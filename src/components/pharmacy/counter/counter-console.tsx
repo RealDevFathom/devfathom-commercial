@@ -489,7 +489,8 @@ function ScopedPharmacyCounterConsole({
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
   const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
   const saveKeymap = trpc.pharmacySales.counterSaveKeymap.useMutation({
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      utils.pharmacySales.counterKeymap.setData(undefined, saved);
       void utils.pharmacySales.counterKeymap.invalidate();
       setNotice({ tone: 'success', message: 'Keymap saved for this operator.' });
     },
@@ -1806,6 +1807,19 @@ function ScopedPharmacyCounterConsole({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Operator preferences do not depend on branch/bill recovery readiness.
+  const keymapLegend = (
+    <CounterKeymapLegend
+      keymap={keymap}
+      saving={saveKeymap.isPending}
+      disabled={pending === 'tender'}
+      error={saveKeymap.error ? messageFrom(saveKeymap.error) : null}
+      onPresetChange={(preset: CounterKeymapPresetKey) =>
+        saveKeymap.mutate({ preset, overrides: {} })
+      }
+    />
+  );
+
   if (branchesQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -1901,6 +1915,7 @@ function ScopedPharmacyCounterConsole({
             </Button>
           </div>
         </SectionCard>
+        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
       </div>
     );
   }
@@ -2813,14 +2828,7 @@ function ScopedPharmacyCounterConsole({
         onOpenChange={setShortcutsOpen}
         finalFocus={searchRef}
       >
-        <CounterKeymapLegend
-          keymap={keymap}
-          saving={saveKeymap.isPending}
-          disabled={busy}
-          onPresetChange={(preset: CounterKeymapPresetKey) =>
-            saveKeymap.mutate({ preset, overrides: {} })
-          }
-        />
+        {keymapLegend}
       </CounterOverlay>
       <CounterOverlay
         title="Receipt preview"

@@ -40,10 +40,17 @@ const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
+  keymapSetData: vi.fn(),
   session: {
     status: 'authenticated',
     data: {
-      user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
+      user: {
+        id: 'account-a',
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        sessionRevoked: false,
+        role: 'EMPLOYEE',
+      },
     },
   },
   entitlements: {
@@ -57,7 +64,8 @@ vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => mocks.entitlements,
 }));
 
-vi.mock('@/lib/trpc', () => {
+vi.mock('@/lib/trpc', async () => {
+  const { useState } = await import('react');
   const router = (names: string[]) =>
     Object.fromEntries(
       names.map((name) => [
@@ -69,11 +77,30 @@ vi.mock('@/lib/trpc', () => {
           },
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
+            const [state, setState] = useState({ isPending: false, error: null as Error | null });
+            // Exercise pending/rejection/success transitions for the preference mutation.
+            const mutateKeymap = (input: unknown) => {
+              const callbacks = options as {
+                onSuccess?: (saved: unknown) => void;
+                onError?: (error: Error) => void;
+              };
+              setState({ isPending: true, error: null });
+              const mutation = mocks.mutations[name] as (input: unknown) => unknown;
+              void Promise.resolve(mutation(input)).then(
+                (saved) => {
+                  callbacks.onSuccess?.(saved);
+                  setState({ isPending: false, error: null });
+                },
+                (error: Error) => {
+                  callbacks.onError?.(error);
+                  setState({ isPending: false, error });
+                }
+              );
+            };
             return {
               mutateAsync: mocks.mutations[name],
-              mutate: mocks.mutations[name],
-              isPending: false,
-              error: null,
+              mutate: name === 'counterSaveKeymap' ? mutateKeymap : mocks.mutations[name],
+              ...state,
             };
           },
         },
@@ -97,6 +124,7 @@ vi.mock('@/lib/trpc', () => {
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
+      counterKeymap: { setData: mocks.keymapSetData, invalidate: vi.fn() },
     },
     pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
     pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
@@ -166,6 +194,7 @@ vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: (
 vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
+import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import {
   persistTenderAttempt,
   readTenderAttempt,
@@ -300,10 +329,19 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.keymapSetData.mockImplementation((_input, saved) => {
+    mocks.queries.counterKeymap = query(saved);
+  });
   mocks.session = {
     status: 'authenticated',
     data: {
-      user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
+      user: {
+        id: 'account-a',
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        sessionRevoked: false,
+        role: 'EMPLOYEE',
+      },
     },
   };
   mocks.entitlements = {
@@ -2196,6 +2234,126 @@ describe('DEV-618 counter composition', () => {
         expect.objectContaining({ action: 'void', saleId: 'sale-a' })
       )
     );
+  });
+
+  it.each([false, true])(
+    'defaults to DevFathom and saves for an owner/admin without a saved preference or branch assignment (payment recovery available: %s)',
+    async (recoveryAvailable) => {
+      // Owners and organization admins use the ADMIN session role.
+      mocks.session.data.user.role = 'ADMIN';
+      // A corrupt recovery record locks sales while leaving the counter mounted.
+      // No branches renders the setup checklist instead; covered separately below.
+      if (!recoveryAvailable) window.localStorage.setItem(tenderAttemptStorageKey(scope), '{');
+      mocks.mutations.counterSaveKeymap!.mockResolvedValueOnce({
+        ...resolveCounterKeymap({ preset: 'legacySpeed' }),
+        stored: true,
+      });
+      render(<PharmacyCounterConsole />);
+      if (!recoveryAvailable) expect(screen.getByLabelText('Scan or search')).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+      const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
+      const select = within(dialog).getByLabelText('Keymap');
+      expect(select).toBeEnabled();
+      expect(select).toHaveValue('devfathom');
+      expect(mocks.mutations.counterSaveKeymap).not.toHaveBeenCalled();
+      await act(async () => {
+        fireEvent.change(select, { target: { value: 'legacySpeed' } });
+      });
+      expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledExactlyOnceWith({
+        preset: 'legacySpeed',
+        overrides: {},
+      });
+      expect(select).toBeEnabled();
+      expect(select).toHaveValue('legacySpeed');
+      if (!recoveryAvailable) {
+        expect(screen.getByLabelText('Scan or search')).toBeDisabled();
+        expect(window.localStorage.getItem(tenderAttemptStorageKey(scope))).toBe('{');
+      }
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets an admin save shortcuts before a branch is available without exposing sales', async () => {
+    mocks.session.data.user.role = 'ADMIN';
+    mocks.queries.counterBranches = query({ branches: [] });
+    mocks.mutations.counterSaveKeymap!.mockResolvedValueOnce({
+      ...resolveCounterKeymap({ preset: 'legacySpeed' }),
+      stored: true,
+    });
+    render(<PharmacyCounterConsole />);
+    expect(
+      screen.getByRole('heading', { name: 'Before this counter can sell' })
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    const select = screen.getByLabelText('Keymap');
+    expect(select).toBeEnabled();
+    expect(select).toHaveValue('devfathom');
+    expect(mocks.mutations.counterSaveKeymap).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'legacySpeed' } });
+    });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledExactlyOnceWith({
+      preset: 'legacySpeed',
+      overrides: {},
+    });
+    expect(select).toBeEnabled();
+    expect(select).toHaveValue('legacySpeed');
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin change Legacy Speed during payment recovery and retry a failed save', async () => {
+    mocks.session.data.user.role = 'ADMIN';
+    mocks.queries.counterKeymap = query({
+      ...resolveCounterKeymap({ preset: 'legacySpeed' }),
+      stored: true,
+    });
+    persistTenderAttempt(savedAttempt());
+    let rejectSave!: (error: Error) => void;
+    mocks.mutations.counterSaveKeymap!
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSave = reject;
+          })
+      )
+      .mockResolvedValueOnce({ ...resolveCounterKeymap({ preset: 'devfathom' }), stored: true });
+    render(<PharmacyCounterConsole />);
+    expect(screen.getByLabelText('Scan or search')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
+    const select = within(dialog).getByLabelText('Keymap');
+    expect(select).toHaveValue('legacySpeed');
+    expect(select).toBeEnabled();
+    fireEvent.change(select, { target: { value: 'devfathom' } });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledExactlyOnceWith({
+      preset: 'devfathom',
+      overrides: {},
+    });
+    expect(select).toBeDisabled();
+    expect(within(dialog).getByText('Saving keymap…')).toBeInTheDocument();
+    await act(async () => rejectSave(new Error('Preference could not be saved.')));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Preference could not be saved.');
+    expect(select).toBeEnabled();
+    expect(select).toHaveValue('legacySpeed');
+    expect(within(dialog).queryByText('Saving keymap…')).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'devfathom' } });
+    });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(2);
+    expect(select).toBeEnabled();
+    expect(select).toHaveValue('devfathom');
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    expect(mocks.keymapSetData).toHaveBeenCalledExactlyOnceWith(undefined, {
+      ...resolveCounterKeymap({ preset: 'devfathom' }),
+      stored: true,
+    });
+    expect(readTenderAttempt(scope)).toEqual({ status: 'pending', attempt: savedAttempt() });
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
 
   it('moves branch/status beside Counter, opens shortcuts from Actions, and changes the branch', async () => {
