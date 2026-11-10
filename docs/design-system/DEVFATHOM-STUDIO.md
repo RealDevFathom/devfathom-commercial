@@ -91,6 +91,11 @@ brand logo mark keeps its original `#ff684f` because it is a graphic, not text.
 | `--success` (dark)                           | `#a3c8a6` | `success/20` over muted `#30302d`      | 4.65  |
 | `--destructive` (dark)                       | `#f0a89f` | `destructive/20` over raised `#2c2c29` | 4.71  |
 
+Small section eyebrows, including the shared `Eyebrow` accent variant, use `--text-muted` so
+tenant-provided brand accents cannot lower their contrast. Accent decoration can still use the
+brand tokens. Purchasing tab metadata inherits the full-contrast active/inactive tab text; do not
+dim it with opacity.
+
 Do not dim a text token with an opacity modifier (`text-muted-foreground/60`); it drops below AA
 on both themes. Use a semantic token (`text-success`) instead of a raw palette utility
 (`text-emerald-500`) for state figures.

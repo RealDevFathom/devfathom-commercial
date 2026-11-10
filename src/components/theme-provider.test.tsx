@@ -19,9 +19,13 @@ function contrast(foreground: string, background: string) {
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
-function studioDarkTokens() {
+function studioTokens(selector: ':root' | "[data-theme='dark']") {
   const css = readFileSync('src/app/globals.css', 'utf8');
-  const blocks = [...css.matchAll(/\[data-theme='dark'\]\s*\{([^}]+)\}/g)];
+  const pattern = new RegExp(
+    `${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]+)\\}`,
+    'g'
+  );
+  const blocks = [...css.matchAll(pattern)];
   const declarations = blocks.at(-1)?.[1] ?? '';
 
   return Object.fromEntries(
@@ -63,13 +67,35 @@ describe('ThemeProvider', () => {
   });
 
   it('keeps dark secondary text at WCAG AA contrast on Studio surfaces', () => {
-    const tokens = studioDarkTokens();
+    const tokens = studioTokens("[data-theme='dark']");
 
     for (const foreground of ['text-muted', 'text-faint']) {
       for (const background of ['surface-page', 'surface-card', 'surface-raised', 'secondary']) {
         expect(
           contrast(tokens[foreground], tokens[background]),
           `${foreground} on ${background}`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('keeps small section labels at WCAG AA contrast independently of tenant accents', () => {
+    const css = readFileSync('src/app/globals.css', 'utf8');
+
+    expect(css).toMatch(/\.eyebrow-accent\s*\{[^}]*color:\s*var\(--text-muted\)/);
+
+    for (const selector of [':root', "[data-theme='dark']"] as const) {
+      const tokens = studioTokens(selector);
+
+      for (const background of [
+        'surface-page',
+        'surface-card',
+        'surface-sunken',
+        'surface-raised',
+      ]) {
+        expect(
+          contrast(tokens['text-muted'], tokens[background]),
+          `${selector} text-muted on ${background}`
         ).toBeGreaterThanOrEqual(4.5);
       }
     }

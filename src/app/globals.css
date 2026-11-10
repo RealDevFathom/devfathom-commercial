@@ -526,7 +526,8 @@
     color: var(--text-muted);
   }
   .eyebrow-accent {
-    color: var(--accent-brand);
+    /* Small labels stay legible even when a tenant supplies a bright brand accent. */
+    color: var(--text-muted);
   }
 
   /* Big stat figure — Oxanium, tabular, tight. */
