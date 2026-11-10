@@ -239,12 +239,17 @@ def collect_stop_files(root, listdir, isfile, mtime, read_text, under=None):
     found = []
     bases = [root]
     try:
-        bases += [os.path.join(root, d) for d in listdir(root) if not str(d).startswith(".")]
+        bases += [os.path.join(root, d) for d in listdir(root)
+                  if not str(d).startswith(".") and not isfile(os.path.join(root, d))]
     except TypeError:
         pass
     seen = set()
     for base in bases:
-        for name in listdir(base):
+        try:
+            names = listdir(base)
+        except (OSError, TypeError):
+            continue
+        for name in names:
             if not STOP_FILE_RE.match(name) or STOP_SKIP_RE.search(name):
                 continue
             path = os.path.join(base, name)
@@ -253,13 +258,14 @@ def collect_stop_files(root, listdir, isfile, mtime, read_text, under=None):
             if path in seen:
                 continue
             seen.add(path)
-            text = (read_text(path, limit=256) or "").strip().splitlines()
+            lines = [ln.strip() for ln in (read_text(path, limit=1024) or "").splitlines() if ln.strip()]
             rec = {
                 "name": name,
                 "dir": os.path.basename(base) if base != root else "",
                 "mtime": mtime(path),
                 "active": True,
-                "text": (text[0][:160] if text else None),
+                # First line may be only a timestamp; keep following lines (PAUSE_CODEX …).
+                "text": " ".join(lines)[:240] if lines else None,
             }
             found.append(rec)
     found.sort(key=lambda r: r.get("mtime") or 0, reverse=True)

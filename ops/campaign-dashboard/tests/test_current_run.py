@@ -379,6 +379,21 @@ class ClassifyAndPauseTests(unittest.TestCase):
             {"name": "REBASE37_1110_STOP", "text": "stop", "mtime": 2},
         ]))
 
+    def test_stop_file_includes_pause_codex_line(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as td:
+            path=os.path.join(td, "RETARGET1906_STOP")
+            with open(path, "w") as fh:
+                fh.write("2026-11-10T09:35:54+05:00\nPAUSE_CODEX no new Codex dispatch until baseline is corrected. Inky 09:34 PKT.\n")
+            def _read(p, limit=1024):
+                with open(p) as fh:
+                    return fh.read(limit)
+            found=cr.collect_stop_files(td, os.listdir, os.path.isfile, os.path.getmtime, _read)
+            self.assertTrue(found)
+            self.assertIn("PAUSE_CODEX", found[0]["text"])
+            pause=cr.campaign_pause_from_stops(found)
+            self.assertEqual(pause["key"], "BASELINE_SUSPECT")
+
 
 if __name__ == "__main__":
     unittest.main()
