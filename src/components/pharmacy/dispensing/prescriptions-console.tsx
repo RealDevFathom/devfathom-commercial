@@ -103,7 +103,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     },
   });
   const [notice, setNotice] = useState('');
-  const [medicineId, setMedicineId] = useState('');
+  const [lines, setLines] = useState([
+    { id: 0, medicineId: '', presentationId: '', medicineQuery: '' },
+  ]);
+  const nextLineId = useRef(1);
   const [selectedPatientId, setPatientId] = useState<string | null>(null);
   const counterPatientId = useSyncExternalStore(
     subscribeToPatientFragment,
@@ -123,10 +126,25 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
 
   const busy = stage !== null || capture.isPending;
   const selectedPatient = workspace.data?.patients.find((item) => item.id === patientId);
-  const medicine = useMemo(
-    () => workspace.data?.medicines.find((item) => item.id === medicineId),
-    [medicineId, workspace.data]
-  );
+  const medicines = workspace.data?.medicines ?? [];
+  const captureRequirements: string[] = [];
+  if (!selectedPatient) {
+    captureRequirements.push(
+      workspace.data?.patients.length
+        ? 'Select a patient above.'
+        : 'Ask a workspace administrator to add a patient, then reload this page.'
+    );
+  }
+  if (!sourceFile) captureRequirements.push('Choose a prescription image above.');
+  else if (sourceError) captureRequirements.push(sourceError);
+  if (!workspace.data?.prescribers.length)
+    captureRequirements.push(
+      'Ask a workspace administrator to add a prescriber, then reload this page.'
+    );
+  if (!medicines.some((item) => item.presentations.length > 0))
+    captureRequirements.push(
+      'Ask a workspace administrator to add a medicine with a medicine form, then reload this page.'
+    );
 
   const effectiveBranchId = selectedBranchId || workspace.data?.selectedBranchId || '';
 
@@ -179,7 +197,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     setSubmitError('');
     const validation = fileError(sourceFile);
     setSourceError(validation);
-    if (validation || !sourceFile || !isImageType(sourceFile.type) || !selectedPatient) return;
+    if (validation || !sourceFile || !isImageType(sourceFile.type) || captureRequirements.length)
+      return;
     const data = new FormData(form);
     inFlight.current = true;
     let currentStage: 'uploading' | 'capturing' = 'uploading';
@@ -216,19 +235,19 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         validFrom: prescriptionCalendarDate(String(data.get('validFrom'))),
         validUntil: prescriptionCalendarDate(String(data.get('validUntil'))),
         authorizedRepeats: Number(data.get('authorizedRepeats')),
-        lines: [
-          {
-            lineNumber: 1,
-            medicineId,
-            presentationId: String(data.get('presentationId')),
-            authorizedCanonicalUnits: Number(data.get('quantity')),
-            directions: String(data.get('directions')),
-          },
-        ],
+        lines: lines.map((line, index) => ({
+          lineNumber: index + 1,
+          medicineId: line.medicineId,
+          presentationId: String(data.get(`presentationId-${line.id}`)),
+          authorizedCanonicalUnits: Number(data.get(`quantity-${line.id}`)),
+          directions: String(data.get(`directions-${line.id}`)),
+        })),
       });
       setSavedAttachment({ url: evidence.url, name: sourceFile.name });
       form.reset();
-      setMedicineId('');
+      setLines([
+        { id: nextLineId.current++, medicineId: '', presentationId: '', medicineQuery: '' },
+      ]);
       setSourceFile(null);
       uploaded.current = null;
       setNotice('Prescription captured. Pharmacist review and dispensing consent still apply.');
@@ -254,9 +273,9 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-02"
+        eyebrow="Pharmacy"
         heading="Prescriptions"
-        description="Capture the original evidence, authority and every authorized unit before dispensing."
+        description="Save the prescription image and prescribed medicines before dispensing."
       />
       {workspace.isLoading ? (
         <WorkspaceState title="Loading prescriptions">
@@ -328,7 +347,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     </Field>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Evidence type">
+                    <Field label="Prescription source">
                       <select name="sourceKind" className={fieldClass}>
                         <option value="PAPER_IMAGE">Paper prescription</option>
                         <option value="WHATSAPP_PHOTO">Photo received digitally</option>
@@ -395,72 +414,190 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       />
                     </Field>
                   </div>
-                  <Field label="Original custody">
+                  <Field label="Where is the original prescription?">
                     <select name="custodyState" className={fieldClass}>
                       <option value="NOT_HELD">Returned / not held</option>
                       <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
                     </select>
                   </Field>
-                  <div className="border-t border-border-subtle pt-4">
-                    <p className="mb-3 font-mono text-xs tracking-wide text-text-muted uppercase">
-                      Line 1
+                  {lines.map((line, index) => {
+                    const medicine = medicines.find((item) => item.id === line.medicineId);
+                    const medicineSearch = line.medicineQuery.trim().toLowerCase();
+                    const matchingMedicines = medicines.filter((item) =>
+                      item.productName.toLowerCase().includes(medicineSearch)
+                    );
+                    const noMedicineMatches =
+                      medicineSearch !== '' && matchingMedicines.length === 0;
+                    const searchEmptyId = `capture-medicine-search-empty-${line.id}`;
+                    return (
+                      <fieldset key={line.id} className="min-w-0 border-t border-border-subtle pt-4">
+                        <legend className="font-mono text-xs tracking-wide text-text-muted uppercase">
+                          Line {index + 1}
+                        </legend>
+                        <div className="mb-4 space-y-2">
+                          <Field label="Search medicine names">
+                            <input
+                              type="search"
+                              value={line.medicineQuery}
+                              onChange={(event) => {
+                                const medicineQuery = event.target.value;
+                                setLines((current) => current.map((item) =>
+                                  item.id === line.id ? { ...item, medicineQuery } : item
+                                ));
+                              }}
+                              className={fieldClass}
+                              aria-describedby={
+                                noMedicineMatches ? searchEmptyId : undefined
+                              }
+                            />
+                          </Field>
+                          {noMedicineMatches ? (
+                            <p
+                              id={searchEmptyId}
+                              role="status"
+                              className="text-sm text-text-muted"
+                            >
+                              No medicines match this search. Clear or change the name.
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <Field label="Medicine">
+                            <select
+                              required
+                              value={line.medicineId}
+                              onChange={(event) => {
+                                const medicineId = event.target.value;
+                                setLines((current) => current.map((item) =>
+                                  item.id === line.id
+                                    ? { ...item, medicineId, presentationId: '' }
+                                    : item
+                                ));
+                              }}
+                              className={fieldClass}
+                            >
+                              <option value="" disabled>
+                                Select medicine
+                              </option>
+                              {medicine && !matchingMedicines.includes(medicine) ? (
+                                <option value={medicine.id}>{medicine.productName}</option>
+                              ) : null}
+                              {matchingMedicines.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.productName}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field label="Medicine form">
+                            <select
+                              required
+                              name={`presentationId-${line.id}`}
+                              disabled={!medicine}
+                              className={fieldClass}
+                              value={line.presentationId}
+                              onChange={(event) => {
+                                const presentationId = event.target.value;
+                                setLines((current) => current.map((item) =>
+                                  item.id === line.id ? { ...item, presentationId } : item
+                                ));
+                              }}
+                            >
+                              <option value="" disabled>
+                                Select medicine form
+                              </option>
+                              {medicine?.presentations.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.presentation}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                        </div>
+                        {medicine && medicine.presentations.length === 0 ? (
+                          <p className="mt-2 text-sm text-text-muted">
+                            This medicine has no medicine forms. Choose another medicine or ask a
+                            workspace administrator to add its form, then reload this page.
+                          </p>
+                        ) : null}
+                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                          <Field label="Prescribed quantity (units)">
+                            <input
+                              required
+                              name={`quantity-${line.id}`}
+                              type="number"
+                              min="1"
+                              className={fieldClass}
+                            />
+                          </Field>
+                          <Field label="Directions">
+                            <input
+                              required
+                              name={`directions-${line.id}`}
+                              maxLength={2000}
+                              className={fieldClass}
+                              placeholder="e.g. One capsule every 8 hours"
+                            />
+                          </Field>
+                        </div>
+                        {lines.length > 1 ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="touch"
+                            className="mt-3"
+                            aria-label={`Remove line ${index + 1}`}
+                            onClick={() => setLines((current) =>
+                              current.filter((item) => item.id !== line.id)
+                            )}
+                          >
+                            Remove line
+                          </Button>
+                        ) : null}
+                      </fieldset>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="touch"
+                    disabled={lines.length >= 30}
+                    aria-describedby={lines.length >= 30 ? 'capture-line-limit' : undefined}
+                    onClick={() => {
+                      const id = nextLineId.current++;
+                      setLines((current) => [
+                        ...current,
+                        { id, medicineId: '', presentationId: '', medicineQuery: '' },
+                      ]);
+                    }}
+                  >
+                    <Plus aria-hidden />
+                    Add line
+                  </Button>
+                  {lines.length >= 30 ? (
+                    <p id="capture-line-limit" className="text-sm text-text-muted">
+                      A prescription can contain up to 30 lines. Remove a line to add another.
                     </p>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Medicine">
-                        <select
-                          required
-                          value={medicineId}
-                          onChange={(e) => setMedicineId(e.target.value)}
-                          className={fieldClass}
-                        >
-                          <option value="" disabled>
-                            Select medicine
-                          </option>
-                          {workspace.data.medicines.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.productName}
-                            </option>
+                  ) : null}
+                  <div
+                    id="capture-requirements"
+                    aria-live="polite"
+                    className="space-y-2 text-sm text-text-muted"
+                  >
+                    {captureRequirements.length ? (
+                      <>
+                        <p>Before you can capture this prescription:</p>
+                        <ul className="list-disc space-y-1 pl-5">
+                          {captureRequirements.map((requirement) => (
+                            <li key={requirement}>{requirement}</li>
                           ))}
-                        </select>
-                      </Field>
-                      <Field label="Presentation">
-                        <select
-                          required
-                          name="presentationId"
-                          disabled={!medicine}
-                          className={fieldClass}
-                          defaultValue=""
-                        >
-                          <option value="" disabled>
-                            Select presentation
-                          </option>
-                          {medicine?.presentations.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.presentation}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                    </div>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                      <Field label="Authorized units">
-                        <input
-                          required
-                          name="quantity"
-                          type="number"
-                          min="1"
-                          className={fieldClass}
-                        />
-                      </Field>
-                      <Field label="Directions">
-                        <input
-                          required
-                          name="directions"
-                          className={fieldClass}
-                          placeholder="e.g. One capsule every 8 hours"
-                        />
-                      </Field>
-                    </div>
+                        </ul>
+                      </>
+                    ) : null}
+                    <p>
+                      Complete the patient, prescriber, dates, and each medicine’s form,
+                      prescribed quantity and directions, then select Capture prescription.
+                    </p>
                   </div>
                   {submitError ? (
                     <p role="alert" className="text-sm text-destructive">
@@ -472,8 +609,12 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       {notice}
                     </p>
                   ) : null}
-                  {stage ? (
-                    <div role="status" className="space-y-2 text-sm text-text-muted">
+                  {busy ? (
+                    <div
+                      id="capture-progress"
+                      role="status"
+                      className="space-y-2 text-sm text-text-muted"
+                    >
                       <p>
                         {stage === 'uploading'
                           ? 'Uploading attachment…'
@@ -490,7 +631,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                   <Button
                     size="lg"
                     className="h-11"
-                    disabled={busy || !selectedPatient || Boolean(sourceError)}
+                    disabled={busy || captureRequirements.length > 0}
+                    aria-describedby={busy ? 'capture-progress' : 'capture-requirements'}
                     type="submit"
                   >
                     <Plus aria-hidden />
@@ -515,7 +657,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
             <SectionCard title="Prescription register" titleLevel={2}>
               {workspace.data.prescriptions.length === 0 ? (
                 <WorkspaceState title="No prescriptions yet">
-                  Captured prescriptions will appear here with the remaining authorized quantity for
+                  Captured prescriptions will appear here with the remaining prescribed quantity for
                   every line.
                 </WorkspaceState>
               ) : (
@@ -533,8 +675,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         <th className="pb-3">Validity</th>
                         <th className="pb-3">Medicine</th>
                         <th className="pb-3 text-right">Remaining</th>
-                        <th className="pb-3">Custody</th>
-                        <th className="pb-3">Evidence</th>
+                        <th className="pb-3">Original prescription</th>
+                        <th className="pb-3">Image</th>
                       </tr>
                     </thead>
                     <tbody>
