@@ -11,13 +11,13 @@ import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharma
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
   selected: SaleUnitKind | null;
-  quantity: number;
+  quantity: string;
   preview: SaleLinePreview | null;
   disabled?: boolean;
   /** Compact inline next-line composition, with the same pricing and keyboard controls. */
   inline?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
-  onQuantityChange: (quantity: number) => void;
+  onQuantityChange: (quantity: string) => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
 };
@@ -52,6 +52,14 @@ export function CounterUnitToggle({
   chordFor,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
+  const parsedQuantity = Number(quantity);
+  const validQuantity =
+    /^\d+$/.test(quantity) && Number.isSafeInteger(parsedQuantity) && parsedQuantity > 0;
+  const quantityMessage = validQuantity
+    ? null
+    : !quantity || parsedQuantity === 0
+      ? 'Enter a quantity'
+      : 'Enter a whole number';
 
   if (options.length === 0) {
     return (
@@ -128,38 +136,48 @@ export function CounterUnitToggle({
           <button
             type="button"
             aria-label="Decrease quantity"
-            disabled={disabled || quantity <= 1}
-            onClick={() => onQuantityChange(Math.max(1, quantity - 1))}
+            disabled={disabled || !validQuantity || parsedQuantity <= 1}
+            onClick={() => onQuantityChange(String(Math.max(1, parsedQuantity - 1)))}
             className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             −
           </button>
           <Input
             id={quantityId}
-            type="number"
-            min={1}
-            step={1}
+            type="text"
+            pattern="[0-9]*"
             inputMode="numeric"
             value={quantity}
             disabled={disabled}
-            aria-describedby={preview ? `${quantityId}-preview` : undefined}
-            aria-invalid={preview ? !preview.sufficient : undefined}
-            onChange={(event) => {
-              const next = Number.parseInt(event.target.value, 10);
-              onQuantityChange(Number.isSafeInteger(next) && next > 0 ? next : 1);
-            }}
+            aria-describedby={
+              quantityMessage
+                ? `${quantityId}-message`
+                : preview
+                  ? `${quantityId}-preview`
+                  : undefined
+            }
+            aria-invalid={
+              (quantity !== '' && !validQuantity) || (preview ? !preview.sufficient : undefined)
+            }
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => onQuantityChange(event.target.value)}
             className="h-11 w-16 text-center tabular-nums"
           />
           <button
             type="button"
             aria-label="Increase quantity"
             disabled={disabled}
-            onClick={() => onQuantityChange(quantity + 1)}
+            onClick={() => onQuantityChange(String(validQuantity ? parsedQuantity + 1 : 1))}
             className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             +
           </button>
         </div>
+        {quantityMessage ? (
+          <p id={`${quantityId}-message`} className="text-sm text-text-muted">
+            {quantityMessage}
+          </p>
+        ) : null}
       </div>
 
       {preview ? (

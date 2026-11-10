@@ -1791,6 +1791,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       mocks.searchQuery.mockResolvedValue({ rows: [controlledRow], truncated: false });
       if (entry === 'manual') {
         act(() => mocks.searchProps.mock.lastCall![0].onSelect(controlledRow));
+        fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
         fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
       } else scan(entry === 'GS1' ? gs1 : '654321');
       await screen.findByText(/Controlled medicine needs the patient address/);
@@ -1936,6 +1937,80 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
 
+  it.each(['', '0', '-1', '1.5', '8.0', '1e2', 'abc', '9007199254740992'])(
+    'refuses invalid tablet quantity %j on the add shortcut',
+    (value) => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
+      const input = screen.getByLabelText('Quantity');
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      expect(mocks.mutations.create).not.toHaveBeenCalled();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(input).toHaveAccessibleDescription(
+        value === '' || value === '0' ? /Enter a quantity/ : /Enter a whole number/
+      );
+    }
+  );
+
+  it('keeps a cleared draft empty, accepts a replacement quantity, and adds it once', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'line-8' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ onHandUnits: 100 })));
+    const input = screen.getByLabelText('Quantity') as HTMLInputElement;
+    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: '1' } });
+    input.blur();
+    input.focus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(1);
+    fireEvent.change(input, { target: { value: '' } });
+    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(expect.objectContaining({ quantity: 8 }))
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the stock limit and refuses an overstock quantity', () => {
+    const row = barcodeRow({ onHandUnits: 5 });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(row));
+    const input = screen.getByLabelText('Quantity');
+    fireEvent.change(input, { target: { value: '8' } });
+    expect(input).toHaveAccessibleDescription(/Only 5 safe units are on hand/);
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('clears the canonical-unit demand draft and captures only the replacement quantity', async () => {
+    mocks.mutations.captureDemand!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        barcodeRow({ saleUnits: [], onHandUnits: 0 })
+      )
+    );
+    const input = screen.getByLabelText('Requested canonical units') as HTMLInputElement;
+    expect(input.value).toBe('');
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '' } });
+    expect(input.value).toBe('');
+    expect(screen.queryByRole('button', { name: /Capture shortfall:/ })).not.toBeInTheDocument();
+    expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture shortfall: 8 canonical units' }));
+    await waitFor(() =>
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ quantity: 8, saleUnit: 'UNIT' })
+      )
+    );
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it('stages real metadata and quantity, switches units with F3/F4/F5, and submits the chosen batch with F6', async () => {
     const row = barcodeRow({
       unitsPerPack: 10,
@@ -1975,6 +2050,13 @@ describe('DEV-618 counter composition', () => {
     expect(next).toHaveTextContent('Batch B-1');
     expect(next).toHaveTextContent('Store A');
     expect(next).toHaveTextContent('FEFO batch B-1 is used');
+    const quantity = within(next).getByLabelText('Quantity');
+    expect(quantity).toHaveValue('');
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
+    expect(within(next).getByText('Enter a quantity')).toBeVisible();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    fireEvent.change(quantity, { target: { value: '1' } });
+    expect(quantity).toHaveValue('1');
     expect(within(next).getByText('Covered · 100 units on hand')).toBeInTheDocument();
     for (const [key, name] of [
       ['F5', /^Unit/],
@@ -1985,7 +2067,7 @@ describe('DEV-618 counter composition', () => {
       expect(within(next).getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
     fireEvent.click(within(next).getByRole('button', { name: 'Increase quantity' }));
-    expect(within(next).getByLabelText('Quantity')).toHaveValue(2);
+    expect(within(next).getByLabelText('Quantity')).toHaveValue('2');
     expect(within(next).getByText('Units').nextElementSibling).toHaveTextContent('20');
     expect(within(next).getByText('Line total').nextElementSibling).toHaveTextContent('200.00');
     fireEvent.click(within(next).getByRole('button', { name: 'Sell a different batch' }));

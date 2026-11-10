@@ -326,7 +326,7 @@ function ScopedPharmacyCounterConsole({
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
-  const [quantity, setQuantity] = useState(1);
+  const [quantityText, setQuantityText] = useState('1');
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
@@ -613,17 +613,26 @@ function ScopedPharmacyCounterConsole({
     () => activeRow?.saleUnits.find((option) => option.kind === saleUnit) ?? null,
     [activeRow, saleUnit]
   );
+  // Keep the editable draft separate from the integer used by previews and writes.
+  const parsedQuantity = Number(quantityText);
+  const quantity =
+    /^\d+$/.test(quantityText) && Number.isSafeInteger(parsedQuantity) && parsedQuantity > 0
+      ? parsedQuantity
+      : null;
 
   const preview = useMemo(
-    () => counterSelectionPreview(activeRow, selectedOption, quantity),
+    () => (quantity === null ? null : counterSelectionPreview(activeRow, selectedOption, quantity)),
     [activeRow, quantity, selectedOption]
   );
 
-  const requestedCanonicalUnits = selectedOption
-    ? selectedOption.canonicalUnitsPerSaleUnit * quantity
-    : activeRow?.saleUnits.length === 0
-      ? quantity
-      : null;
+  const requestedCanonicalUnits =
+    quantity === null
+      ? null
+      : selectedOption
+        ? selectedOption.canonicalUnitsPerSaleUnit * quantity
+        : activeRow?.saleUnits.length === 0
+          ? quantity
+          : null;
   const shortfallUnits =
     activeRow &&
     requestedCanonicalUnits !== null &&
@@ -923,7 +932,7 @@ function ScopedPharmacyCounterConsole({
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
-    setQuantity(1);
+    setQuantityText('');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
     setLotOverride(null);
   }, []);
@@ -943,6 +952,16 @@ function ScopedPharmacyCounterConsole({
       const row = scannedRow ?? activeRow;
       const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
       const units = scannedRow ? 1 : quantity;
+      if (units === null) {
+        setNotice({
+          tone: 'warning',
+          message:
+            !quantityText || Number(quantityText) === 0
+              ? 'Enter a quantity'
+              : 'Enter a whole number',
+        });
+        return;
+      }
       const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
       const batchOverride = scannedRow ? null : lotOverride;
       if (!row || !option || !selectionPreview || busy) return;
@@ -1069,6 +1088,7 @@ function ScopedPharmacyCounterConsole({
       openChecks,
       preview,
       quantity,
+      quantityText,
       refreshCart,
       selectedOption,
       utils,
@@ -1112,7 +1132,11 @@ function ScopedPharmacyCounterConsole({
         const row = result.rows[0]!;
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
-        if (restage) stageRow(row);
+        if (restage) {
+          stageRow(row);
+          // Barcode entry keeps its one-item default; manual selection starts empty.
+          setQuantityText('1');
+        }
         const scanPreview = restage
           ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
           : preview;
@@ -1476,7 +1500,7 @@ function ScopedPharmacyCounterConsole({
   ]);
 
   const captureShortfall = useCallback(async () => {
-    if (busy || !branchAuthorized) return;
+    if (busy || !branchAuthorized || quantity === null) return;
     const requested = activeRow?.displayName ?? query.trim();
     if (!requested) {
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
@@ -1537,7 +1561,7 @@ function ScopedPharmacyCounterConsole({
   ]);
 
   const declineVisibleSubstitutes = useCallback(async () => {
-    if (!activeRow || busy) return;
+    if (!activeRow || busy || quantity === null) return;
     setPending('declineSubstitute');
     try {
       await declineSubstitute.mutateAsync({
@@ -2057,7 +2081,7 @@ function ScopedPharmacyCounterConsole({
                         setQuery(event.target.value);
                         setActiveRow(null);
                         setSaleUnit(null);
-                        setQuantity(1);
+                        setQuantityText('1');
                       }}
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter') return;
@@ -2147,11 +2171,11 @@ function ScopedPharmacyCounterConsole({
                       inline
                       options={activeRow.saleUnits}
                       selected={saleUnit}
-                      quantity={quantity}
+                      quantity={quantityText}
                       preview={preview}
                       disabled={busy}
                       onSelect={setSaleUnit}
-                      onQuantityChange={setQuantity}
+                      onQuantityChange={setQuantityText}
                       chordFor={chordFor}
                     />
                     {activeRow.saleUnits.length === 0 ? (
@@ -2163,12 +2187,9 @@ function ScopedPharmacyCounterConsole({
                           min={1}
                           step={1}
                           className="h-11 w-32"
-                          value={quantity}
+                          value={quantityText}
                           disabled={busy}
-                          onChange={(event) => {
-                            const next = Number(event.target.value);
-                            setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
-                          }}
+                          onChange={(event) => setQuantityText(event.target.value)}
                         />
                       </div>
                     ) : null}
