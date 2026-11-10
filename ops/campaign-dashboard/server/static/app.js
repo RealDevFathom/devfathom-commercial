@@ -369,6 +369,20 @@
       stamp.title = asOf ? `Current-run data as of ${fmtFull(asOf)}` : 'No collector data yet';
       stamp.classList.toggle('stale', !!(S && ((S.freshness && S.freshness.stale) || Object.values(S.sources || {}).some((v) => v && v.stale))));
     }
+    const campEl = $('campaign-state');
+    if (campEl) {
+      const camp = (S && S.campaign) || {};
+      if (camp.paused) {
+        campEl.classList.remove('hidden');
+        campEl.classList.add('paused');
+        campEl.textContent = `${camp.key || 'campaign-paused'}: Codex dispatch paused`;
+        campEl.title = camp.reason || camp.stopFile || 'Controller paused new Codex dispatch';
+      } else {
+        campEl.classList.add('hidden');
+        campEl.classList.remove('paused');
+        campEl.textContent = '';
+      }
+    }
     if (fetchError && (!S || nowSec() - lastFetchOk > 90)) { el.className = 'live-pill bad'; el.textContent = `Offline: ${fetchError}`; return; }
     if (!S) return;
     const stale = Object.entries(S.sources).filter(([, v]) => v.stale).map(([k]) => k);
@@ -403,6 +417,15 @@
     const staleSrc = Object.entries(S.sources || {}).filter(([, v]) => v && v.stale);
     const asOf = dataAsOfTs();
     const items = [];
+    const camp = S.campaign || {};
+    if (camp.paused) {
+      items.push(h('div', { class: 'banner-item campaign-pause', role: 'alert' },
+        icon('octagon'),
+        h('span', null,
+          h('span', { class: 'badge bad' }, camp.key || 'campaign-paused'),
+          ' Campaign paused: ', camp.reason || 'no new Codex dispatch',
+          camp.stopFile ? h('div', { class: 'meta' }, `${camp.stopFile}${camp.stoppedAt ? ` · ${fmtClock(camp.stoppedAt)} PKT` : ''}`) : null)));
+    }
     if (staleSrc.length) {
       const names = staleSrc.map(([k]) => k).join(' and ');
       const age = staleSrc[0][1].ageSec;
@@ -526,7 +549,7 @@
         row('Gates passed on final SHA', passed, () => openModal('list', { status: 'passed', title: 'Passed on final SHA' })),
         row('Merged into develop', merged, () => openModal('list', { status: 'merged', title: 'Merged into develop' })),
         row('Linear and GitHub closed', done, () => openModal('list', { status: 'done', title: 'Done' }))),
-      h('div', { class: 'mini-stats two' }, [['running', 'Running', 'circle-notch'], ['failed', 'Failed', 'x-circle'], ['pending_qa', 'Pending QA', 'hourglass'], ['rejected', 'Rejected', 'prohibit'], ['queued', 'Queued', 'circle-dashed']].map(([k, label, ic]) => {
+      h('div', { class: 'mini-stats two' }, [['running', 'Running', 'circle-notch'], ['failed', 'Failed', 'x-circle'], ['blocked', 'Blocked', 'prohibit'], ['pending_qa', 'Pending QA', 'hourglass'], ['rejected', 'Rejected', 'prohibit'], ['queued', 'Queued', 'circle-dashed']].map(([k, label, ic]) => {
         const v = list.filter((x) => x.st.key === k || (k === 'queued' && x.st.key === 'pending')).length;
         return h('button', { type: 'button', class: `mini ${k === 'failed' && v ? 'bad' : ''}`, onclick: () => { ui.filter.status = k; render(); $('sec-batches').scrollIntoView({ behavior: 'smooth' }); } },
           h('span', null, icon(ic), label), h('b', null, countUp(`pm-${k}`, v)));
@@ -668,6 +691,7 @@
       if (ui.filter.batch && b.id !== ui.filter.batch) continue;
       if (ui.filter.q && !`${t.issue} ${t.title || ''}`.toLowerCase().includes(ui.filter.q)) continue;
       for (const r of t.runs || []) {
+        if (r.superseded || r.current === false) continue;
         const start = r.codexStart ?? r.start;
         if (!isNum(start)) continue;
         const live = r.norm === 'RUNNING' || (/RUNNING|VERIFYING/i.test(r.status || '') && !r.stale);
@@ -947,7 +971,9 @@
       h('div', { class: 'b-legend' }, segs.map(([k, c, l]) => h('span', null, h('i', { style: { background: c } }), `${cnt[k]} ${l}`)))),
       h('div', { class: 'b-right' },
         b.active ? h('span', { class: 'pill s-running' }, icon('circle-notch'), `${b.active} active`) : h('span', { class: 'pill s-pending' }, icon('circle-dashed'), 'Idle'),
-        h('div', { class: 'chips' }, (b.runs || []).slice(0, 4).map((r) => h('button', { type: 'button', class: 'tag', title: `${r.tasks} tasks`, onclick: (e) => { e.stopPropagation(); openModal('run', { batch: b.id, run: r.name }); } }, r.name)),
+        h('div', { class: 'chips' },
+          (b.runs || []).filter((r) => r.current && !r.superseded).slice(0, 3).map((r) => h('button', { type: 'button', class: 'tag current-run', title: `Current run · ${r.tasks || 0} tasks`, onclick: (e) => { e.stopPropagation(); openModal('run', { batch: b.id, run: r.name }); } }, r.name, r.countsSource === 'live-status' ? h('span', { class: 'meta' }, ' live') : null)),
+          (b.runs || []).some((r) => r.superseded) ? h('span', { class: 'tag superseded-run', title: 'Superseded runs are in Archive' }, `Archive ${(b.runs || []).filter((r) => r.superseded).length}`) : null,
           b.attemptDirs ? h('span', { class: 'tag', title: 'Superseded attempt directories' }, `${b.attemptDirs} attempts`) : null)));
   }
   function renderBatches() {
@@ -1015,7 +1041,16 @@
           : `Current baseline ${base.baseSHA || ''}: ${base.incompleteReason || 'incomplete'}`) : h('span', { class: 'tag' }, 'No baseline in this batch'),
       b.previousBaseline ? h('span', { class: 'tag' }, `Previous ${b.previousBaseline.baseSHA || ''}: ${b.previousBaseline.numPassedTests ?? '?'} pass / ${b.previousBaseline.numFailedTests ?? '?'} fail`) : null,
       (b.policies || []).map((p) => h('span', { class: 'tag', title: 'Merge gate policy present' }, icon('shield'), p)),
-      [...(b.ledgers || []), ...(b.files || [])].map((l) => h('button', { type: 'button', class: 'tag', onclick: () => openModal('file', { batch: b.id, file: l }) }, icon('list'), `${l.run ? `${l.run}/` : ''}${l.file}`)));
+      [...(b.ledgers || []), ...(b.files || [])].map((l) => h('button', { type: 'button', class: 'tag', onclick: () => openModal('file', { batch: b.id, file: l }) }, icon('list'), `${l.run ? `${l.run}/` : ''}${l.file}`)),
+      (b.runs || []).filter((r) => r.current && !r.superseded).map((r) => {
+        const c = r.counts || {};
+        const bits = ['failed', 'running', 'blocked', 'queued', 'pendingQa', 'rejected', 'fixed'].filter((k) => c[k]).map((k) => `${c[k]} ${k}`);
+        return h('button', { type: 'button', class: 'tag current-run', onclick: () => openModal('run', { batch: b.id, run: r.name }) },
+          `Current run ${r.name}`, bits.length ? h('span', { class: 'meta' }, ` · ${bits.join(', ')}`) : null);
+      }),
+      (b.runs || []).some((r) => r.superseded) ? h('details', { class: 'hist archive' },
+        h('summary', null, `Archive (${(b.runs || []).filter((r) => r.superseded).length} superseded runs)`),
+        h('div', { class: 'chips' }, (b.runs || []).filter((r) => r.superseded).map((r) => h('button', { type: 'button', class: 'tag superseded-run', title: r.supersededReason || 'superseded', onclick: () => openModal('run', { batch: b.id, run: r.name }) }, r.name, r.supersededReason ? h('span', { class: 'meta' }, ` · ${r.supersededReason}`) : null)))) : null);
     const cols = gateColumns(b.tasks);
     const rows = b.tasks.map((t) => ({ t, st: statusOf(t) })).filter(({ t, st }) => filterMatch(b, t, st));
     const head = h('thead', null, h('tr', null, h('th', null, 'Issue'), h('th', null, 'Title'), h('th', null, 'Status'),
@@ -1346,10 +1381,14 @@
     const tasks = b.tasks.filter((t) => (t.runs || []).some((r) => r.run === k.run));
     const base = b.baseline && b.baseline.run === k.run ? b.baseline : null;
     const ledgers = (b.ledgers || []).filter((l) => l.run === k.run);
-    setHead(`Run in ${b.label || b.id}`, k.run, run ? `${run.kind}, ${run.tasks} tasks, ${run.active || 0} active` : '');
+    setHead(`Run in ${b.label || b.id}`, k.run, run ? `${run.current && !run.superseded ? 'Current run' : (run.superseded ? 'Superseded' : run.kind)}, ${run.tasks} tasks, ${run.active || 0} active` : '');
     return [
-      run ? h('dl', { class: 'kv' }, kv('Kind', run.kind), kv('Started', fmtFull(run.start)), kv('Last activity', fmtFull(run.last)), kv('Active', String(run.active || 0)), kv('Cap', run.cap ? String(run.cap) : '-'),
-        kv('Statuses', Object.entries(run.counts || {}).map(([s, n]) => `${s} ${n}`).join(', ') || '-')) : null,
+      run ? h('dl', { class: 'kv' },
+        kv('Lane', run.current && !run.superseded ? 'Current' : (run.superseded ? 'Superseded / archive' : run.kind)),
+        run.supersededReason ? kv('Why', run.supersededReason) : null,
+        kv('Kind', run.kind), kv('Started', fmtFull(run.start)), kv('Last activity', fmtFull(run.last)), kv('Active', String(run.active || 0)), kv('Cap', run.cap ? String(run.cap) : '-'),
+        kv('Counts', Object.entries(run.counts || {}).map(([s, n]) => `${s} ${n}`).join(', ') || '-'),
+        run.countsSource ? kv('Counts source', run.countsSource) : null) : null,
       base ? sec('Baseline', h('dl', { class: 'kv' }, kv('Base SHA', sha(base.baseSHA, 10)), kv('Status', base.status), kv('Failed tests', fmtNum(base.numFailedTests)), kv('Passed tests', fmtNum(base.numPassedTests)), kv('Failed files', fmtNum(base.failedFileCount))),
         h('ul', { class: 'files base' }, (base.failedFiles || []).map((f) => h('li', { title: f }, f)))) : null,
       ledgers.length ? sec('Ledgers', ledgers.map((l) => evidence(l, `${l.file}, ${isNum(l.at) ? fmtFull(l.at) : ''}`))) : null,

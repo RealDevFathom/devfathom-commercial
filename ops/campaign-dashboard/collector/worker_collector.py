@@ -657,12 +657,17 @@ def collect_batch(root, name, now, live_window):
             run["active"] = 0
         elif run["active"] == 0:
             run["active"] = sum(1 for j in batch["codexJobs"] if j["run"] == entry and j["running"])
-        cls = _cr.classify_run(entry, has_current_rebase=bool(current_run_name),
-                               invalid_base=(current_sources or {}).get("status", {}).get("invalidOldBase") if current_sources else None)
-        # Also treat an INVALID_ONTO_0c6245c marker in the run dir as superseded.
+        st_src = (current_sources or {}).get("status") or {}
+        live_target = st_src.get("target") if current_sources else None
+        # invalidOldBase is historical; only pass it for non-current lanes / marker dirs.
         invalid_marker = next((f for f in listdir(p) if f.startswith("INVALID_ONTO_0c6245c")), None)
+        cls = _cr.classify_run(
+            entry,
+            has_current_rebase=bool(current_run_name),
+            target=live_target,
+            invalid_base=("0c6245c" if invalid_marker else None),
+        )
         if invalid_marker:
-            cls = _cr.classify_run(entry, has_current_rebase=True, invalid_base="0c6245c")
             run["invalidMarker"] = invalid_marker
         run["current"] = cls["current"]
         run["historical"] = cls["historical"]
@@ -761,6 +766,18 @@ def collect_batches(root, now=None, live_window=1800):
             b["baseline"] = _cr.annotate_baseline(b["baseline"], preferred=True, develop_prefix=tip)
         b["archived"] = _cr.is_archived_batch(b)
         b["counts"] = _cr.counts_from_verdicts(tasks)
+        # Progress on the current run must follow live status.json verdicts, not
+        # leftover checkpoint PENDING counts.
+        if current_run_name:
+            live = {k: v for k, v in (b.get("counts") or {}).items() if v}
+            for r in b.get("runs") or []:
+                if r.get("name") == current_run_name or r.get("current"):
+                    r["current"] = True
+                    r["superseded"] = False
+                    r.pop("supersededReason", None)
+                    r["counts"] = dict(live)
+                    r["countsSource"] = "live-status"
+                    r["tasks"] = (b.get("counts") or {}).get("total") or r.get("tasks")
         times = [name_start_ts(b["name"])] + [r.get("start") for r in b["runs"]] + [t.get("start") for t in tasks]
         b["start"] = mints(*times)
         b["last"] = maxts(*([r.get("last") for r in b["runs"]] + [t.get("last") for t in tasks] +
@@ -1160,6 +1177,10 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
             except OSError:
                 return ""
         payload["stopFiles"] = _cr.collect_stop_files(root, listdir, os.path.isfile, mtime, _read_stop)
+        payload["campaign"] = _cr.campaign_pause_from_stops(
+            payload["stopFiles"],
+            (payload.get("current") or {}).get("baseline") or payload.get("current", {}).get("baseline"),
+        )
     lanes = _live.collect_lane_status(root)
     payload["rebase"] = lanes.get("rebase")
     payload["devfix"] = lanes.get("devfix")

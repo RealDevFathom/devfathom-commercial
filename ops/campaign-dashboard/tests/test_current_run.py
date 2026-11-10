@@ -244,7 +244,19 @@ class CurrentRunCollectorTests(unittest.TestCase):
         self.assertIn("dataAsOf", self.state.get("freshness") or {})
         self.assertEqual(self.state["overview"].get("currentRun"), "rebase-1906-1110")
 
+    def test_rebase_1906_is_current_despite_invalid_old_base(self):
+        runs = {r["name"]: r for r in self._batch()["runs"]}
+        cur = runs["rebase-1906-1110"]
+        self.assertTrue(cur.get("current"))
+        self.assertFalse(cur.get("superseded"))
+        self.assertIsNone(cur.get("supersededReason"))
+        self.assertEqual(cur.get("countsSource"), "live-status")
+        # Live overlay verdicts, not raw checkpoint PENDING=70.
+        self.assertNotEqual(cur.get("counts"), {"PENDING": 70})
+        self.assertGreater((cur.get("counts") or {}).get("total") or 0, 0)
+
     def test_rebase_1110_marked_superseded(self):
+
         runs = {r["name"]: r for r in self._batch()["runs"]}
         self.assertTrue(runs["rebase-1110"].get("superseded"))
         self.assertTrue(runs.get("rebase-1906-1110", {}).get("current") or
@@ -334,6 +346,38 @@ class Fa2004DevelopBaselineTests(unittest.TestCase):
         self.assertEqual(cr.verdict_from_current_status("BLOCKED_BY_DEVELOP_BASELINE_TYPECHECK")["key"], "blocked")
         self.assertEqual(cr.verdict_from_current_status("HARNESS_BLOCKER")["key"], "blocked")
         self.assertEqual(cr.verdict_from_current_status("GATES_RUNNING")["key"], "running")
+
+
+class ClassifyAndPauseTests(unittest.TestCase):
+    def test_invalid_old_base_does_not_demote_current_lane(self):
+        cls = cr.classify_run("rebase-1906-1110", has_current_rebase=True,
+                              invalid_base="0c6245c83c1f264cc9a592ab595a8f140dd3b65b",
+                              target="fa2004e2362f7bfade1b50168fcfef23c08f6987")
+        self.assertTrue(cls["current"])
+        self.assertFalse(cls["superseded"])
+
+    def test_current_lane_demoted_only_when_live_target_is_invalid(self):
+        cls = cr.classify_run("rebase-1906-1110", target="0c6245c83c1f264cc9a592ab595a8f140dd3b65b")
+        self.assertFalse(cls["current"])
+        self.assertTrue(cls["superseded"])
+        self.assertIn("0c6245c", cls["supersededReason"])
+
+    def test_campaign_pause_baseline_suspect(self):
+        pause = cr.campaign_pause_from_stops([{
+            "name": "RETARGET1906_STOP",
+            "mtime": 1794286554,
+            "text": "PAUSE_CODEX no new Codex dispatch until baseline is corrected. Inky 09:34 PKT.",
+        }], baseline={"baseSHA": "fa2004e2", "from": "empty-after-fa2004e2"})
+        self.assertTrue(pause["paused"])
+        self.assertEqual(pause["key"], "BASELINE_SUSPECT")
+        self.assertEqual(pause["status"], "campaign-paused")
+        self.assertIn("no new Codex dispatch", pause["reason"])
+
+    def test_old_lane_stops_are_not_a_campaign_pause(self):
+        self.assertIsNone(cr.campaign_pause_from_stops([
+            {"name": "CODEX_1110_STOP", "text": "stop", "mtime": 1},
+            {"name": "REBASE37_1110_STOP", "text": "stop", "mtime": 2},
+        ]))
 
 
 if __name__ == "__main__":

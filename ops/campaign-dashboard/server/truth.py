@@ -143,23 +143,32 @@ def stub_baseline_for_tip(develop_sha, previous=None, run="develop-tip"):
     }
 
 
-def classify_run(name, *, has_current_rebase=False, invalid_base=None):
-    """Tag a run as current, historical or superseded."""
+def classify_run(name, *, has_current_rebase=False, invalid_base=None, target=None):
+    """Tag a run as current, historical or superseded.
+
+    status.invalidOldBase is historical metadata ("we left 0c6245c"). It must
+    not mark the current rebase-1906 lane superseded when the live target is
+    fa2004e2 (or any non-invalid SHA). Only a live target (or a per-run
+    INVALID_ONTO_0c6245c marker, passed as target/invalid_base for that run)
+    on the invalid base can demote the current lane.
+    """
     name = name or ""
     info = {"name": name, "current": False, "historical": False, "superseded": False, "supersededReason": None}
     if CURRENT_LANE_RE.search(name):
         info["current"] = True
-        if sha_matches(invalid_base, INVALID_BASE_PREFIX):
+        # Live target wins over the recorded invalidOldBase.
+        if sha_matches(target, INVALID_BASE_PREFIX):
             info["superseded"] = True
             info["current"] = False
-            info["supersededReason"] = f"rebased onto invalid base {short(invalid_base)}"
+            info["supersededReason"] = f"rebased onto invalid base {short(target)}"
         return info
-    if SUPERSEDED_LANE_RE.search(name) or sha_matches(invalid_base, INVALID_BASE_PREFIX):
+    if SUPERSEDED_LANE_RE.search(name) or sha_matches(target, INVALID_BASE_PREFIX) or sha_matches(invalid_base, INVALID_BASE_PREFIX):
         info["superseded"] = True
         info["historical"] = True
+        bad = target if sha_matches(target, INVALID_BASE_PREFIX) else invalid_base
         info["supersededReason"] = (
-            f"rebased onto invalid base {short(invalid_base)}" if sha_matches(invalid_base, INVALID_BASE_PREFIX)
-            else "superseded by rebase onto develop 1906b530"
+            f"rebased onto invalid base {short(bad)}" if sha_matches(bad, INVALID_BASE_PREFIX)
+            else "superseded by rebase onto develop 1906b530 / fa2004e2"
         )
         return info
     if has_current_rebase and HISTORICAL_RUN_RE.search(name):
@@ -180,6 +189,46 @@ def is_archived_batch(batch):
         return True
     hay = f"{bid} {label}".lower().replace("_", "-")
     return "review-50" in hay or "review 50" in hay
+
+
+
+def campaign_pause_from_stops(stop_files, baseline=None):
+    """Detect a controller pause of Codex dispatch (do not infer from jobs).
+
+    RETARGET1906_STOP currently reads:
+      "PAUSE_CODEX no new Codex dispatch until baseline is corrected. Inky 09:34 PKT."
+    That is BASELINE_SUSPECT / campaign-paused — display only.
+    """
+    for rec in stop_files or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("name") or "")
+        text = str(rec.get("text") or "")
+        blob = f"{name} {text}"
+        if "PAUSE_CODEX" not in blob and "no new Codex dispatch" not in blob:
+            continue
+        suspect = bool(
+            "BASELINE_SUSPECT" in blob
+            or "baseline is corrected" in text.lower()
+            or "until baseline" in text.lower()
+        )
+        return {
+            "key": "BASELINE_SUSPECT" if suspect else "campaign-paused",
+            "status": "campaign-paused",
+            "paused": True,
+            "dispatch": "paused",
+            "reason": text or "No new Codex dispatch",
+            "stopFile": name,
+            "stoppedAt": rec.get("mtime"),
+            "baseline": {
+                "sha": (baseline or {}).get("baseSHA") or (baseline or {}).get("sha"),
+                "from": (baseline or {}).get("from"),
+                "complete": (baseline or {}).get("complete"),
+                "numPassedTests": (baseline or {}).get("numPassedTests"),
+                "numFailedTests": (baseline or {}).get("numFailedTests"),
+            } if baseline else None,
+        }
+    return None
 
 
 def collect_stop_files(root, listdir, isfile, mtime, read_text, under=None):

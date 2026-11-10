@@ -696,3 +696,10 @@ button.mini { cursor: pointer; } button.mini:hover { background: var(--glass-str
 .develop-lane .dev-sha { font-variant-numeric: tabular-nums; font-family: var(--mono, ui-monospace, monospace); font-weight: 600; }
 .develop-lane .dev-gate { margin-left: auto; }
 .develop-lane .badge.pending, .develop-lane .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
+
+.campaign-state { margin-left: 12px; font-weight: 600; letter-spacing: .01em; }
+.campaign-state.paused, .banner-item.campaign-pause { background: var(--crit-bg, #3b1010); color: var(--crit-ink, #ffd6d6); padding: 4px 10px; border-radius: 999px; }
+.tag.current-run { font-weight: 600; }
+.tag.superseded-run { opacity: .65; }
+.banner-item.campaign-pause { display: flex; gap: 10px; align-items: flex-start; border-radius: 10px; padding: 10px 14px; }
+.banner-item.campaign-pause .badge { margin-right: 4px; }

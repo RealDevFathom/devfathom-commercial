@@ -30,6 +30,7 @@ from truth import (  # noqa: E402
     annotate_baseline, annotate_services, counts_from_verdicts, inky_usage_from_box,
     is_archived_batch, is_current_event, pick_current_baseline, previous_complete_baseline,
     stub_baseline_for_tip, verdict_from_current_status, develop_merge_event,
+    campaign_pause_from_stops,
 )
 from s3util import S3Backup  # noqa: E402
 
@@ -447,6 +448,7 @@ def build_state(snapshot, now=None, ai=None):
         "rejected": live_counts.get("rejected") or 0,
         "running": live_counts.get("running") or 0,
         "queued": live_counts.get("queued") or 0,
+        "blocked": live_counts.get("blocked") or 0,
         "codexJobsTotal": current.get("codexJobs") if current.get("codexJobs") is not None else (worker.get("allTime") or {}).get("codexJobsSeen"),
         "codexActive": codex.get("activeCount"),
         "codexCap": codex.get("cap") or 50,
@@ -528,7 +530,7 @@ def build_state(snapshot, now=None, ai=None):
         "overview": overview,
         "worker": {k: worker.get(k) for k in ("system", "history", "services", "codexProcs", "killSwitch",
                                               "usage", "allTime", "collectedAt", "dataAsOf", "current",
-                                              "gateProcs", "rebase", "devfix", "lanes", "stopFiles", "develop")},
+                                              "gateProcs", "rebase", "devfix", "lanes", "stopFiles", "develop", "campaign")},
         "box": {k: box.get(k) for k in ("workers", "machine", "region", "collectedAt", "usage")},
         "usage": usage,
         "codex": codex,
@@ -538,6 +540,10 @@ def build_state(snapshot, now=None, ai=None):
             "short": (github.get("developSha") or "")[:8] or None,
             "mergedAt": github.get("developAt"),
         },
+        "campaign": worker.get("campaign") or campaign_pause_from_stops(
+            worker.get("stopFiles"),
+            ((worker.get("current") or {}).get("baseline")),
+        ),
         "github": {"developSha": (develop or {}).get("sha") or github.get("developSha"),
                    "developAt": (develop or {}).get("mergedAt") or github.get("developAt"),
                    "developMovedAt": (develop or {}).get("mergedAt"),
@@ -598,6 +604,13 @@ def compute_alerts(worker, box, sources):
         price = _num(w.get("spotPrice"))
         if price is not None and price > SPOT_CAP and w.get("state") == "running":
             add("warn", f"spot-{w.get('instanceId')}", f"spot price ${price:.3f}/h above ${SPOT_CAP:.2f} cap")
+    camp = worker.get("campaign") or campaign_pause_from_stops(
+        worker.get("stopFiles"), (worker.get("current") or {}).get("baseline"))
+    if camp and camp.get("paused"):
+        reason = camp.get("reason") or "No new Codex dispatch"
+        key = camp.get("key") or "campaign-paused"
+        add("crit", key,
+            f"Campaign paused ({key}): {reason}")
     usage = inky_usage_from_box(box, worker.get("usage"))
     pct = _num(usage.get("weeklyPct"))
     if pct is not None and pct >= USAGE_STOP:
