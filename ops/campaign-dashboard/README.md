@@ -28,6 +28,7 @@ Everything is Python 3 standard library plus vanilla JS. There are no external C
 | Path | What |
 |---|---|
 | `server/app.py` | HTTP server: auth, ingest, state merge, alerts |
+| `server/ai.py` | Claude layer: read-only tools, chat loop, cached analysis, budgets |
 | `server/sanitize.py` | Sanitiser (byte-identical copy of `collector/sanitize.py`) |
 | `server/static/` | `index.html`, `app.css`, `app.js` (UI: inline SVG charts, CSP `'self'` only) |
 | `server/Dockerfile` | `python:3.12-slim`, non-root uid 10001, port 8080, linux/amd64 |
@@ -37,7 +38,7 @@ Everything is Python 3 standard library plus vanilla JS. There are no external C
 | `collector/ops-collector.env.example` | Env file template (placeholders only) |
 | `deploy/ecs-task-def.template.json` | Fargate task definition template (0.25 vCPU / 0.5 GB) |
 | `fixtures/` | Fake data that mirrors the real layout |
-| `tests/` | stdlib `unittest`: sanitiser, batch discovery, auth/ingest |
+| `tests/` | stdlib `unittest`: sanitiser, batch discovery, auth/ingest, AI layer (fake Anthropic endpoint, no network) |
 
 ## Run locally with fixtures
 
@@ -192,6 +193,37 @@ mkdir -p ~/.config/systemd/user && cp ops/campaign-dashboard/collector/systemd/o
 The box collector refuses any `aws` call except `ec2 describe-instances|describe-spot-price-history|describe-spot-instance-requests`.
 It refuses any `gh` call except `gh api -X GET ...` (no `-f/-F/--input`) and `pr|issue list|view`. Linear is a GraphQL
 `query` only, and is skipped when `LINEAR_API_KEY` is unset.
+
+## Claude assistant (AI layer)
+
+The **Ask Claude** button opens a chat drawer. Claude (`claude-opus-5-5` by default, adaptive thinking,
+server-side refusal fallbacks) answers questions about past, current and upcoming work. It uses
+**read-only tools** over the same data the dashboard shows: overview, batches, tasks, live Codex and
+gate runs, the queue, worker metrics, GitHub and Linear state, and the event history. Answers link to
+the evidence (for example `#task=<batch>/<issue>`, `#pr=994` or `#metric=memPct`); clicking a link
+opens the matching drill-down.
+
+* **Server-side only.** The key is read from `ANTHROPIC_API_KEY`, which the ECS task injects from Secrets
+  Manager. It is sent only to `api.anthropic.com`. It is never logged and never sent to the browser
+  (`/api/state` exposes only `ai.enabled` and the model name). Without the variable the AI layer is off
+  and the button is hidden.
+* **Read-only.** Every tool is a pure function over the in-memory snapshot. There are no action
+  endpoints, and the system prompt forbids claiming or offering actions. Rendered answers keep only
+  links to dashboard routes or this repository on GitHub.
+* **Cost controls** (env, defaults in brackets): `AI_DAILY_TOKEN_BUDGET` [3,000,000 weighted tokens/day,
+  cache reads count 10 %], `AI_CHAT_PER_MIN` [6] and `AI_CHAT_PER_DAY` [150] per client IP,
+  `AI_MAX_CONCURRENT` [2], at most 8 tool rounds per answer, a cached system prompt and tools,
+  `AI_CHAT_EFFORT` / `AI_ANALYSIS_EFFORT` [medium], and `AI_MODEL` [claude-opus-5-5].
+* **CSRF.** `POST /api/ai/*` needs Basic auth, a same-origin `Origin` (when sent) and the custom
+  `X-Requested-With: ops-dash` header.
+
+Create the secret once and add its ARN to the task definition (already templated):
+
+```bash
+aws secretsmanager create-secret --region eu-north-1 --name campaign-dashboard/ANTHROPIC_API_KEY --secret-string '<key from the Claude Console>'
+```
+
+The task needs outbound HTTPS to `api.anthropic.com` (NAT gateway or an egress rule from the private subnets).
 
 ## Security model
 

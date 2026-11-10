@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sanitize import sanitize  # noqa: E402
+from ai import AIError, AIService  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
@@ -34,6 +35,7 @@ STATIC_FILES = {
 }
 SOURCES = ("worker", "box")
 MAX_BODY = 8 * 1024 * 1024
+MAX_CHAT_BODY = 64 * 1024
 STALE_AFTER = 180
 FAIL_WINDOW = 300
 FAIL_LIMIT = 10
@@ -165,7 +167,7 @@ def _num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
-def build_state(snapshot, now=None):
+def build_state(snapshot, now=None, ai=None):
     """Merge the latest worker/box payloads into the dashboard view model."""
     now = now or time.time()
     sources = {}
@@ -330,6 +332,7 @@ def build_state(snapshot, now=None):
         "linear": {"available": linear_ok, "reason": linear.get("reason")},
         "events": events[:MAX_EVENTS],
         "alerts": compute_alerts(worker, box, sources),
+        "ai": ai.status() if ai else {"enabled": False},
         "limits": {"spotCap": SPOT_CAP, "usageStop": USAGE_STOP, "diskAlert": DISK_ALERT,
                    "reserveBytes": RESERVE_BYTES, "staleAfter": STALE_AFTER},
     }
@@ -474,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.static(name)
             return self.send(404, "not found")
         if path == "/api/state":
-            return self.send_json(200, build_state(self.server.store.snapshot()))
+            return self.send_json(200, self.server.state())
         return self.send(404, "not found")
 
     def static(self, name):
@@ -485,8 +488,64 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404, "not found")
         return self.send(200, body, STATIC_FILES[name])
 
+    def same_origin_json(self, limit):
+        """CSRF guard for browser POSTs: custom header (forces a CORS preflight) + Origin check."""
+        if self.headers.get("X-Requested-With") != "ops-dash":
+            self.send(403, "forbidden", api=True)
+            return None
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin and origin.split("://", 1)[-1] != host:
+            self.send(403, "forbidden", api=True)
+            return None
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+            self.send(415, "application/json required", api=True)
+            return None
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self.send(411, "content-length required", api=True)
+            return None
+        if length < 0 or length > limit:
+            self.send(413, "payload too large", api=True)
+            return None
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            self.send(400, "invalid json", api=True)
+            return None
+        if not isinstance(body, dict):
+            self.send(400, "payload must be a JSON object", api=True)
+            return None
+        return body
+
+    def ai_post(self, path):
+        if not self.require_basic():
+            self.close_connection = True
+            return None
+        body = self.same_origin_json(MAX_CHAT_BODY)
+        if body is None:
+            self.close_connection = True
+            return None
+        ai = self.server.ai
+        if not ai.enabled:
+            return self.send_json(503, {"error": "AI is not configured on this deployment"})
+        if path == "/api/ai/chat":
+            if not ai.allow_chat(self.client_ip()):
+                return self.send_json(429, {"error": "chat rate limit reached, try again shortly"})
+            history = body.get("messages")
+            if not isinstance(history, list) or not history:
+                return self.send_json(400, {"error": "messages required"})
+            try:
+                return self.send_json(200, ai.chat([m for m in history if isinstance(m, dict)]))
+            except AIError as exc:
+                return self.send_json(503, {"error": str(exc)})
+        return self.send(404, "not found", api=True)
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path.startswith("/api/ai/"):
+            return self.ai_post(path)
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[:2] != ["api", "ingest"] or parts[2] not in SOURCES:
             self.close_connection = True
@@ -528,6 +587,8 @@ def make_server(host, port, cfg, data_dir):
     srv.cfg = cfg
     srv.store = Store(data_dir)
     srv.limiter = RateLimiter()
+    srv.ai = AIService(lambda: build_state(srv.store.snapshot(), ai=srv.ai), data_dir)
+    srv.state = lambda: build_state(srv.store.snapshot(), ai=srv.ai)
     return srv
 
 
@@ -544,7 +605,7 @@ def main():
         log("WARNING: INGEST_TOKEN not set - ingest is disabled (fail closed)")
     port = int(os.environ.get("PORT", "8080"))
     srv = make_server(os.environ.get("BIND", "0.0.0.0"), port, cfg, os.environ.get("DATA_DIR", "/tmp/dash"))
-    log(f"listening on :{port}")
+    log(f"listening on :{port} · AI {'enabled (' + srv.ai.model + ')' if srv.ai.enabled else 'disabled (no ANTHROPIC_API_KEY)'}")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

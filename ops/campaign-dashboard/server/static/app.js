@@ -262,7 +262,10 @@
       S = data;
       lastFetchOk = nowSec();
       fetchError = null;
+      const first = !render.done;
       render();
+      render.done = true;
+      if (first && location.hash && ROUTE_RE.test(location.hash)) route(location.hash);
     } catch (err) {
       fetchError = err.message || 'fetch failed';
       renderFreshness();
@@ -286,7 +289,7 @@
   function render() {
     const safe = (fn) => { try { fn(); } catch (err) { console.error(fn.name, err); } };
     [renderFreshness, renderAlerts, renderFunnel, renderOverview, renderCodex, renderGatesNow, renderVitals, renderQueue,
-      renderUpcoming, renderNextBatch, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker].forEach(safe);
+      renderUpcoming, renderNextBatch, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker, renderAIStatus].forEach(safe);
     if (ui.modal.length && $('dlg').open) safe(renderModal);
   }
 
@@ -1058,6 +1061,142 @@
     return [e.batch && batchById(e.batch) ? h('button', { class: 'btn', type: 'button', onclick: () => selectBatch(e.batch, true) }, `Open batch ${batchName(e.batch)} →`) : null, evidence(e)];
   }
 
+
+  // ------------------------------------------------------------------ deep links (also used by Claude's evidence links)
+  function route(hash) {
+    if (!S || !hash || hash.length < 2) return false;
+    const raw = hash.slice(1);
+    const [key, ...rest] = raw.split('=');
+    const val = rest.join('=');
+    const dec = (x) => { try { return decodeURIComponent(x); } catch (e) { return x; } };
+    const pair = () => { const i = val.indexOf('/'); return i < 0 ? [dec(val), ''] : [dec(val.slice(0, i)), dec(val.slice(i + 1))]; };
+    if (key === 'task') { const [batch, issue] = pair(); const f = batchById(batch) ? { batch, issue } : findTask(issue) && { batch: findTask(issue).b.id, issue }; if (f) openModal('task', f); return true; }
+    if (key === 'run') { const [batch, run] = pair(); openModal('run', { batch, run }); return true; }
+    if (key === 'batch') { selectBatch(dec(val), true); return true; }
+    if (key === 'pr') { openModal('merge', { number: Number(val) }); return true; }
+    if (key === 'issue') { openModal('ghissue', { number: Number(val) }); return true; }
+    if (key === 'metric') { openModal('metric', { field: dec(val) }); return true; }
+    if (raw === 'usage') { openModal('usage', {}); return true; }
+    if (raw === 'workers') { openModal('workers', {}); return true; }
+    return false;
+  }
+  const ROUTE_RE = /^#((task|run|batch|pr|issue|metric)=[\w%.\-/]+|usage|workers)$/;
+
+  // ------------------------------------------------------------------ safe markdown (DOM only, no innerHTML)
+  function safeHref(href) {
+    if (ROUTE_RE.test(href)) return href;
+    if (S && href.startsWith(`https://github.com/${S.repo}/`) && /^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+\/(pull|issues|commit)\/\w+$/.test(href)) return href;
+    return null;
+  }
+  function inline(text) {
+    const out = [];
+    const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\))/g;
+    let last = 0; let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) out.push(text.slice(last, m.index));
+      if (m[2]) out.push(h('strong', null, m[2]));
+      else if (m[3]) out.push(h('code', null, m[3]));
+      else {
+        const href = safeHref(m[5]);
+        if (!href) out.push(m[4]);
+        else if (href.startsWith('#')) out.push(h('a', { href }, m[4]));
+        else out.push(h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, `${m[4]} ↗`));
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+  }
+  function markdown(src) {
+    const nodes = [];
+    const lines = String(src || '').replace(/\r/g, '').split('\n');
+    let list = null; let para = [];
+    const flushPara = () => { if (para.length) { nodes.push(h('p', null, inline(para.join(' ')))); para = []; } };
+    const flushList = () => { if (list) { nodes.push(list); list = null; } };
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (/^```/.test(line)) {
+        flushPara(); flushList();
+        const buf = [];
+        for (i += 1; i < lines.length && !/^```/.test(lines[i]); i += 1) buf.push(lines[i]);
+        nodes.push(h('pre', null, buf.join('\n')));
+        continue;
+      }
+      const hm = line.match(/^#{1,4}\s+(.*)/);
+      const ul = line.match(/^\s*[-*•]\s+(.*)/);
+      const ol = line.match(/^\s*\d+[.)]\s+(.*)/);
+      if (hm) { flushPara(); flushList(); nodes.push(h('h4', null, inline(hm[1]))); } else if (ul || ol) {
+        flushPara();
+        const tag = ul ? 'ul' : 'ol';
+        if (!list || list.tagName.toLowerCase() !== tag) { flushList(); list = h(tag); }
+        list.append(h('li', null, inline((ul || ol)[1])));
+      } else if (!line.trim()) { flushPara(); flushList(); } else { flushList(); para.push(line.trim()); }
+    }
+    flushPara(); flushList();
+    return nodes;
+  }
+
+  // ------------------------------------------------------------------ Claude chat drawer
+  const chat = { history: [], busy: false };
+  const SUGGESTIONS = ['What is running right now?', 'Which tasks are stuck or failing repeatedly?', 'What will merge next?',
+    'Summarise the last 24 hours', 'How is the worker machine doing?', 'Which batch needs attention?'];
+  try { const saved = JSON.parse(sessionStorage.getItem('ops-chat') || '[]'); if (Array.isArray(saved)) chat.history = saved.slice(-30); } catch (e) { /* storage unavailable */ }
+  const saveChat = () => { try { sessionStorage.setItem('ops-chat', JSON.stringify(chat.history.slice(-30))); } catch (e) { /* ignore */ } };
+
+  function renderChat(pending) {
+    const log = $('ai-log');
+    const items = chat.history.map((m) => (m.role === 'user' ? h('div', { class: 'msg user' }, m.content)
+      : h('div', { class: `msg ${m.error ? 'error' : 'assistant'}` }, m.error ? m.content : markdown(m.content),
+        m.meta ? h('div', { class: 'meta' }, m.meta) : null)));
+    if (!items.length) items.push(h('div', { class: 'msg assistant' }, markdown('Hi — I can answer anything the dashboard knows: batches, tasks and gates, Codex jobs, merges, GitHub/Linear state, worker metrics and history. I link to the evidence so you can click through.')));
+    if (pending) items.push(h('div', { class: 'msg assistant typing', 'aria-label': 'Claude is thinking' }, h('i'), h('i'), h('i')));
+    log.replaceChildren(...items);
+    log.scrollTop = log.scrollHeight;
+    mount('ai-suggest', chat.history.length ? null : SUGGESTIONS.map((q) => h('button', { class: 'btn ghost', type: 'button', onclick: () => sendChat(q) }, q)));
+  }
+
+  async function sendChat(text) {
+    text = (text || '').trim();
+    if (!text || chat.busy) return;
+    chat.busy = true;
+    $('ai-send').disabled = true;
+    chat.history.push({ role: 'user', content: text });
+    $('ai-input').value = '';
+    renderChat(true);
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ops-dash' },
+        body: JSON.stringify({ messages: chat.history.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content })).slice(-16) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      chat.history.push({ role: 'assistant', content: data.reply || '(no answer)', meta: `${data.model || ''}${(data.tools || []).length ? ` · looked at ${[...new Set(data.tools)].join(', ')}` : ''}` });
+    } catch (err) {
+      chat.history.push({ role: 'assistant', error: true, content: `Couldn't get an answer: ${err.message}` });
+    } finally {
+      chat.busy = false;
+      $('ai-send').disabled = false;
+      saveChat();
+      renderChat(false);
+    }
+  }
+
+  function toggleChat(open) {
+    const d = $('ai-drawer');
+    const on = open ?? !d.classList.contains('open');
+    d.classList.toggle('open', on);
+    d.setAttribute('aria-hidden', on ? 'false' : 'true');
+    $('ai-fab').setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on) { renderChat(chat.busy); setTimeout(() => $('ai-input').focus(), 200); }
+  }
+
+  function renderAIStatus() {
+    const st = S.ai || {};
+    $('ai-fab').classList.toggle('hidden', !st.enabled);
+    $('ai-status').textContent = st.enabled ? `${st.model} · ${st.budgetExhausted ? 'daily budget reached' : `${st.budgetUsedPct ?? 0}% of daily budget used`}` : 'AI not configured';
+  }
+
   // ------------------------------------------------------------------ wiring
   function init() {
     $('bd-close').addEventListener('click', () => selectBatch(ui.batch));
@@ -1068,6 +1207,19 @@
     $('dlg').addEventListener('close', () => { ui.modal = []; });
     $('dlg').addEventListener('click', (e) => { if (e.target === $('dlg')) $('dlg').close(); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[href^="#"]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (ROUTE_RE.test(href)) { e.preventDefault(); if (route(href)) history.replaceState(null, '', href); }
+    });
+    window.addEventListener('hashchange', () => { if (ROUTE_RE.test(location.hash)) route(location.hash); });
+    $('ai-fab').addEventListener('click', () => toggleChat());
+    $('ai-close').addEventListener('click', () => toggleChat(false));
+    $('ai-clear').addEventListener('click', () => { chat.history = []; saveChat(); renderChat(false); });
+    $('ai-form').addEventListener('submit', (e) => { e.preventDefault(); sendChat($('ai-input').value); });
+    $('ai-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat($('ai-input').value); } });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('ai-drawer').classList.contains('open') && !$('dlg').open) toggleChat(false); });
     if ('IntersectionObserver' in window) {
       const links = [...document.querySelectorAll('.tabs a')];
       const io = new IntersectionObserver((entries) => {

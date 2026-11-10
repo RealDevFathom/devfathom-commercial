@@ -121,6 +121,24 @@
     <div id="dlg-body"></div>
   </dialog>
 
+  <button id="ai-fab" class="ai-fab hidden" type="button" aria-controls="ai-drawer" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+    <span>Ask Claude</span>
+  </button>
+  <aside id="ai-drawer" class="ai-drawer" aria-label="Claude assistant" aria-hidden="true">
+    <div class="ai-head">
+      <div><div class="eyebrow">Read-only assistant</div><h2>Ask Claude</h2><div id="ai-status" class="muted small"></div></div>
+      <div class="dialog-actions"><button id="ai-clear" class="btn ghost" type="button" title="New conversation">New</button><button id="ai-close" class="btn ghost" type="button" aria-label="Close assistant">✕</button></div>
+    </div>
+    <div id="ai-log" class="ai-log" aria-live="polite"></div>
+    <div id="ai-suggest" class="ai-suggest"></div>
+    <form id="ai-form" class="ai-form" autocomplete="off">
+      <textarea id="ai-input" rows="2" maxlength="4000" placeholder="Ask about batches, tasks, gates, merges, the worker…" aria-label="Message"></textarea>
+      <button id="ai-send" class="btn primary" type="submit">Send</button>
+    </form>
+    <div class="ai-foot muted small">Answers come from the dashboard's data via read-only tools. Claude cannot change anything.</div>
+  </aside>
+
   <footer>Read-only monitoring · private · worker &amp; ops-box collectors · all times PKT (Asia/Karachi, UTC+5) · auto-refresh 30 s</footer>
   <script src="/static/app.js" defer></script>
 </body>
