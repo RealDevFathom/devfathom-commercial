@@ -13,7 +13,7 @@ RUN groupadd --system --gid 10001 app \
  && chown app:app /data
 
 WORKDIR /app
-COPY --chown=root:root app.py sanitize.py /app/
+COPY --chown=root:root *.py /app/
 COPY --chown=root:root static/ /app/static/
 
 USER 10001:10001

@@ -1,0 +1,274 @@
+"""Current-run truth: rebase-1906-1110 + reclassify drive KPIs, not superseded codex-1110."""
+import json
+import os
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.join(os.path.dirname(HERE), d) for d in ("server", "tests", "collector")]
+
+import app  # noqa: E402
+import current_run as cr  # noqa: E402
+import insights  # noqa: E402
+import worker_collector as wc  # noqa: E402
+
+BATCH = "pharmacy-campaign-repair-20261108-1306"
+NOW = 1762732800  # 2026-11-10 08:00:00 PKT-ish; used only as a floor
+
+
+def _write(path, obj):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(obj))
+
+
+def _pkt(h, m=0, s=0):
+    return f"2026-11-10T{h:02d}:{m:02d}:{s:02d}+05:00"
+
+
+def make_tree(root):
+    jobs = Path(root) / "jobs"
+    b = jobs / BATCH
+    (b / "rebase-1906-1110").mkdir(parents=True)
+    (b / "baseline-1110").mkdir()
+    (b / "codex-1110").mkdir()
+    review = jobs / "pharmacy-review-50"
+    review.mkdir()
+    # Incomplete old baseline should lose to baseline-1110.
+    hotel = b / "baseline-hotel-dynamic-1649"
+    hotel.mkdir()
+    _write(hotel / "checkpoint.json", {"status": "CANONICAL_BOOTSTRAP_CHECKS_TERMINAL_NOT_FULL_QA"})
+    _write(b / "baseline-1110" / "checkpoint.json", {
+        "status": "TERMINAL_BASELINE_RECORDED",
+        "baseSHA": "1906b53076286b2e1438eb821969c0d50e5575c6",
+        "numPassedTests": 16281, "numFailedTests": 33, "failedFileCount": 12,
+        "startPKT": _pkt(5, 38), "endPKT": _pkt(5, 40),
+    })
+    # Superseded invalid marker + an old failed run that must not drive KPIs.
+    _write(b / "rebase-1110" / "INVALID_ONTO_0c6245c_1110.json", {
+        "invalidPKT": _pkt(7, 2), "reason": "wrong base", "trees": {},
+    })
+    _write(b / "codex-1110" / "DEV-18" / "checkpoint.json", {
+        "issue": "DEV-18", "status": "TERMINAL_VERIFY_FAILED_NEEDS_ITERATION",
+        "newSourceSHA": "aaaaaaaaaa", "codexExitCode": 0,
+        "changedFiles": ["src/lib/x.ts"],
+        "steps": {"complete_unit": {"status": "FAIL", "failedFiles": ["a.test.ts"]}},
+        "startPKT": _pkt(5, 50), "endPKT": _pkt(5, 58),
+    })
+    status_tasks = {
+        "DEV-741": {
+            "issue": "DEV-741",
+            "status": "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY",
+            "finalRebasedSHA": "ae48eb9656d83136bf4757cf1adc83af80e5f412",
+            "onDevelopTip": True, "contains0c6245c": False,
+            "endPKT": _pkt(7, 19), "reclassifiedPKT": _pkt(7, 46, 50),
+            "reclassifiedFrom": "J/baseline-1110",
+        },
+        "DEV-61": {
+            "issue": "DEV-61",
+            "status": "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY",
+            "finalRebasedSHA": "2350adb1e0be281d7f59db3978ff1a7423c352c8",
+            "endPKT": _pkt(7, 19), "reclassifiedPKT": _pkt(7, 46, 50),
+        },
+        "DEV-18": {
+            "issue": "DEV-18",
+            "status": "GATES_FAIL_NEW_VS_BASELINE",
+            "finalRebasedSHA": "cee6dad2e7b645e66c317b2708cf5dab1d8a4571",
+            "endPKT": _pkt(7, 19), "reclassifiedPKT": _pkt(7, 46, 50),
+        },
+        "DEV-54": {
+            "issue": "DEV-54",
+            "status": "TERMINAL_REJECTED_ASSERTION_GUARD",
+            "finalRebasedSHA": "0d9651d267c59acce4ab6ffba9797b38c31674e1",
+            "endPKT": _pkt(7, 6, 51),
+        },
+        "DEV-10": {
+            "issue": "DEV-10",
+            "status": "GATES_RUNNING",
+            "mode": "transplant",
+            "codex": [{"model": "gpt-6.1-terra", "effort": "medium",
+                       "codexStartPKT": _pkt(8, 0, 6), "codexEndPKT": _pkt(8, 1, 23),
+                       "codexExitCode": 0}],
+        },
+        "DEV-108": {"issue": "DEV-108", "status": "PENDING"},
+    }
+    _write(b / "rebase-1906-1110" / "status.json", {
+        "startPKT": _pkt(7, 0),
+        "target": "1906b53076286b2e1438eb821969c0d50e5575c6",
+        "invalidOldBase": "0c6245c83c1f264cc9a592ab595a8f140dd3b65b",
+        "tasks": status_tasks,
+        "baseline": {"sha": "1906b53076286b2e1438eb821969c0d50e5575c6"},
+    })
+    _write(b / "rebase-1906-1110" / "reclassify-baseline1110.json", {
+        "atPKT": _pkt(7, 46, 50),
+        "baseline": {
+            "sha": "1906b53076286b2e1438eb821969c0d50e5575c6",
+            "complete": True, "status": "COMPLETE",
+            "numPassedTests": 16281, "numFailedTests": 33,
+        },
+        "summary": {
+            "n": 3,
+            "verdicts": {"HARNESS_FALSE_OR_BASELINE_ONLY": 2, "REAL_NEW_FAILURES": 1},
+            "statusAfter": {
+                "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY": 2,
+                "GATES_FAIL_NEW_VS_BASELINE": 1,
+            },
+            "realNewFailures": ["DEV-18"],
+            "passedAll": [],
+            "counts": {"realFailures": 1},
+        },
+        "tasks": {
+            "DEV-741": {
+                "oldStatus": "GATES_FAILED_CODEX_NO_CHANGE",
+                "newStatus": "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY",
+                "verdict": "HARNESS_FALSE_OR_BASELINE_ONLY",
+                "baselineOnly": ["src/lib/abac/index.test.ts"],
+                "newVsBaseline": [],
+                "rebasedSHA": "ae48eb9656d83136bf4757cf1adc83af80e5f412",
+            },
+            "DEV-61": {
+                "oldStatus": "GATES_FAILED_CODEX_NO_CHANGE",
+                "newStatus": "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY",
+                "verdict": "HARNESS_FALSE_OR_BASELINE_ONLY",
+                "baselineOnly": ["a.test.ts"],
+                "newVsBaseline": [],
+            },
+            "DEV-18": {
+                "oldStatus": "GATES_FAILED_CODEX_NO_CHANGE",
+                "newStatus": "GATES_FAIL_NEW_VS_BASELINE",
+                "verdict": "REAL_NEW_FAILURES",
+                "baselineOnly": ["a.test.ts"],
+                "newVsBaseline": ["src/new-fail.test.ts"],
+            },
+        },
+    })
+    _write(b / "rebase-1906-1110" / "flags.json", {
+        "updatedPKT": _pkt(7, 37),
+        "items": [{"issue": "DEV-54", "status": "TERMINAL_REJECTED_ASSERTION_GUARD", "for": "Security"}],
+    })
+    # Empty review-50 batch (70 pending historically) — must be archived.
+    for i in range(3):
+        _write(review / f"DEV-{i+1}" / "checkpoint.json", {"issue": f"DEV-{i+1}", "status": "PENDING"})
+    return jobs
+
+
+class VerdictMappingTests(unittest.TestCase):
+    def test_baseline_only_is_not_failed(self):
+        v = cr.verdict_from_current_status(
+            "GATES_PASS_EXCEPT_DEVELOP_BASELINE_PENDING_QA_SECURITY",
+            {"verdict": "HARNESS_FALSE_OR_BASELINE_ONLY"})
+        self.assertEqual(v["key"], "pending_qa")
+
+    def test_real_new_failures(self):
+        v = cr.verdict_from_current_status(
+            "GATES_FAIL_NEW_VS_BASELINE", {"verdict": "REAL_NEW_FAILURES"})
+        self.assertEqual(v["key"], "failed")
+        self.assertIn("differential", v["gates"])
+
+    def test_rejected_and_running(self):
+        self.assertEqual(cr.verdict_from_current_status("TERMINAL_REJECTED_ASSERTION_GUARD")["key"], "rejected")
+        self.assertEqual(cr.verdict_from_current_status("GATES_RUNNING")["key"], "running")
+        self.assertEqual(cr.verdict_from_current_status("CODEX_ITER2_RUNNING")["key"], "running")
+        self.assertEqual(cr.verdict_from_current_status("PENDING")["key"], "queued")
+
+    def test_live_running_wins_over_reclassify(self):
+        v = cr.verdict_from_current_status(
+            "CODEX_ITER2_RUNNING", {"verdict": "REAL_NEW_FAILURES", "newStatus": "GATES_FAIL_NEW_VS_BASELINE"})
+        self.assertEqual(v["key"], "running")
+
+
+class CurrentRunCollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.jobs = str(make_tree(cls.tmp.name))
+        cls.payload = wc.collect(cls.jobs, state_dir=None, live_window=0, host_metrics=False,
+                                 now=time.time())
+        cls.state = app.build_state({"worker": {"receivedAt": time.time(), "payload": cls.payload}},
+                                    now=time.time())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _batch(self):
+        return next(b for b in self.state["batches"] if b["id"] == BATCH)
+
+    def _task(self, issue):
+        return next(t for t in self._batch()["tasks"] if t["issue"] == issue)
+
+    def test_baseline_1110_is_current_and_complete(self):
+        base = self._batch()["baseline"]
+        self.assertEqual(base["run"], "baseline-1110")
+        self.assertTrue(base.get("complete") or base.get("current"))
+        self.assertEqual(base["numPassedTests"], 16281)
+        self.assertEqual(base["numFailedTests"], 33)
+        self.assertTrue(str(base.get("baseSHA") or "").startswith("1906b530"))
+
+    def test_verdicts_and_kpis(self):
+        o = self.state["overview"]
+        self.assertEqual(o["pendingQa"], 2)
+        self.assertEqual(o["failed"], 1)
+        self.assertEqual(o["rejected"], 1)
+        self.assertEqual(o["running"], 1)
+        self.assertEqual(o["queued"], 1)
+        self.assertEqual(o["fixed"], 0)
+        self.assertEqual(o["merged"], 0)
+        self.assertEqual(o["tasks"], 6)
+        self.assertEqual(self._task("DEV-741")["verdict"]["key"], "pending_qa")
+        self.assertEqual(self._task("DEV-18")["verdict"]["key"], "failed")
+        self.assertEqual(self._task("DEV-54")["verdict"]["key"], "rejected")
+        self.assertEqual(self._task("DEV-10")["verdict"]["key"], "running")
+        self.assertEqual(self._task("DEV-108")["verdict"]["key"], "queued")
+        # Baseline-only must not set differential FAIL (that was the "38 with new failures" bug).
+        self.assertEqual(self._task("DEV-741")["gates"]["differential"]["status"], "PASS")
+        self.assertEqual(self._task("DEV-18")["gates"]["differential"]["status"], "FAIL")
+
+    def test_review_50_archived_and_excluded(self):
+        r = next(b for b in self.state["batches"] if "review-50" in b["id"])
+        self.assertTrue(r["archived"])
+        # Overview tasks are 6 from the current batch, not 6+3.
+        self.assertEqual(self.state["overview"]["tasks"], 6)
+        ids = {x["id"] for x in self.state["insights"]["rules"]}
+        self.assertFalse(any("review-50" in i for i in ids))
+
+    def test_superseded_codex_events_excluded(self):
+        for e in self.state["events"]:
+            self.assertNotIn("codex-1110", str(e.get("run") or ""))
+            self.assertFalse(e.get("superseded"))
+
+    def test_data_as_of_present(self):
+        self.assertTrue(self.state.get("dataAsOf"))
+        self.assertIn("dataAsOf", self.state.get("freshness") or {})
+        self.assertEqual(self.state["overview"].get("currentRun"), "rebase-1906-1110")
+
+    def test_rebase_1110_marked_superseded(self):
+        runs = {r["name"]: r for r in self._batch()["runs"]}
+        self.assertTrue(runs["rebase-1110"].get("superseded"))
+        self.assertTrue(runs.get("rebase-1906-1110", {}).get("current") or
+                        self._batch().get("currentRun") == "rebase-1906-1110")
+
+
+class HostBuildRuleTests(unittest.TestCase):
+    def test_host_build_common_fail_dropped(self):
+        st = {
+            "batches": [{
+                "id": BATCH, "label": "Pharmacy campaign",
+                "tasks": [
+                    {"issue": f"DEV-{i}", "runs": [
+                        {"run": "rebase-1906-1110", "current": True,
+                         "steps": [{"gate": "host_build", "status": "FAIL", "name": "host_build"}]}],
+                     "gates": {}, "verdict": {"key": "failed"}}
+                    for i in range(20)
+                ],
+            }],
+            "codex": {}, "worker": {}, "limits": {},
+        }
+        ids = {r["id"] for r in insights.rule_insights(st)}
+        self.assertNotIn(f"rule:common-fail:{BATCH}:host_build", ids)
+
+
+if __name__ == "__main__":
+    unittest.main()

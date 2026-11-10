@@ -26,6 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sanitize import sanitize  # noqa: E402
 from ai import AIError, AIService  # noqa: E402
 from insights import rule_insights  # noqa: E402
+from truth import (  # noqa: E402
+    annotate_baseline, annotate_services, counts_from_verdicts, inky_usage_from_box,
+    is_archived_batch, is_current_event, pick_current_baseline, verdict_from_current_status,
+)
+from s3util import S3Backup  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
@@ -65,7 +70,27 @@ def verdict(t):
 
     PASSED/MERGED/DONE only when every required gate passed on the exact final SHA and nothing failed.
     Any failed gate (complete_unit counts unless the differential vs baseline passes) is FAILED and named.
+    Baseline-only (pending QA/Security) and assertion-guard rejections come from the current
+    rebase-1906 / reclassify status and must not be reported as failed.
     """
+    live = t.get("liveVerdict") if isinstance(t.get("liveVerdict"), dict) else None
+    if not live and (t.get("currentRun") or t.get("currentSource")):
+        live = verdict_from_current_status(t.get("status"), t.get("reclassify"), running=bool(t.get("running")))
+    if live and live.get("key") == "running":
+        step = t.get("currentStep")
+        return {"key": "running", "label": live.get("label") or (
+            f"Running {GATE_NAMES.get(step, step)}" if step else "Running"), "status": live.get("status")}
+    if live and live.get("key") in ("pending_qa", "rejected", "queued"):
+        return live
+    if live and live.get("key") == "failed":
+        return live
+    if live and live.get("key") == "passed":
+        # Fall through so merge / done can upgrade a real pass.
+        t = dict(t)
+        t["gated"] = True
+        g = dict(t.get("gates") or {})
+        g.setdefault("final_sha", {"status": "PASS"})
+        t["gates"] = g
     g = t.get("gates") or {}
     diff_pass = (g.get("differential") or {}).get("status") == "PASS"
     fails = [k for k, v in g.items() if k not in META_GATES and isinstance(v, dict) and v.get("status") == "FAIL"
@@ -158,8 +183,9 @@ def log(msg):
 # --------------------------------------------------------------------------- storage
 
 class Store:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, backup=None):
         self.data_dir = data_dir
+        self.backup = backup
         self.lock = threading.Lock()
         self.data = {}
         try:
@@ -167,25 +193,46 @@ class Store:
         except OSError as exc:
             log(f"cannot create DATA_DIR ({type(exc).__name__}); running in-memory only")
         for src in SOURCES:
-            try:
-                with open(os.path.join(data_dir, f"{src}.json")) as fh:
-                    rec = json.load(fh)
-                if isinstance(rec, dict) and isinstance(rec.get("payload"), dict):
-                    self.data[src] = rec
-            except (OSError, ValueError):
-                pass
+            rec = self._read_local(src)
+            if rec is None and backup:
+                rec = backup.get_json(f"{src}.json")
+                if rec and isinstance(rec.get("payload"), dict):
+                    log(f"hydrated {src} from durable backup")
+                    self._write_local(src, rec)
+            if isinstance(rec, dict) and isinstance(rec.get("payload"), dict):
+                self.data[src] = rec
+
+    def _read_local(self, source):
+        try:
+            with open(os.path.join(self.data_dir, f"{source}.json")) as fh:
+                rec = json.load(fh)
+            if isinstance(rec, dict) and isinstance(rec.get("payload"), dict):
+                return rec
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _write_local(self, source, rec):
+        try:
+            fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=f".{source}.")
+            with os.fdopen(fd, "w") as fh:
+                json.dump(rec, fh, separators=(",", ":"))
+            os.replace(tmp, os.path.join(self.data_dir, f"{source}.json"))
+            return True
+        except OSError as exc:
+            log(f"persist {source} failed ({type(exc).__name__})")
+            return False
 
     def put(self, source, payload, now=None):
         rec = {"receivedAt": now or time.time(), "payload": payload}
         with self.lock:
             self.data[source] = rec
+            self._write_local(source, rec)
+        if self.backup:
             try:
-                fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=f".{source}.")
-                with os.fdopen(fd, "w") as fh:
-                    json.dump(rec, fh, separators=(",", ":"))
-                os.replace(tmp, os.path.join(self.data_dir, f"{source}.json"))
-            except OSError as exc:
-                log(f"persist {source} failed ({type(exc).__name__})")
+                self.backup.put_json(f"{source}.json", rec)
+            except Exception as exc:  # backup must never break ingest
+                log(f"durable persist {source} failed ({type(exc).__name__})")
         return rec
 
     def snapshot(self):
@@ -277,6 +324,7 @@ def build_state(snapshot, now=None, ai=None):
         if isinstance(st, dict) and st.get("title"):
             titles[issue] = st["title"]
 
+    usage = inky_usage_from_box(box, worker.get("usage"))
     best = {}
     batches = []
     for b in worker.get("batches") or []:
@@ -314,55 +362,84 @@ def build_state(snapshot, now=None, ai=None):
             t["done"] = verdict(t)["key"] in ("passed", "merged") and bool(merge) and issues_closed
             t["verdict"] = verdict(t)
             t["nextGate"], t["nextGateStatus"] = (None, None) if t["done"] else next_gate(gates)
-            if t["verdict"]["key"] in ("done", "merged", "failed"):
+            if t["verdict"]["key"] in ("done", "merged", "failed", "pending_qa", "rejected", "running", "queued"):
                 t["phase"] = t["verdict"]["key"]
             tasks.append(t)
-            agg = best.setdefault(issue, {"fixed": False, "gated": False, "merged": False, "linear": False,
-                                          "gh": False, "done": False})
-            agg["fixed"] |= bool(t.get("fixed"))
-            agg["gated"] |= t["verdict"]["key"] in ("passed", "merged", "done")
-            agg["merged"] |= t["merged"]
-            agg["linear"] |= bool(linear_closed)
-            agg["gh"] |= t["ghClosed"]
-            agg["done"] |= t["done"]
         b = dict(b)
+        b["archived"] = is_archived_batch(b)
         b["tasks"] = tasks
+        # Rollups come only from per-task verdicts (PASSED = every required gate on the final SHA).
         counts = dict(b.get("counts") or {})
-        counts.update({"total": len(tasks),
-                       "fixed": sum(1 for t in tasks if t.get("fixed")),
-                       "gated": sum(1 for t in tasks if t.get("gated")),
-                       "merged": sum(1 for t in tasks if t["merged"]),
-                       "closed": sum(1 for t in tasks if t["ghClosed"] and t["linearClosed"] is not False),
-                       "done": sum(1 for t in tasks if t["done"]),
-                       "running": sum(1 for t in tasks if t.get("running"))})
+        counts.update(counts_from_verdicts(tasks))
         b["counts"] = counts
         last = _num(b.get("last")) or 0
-        b["historical"] = not b.get("active") and not counts["running"] and now - last > 86400
+        b["historical"] = bool(b["archived"]) or (
+            not b.get("active") and not counts["running"] and now - last > 86400)
+        if b.get("baseline"):
+            preferred = pick_current_baseline(b.get("baselines") or [b["baseline"]],
+                                              ((github.get("developSha") or "")[:8] or None))
+            # Fall back to the batch's own list / current object when develop SHA is unknown in tests.
+            b["baselines"] = [annotate_baseline(x, preferred=x is preferred or (
+                preferred and x.get("run") and x.get("run") == preferred.get("run")))
+                for x in (b.get("baselines") or [b["baseline"]])]
+            current = next((x for x in b["baselines"] if x.get("current")), b["baselines"][0] if b["baselines"] else None)
+            if current:
+                b["baseline"] = current
+        if not b["archived"]:
+            for t in tasks:
+                issue = t["issue"]
+                agg = best.setdefault(issue, {"fixed": False, "gated": False, "merged": False, "linear": False,
+                                              "gh": False, "done": False, "failed": False, "verdict": None})
+                key = (t.get("verdict") or {}).get("key")
+                agg["fixed"] |= key in ("passed", "merged", "done")
+                agg["gated"] |= key in ("passed", "merged", "done")
+                agg["failed"] |= key == "failed"
+                agg["merged"] |= t["merged"]
+                agg["linear"] |= bool(t.get("linearClosed"))
+                agg["gh"] |= t["ghClosed"]
+                agg["done"] |= t["done"]
+                agg["verdict"] = t.get("verdict")
         batches.append(b)
 
     codex = worker.get("codex") or {}
     machine = box.get("machine") or {}
-    usage = worker.get("usage") or {}
+    # Live KPI totals: only non-archived batches, driven by per-task verdicts.
+    live_batches = [b for b in batches if not b.get("archived")]
+    live_tasks = [t for b in live_batches for t in b.get("tasks") or []]
+    live_counts = counts_from_verdicts(live_tasks)
+    current = worker.get("current") or {}
+    data_as_of = current.get("dataAsOf") or worker.get("dataAsOf") or worker.get("collectedAt")
+    if data_as_of is None:
+        rec = (snapshot.get("worker") or {}).get("receivedAt")
+        data_as_of = rec
+    worker_age = sources.get("worker") or {}
     overview = {
-        "tasks": len(best),
-        "fixed": sum(1 for v in best.values() if v["fixed"]),
-        "gated": sum(1 for v in best.values() if v["gated"]),
+        "tasks": live_counts["total"] or len(best),
+        "fixed": live_counts["fixed"],
+        "failed": live_counts["failed"],
+        "gated": live_counts["gated"],
         "merged": sum(1 for v in best.values() if v["merged"]),
         "linearClosed": sum(1 for v in best.values() if v["linear"]) if linear_ok else None,
         "ghClosed": sum(1 for v in best.values() if v["gh"]),
         "done": sum(1 for v in best.values() if v["done"]),
-        "codexJobsTotal": (worker.get("allTime") or {}).get("codexJobsSeen"),
+        "pendingQa": live_counts.get("pendingQa") or 0,
+        "rejected": live_counts.get("rejected") or 0,
+        "running": live_counts.get("running") or 0,
+        "queued": live_counts.get("queued") or 0,
+        "codexJobsTotal": current.get("codexJobs") if current.get("codexJobs") is not None else (worker.get("allTime") or {}).get("codexJobsSeen"),
         "codexActive": codex.get("activeCount"),
         "codexCap": codex.get("cap") or 50,
         "machineHours": machine.get("hours"),
         "machineCostUsd": machine.get("costUsd"),
         "usagePct": usage.get("weeklyPct"),
         "usageStopActive": bool(usage.get("stopActive")),
-        "batches": len(batches),
+        "batches": len(live_batches),
         "mergedLast30d": len(github.get("merged") or []),
+        "currentRun": current.get("run") or next((b.get("currentRun") for b in live_batches if b.get("currentRun")), None),
     }
 
     events = list(worker.get("events") or [])
+    events = [e for e in events if is_current_event(e)]
     for pr in (github.get("merged") or [])[:100]:
         if pr.get("mergedAt"):
             events.append({"ts": pr["mergedAt"], "kind": "merge", "level": "ok", "pr": pr.get("number"),
@@ -388,7 +465,9 @@ def build_state(snapshot, now=None, ai=None):
                                       "step": (cur or {}).get("name"), "gate": (cur or {}).get("gate"),
                                       "start": (cur or {}).get("start") or r.get("start"),
                                       "done": sum(1 for s in steps if s.get("status") == "PASS"), "total": len(steps)})
-            if t.get("phase") == "pending" and not t.get("running"):
+            if b.get("archived"):
+                continue
+            if (t.get("phase") == "pending" or (t.get("verdict") or {}).get("key") in ("queued", "pending")) and not t.get("running"):
                 queue.append({"batch": b["id"], "issue": t["issue"], "status": t.get("status"),
                               "model": t.get("model"), "effort": t.get("effort"), "title": t.get("title")})
             if t.get("nextGate") and t.get("phase") not in ("pending",):
@@ -398,14 +477,26 @@ def build_state(snapshot, now=None, ai=None):
 
     state = {
         "serverTime": now,
+        "dataAsOf": data_as_of,
+        "freshness": {
+            "dataAsOf": data_as_of,
+            "collectedAt": worker.get("collectedAt"),
+            "stale": bool(worker_age.get("stale")),
+            "ageSec": worker_age.get("ageSec"),
+            "staleAfter": STALE_AFTER,
+            "currentRun": overview.get("currentRun"),
+            "currentSource": current.get("statusFile"),
+        },
         "now": {"gates": gates_now},
         "next": {"queue": queue, "upcoming": upcoming, "pipeline": list(PIPELINE)},
         "sources": sources,
         "repo": box.get("repo") or "RealDevFathom/devfathom-commercial",
         "overview": overview,
         "worker": {k: worker.get(k) for k in ("system", "history", "services", "codexProcs", "killSwitch",
-                                              "usage", "allTime", "collectedAt")},
-        "box": {k: box.get(k) for k in ("workers", "machine", "region", "collectedAt")},
+                                              "usage", "allTime", "collectedAt", "dataAsOf", "current",
+                                              "gateProcs", "rebase", "devfix", "lanes", "stopFiles")},
+        "box": {k: box.get(k) for k in ("workers", "machine", "region", "collectedAt", "usage")},
+        "usage": usage,
         "codex": codex,
         "batches": batches,
         "github": {"developSha": github.get("developSha"), "developAt": github.get("developAt"),
@@ -416,8 +507,11 @@ def build_state(snapshot, now=None, ai=None):
         "alerts": compute_alerts(worker, box, sources),
         "ai": ai.status() if ai else {"enabled": False},
         "limits": {"spotCap": SPOT_CAP, "usageStop": USAGE_STOP, "diskAlert": DISK_ALERT,
-                   "reserveBytes": RESERVE_BYTES, "staleAfter": STALE_AFTER},
+                   "reserveBytes": RESERVE_BYTES, "staleAfter": STALE_AFTER,
+                   "usageLabel": usage.get("label")},
     }
+    if isinstance(state["worker"].get("services"), list):
+        state["worker"]["services"] = annotate_services(state["worker"]["services"])
     try:
         rules = rule_insights(state, now)
     except Exception as exc:  # a bad payload must never break the dashboard
@@ -461,12 +555,16 @@ def compute_alerts(worker, box, sources):
         price = _num(w.get("spotPrice"))
         if price is not None and price > SPOT_CAP and w.get("state") == "running":
             add("warn", f"spot-{w.get('instanceId')}", f"spot price ${price:.3f}/h above ${SPOT_CAP:.2f} cap")
-    usage = worker.get("usage") or {}
+    usage = inky_usage_from_box(box, worker.get("usage"))
     pct = _num(usage.get("weeklyPct"))
     if pct is not None and pct >= USAGE_STOP:
-        add("crit", "usage", f"weekly usage {pct:.0f}% ≥ {USAGE_STOP:.0f}% stop line")
+        add("crit", "usage",
+            f"Inky (Grok Bot) weekly usage {pct:.0f}% ≥ {USAGE_STOP:.0f}% stop line. "
+            "Inky stops its own work at 95%; this is not Codex, worker, or Claude usage.")
     if usage.get("stopActive"):
-        add("warn", "usage-stop", "owner usage cutoff STOP marker is active")
+        add("warn", "usage-stop",
+            "Inky (Grok Bot) usage-stop marker is active — Inky has stopped its own work. "
+            "This does not mean Codex, the worker, or Claude should be throttled.")
     return alerts
 
 
@@ -680,13 +778,14 @@ class Handler(BaseHTTPRequestHandler):
     do_DELETE = do_PATCH = do_PUT
 
 
-def make_server(host, port, cfg, data_dir):
+def make_server(host, port, cfg, data_dir, backup=None):
     srv = ThreadingHTTPServer((host, port), Handler)
     srv.daemon_threads = True
     srv.cfg = cfg
-    srv.store = Store(data_dir)
+    srv.backup = backup if backup is not None else S3Backup()
+    srv.store = Store(data_dir, backup=srv.backup)
     srv.limiter = RateLimiter()
-    srv.ai = AIService(lambda: build_state(srv.store.snapshot(), ai=srv.ai), data_dir)
+    srv.ai = AIService(lambda: build_state(srv.store.snapshot(), ai=srv.ai), data_dir, backup=srv.backup)
     srv.state = lambda: build_state(srv.store.snapshot(), ai=srv.ai)
     return srv
 

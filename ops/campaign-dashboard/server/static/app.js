@@ -21,10 +21,12 @@
   };
   const STATUS_META = {
     done: { icon: 'check-circle', label: 'Done' }, merged: { icon: 'merge', label: 'Merged' }, passed: { icon: 'check-circle', label: 'Passed' },
-    failed: { icon: 'x-circle', label: 'Failed' }, blocked: { icon: 'prohibit', label: 'Blocked' }, running: { icon: 'circle-notch', label: 'Running' },
+    failed: { icon: 'x-circle', label: 'Failed' }, rejected: { icon: 'prohibit', label: 'Rejected' },
+    blocked: { icon: 'prohibit', label: 'Blocked' }, running: { icon: 'circle-notch', label: 'Running' },
+    pending_qa: { icon: 'hourglass', label: 'Pending QA / Security' },
     gates: { icon: 'hourglass', label: 'Awaiting gates' }, queued: { icon: 'circle-dashed', label: 'Queued' }, pending: { icon: 'circle-dashed', label: 'Pending' },
   };
-  const FILTERS = [['', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['blocked', 'Blocked'], ['passed', 'Passed'], ['merged', 'Merged'], ['queued', 'Queued']];
+  const FILTERS = [['', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['rejected', 'Rejected'], ['pending_qa', 'Pending QA'], ['blocked', 'Blocked'], ['passed', 'Passed'], ['merged', 'Merged'], ['queued', 'Queued']];
   const SERIES = { pass: 'var(--s-pass)', merge: 'var(--s-merge)', codex: 'var(--s-codex)', fail: 'var(--s-fail)' };
   const SERIES_LABEL = { pass: 'Gate passes', merge: 'Merges and closures', codex: 'Codex runs', fail: 'Gate failures' };
   const MODEL_COLORS = ['var(--s-codex)', 'var(--s-pass)', 'var(--s-merge)', 'var(--warn)', 'var(--merged)', 'var(--dim)'];
@@ -74,6 +76,7 @@
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const pkt = (ts) => new Date(ts * 1000 + PKT_MS);
   const fmtHM = (ts) => { if (!isNum(ts)) return '-'; const d = pkt(ts); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const fmtClock = (ts) => { if (!isNum(ts)) return '--:--:--'; const d = pkt(ts); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
   const fmtDT = (ts) => { if (!isNum(ts)) return '-'; const d = pkt(ts); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
   const fmtFull = (ts) => (isNum(ts) ? `${fmtDT(ts)}:${pad(pkt(ts).getUTCSeconds())} PKT` : '-');
   const dayKey = (ts) => { const d = pkt(ts); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
@@ -168,6 +171,7 @@
   }
   function stageOf(t, st) {
     if (st.key === 'queued' || st.key === 'pending') return 'codex';
+    if (st.key === 'pending_qa' || st.key === 'rejected') return 'qa';
     const runs = t.runs || [];
     const last = runs[runs.length - 1] || {};
     if (st.key === 'running' && last.kind === 'codex' && !last.codexEnd) return 'codex';
@@ -184,9 +188,12 @@
   }
 
   // tasks with filter applied; uniq() keeps the latest occurrence of each issue
-  function allTasks() {
+  function allTasks(opts = {}) {
     const out = [];
-    for (const b of S.batches) for (const t of b.tasks) out.push({ b, t, st: statusOf(t) });
+    for (const b of S.batches) {
+      if (!opts.includeArchive && b.archived) continue;
+      for (const t of b.tasks) out.push({ b, t, st: statusOf(t) });
+    }
     return out;
   }
   function filterMatch(b, t, st, opts = {}) {
@@ -350,8 +357,18 @@
     if (ui.modal.length && $('dlg').open) safe(renderModal);
   }
 
+  function dataAsOfTs() {
+    return (S && (S.dataAsOf || (S.freshness && S.freshness.dataAsOf) || (S.worker && S.worker.collectedAt))) || null;
+  }
   function renderFreshness() {
     const el = $('freshness');
+    const stamp = $('data-as-of');
+    const asOf = S ? dataAsOfTs() : null;
+    if (stamp) {
+      stamp.textContent = `data as of ${fmtClock(asOf)} PKT`;
+      stamp.title = asOf ? `Current-run data as of ${fmtFull(asOf)}` : 'No collector data yet';
+      stamp.classList.toggle('stale', !!(S && ((S.freshness && S.freshness.stale) || Object.values(S.sources || {}).some((v) => v && v.stale))));
+    }
     if (fetchError && (!S || nowSec() - lastFetchOk > 90)) { el.className = 'live-pill bad'; el.textContent = `Offline: ${fetchError}`; return; }
     if (!S) return;
     const stale = Object.entries(S.sources).filter(([, v]) => v.stale).map(([k]) => k);
@@ -361,7 +378,6 @@
     el.textContent = stale.length ? `Stale: ${stale.join(', ')}` : `Live, ${ago(newest)}`;
     el.title = Object.entries(S.sources).map(([k, v]) => `${k}: ${v.receivedAt ? fmtFull(v.receivedAt) : 'never'}`).join('\n');
   }
-
   function renderFilters() {
     const sel = $('f-batch');
     const want = ['', ...S.batches.map((b) => b.id)].join('|');
@@ -384,9 +400,19 @@
 
   function renderBanner() {
     const alerts = [...(S.alerts || [])].sort((a, b) => (a.level === 'crit' ? 0 : 1) - (b.level === 'crit' ? 0 : 1));
+    const staleSrc = Object.entries(S.sources || {}).filter(([, v]) => v && v.stale);
+    const asOf = dataAsOfTs();
+    const items = [];
+    if (staleSrc.length) {
+      const names = staleSrc.map(([k]) => k).join(' and ');
+      const age = staleSrc[0][1].ageSec;
+      const ageTxt = isNum(age) ? `${Math.floor(age / 60)} min old` : 'no data received';
+      items.push(h('div', { class: 'banner-item warn stale-banner', role: 'alert' }, icon('warning'),
+        `Collector has not updated for more than 3 minutes (${names} ${ageTxt}). Data as of ${fmtClock(asOf)} PKT — numbers may be frozen.`));
+    }
     const crit = alerts.filter((a) => a.level === 'crit');
-    const warn = alerts.filter((a) => a.level !== 'crit');
-    const items = crit.map((a) => h('button', { type: 'button', class: 'banner-item', onclick: () => openModal('alert', a) }, icon('octagon'), a.message));
+    const warn = alerts.filter((a) => a.level !== 'crit' && !String(a.id || a.key || '').startsWith('stale-'));
+    items.push(...crit.map((a) => h('button', { type: 'button', class: 'banner-item', onclick: () => openModal('alert', a) }, icon('octagon'), a.message)));
     if (warn.length) {
       items.push(h('button', { type: 'button', class: 'banner-item warn', onclick: () => openModal('alert', warn[0]) }, icon('warning'), warn[0].message,
         warn.length > 1 ? h('span', { class: 'more' }, `+${warn.length - 1} more`) : null));
@@ -396,7 +422,9 @@
 
   function renderOverview() {
     const o = S.overview;
-    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} Codex jobs run.`;
+    const asOf = dataAsOfTs();
+    const run = o.currentRun ? ` Current run ${o.currentRun}.` : '';
+    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. Data as of ${fmtClock(asOf)} PKT.${run} ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} current-run Codex jobs.`;
   }
 
   // ------------------------------------------------------------------ control room (OpsPulse-style top grid)
@@ -454,7 +482,7 @@
   function renderProgress() {
     const list = scoped({ ignoreStatus: true });
     const total = list.length;
-    const fixed = list.filter((x) => x.t.fixed || ['passed', 'merged', 'done'].includes(x.st.key)).length;
+    const fixed = list.filter((x) => ['passed', 'merged', 'done'].includes(x.st.key)).length;
     const passed = list.filter((x) => ['passed', 'merged', 'done'].includes(x.st.key)).length;
     const merged = list.filter((x) => x.t.merged).length;
     const done = list.filter((x) => x.st.key === 'done').length;
@@ -465,11 +493,11 @@
     mount('progress', h('div', { class: 'meta' }, 'Tasks through the full pipeline: gated on the final SHA, merged and closed.'),
       h('div', { class: 'pc-bar' }, h('div', { class: 'track' }, h('i', { style: { width: `${p}%` } })), h('b', null, `${p}%`)),
       h('div', { class: 'well' },
-        row('Codex fix produced', fixed, () => openModal('list', { stage: 'all', title: 'All tasks' })),
+        row('Real fixes (passed on final SHA)', fixed, () => openModal('list', { status: 'passed', title: 'Real fixes' })),
         row('Gates passed on final SHA', passed, () => openModal('list', { status: 'passed', title: 'Passed on final SHA' })),
         row('Merged into develop', merged, () => openModal('list', { status: 'merged', title: 'Merged into develop' })),
         row('Linear and GitHub closed', done, () => openModal('list', { status: 'done', title: 'Done' }))),
-      h('div', { class: 'mini-stats two' }, [['running', 'Running', 'circle-notch'], ['failed', 'Failed', 'x-circle'], ['blocked', 'Blocked', 'prohibit'], ['queued', 'Queued', 'circle-dashed']].map(([k, label, ic]) => {
+      h('div', { class: 'mini-stats two' }, [['running', 'Running', 'circle-notch'], ['failed', 'Failed', 'x-circle'], ['pending_qa', 'Pending QA', 'hourglass'], ['rejected', 'Rejected', 'prohibit'], ['queued', 'Queued', 'circle-dashed']].map(([k, label, ic]) => {
         const v = list.filter((x) => x.st.key === k || (k === 'queued' && x.st.key === 'pending')).length;
         return h('button', { type: 'button', class: `mini ${k === 'failed' && v ? 'bad' : ''}`, onclick: () => { ui.filter.status = k; render(); $('sec-batches').scrollIntoView({ behavior: 'smooth' }); } },
           h('span', null, icon(ic), label), h('b', null, countUp(`pm-${k}`, v)));
@@ -662,7 +690,9 @@
           running ? h('span', { class: 'pill s-running' }, icon('circle-notch'), `${running} running`) : null,
           failed ? h('span', { class: 'pill s-failed' }, icon('x-circle'), `${failed} failed`) : null,
           blocked ? h('span', { class: 'pill s-blocked' }, icon('prohibit'), `${blocked} blocked`) : null,
-          queued ? h('span', { class: 'pill s-queued' }, icon('circle-dashed'), `${queued} queued`) : null));
+          queued ? h('span', { class: 'pill s-queued' }, icon('circle-dashed'), `${queued} queued`) : null,
+          xs.filter((x) => x.st.key === 'pending_qa').length ? h('span', { class: 'pill s-pending_qa' }, icon('hourglass'), `${xs.filter((x) => x.st.key === 'pending_qa').length} pending QA`) : null,
+          xs.filter((x) => x.st.key === 'rejected').length ? h('span', { class: 'pill s-rejected' }, icon('prohibit'), `${xs.filter((x) => x.st.key === 'rejected').length} rejected`) : null));
     }));
   }
 
@@ -893,12 +923,15 @@
   }
   function renderBatches() {
     const list = S.batches.filter((b) => !ui.filter.batch || b.id === ui.filter.batch);
-    const current = list.filter((b) => !b.historical);
-    const hist = list.filter((b) => b.historical);
-    $('batches-meta').textContent = `${S.batches.length} discovered automatically. ${current.length} current, ${hist.length} historical.`;
+    const archived = list.filter((b) => b.archived);
+    const current = list.filter((b) => !b.historical && !b.archived);
+    const hist = list.filter((b) => b.historical && !b.archived);
+    $('batches-meta').textContent = `${S.batches.length} discovered automatically. ${current.length} current, ${hist.length} historical, ${archived.length} archived.`;
     const wasOpen = document.querySelector('details.hist')?.open;
+    const wasArchOpen = document.querySelector('details.archive')?.open;
     mount('batches', current.length ? current.map(batchRow) : h('div', { class: 'empty' }, 'No current batches'),
-      hist.length ? h('details', { class: 'hist', open: wasOpen || hist.some((b) => b.id === ui.batch) }, h('summary', null, icon('caret-right'), `Historical batches (${hist.length})`), h('div', { class: 'batch-list' }, hist.map(batchRow))) : null);
+      hist.length ? h('details', { class: 'hist', open: wasOpen || hist.some((b) => b.id === ui.batch) }, h('summary', null, icon('caret-right'), `Historical batches (${hist.length})`), h('div', { class: 'batch-list' }, hist.map(batchRow))) : null,
+      archived.length ? h('details', { class: 'hist archive', open: wasArchOpen || archived.some((b) => b.id === ui.batch) }, h('summary', null, icon('caret-right'), `Archive (${archived.length})`), h('div', { class: 'batch-list' }, archived.map(batchRow))) : null);
   }
   function selectBatch(id, forceOpen) {
     ui.batch = ui.batch === id && !forceOpen ? null : id;

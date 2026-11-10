@@ -27,7 +27,9 @@ class InsightRuleTests(unittest.TestCase):
 
     def test_weakened_guards_and_repeat_failures(self):
         b = "pharmacy-campaign-repair-20261108-1306"
-        self.assertIn(f"rule:guards:{b}:DEV-13", self.ids)               # touches vitest.config.ts
+        # DEV-13 also changes src/server/pharmacy/returns.ts, so a mixed diff must not
+        # trip the test-only "changes test file" rule (vitest.config.ts alone is not enough).
+        self.assertNotIn(f"rule:guards:{b}:DEV-13", self.ids)
         self.assertIn(f"rule:repeat-fail:{b}:DEV-13:complete_unit", self.ids)
         self.assertIn(f"rule:tests-drop:{b}:DEV-13", self.ids)           # 4120 passed vs 4175 baseline
         self.assertIn(f"rule:blocked:{b}", self.ids)
@@ -42,10 +44,36 @@ class InsightRuleTests(unittest.TestCase):
         st = dict(self.state)
         st["worker"] = dict(st["worker"], system={"cores": 4, "mem": {"pct": 93}, "disks": {
             "/workspace": {"pct": 80, "freeBytes": 250 * insights.GiB}}}, usage={"weeklyPct": 90})
+        st["usage"] = dict(st.get("usage") or {}, weeklyPct=90, stopActive=False)
         ids = {r["id"]: r for r in insights.rule_insights(st)}
         self.assertEqual(ids["rule:ram"]["severity"], "crit")
         for k in ("rule:disk-soon:/workspace", "rule:reserve-soon", "rule:usage-soon"):
             self.assertIn(k, ids)
+
+    def test_test_only_diffs_are_flagged(self):
+        st = dict(self.state)
+        batches = []
+        for b in st["batches"]:
+            b = dict(b)
+            if b.get("id") == "pharmacy-campaign-repair-20261108-1306":
+                tasks = [dict(t) for t in b["tasks"]]
+                tasks.append({
+                    "issue": "DEV-ABAC", "changedPaths": ["src/lib/abac/index.test.ts"],
+                    "phase": "failed", "gates": {}, "runs": [],
+                    "verdict": {"key": "failed", "label": "Failed"},
+                })
+                tasks.append({
+                    "issue": "DEV-MIXED", "changedPaths": ["src/lib/abac/index.ts", "src/lib/abac/index.test.ts"],
+                    "phase": "failed", "gates": {}, "runs": [],
+                    "verdict": {"key": "failed", "label": "Failed"},
+                })
+                b["tasks"] = tasks
+            batches.append(b)
+        st["batches"] = batches
+        ids = {r["id"]: r for r in insights.rule_insights(st)}
+        self.assertIn("rule:guards:pharmacy-campaign-repair-20261108-1306:DEV-ABAC", ids)
+        self.assertIn("abac", ids["rule:guards:pharmacy-campaign-repair-20261108-1306:DEV-ABAC"]["reason"].lower())
+        self.assertNotIn("rule:guards:pharmacy-campaign-repair-20261108-1306:DEV-MIXED", ids)
 
     def test_guard_patterns(self):
         hits = dict(insights.guard_hits(["src/a.test.ts", "eslint.config.mjs", "src/lib/auth-guard.ts", "src/app/page.tsx",

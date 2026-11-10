@@ -23,6 +23,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sanitize import scrub_string  # noqa: E402
+from truth import compact_guards  # noqa: E402
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2026-10-21"
@@ -59,6 +60,8 @@ needs doing, say what a human should do and why.
 Ground every statement in tool data. If the data does not show something, say so plainly instead of guessing. \
 Times are Pakistan Standard Time (PKT, UTC+5); tool results carry epoch seconds and already-formatted PKT strings.
 
+The `guards` object (and `usage` / `worker.system` / `killSwitch` / `box.workers`) is the source of truth for machine health and Inky's weekly usage. If those fields are present, never say they are null or that usage, the kill switch or resource guards cannot be checked. `usage` is Inky (Grok Bot) weekly usage with a 95% stop line for Inky's own work only — it is not the machine's, Codex's or Claude's usage. Do not suggest throttling Codex, the worker or Claude because of it.
+
 Cite evidence with markdown links using only these targets:
 - [DEV-12](#task=<batch_id>/<issue>) for a task, [codex-1110](#run=<batch_id>/<run>) for a run, [batch](#batch=<batch_id>)
 - [PR #994](#pr=994), [issue #1010](#issue=1010), [CPU](#metric=cpuPct) (also memPct, load1, workspacePct, scratchPct)
@@ -72,7 +75,7 @@ ANALYSIS_INSTRUCTIONS = """Review the campaign state digest and the rule finding
 suggestions for the dashboard. Focus on what is going the wrong way or is about to: stalled or looping Codex jobs, \
 repeated gate failures and their likely shared causes, tasks not moving, tests or guards that may have been weakened \
 (changed test/config/auth files, fewer passing tests than baseline), Codex running machine checks itself, disk/RAM/CPU \
-pressure, spot price or weekly usage nearing limits, stale data, and anything else unusual. Add useful suggestions \
+pressure, spot price or weekly usage nearing limits, stale data, and anything else unusual. Weekly usage in the digest is Inky (Grok Bot) usage, not Codex/worker/Claude — do not recommend throttling those because of it. If the guards object is present, do not claim usage, the kill switch or resource metrics are missing. Add useful suggestions \
 (what a human should look at or do next) — advice only, the dashboard is read-only.
 
 Rules for the output:
@@ -301,36 +304,64 @@ class ReadOnlyTools:
         return self.s.get("insights")
 
 
+def sources_ready(state):
+    """True when both collector feeds have arrived and are not stale."""
+    src = (state or {}).get("sources") or {}
+    for name in ("worker", "box"):
+        info = src.get(name) or {}
+        if not info.get("receivedAt") or info.get("stale"):
+            return False
+    return True
+
+
 def digest(state):
-    """A compact, deterministic snapshot for the analysis prompt."""
+    """A compact snapshot for the analysis prompt.
+
+    `guards` is serialised first and is never truncated, so CPU/RAM/disk, instance
+    identity, the kill-switch, stop files and Inky usage cannot be dropped.
+    """
     batches = []
     for b in state.get("batches") or []:
+        if b.get("archived"):
+            continue
         tasks = sorted(b.get("tasks") or [], key=lambda t: (t.get("done") is True, -(t.get("last") or 0)))
-        batches.append({k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical")}
-                       | {"baseline": {k: (b.get("baseline") or {}).get(k) for k in ("baseSHA", "numPassedTests", "numFailedTests")},
-                          "runs": [{k: r.get(k) for k in ("name", "kind", "tasks", "active", "start", "last", "counts")} for r in b.get("runs") or []],
+        batches.append({k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical", "currentRun")}
+                       | {"baseline": {k: (b.get("baseline") or {}).get(k) for k in (
+                              "run", "baseSHA", "numPassedTests", "numFailedTests", "complete", "incomplete",
+                              "incompleteReason", "current", "matchesDevelop")},
+                          "runs": [{k: r.get(k) for k in ("name", "kind", "tasks", "active", "start", "last", "counts",
+                                                          "current", "historical", "superseded", "baselineUsed")}
+                                   for r in b.get("runs") or []],
                           "ledgers": [{k: l.get(k) for k in ("file", "run", "at", "mtime", "counts")} for l in b.get("ledgers") or []],
                           "tasks": [_compact_task(t) | {"changedPaths": (t.get("changedPaths") or [])[:12],
                                                         "unitPassed": ((t.get("gates") or {}).get("complete_unit") or {}).get("passed"),
-                                                        "runs": [{k: r.get(k) for k in ("run", "kind", "status", "start", "end", "codexStart", "codexEnd", "codexExitCode")}
+                                                        "attempts": (t.get("attempts") or [])[-8:],
+                                                        "flag": t.get("flag"),
+                                                        "runs": [{k: r.get(k) for k in ("run", "kind", "status", "start", "end", "codexStart", "codexEnd", "codexExitCode", "current", "historical", "superseded")}
                                                                  for r in (t.get("runs") or [])[-4:]]}
                                     for t in tasks[:150]]})
     w = state.get("worker") or {}
-    d = {
+    body = {
         "serverTime": state.get("serverTime"), "overview": state.get("overview"), "alerts": state.get("alerts"),
         "sources": state.get("sources"), "limits": state.get("limits"), "codex": state.get("codex"), "now": state.get("now"),
         "next": {"queue": ((state.get("next") or {}).get("queue") or [])[:60],
                  "waitingOn": {k: len(v) for k, v in ((state.get("next") or {}).get("upcoming") or {}).items()}},
         "worker": {"system": w.get("system"), "services": w.get("services"), "killSwitch": w.get("killSwitch"),
-                   "usage": w.get("usage"), "codexProcs": w.get("codexProcs")},
+                   "usage": state.get("usage") or w.get("usage"), "codexProcs": w.get("codexProcs"),
+                   "stopFiles": w.get("stopFiles")},
         "box": state.get("box"), "github": {"merged": ((state.get("github") or {}).get("merged") or [])[:25],
                                              "closedIssues": ((state.get("github") or {}).get("closedIssues") or [])[:25]},
         "recentEvents": (state.get("events") or [])[:80], "batches": batches,
     }
-    text = json.dumps(_with_times(d), separators=(",", ":"), sort_keys=True, default=str)
-    if len(text) > MAX_DIGEST_CHARS:
-        text = text[:MAX_DIGEST_CHARS] + "…(truncated)"
-    return text
+    guards_text = json.dumps({"guards": _with_times(compact_guards(state))}, separators=(",", ":"), default=str)
+    body_text = json.dumps(_with_times(body), separators=(",", ":"), default=str)
+    budget = MAX_DIGEST_CHARS - len(guards_text) - 16
+    if budget < 256:
+        budget = 256
+    if len(body_text) > budget:
+        body_text = body_text[:budget] + "…(truncated)"
+    # guards first so a character cap cannot drop machine health / Inky usage.
+    return '{"guards":' + guards_text[len('{"guards":'):-1] + ',"body":' + body_text + '}'
 
 
 def _clean_item(item):
@@ -356,7 +387,7 @@ class AIError(Exception):
 
 
 class AIService:
-    def __init__(self, get_state, data_dir, env=None):
+    def __init__(self, get_state, data_dir, env=None, backup=None):
         env = env if env is not None else os.environ
         self._key = env.get("ANTHROPIC_API_KEY", "").strip()
         self.model = env.get("AI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
@@ -364,7 +395,8 @@ class AIService:
         self.analysis_model = env.get("AI_ANALYSIS_MODEL", "").strip() or self.model
         self.chat_effort = env.get("AI_CHAT_EFFORT", "medium")
         self.analysis_effort = env.get("AI_ANALYSIS_EFFORT", "high")
-        self.daily_budget = int(env.get("AI_DAILY_TOKEN_BUDGET", "3000000"))
+        self.daily_budget = int(env.get("AI_DAILY_TOKEN_BUDGET", "6000000"))
+        self.backup = backup
         self.min_interval = int(env.get("AI_ANALYSIS_MIN_INTERVAL", "900"))
         self.max_age = int(env.get("AI_ANALYSIS_MAX_AGE", "21600"))
         self.refresh_cooldown = int(env.get("AI_REFRESH_COOLDOWN", "300"))
@@ -387,6 +419,18 @@ class AIService:
                 self.analysis = data
         except (OSError, ValueError):
             pass
+        if self.analysis is None and backup:
+            data = backup.get_json("ai_analysis.json")
+            if isinstance(data, dict) and not data.get("emptySources"):
+                self.analysis = data
+                try:
+                    tmp = self.path + ".tmp"
+                    with open(tmp, "w") as fh:
+                        json.dump(data, fh)
+                    os.replace(tmp, self.path)
+                    log("hydrated last analysis from durable backup")
+                except OSError:
+                    pass
 
     # -- status shown in /api/state (never includes the key)
     @property
@@ -553,6 +597,8 @@ class AIService:
 
     def due(self, dig_hash, now):
         a = self.analysis or {}
+        if a.get("emptySources"):
+            return True
         last = a.get("generatedAt") or 0
         if now - last < self.min_interval:
             return False
@@ -563,11 +609,16 @@ class AIService:
             return None
         try:
             state = self.get_state()
+            if not sources_ready(state):
+                log("analysis skipped: sources stale or empty; keeping last analysis")
+                return self.analysis
             text = digest(state)
             dig_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
             now = time.time()
             if not force and not self.due(dig_hash, now):
                 return self.analysis
+            if (self.analysis or {}).get("emptySources"):
+                pass  # always replace an analysis that was produced on empty inputs
             if force and self.analysis and now - (self.analysis.get("generatedAt") or 0) < 60:
                 return self.analysis
             rules = [{k: f.get(k) for k in ("severity", "area", "title", "reason", "evidence")}
@@ -605,6 +656,11 @@ class AIService:
                 os.replace(tmp, self.path)
             except OSError:
                 pass
+            if self.backup:
+                try:
+                    self.backup.put_json("ai_analysis.json", result)
+                except Exception as exc:  # noqa: BLE001
+                    log(f"durable analysis persist failed: {type(exc).__name__}")
             return result
         finally:
             self.analysis_lock.release()

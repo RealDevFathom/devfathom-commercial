@@ -11,6 +11,8 @@ import re
 import time
 from urllib.parse import quote
 
+from truth import is_archived_batch, inky_usage_from_box  # noqa: E402
+
 GiB = 1024 ** 3
 STALL_CODEX_SEC = 3 * 3600
 STALL_STEP_SEC = 90 * 60
@@ -47,6 +49,22 @@ def _num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+TEST_KINDS = {"test file", "test directory", "test runner config", "test setup"}
+
+
+def is_test_path(path):
+    p = str(path or "").replace("\\", "/")
+    for rx, kind in GUARD_PATTERNS:
+        if kind in TEST_KINDS and rx.search(p):
+            return True
+    return False
+
+
+def test_only_paths(paths):
+    items = [p for p in (paths or []) if p]
+    return bool(items) and all(is_test_path(p) for p in items)
+
+
 def guard_hits(paths):
     hits = []
     for p in paths or []:
@@ -66,12 +84,12 @@ def rule_insights(state, now=None):
                     "reason": reason, "evidence": (evidence or [])[:8], "batch": batch, "issue": issue,
                     "source": "rules"})
 
-    batches = state.get("batches") or []
+    batches = [b for b in (state.get("batches") or []) if not is_archived_batch(b)]
     by_id = {b.get("id"): b for b in batches}
     codex = state.get("codex") or {}
     worker = state.get("worker") or {}
     sysm = worker.get("system") or {}
-    usage = worker.get("usage") or {}
+    usage = state.get("usage") or inky_usage_from_box(state.get("box") or {}, worker.get("usage"))
     limits = state.get("limits") or {}
 
     # --- stalled Codex jobs
@@ -112,9 +130,11 @@ def rule_insights(state, now=None):
         for t in tasks:
             issue = t.get("issue")
             runs = t.get("runs") or []
-            # --- repeated gate failures on the same task
+            # --- repeated gate failures on the same task (current runs only)
             fails = {}
             for r in runs:
+                if r.get("superseded") or r.get("historical") or r.get("current") is False:
+                    continue
                 for s in r.get("steps") or []:
                     if s.get("status") == "FAIL":
                         fails.setdefault(s.get("gate"), set()).add(r.get("run"))
@@ -124,13 +144,27 @@ def rule_insights(state, now=None):
                     add("warning", "warn", "batches", f"repeat-fail:{bid}:{issue}:{gate}", f"{issue}: {gate} failed in {len(rs)} runs",
                         f"{gate} failed again across {', '.join(sorted(rs))}. Another attempt with the same approach is unlikely to pass.",
                         [_ev(f"{issue} task", link_task(bid, issue))] + [_ev(r, link_run(bid, r)) for r in sorted(rs)][:3], bid, issue)
-            # --- weakened tests / guards
-            hits = guard_hits(t.get("changedPaths"))
-            if hits:
-                kinds = sorted({k for _, k in hits})
+            # --- test-ONLY diffs (especially the shared abac test) and other weakened guards
+            paths = t.get("changedPaths") or []
+            hits = guard_hits(paths)
+            test_hits = [h for h in hits if h[1] in TEST_KINDS]
+            other_hits = [h for h in hits if h[1] not in TEST_KINDS]
+            if test_only_paths(paths):
+                kinds = sorted({k for _, k in test_hits} or {"test file"})
+                abac = [p for p, _ in test_hits if "abac" in p.lower()]
+                extra = (" Includes the abac test — a shared failing test Codex has been patching across tasks."
+                         if abac else "")
+                add("warning", "warn", "batches", f"guards:{bid}:{issue}",
+                    f"{issue} changes {', '.join(kinds)} only",
+                    "This diff is test-only: " + ", ".join(p for p, _ in test_hits[:4])
+                    + (" …" if len(test_hits) > 4 else "") + "." + extra
+                    + " Review that tests were not weakened just to make gates pass.",
+                    [_ev(f"{issue} task", link_task(bid, issue))], bid, issue)
+            elif other_hits:
+                kinds = sorted({k for _, k in other_hits})
                 add("warning", "warn", "batches", f"guards:{bid}:{issue}", f"{issue} changes {', '.join(kinds)}",
-                    "The fix touches " + ", ".join(p for p, _ in hits[:4]) + (" …" if len(hits) > 4 else "") +
-                    ". Review that tests, lint rules or guards were not weakened to make gates pass.",
+                    "The fix touches " + ", ".join(p for p, _ in other_hits[:4]) + (" …" if len(other_hits) > 4 else "") +
+                    ". Review that lint rules or guards were not weakened to make gates pass.",
                     [_ev(f"{issue} task", link_task(bid, issue))], bid, issue)
             unit = (t.get("gates") or {}).get("complete_unit") or {}
             if base_passed and _num(unit.get("passed")) is not None and unit["passed"] < base_passed - TEST_DROP_TOLERANCE:
@@ -165,6 +199,9 @@ def rule_insights(state, now=None):
                 "No new runs or step results for: " + ", ".join(t["issue"] for t in idle[:8]) + (" …" if len(idle) > 8 else ""),
                 [_ev(t["issue"], link_task(bid, t["issue"])) for t in idle[:6]], bid)
         for gate, issues in gate_fail_tasks.items():
+            # host_build was rerun and passed on the current baseline; don't revive the old rule.
+            if gate == "host_build":
+                continue
             if len(issues) >= 3:
                 add("suggestion", "warn", "batches", f"common-fail:{bid}:{gate}", f"{gate} failing on {len(issues)} tasks in {label}",
                     f"The same gate fails across {', '.join(issues[:6])}. Look for a shared cause (baseline drift, harness, flaky test) before retrying tasks one by one.",
@@ -206,8 +243,11 @@ def rule_insights(state, now=None):
     # --- budget / usage
     pct = _num(usage.get("weeklyPct"))
     if pct is not None and 85 <= pct < limits.get("usageStop", 95):
-        add("warning", "warn", "overview", "usage-soon", f"Weekly usage {pct:.0f}% — nearing the 95% stop line",
-            "Plan the remaining work: the owner usage cutoff stops Codex at 95%.", [_ev("usage", "#usage")])
+        add("warning", "warn", "overview", "usage-soon",
+            f"Inky (Grok Bot) weekly usage {pct:.0f}% — nearing the 95% stop line",
+            "This is Inky's own weekly usage, not the machine's, Codex's or Claude's. "
+            "Inky stops its own work at 95% and writes a handoff. Do not throttle Codex, the worker or Claude because of it.",
+            [_ev("usage", "#usage")])
     for w in (state.get("box") or {}).get("workers") or []:
         price, cap = _num(w.get("spotPrice")), limits.get("spotCap", 2.5)
         if price is not None and 0.8 * cap <= price <= cap:

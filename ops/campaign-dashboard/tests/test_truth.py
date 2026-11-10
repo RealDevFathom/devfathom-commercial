@@ -73,9 +73,10 @@ class TruthTests(unittest.TestCase):
 
     def test_overview_counts_follow_truth(self):
         o = self.s["overview"]
-        self.assertEqual(o["merged"], 2)   # DEV-15 and DEV-20 only; PR #985 does not count
-        self.assertEqual(o["done"], 2)
-        self.assertEqual(o["gated"], 3)    # passed on final SHA: DEV-12, DEV-15, DEV-20 (DEV-21 failed QA)
+        # pharmacy-review-50 (DEV-20) is archived, so live KPIs only count the current batch.
+        self.assertEqual(o["merged"], 1)   # DEV-15 only; PR #985 does not count; DEV-20 is archived
+        self.assertEqual(o["done"], 1)
+        self.assertEqual(o["gated"], 2)    # passed on final SHA: DEV-12, DEV-15 (DEV-20 is in the archive)
 
 
 if __name__ == "__main__":

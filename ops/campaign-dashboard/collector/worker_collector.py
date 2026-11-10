@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sanitize import sanitize  # noqa: E402
+import current_run as _cr  # noqa: E402
+import live_activity as _live  # noqa: E402
 
 SCHEMA = 1
 PKT = timezone(timedelta(hours=5))
@@ -38,10 +40,10 @@ KILLSWITCH_EVERY = 300
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_FILES_LIST = 60
 MAX_EVENTS = 1500
-RUN_RE = re.compile(r"^(codex|gates|baseline)-")
+RUN_RE = re.compile(r"^(codex|gates|baseline|rebase|retarget|devfix)-", re.I)
 ISSUE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 REQUIRED_GATES = ("prisma", "typecheck", "lint", "complete_unit", "host_build", "docker")
-SERVICE_PATTERNS = ("qa-*", "codex*", "postgresql*", "tailscaled*", "ops-collector*")
+SERVICE_PATTERNS = _live.SERVICE_PATTERNS
 KILLSWITCH_ARGV = (
     "ip", "netns", "exec", "codex-home", "tailscale",
     "--socket=/run/codex-tailscaled.sock", "status", "--json",
@@ -175,8 +177,8 @@ def listdir(path):
         return []
 
 
-def short(sha):
-    return sha[:10] if isinstance(sha, str) else None
+def short(sha, n=10):
+    return sha[:n] if isinstance(sha, str) and sha else None
 
 
 def maxts(*vals):
@@ -512,6 +514,9 @@ def collect_batch(root, name, now, live_window):
     }
     per_issue = {}
     baseline_failed = None
+    baselines = []
+    current_sources = None
+    current_run_name = None
     ledgers_live = []
     entries = listdir(broot)
     for entry in entries:
@@ -539,7 +544,14 @@ def collect_batch(root, name, now, live_window):
             continue
         if not RUN_RE.match(entry):
             continue
-        kind = entry.split("-", 1)[0]
+        kind = entry.split("-", 1)[0].lower()
+        # Current-run overlay: rebase-1906-1110/status.json + reclassify.
+        status_path = os.path.join(p, "status.json")
+        if (os.path.isfile(status_path) and _cr.CURRENT_STATUS_DIR_RE.search(entry)
+                and (current_run_name is None or "1906-1110" in entry)):
+            current_run_name = entry
+            current_sources = _cr.load_current_sources(
+                p, lambda path: read_json(path, root), mtime, os.path.isfile, os.path.join)
         if "-attempt" in entry:
             batch["attemptDirs"] += 1
             batch["attemptJobs"] += sum(1 for d in listdir(p) if ISSUE_RE.match(d))
@@ -587,22 +599,33 @@ def collect_batch(root, name, now, live_window):
             file_strings(bft if bft is not None else cp.get("failedFiles", []), files)
             files = sorted({norm_file(f) for f in files})
             baseline_failed = set(files)
-            batch["baseline"] = {
+            binfo = {
                 "run": entry,
-                "baseSHA": short(cp.get("baseSHA")),
+                "baseSHA": short(cp.get("baseSHA"), 12) or short(cp.get("sha"), 12),
+                "sha": short(cp.get("baseSHA") or cp.get("sha"), 40),
                 "status": cp.get("status"),
                 "norm": norm_status(cp.get("status")),
                 "numFailedTests": cp.get("numFailedTests"),
                 "numPassedTests": cp.get("numPassedTests"),
+                "numPendingTests": cp.get("numPendingTests"),
+                "numTotalTests": cp.get("numTotalTests"),
                 "failedFileCount": cp.get("failedFileCount", len(files)),
                 "failedFiles": files[:MAX_FILES_LIST],
                 "steps": parse_steps(cp.get("steps")),
                 "start": parse_ts(cp.get("startPKT")),
                 "end": parse_ts(cp.get("endPKT")),
             }
-            run["start"] = mints(run["start"], batch["baseline"]["start"])
-            run["last"] = maxts(run["last"], batch["baseline"]["end"])
+            baselines.append(binfo)
+            # Prefer a complete baseline on develop 1906b530 (baseline-1110) over an incomplete hotel-dynamic one.
+            chosen = _cr.pick_current_baseline(baselines)
+            batch["baseline"] = chosen
+            batch["baselines"] = baselines
+            run["start"] = mints(run["start"], binfo["start"])
+            run["last"] = maxts(run["last"], binfo["end"])
             run["status"] = cp.get("status")
+            # Use this baseline's failed files when it is the chosen current baseline.
+            if chosen is binfo or (chosen and chosen.get("run") == entry):
+                baseline_failed = set(files)
         issues = set(ledger_jobs) | set(terminal_map)
         issues |= {d for d in listdir(p) if ISSUE_RE.match(d) and os.path.isdir(os.path.join(p, d))}
         for issue in sorted(issues):
@@ -634,9 +657,25 @@ def collect_batch(root, name, now, live_window):
             run["active"] = 0
         elif run["active"] == 0:
             run["active"] = sum(1 for j in batch["codexJobs"] if j["run"] == entry and j["running"])
+        cls = _cr.classify_run(entry, has_current_rebase=bool(current_run_name),
+                               invalid_base=(current_sources or {}).get("status", {}).get("invalidOldBase") if current_sources else None)
+        # Also treat an INVALID_ONTO_0c6245c marker in the run dir as superseded.
+        invalid_marker = next((f for f in listdir(p) if f.startswith("INVALID_ONTO_0c6245c")), None)
+        if invalid_marker:
+            cls = _cr.classify_run(entry, has_current_rebase=True, invalid_base="0c6245c")
+            run["invalidMarker"] = invalid_marker
+        run["current"] = cls["current"]
+        run["historical"] = cls["historical"]
+        run["superseded"] = cls["superseded"]
+        if cls.get("supersededReason"):
+            run["supersededReason"] = cls["supersededReason"]
         batch["runs"].append(run)
     batch["_baselineFailed"] = baseline_failed
     batch["_perIssue"] = per_issue
+    batch["_currentSources"] = current_sources
+    batch["_currentRunName"] = current_run_name
+    if baselines and not batch.get("baselines"):
+        batch["baselines"] = baselines
     return batch
 
 
@@ -659,21 +698,56 @@ def collect_batches(root, now=None, live_window=1800):
     for b in batches:
         base = b["_baselineFailed"] if b["_baselineFailed"] is not None else (
             latest_baseline[1] if latest_baseline else None)
-        tasks = [build_task(issue, runs, base) for issue, runs in sorted(b.pop("_perIssue").items())]
+        current_sources = b.pop("_currentSources", None)
+        current_run_name = b.pop("_currentRunName", None)
+        # When a current rebase status exists, don't let superseded runs (codex-1110, gates-1110
+        # on 0c6245c) drive gates / phase / the `fixed` flag.
+        def _runs_for(issue, runs):
+            if not current_sources:
+                return runs
+            current, rest = [], []
+            for r in runs:
+                if _cr.classify_run(r.get("run") or "", has_current_rebase=True).get("current") or r.get("kind") == "baseline":
+                    current.append(r)
+                else:
+                    rest.append(r)
+            # build_task still needs at least the current/baseline runs; overlay replaces verdicts.
+            return current or runs
+
+        tasks = [build_task(issue, _runs_for(issue, runs), base)
+                 for issue, runs in sorted(b.pop("_perIssue").items())]
         b.pop("_baselineFailed")
         b["tasks"] = tasks
-        counts = {"total": len(tasks)}
-        for key in ("fixed", "gated", "running"):
-            counts[key] = sum(1 for t in tasks if t[key])
-        for ph in ("blocked", "failed", "pending"):
-            counts[ph] = sum(1 for t in tasks if t["phase"] == ph)
-        b["counts"] = counts
+        if current_sources and current_sources.get("status"):
+            run_dir = os.path.join(root, b["name"], current_run_name)
+
+            def _load_attempts(issue):
+                path = os.path.join(run_dir, issue, "attempts.json")
+                if os.path.isfile(path):
+                    return _cr.load_attempts(path, lambda p: read_json(p, root))
+                return None
+
+            _cr.apply_current_overlay(b, current_run_name, current_sources, _load_attempts)
+            tasks = b["tasks"]
+        # Prefer a complete baseline-1110 even if overlay didn't run.
+        if b.get("baselines"):
+            chosen = _cr.pick_current_baseline(b["baselines"])
+            b["baselines"] = [_cr.annotate_baseline(x, preferred=x is chosen or (
+                chosen and x.get("run") == chosen.get("run"))) for x in b["baselines"]]
+            current_b = next((x for x in b["baselines"] if x.get("current")), None)
+            if current_b:
+                b["baseline"] = current_b
+        elif b.get("baseline"):
+            b["baseline"] = _cr.annotate_baseline(b["baseline"], preferred=True)
+        b["archived"] = _cr.is_archived_batch(b)
+        b["counts"] = _cr.counts_from_verdicts(tasks)
         times = [name_start_ts(b["name"])] + [r.get("start") for r in b["runs"]] + [t.get("start") for t in tasks]
         b["start"] = mints(*times)
         b["last"] = maxts(*([r.get("last") for r in b["runs"]] + [t.get("last") for t in tasks] +
-                            [l.get("mtime") for l in b["ledgers"]]))
-        b["active"] = sum(r.get("active") or 0 for r in b["runs"])
-        caps = [r["cap"] for r in b["runs"] if r.get("cap")]
+                            [l.get("mtime") for l in b["ledgers"]] + [b.get("dataAsOf")]))
+        # Active jobs: only current (non-superseded) runs.
+        b["active"] = sum(r.get("active") or 0 for r in b["runs"] if not r.get("superseded"))
+        caps = [r["cap"] for r in b["runs"] if r.get("cap") and not r.get("superseded")]
         b["cap"] = max(caps) if caps else None
         b["events"] = derive_events(b)
     batches.sort(key=lambda b: b.get("last") or 0, reverse=True)
@@ -710,7 +784,7 @@ def derive_events(batch):
         ev.append({"ts": b["end"], "batch": bid, "kind": "baseline", "run": b.get("run"),
                    "level": "ok", "text": f"Baseline recorded: {b.get('status')}"})
     ev.sort(key=lambda e: e["ts"], reverse=True)
-    return ev[:MAX_EVENTS]
+    return [_cr.tag_event(e) for e in ev[:MAX_EVENTS] if e.get("ts")]
 
 
 # --------------------------------------------------------------------------- usage stop
@@ -853,68 +927,17 @@ def run_ro(argv, timeout=10):
     return res.returncode, res.stdout
 
 
+
 def collect_services():
-    try:
-        rc, out = run_ro(["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
-                          "--type=service,timer", *SERVICE_PATTERNS])
-    except (OSError, subprocess.SubprocessError, PermissionError) as exc:
-        log(f"systemctl unavailable: {type(exc).__name__}")
-        return None
-    units = [line.split()[0] for line in out.splitlines() if line.strip()]
-    units = [u for u in units if re.match(r"^[\w@.\-:]+$", u)][:80]
-    if not units:
-        return []
-    try:
-        rc, out = run_ro(["systemctl", "show", "--no-pager", "-p", "Id", "-p", "ActiveState",
-                          "-p", "SubState", "-p", "Result", *units])
-    except (OSError, subprocess.SubprocessError, PermissionError):
-        return None
-    services, cur = [], {}
-    for line in out.splitlines() + [""]:
-        if not line.strip():
-            if cur.get("Id"):
-                services.append({"unit": cur["Id"], "active": cur.get("ActiveState"),
-                                 "sub": cur.get("SubState"), "result": cur.get("Result")})
-            cur = {}
-            continue
-        k, _, v = line.partition("=")
-        cur[k] = v
-    return services
+    return _live.collect_services(run_ro, patterns=SERVICE_PATTERNS)
 
 
-def collect_codex_procs():
-    procs = {}
-    for pid in listdir("/proc"):
-        if not pid.isdigit():
-            continue
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                args = [a.decode("utf-8", "replace") for a in fh.read().split(b"\0") if a]
-            with open(f"/proc/{pid}/stat") as fh:
-                ppid = fh.read().rsplit(")", 1)[1].split()[1]
-        except (OSError, IndexError):
-            continue
-        if not args:
-            continue
-        names = [os.path.basename(a) for a in args[:2]]
-        if not any(n in ("codex", "codex.js", "codex-exec") or re.match(r"^codex-(x86_64|aarch64|linux)", n)
-                   for n in names):
-            continue
-        model = None
-        for i, a in enumerate(args):
-            if a in ("-m", "--model") and i + 1 < len(args):
-                model = args[i + 1]
-            elif a.startswith("--model="):
-                model = a.split("=", 1)[1]
-            elif a == "-c" and i + 1 < len(args) and args[i + 1].startswith("model="):
-                model = args[i + 1].split("=", 1)[1].strip("\"'")
-        procs[pid] = (ppid, model)
-    top = {pid: v for pid, v in procs.items() if v[0] not in procs}
-    by_model = {}
-    for _, model in top.values():
-        key = model or "unknown"
-        by_model[key] = by_model.get(key, 0) + 1
-    return {"total": len(top), "byModel": by_model}
+def collect_codex_procs(proc_root="/proc"):
+    return _live.collect_codex_procs(proc_root)
+
+
+def collect_gate_procs(proc_root="/proc"):
+    return _live.collect_gate_procs(proc_root)
 
 
 def collect_killswitch(state, now):
@@ -1066,12 +1089,40 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
     state["phases"] = new_phase
     state["stateEvents"] = state_events[-300:]
     events = list(state["stateEvents"])
+    for e in events:
+        # State-change events are about the live task phase; treat as current unless the batch is archived.
+        e.setdefault("current", True)
     for b in batches:
-        events.extend(b.pop("events"))
+        evs = b.pop("events") or []
+        if b.get("archived"):
+            for e in evs:
+                e["archived"] = True
+                e["current"] = False
+        events.extend(evs)
+    events = [e for e in events if isinstance(e, dict) and e.get("ts")]
     events.sort(key=lambda e: e["ts"], reverse=True)
-    payload["events"] = events[:MAX_EVENTS]
+    current_events = [e for e in events if _cr.is_current_event(e)]
+    payload["events"] = current_events[:MAX_EVENTS]
+    payload["archivedEvents"] = [e for e in events if not _cr.is_current_event(e)][:200]
 
     payload["usage"] = collect_usage(root)
+    # Current-run rollup used by the dashboard KPIs (never the all-time 161 Codex jobs).
+    current_batches = [b for b in batches if not b.get("archived")]
+    data_as_of = max(filter(None, [b.get("dataAsOf") for b in current_batches] + [now]), default=now)
+    payload["dataAsOf"] = max(filter(None, [b.get("dataAsOf") for b in current_batches]), default=now)
+    payload["current"] = {
+        "run": next((b.get("currentRun") for b in current_batches if b.get("currentRun")), None),
+        "statusFile": next((b.get("currentSource") for b in current_batches if b.get("currentSource")), None),
+        "reclassifyFile": next((b.get("reclassifySource") for b in current_batches if b.get("reclassifySource")), None),
+        "dataAsOf": payload["dataAsOf"],
+        "codexJobs": sum(b.get("currentCodexJobs") or 0 for b in current_batches),
+        "counts": {
+            k: sum((b.get("counts") or {}).get(k) or 0 for b in current_batches)
+            for k in ("total", "fixed", "failed", "running", "queued", "pendingQa", "rejected",
+                      "gated", "merged", "blocked")
+        },
+        "baseline": next((b.get("baseline") for b in current_batches if b.get("baseline")), None),
+    }
     if host_metrics:
         host = collect_host(state, disks)
         payload["history"] = update_history(hist, now, host)
@@ -1079,7 +1130,20 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
         payload["system"] = host
         payload["services"] = collect_services()
         payload["codexProcs"] = collect_codex_procs()
+        payload["gateProcs"] = collect_gate_procs()
+        payload["codex"] = _live.merge_live_codex(payload.get("codex"), payload["codexProcs"])
         payload["killSwitch"] = collect_killswitch(state, now)
+        def _read_stop(path, limit=256):
+            try:
+                with open(path, "r", errors="replace") as fh:
+                    return fh.read(limit)
+            except OSError:
+                return ""
+        payload["stopFiles"] = _cr.collect_stop_files(root, listdir, os.path.isfile, mtime, _read_stop)
+    lanes = _live.collect_lane_status(root)
+    payload["rebase"] = lanes.get("rebase")
+    payload["devfix"] = lanes.get("devfix")
+    payload["lanes"] = lanes.get("all")
     if sdir:
         save_state(sdir, "state.json", state)
         save_state(sdir, "history.json", hist)
