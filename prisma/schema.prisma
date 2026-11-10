@@ -1589,6 +1589,52 @@ model PharmacyReceiptNumberSequence {
   @@map("pharmacy_receipt_number_sequences")
 }
 
+/// Durable authority for original-versus-reprint receipt dispatches.
+model PharmacyReceiptPrintState {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  copyCount      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, branchId, saleId])
+  @@map("pharmacy_receipt_print_states")
+}
+
+/// Append-only audit record for every receipt copy handed to the print bridge.
+model PharmacyReceiptPrintDispatch {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  copyNumber     Int
+  actorId        String
+  locale         String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, branchId, saleId, copyNumber])
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_receipt_print_dispatches")
+}
+
+/// Immutable binding of a browser receipt copy to the operator and locale that
+/// reserved it; dispatch confirmation must match this allocation.
+model PharmacyReceiptPrintAllocation {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  copyNumber     Int
+  actorId        String
+  locale         String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, branchId, saleId, copyNumber], map: "pharmacy_receipt_print_allocations_copy_key")
+  @@map("pharmacy_receipt_print_allocations")
+}
+
 /// POS-01: one counter operator's configurable shortcut map. Organization- and
 /// user-scoped rather than branch-scoped, because muscle memory belongs to the
 /// cashier and follows them between counters. `overrides` is a JSON map from

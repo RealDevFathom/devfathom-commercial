@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Prisma } from '@/generated/prisma/client';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
@@ -80,6 +81,7 @@ import {
   returnSaleLine,
 } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import {
   assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
@@ -104,8 +106,8 @@ function fixture(
   role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
   overrides: Permission[] = []
 ) {
+  let printCopyCount = 0;
   const db = {
-    $queryRaw: vi.fn(async () => []),
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
@@ -149,6 +151,9 @@ function fixture(
       ]),
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'audit-a' })) },
+    $queryRaw: vi.fn(async () => [{ copyCount: ++printCopyCount }]),
+    $executeRaw: vi.fn<(query: Prisma.Sql) => Promise<number>>(async () => 1),
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -288,14 +293,31 @@ const paths: {
   {
     name: 'counterReceiptPrintJob',
     run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: false }),
+      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en' }),
     allowed: { status: 'READY', reprint: false },
   },
   {
-    name: 'counterReceiptPrintJob reprint',
+    name: 'counterReceiptBrowserPrint',
     run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: true }),
-    allowed: { status: 'READY', reprint: true },
+      caller.counterReceiptBrowserPrint({ branchId, saleId: 'sale-a', locale: 'en' }),
+    allowed: { reprint: false, copyNumber: 1 },
+  },
+  {
+    name: 'counterReceiptBrowserPrintFailed',
+    run: (caller, branchId = 'branch-a') =>
+      caller.counterReceiptBrowserPrintFailed({ branchId, saleId: 'sale-a', locale: 'en' }),
+    allowed: { recorded: true },
+  },
+  {
+    name: 'counterReceiptBrowserPrintDispatched',
+    run: (caller, branchId = 'branch-a') =>
+      caller.counterReceiptBrowserPrintDispatched({
+        branchId,
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      }),
+    allowed: { recorded: true },
   },
   {
     name: 'lookupReceiptByNumber',
@@ -912,11 +934,206 @@ describe('counter receipt authorization', () => {
         branchId: 'branch-a',
         saleId: 'sale-a',
         locale: 'en',
-        reprint: true,
       })
-    ).resolves.toMatchObject({ status: 'READY', reprint: true });
+    ).resolves.toMatchObject({ status: 'READY', reprint: false, copyNumber: 1 });
     expect(admin.context.audit.detail).toMatchObject({
       metadata: { reason: 'org-admin-receipt-access' },
+    });
+  });
+
+  describe.each([
+    'counterReceiptBrowserPrint',
+    'counterReceiptBrowserPrintDispatched',
+  ] as const)('%s sale ID bounds', (procedure) => {
+    const call = (caller: Caller, saleId: string) => {
+      const input = { branchId: 'branch-a', saleId, locale: 'en' as const };
+      return procedure === 'counterReceiptBrowserPrint'
+        ? caller.counterReceiptBrowserPrint(input)
+        : caller.counterReceiptBrowserPrintDispatched({ ...input, copyNumber: 1 });
+    };
+
+    it.each([0, 129])(
+      'rejects a %i-character sale ID in direct tRPC calls before receipt or print-state access',
+      async (length) => {
+        const f = fixture(dispense, 'ADMIN');
+
+        await expect(call(f.caller(), 's'.repeat(length))).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+        });
+        expect(readCounterReceipt).not.toHaveBeenCalled();
+        expect(f.db.$transaction).not.toHaveBeenCalled();
+        expect(f.db.$queryRaw).not.toHaveBeenCalled();
+        expect(f.db.$executeRaw).not.toHaveBeenCalled();
+      }
+    );
+
+    it('accepts a 128-character sale ID in direct tRPC calls', async () => {
+      const f = fixture(dispense, 'ADMIN');
+
+      await expect(call(f.caller(), 's'.repeat(128))).resolves.toMatchObject(
+        procedure === 'counterReceiptBrowserPrint'
+          ? { copyNumber: 1, reprint: false }
+          : { recorded: true }
+      );
+      expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.each(['counterReceiptPrintJob', 'counterReceiptBrowserPrint'] as const)(
+    '%s rejects a caller-controlled marker before receipt or allocation access',
+    async (procedure) => {
+      const f = fixture(dispense, 'ADMIN');
+      await expect(f.caller()[procedure]({
+        branchId: 'branch-a', saleId: 'sale-a', locale: 'en', reprint: false,
+      } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(readCounterReceipt).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+      expect(f.db.$executeRaw).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allocates one original then durably marks and audits every later copy', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: false,
+      copyNumber: 1,
+    });
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: true,
+      copyNumber: 2,
+    });
+
+    expect(f.db.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(buildPharmacyReceiptEscPosJob).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'en',
+      expect.objectContaining({ reprint: true })
+    );
+  });
+
+  it('shares durable copy numbering between browser and ESC/POS transports', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      reprint: false,
+      copyNumber: 1,
+    });
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: true,
+      copyNumber: 2,
+    });
+    // Browser allocation binding + thermal dispatch audit.
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('durably audits failed browser preflight without consuming the original', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+    await expect(f.caller().counterReceiptBrowserPrintFailed(input)).resolves.toEqual({ recorded: true });
+    expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        organizationId: 'org-a', actorId: 'user-a', outcome: 'FAILURE',
+        targetId: 'sale-a', errorCode: 'BROWSER_PRINT_NOT_READY',
+        metadata: { branchId: 'branch-a', locale: 'en' },
+      }),
+    });
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      copyNumber: 1, reprint: false,
+    });
+  });
+
+  it('binds each browser allocation to the requesting operator and locale', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'ur' as const };
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      copyNumber: 1,
+      reprint: false,
+    });
+    const binding = vi.mocked(f.db.$executeRaw).mock.calls[0]![0] as unknown as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(binding.sql).toContain('"pharmacy_receipt_print_allocations"');
+    expect(binding.values).toEqual(
+      expect.arrayContaining(['org-a', 'branch-a', 'sale-a', 1, 'user-a', 'ur'])
+    );
+  });
+
+  it('records a browser dispatch only against the caller\'s own allocation', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const, copyNumber: 1 };
+
+    await expect(f.caller().counterReceiptBrowserPrintDispatched(input)).resolves.toEqual({
+      recorded: true,
+    });
+    const insert = vi.mocked(f.db.$executeRaw).mock.calls[0]![0] as unknown as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(insert.sql).toContain('FROM "pharmacy_receipt_print_allocations"');
+    expect(insert.sql).toContain('"actorId" =');
+    expect(insert.sql).toContain('"locale" =');
+    expect(insert.values).toEqual(expect.arrayContaining(['user-a', 'en', 1]));
+  });
+
+  it('treats a repeated confirmation of a recorded allocation as idempotent success', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    vi.mocked(f.db.$executeRaw).mockResolvedValueOnce(0);
+    vi.mocked(f.db.$queryRaw).mockResolvedValueOnce([{ recorded: true }] as never);
+
+    await expect(
+      f.caller().counterReceiptBrowserPrintDispatched({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      })
+    ).resolves.toEqual({ recorded: true });
+  });
+
+  it('rejects confirming an allocation that belongs to another operator or locale', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    vi.mocked(f.db.$executeRaw).mockResolvedValueOnce(0);
+    vi.mocked(f.db.$queryRaw).mockResolvedValueOnce([] as never);
+
+    await expect(
+      f.caller().counterReceiptBrowserPrintDispatched({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('does not consume the original copy when thermal validation falls back inside a tenant transaction', async () => {
+    // ScopedDb reuses the request's transaction, so a caught validation error
+    // does not roll back an allocation made before the error.
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+    vi.mocked(buildPharmacyReceiptEscPosJob).mockImplementationOnce(() => {
+      throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
+    });
+
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      fallback: 'BROWSER_OS',
+    });
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      copyNumber: 1,
+      reprint: false,
     });
   });
 

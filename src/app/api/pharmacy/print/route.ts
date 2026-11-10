@@ -2,15 +2,15 @@ import { NextResponse } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { publicRequestOrigin } from '@/lib/http-origin';
 import { appRouter } from '@/server/routers/_app';
 import { createTRPCContext } from '@/server/trpc';
 
-const query = z
+const input = z
   .object({
     branchId: z.string().trim().min(1).max(128),
     saleId: z.string().trim().min(1).max(128),
     locale: z.enum(['en', 'ur']).default('en'),
-    reprint: z.enum(['0', '1']).default('0'),
   })
   .strict();
 
@@ -26,12 +26,38 @@ const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options'
 /**
  * PH-A7 Pharmacy receipt print bridge. Returns a validated ESC/POS `RECEIPT`
  * job (shared `PrintDocumentSchema` + bytes) for a local bridge hand-off; it
- * queues nothing and cannot confirm paper. Reprint from history is the same
- * read with `reprint=1`. Called through the app router so the
+ * queues nothing and cannot confirm paper. Every POST claims the next durable
+ * copy number. Called through the app router so the
  * `pharmacySales.*` path keeps session, module and branch-scope enforcement.
  */
-export async function GET(request: Request) {
-  const parsed = query.safeParse(Object.fromEntries(new URL(request.url).searchParams));
+export function GET() {
+  return NextResponse.json(
+    { error: 'Receipt print jobs must be requested with POST.' },
+    { status: 405, headers: { ...headers, Allow: 'POST' } }
+  );
+}
+
+function isSameOriginJson(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  const fetchSite = request.headers.get('sec-fetch-site');
+  const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  try {
+    return (
+      origin !== null &&
+      new URL(origin).origin.toLowerCase() === publicRequestOrigin(request) &&
+      (!fetchSite || fetchSite === 'same-origin' || fetchSite === 'none') &&
+      mediaType === 'application/json'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function POST(request: Request) {
+  if (!isSameOriginJson(request)) {
+    return NextResponse.json({ error: 'Forbidden.' }, { status: 403, headers });
+  }
+  const parsed = input.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid receipt print request.' }, { status: 400, headers });
   }
@@ -41,7 +67,6 @@ export async function GET(request: Request) {
       branchId: parsed.data.branchId,
       saleId: parsed.data.saleId,
       locale: parsed.data.locale,
-      reprint: parsed.data.reprint === '1',
     });
     if (result.status === 'FALLBACK') {
       // Same error contract as the Restaurant print bridge: no payload in errors.

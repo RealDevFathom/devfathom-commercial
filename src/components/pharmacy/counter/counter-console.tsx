@@ -100,6 +100,7 @@ import {
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
 import {
+  assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
   printCounterBrowserReceipt,
   reserveCounterBrowserPrint,
@@ -303,6 +304,23 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   );
 }
 
+type CounterBrowserPrintAudit = {
+  branchId: string;
+  saleId: string;
+  locale: CounterReceiptLocale;
+} & ({ copyNumber: number; failed?: never } | { failed: true; copyNumber?: never });
+
+const PRINT_AUDIT_RETRY_MS = 2_000;
+const PRINT_AUDIT_MAX_RETRIES = 5;
+
+/** Transport faults can be retried; rejected allocation bindings cannot. */
+function isRetryablePrintAuditError(error: unknown): boolean {
+  const code = (error as { data?: { code?: string } } | null)?.data?.code;
+  return !['CONFLICT', 'FORBIDDEN', 'UNAUTHORIZED', 'BAD_REQUEST', 'NOT_FOUND'].includes(
+    code ?? ''
+  );
+}
+
 /**
  * PH-POS counter — POS-01, POS-02, POS-08 and POS-09 in one keyboard-first
  * surface.
@@ -363,7 +381,7 @@ function ScopedPharmacyCounterConsole({
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
-  const [receiptRenders, setReceiptRenders] = useState(0);
+  const [receiptReprint, setReceiptReprint] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
   const [settledChange, setSettledChange] = useState<{
@@ -447,7 +465,6 @@ function ScopedPharmacyCounterConsole({
       if (intent?.saleId !== result.saleId || intent.receiptNumber !== result.receiptNumber) return;
       discardReceiptIntent();
       setReceiptSettlement(null);
-      if (result.printStatus === 'dialog-requested') setReceiptRenders((count) => count + 1);
     },
     [discardReceiptIntent]
   );
@@ -599,6 +616,15 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  const allocateBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrint.useMutation({
+    retry: false,
+  });
+  const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
+    retry: false,
+  });
+  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation({
+    retry: false,
+  });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -832,7 +858,7 @@ function ScopedPharmacyCounterConsole({
   // the query key and clears its error; that must never restore this snapshot.
   if (receiptAccessDenied && lastReceipt !== null) {
     setLastReceipt(null);
-    setReceiptRenders(0);
+    setReceiptReprint(false);
   }
   const presentedReceipt =
     branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
@@ -895,7 +921,7 @@ function ScopedPharmacyCounterConsole({
             throw new Error('Receipt unavailable');
           // Validate an issued print model before retaining it beyond this query.
           buildCounterBrowserReceipt(receipt.data, receiptLocale, receiptFormat);
-          if (presentedReceipt?.saleId !== receipt.data.saleId) setReceiptRenders(0);
+          if (presentedReceipt?.saleId !== receipt.data.saleId) setReceiptReprint(false);
           setLastReceipt({ branchId, receipt: receipt.data });
           const intent = receiptIntent.current;
           if (
@@ -1728,47 +1754,133 @@ function ScopedPharmacyCounterConsole({
     substitutesQuery.data,
   ]);
 
-  const printReceipt = useCallback(() => {
-    // Outside the receipt drawer, the print shortcut still belongs to the
-    // current bill. Reprinting an earlier bill requires opening Last receipt.
-    const receipt = receiptOpen ? displayReceipt : currentReceipt;
-    if (!receipt || receipt.receiptNumber === null) {
-      setNotice({ tone: 'warning', message: 'Load the settled receipt before printing.' });
-      return;
-    }
-    discardReceiptIntent();
-    setReceiptSettlement(null);
-    try {
-      const sameReceipt =
-        presentedReceipt?.saleId === receipt.saleId &&
-        presentedReceipt.receiptNumber === receipt.receiptNumber;
-      printCounterBrowserReceipt(
-        receipt,
-        receiptLocale,
-        receiptFormat,
-        sameReceipt && receiptRenders > 0
-      );
+  // A dispatch retry confirms the same copy; it must never allocate another one.
+  const pendingPrintAudits = useRef<CounterBrowserPrintAudit[]>([]);
+  const printAuditRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushPrintAudits = useCallback(
+    async (attempt = 0): Promise<void> => {
+      if (printAuditRetry.current) {
+        clearTimeout(printAuditRetry.current);
+        printAuditRetry.current = null;
+      }
+      const queued = [...pendingPrintAudits.current];
+      for (const event of queued) {
+        try {
+          if (event.failed) {
+            await recordBrowserPrintFailure.mutateAsync({
+              branchId: event.branchId,
+              saleId: event.saleId,
+              locale: event.locale,
+            });
+          } else {
+            await recordBrowserPrint.mutateAsync(event);
+          }
+          pendingPrintAudits.current = pendingPrintAudits.current.filter((item) => item !== event);
+        } catch (error) {
+          if (!isRetryablePrintAuditError(error)) {
+            pendingPrintAudits.current = pendingPrintAudits.current.filter(
+              (item) => item !== event
+            );
+          }
+        }
+      }
+      if (pendingPrintAudits.current.length > 0 && attempt < PRINT_AUDIT_MAX_RETRIES) {
+        printAuditRetry.current = setTimeout(
+          () => void flushPrintAudits(attempt + 1),
+          PRINT_AUDIT_RETRY_MS * 2 ** attempt
+        );
+      }
+    },
+    [recordBrowserPrint, recordBrowserPrintFailure]
+  );
+  useEffect(
+    () => () => {
+      if (printAuditRetry.current) clearTimeout(printAuditRetry.current);
+    },
+    []
+  );
+
+  const printReceipt = useCallback(
+    async (existingReservation?: CounterBrowserPrintReservation): Promise<boolean> => {
+      const reservation = existingReservation ?? reserveCounterBrowserPrint();
+      // Outside the drawer the shortcut belongs to the current bill; Last
+      // receipt explicitly selects the retained, authorized receipt snapshot.
+      const receipt = receiptOpen ? displayReceipt : currentReceipt;
+      if (!receipt || receipt.receiptNumber === null) {
+        setNotice({ tone: 'warning', message: 'Load the settled receipt before printing.' });
+        reservation.cancel();
+        return false;
+      }
+      if (!existingReservation) {
+        discardReceiptIntent();
+        setReceiptSettlement(null);
+      }
+      try {
+        // Reject known popup and rendering failures before claiming an ordinal.
+        // Recheck at dispatch too: windows can close while allocation is in flight.
+        assertCounterBrowserPrintReady(reservation);
+        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
+        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
+      } catch (error) {
+        reservation.cancel();
+        pendingPrintAudits.current.push({
+          branchId,
+          saleId: receipt.saleId,
+          locale: receiptLocale,
+          failed: true,
+        });
+        void flushPrintAudits();
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      }
+      let allocation: { copyNumber: number; reprint: boolean };
+      try {
+        allocation = await allocateBrowserPrint.mutateAsync({
+          branchId,
+          saleId: receipt.saleId,
+          locale: receiptLocale,
+        });
+        printCounterBrowserReceipt(
+          receipt,
+          receiptLocale,
+          receiptFormat,
+          allocation.reprint,
+          reservation
+        );
+      } catch (error) {
+        reservation.cancel();
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      }
+      // Recording faults do not undo a dialog that has already opened.
       setLastReceipt({ branchId, receipt });
-      setReceiptRenders((count) => (sameReceipt ? count + 1 : 1));
+      setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
-    } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-    }
-  }, [
-    branchId,
-    currentReceipt,
-    displayReceipt,
-    discardReceiptIntent,
-    presentedReceipt,
-    receiptFormat,
-    receiptLocale,
-    receiptOpen,
-    receiptRenders,
-  ]);
+      pendingPrintAudits.current.push({
+        branchId,
+        saleId: receipt.saleId,
+        locale: receiptLocale,
+        copyNumber: allocation.copyNumber,
+      });
+      void flushPrintAudits();
+      return true;
+    },
+    [
+      currentReceipt,
+      displayReceipt,
+      discardReceiptIntent,
+      receiptFormat,
+      receiptLocale,
+      receiptOpen,
+      allocateBrowserPrint,
+      flushPrintAudits,
+      branchId,
+    ]
+  );
 
   // ── POS-01 keyboard map ───────────────────────────────────────────────────
 
@@ -2062,7 +2174,7 @@ function ScopedPharmacyCounterConsole({
                 scannerRevision.current += 1;
                 setSelectedBranchId(event.target.value);
                 setLastReceipt(null);
-                setReceiptRenders(0);
+                setReceiptReprint(false);
                 setActiveRow(null);
                 setActiveSale(null);
                 setHeldSaleId(null);
@@ -2539,7 +2651,7 @@ function ScopedPharmacyCounterConsole({
                   className="h-11 w-full"
                   onClick={() => {
                     if (settledReceipt) {
-                      if (presentedReceipt?.saleId !== saleId) setReceiptRenders(0);
+                      if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
                       setLastReceipt({ branchId, receipt: settledReceipt });
                     }
                     setReceiptOpen(true);
@@ -2547,7 +2659,7 @@ function ScopedPharmacyCounterConsole({
                 >
                   Preview receipt
                 </Button>
-                <Button variant="outline" className="h-11 w-full" onClick={printReceipt}>
+                <Button variant="outline" className="h-11 w-full" onClick={() => void printReceipt()}>
                   Print · {formatBinding(keymap.bindings.printReceipt)}
                 </Button>
               </div>
@@ -3010,7 +3122,7 @@ function ScopedPharmacyCounterConsole({
           }
           locale={receiptLocale}
           format={receiptFormat}
-          reprint={receiptRenders > 0}
+          reprint={receiptReprint}
           printing={!displayReceipt && receiptQuery.isFetching}
           error={!displayReceipt && receiptQuery.error ? messageFrom(receiptQuery.error) : null}
           onLocaleChange={setReceiptLocale}

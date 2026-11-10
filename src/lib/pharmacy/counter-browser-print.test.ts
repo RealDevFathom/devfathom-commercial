@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
 import {
+  assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
   buildCounterBrowserZReport,
   printCounterBrowserReceipt,
+  reserveCounterBrowserPrint,
 } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
 import { buildPharmacyReceiptPrintDocument, readPharmacyReceiptTaxIdentity } from './receipt-print';
@@ -490,6 +492,45 @@ describe('isolated Pharmacy browser receipt', () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
     expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Allow pop-ups');
     expect(print).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked reservation before a server copy can be requested', () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    const reservation = reserveCounterBrowserPrint();
+    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('Allow pop-ups');
+    reservation.cancel();
+  });
+
+  it('rejects a closed or cancelled reservation before allocating a receipt', () => {
+    const popup = {
+      closed: false,
+      opener: window,
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
+      focus: vi.fn(),
+      print: vi.fn(),
+      close: vi.fn(),
+    };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const reservation = reserveCounterBrowserPrint();
+    expect(() => assertCounterBrowserPrintReady(reservation)).not.toThrow();
+    expect(popup.document.write).not.toHaveBeenCalled();
+    expect(popup.print).not.toHaveBeenCalled();
+    popup.closed = true;
+    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
+    reservation.cancel();
+    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
+  });
+
+  it('rejects a reserved window whose document is no longer accessible', () => {
+    const popup = {
+      opener: window,
+      get document(): Document { throw new Error('Cross-origin window'); },
+      close: vi.fn(),
+    };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const reservation = reserveCounterBrowserPrint();
+    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
+    reservation.cancel();
   });
 
   it('prints the isolated document, disconnects opener and leaves receipt available', () => {

@@ -52,6 +52,31 @@ export function reserveCounterBrowserPrint(): CounterBrowserPrintReservation {
   return reservation;
 }
 
+/** Check known failures before asking the server to allocate a receipt copy. */
+export function assertCounterBrowserPrintReady(reservation: CounterBrowserPrintReservation): void {
+  const reserved = reservations.get(reservation);
+  if (!reserved || reserved.consumed) {
+    throw new Error('This print window is no longer available. Retry Print receipt.');
+  }
+  if (!reserved.popup) {
+    throw new Error('Allow pop-ups for this site, then retry Print receipt.');
+  }
+  try {
+    if (
+      reserved.popup.closed ||
+      typeof reserved.popup.document.open !== 'function' ||
+      typeof reserved.popup.document.write !== 'function' ||
+      typeof reserved.popup.document.close !== 'function' ||
+      typeof reserved.popup.focus !== 'function' ||
+      typeof reserved.popup.print !== 'function'
+    ) {
+      throw new Error('Print window unavailable.');
+    }
+  } catch {
+    throw new Error('The print window is no longer available. Retry Print receipt.');
+  }
+}
+
 function escapeHtml(value: string | number): string {
   return String(value).replace(/[&<>"']/g, (character) => {
     const entities: Record<string, string> = {
@@ -126,13 +151,11 @@ export function printCounterBrowserReceipt(
   labelSources: readonly DispensingLabelSource[] = []
 ): void {
   const html = buildCounterBrowserReceipt(receipt, locale, format, reprint, labelSources);
-  const reserved = reservations.get(reservation ?? reserveCounterBrowserPrint());
-  if (!reserved || reserved.consumed) {
-    throw new Error('This print window is no longer available. Retry Print receipt.');
-  }
+  const printReservation = reservation ?? reserveCounterBrowserPrint();
+  assertCounterBrowserPrintReady(printReservation);
+  const reserved = reservations.get(printReservation)!;
   reserved.consumed = true;
-  const popup = reserved.popup;
-  if (!popup) throw new Error('Allow pop-ups for this site, then retry Print receipt.');
+  const popup = reserved.popup!;
   try {
     if (popup.closed) throw new Error('Print window closed.');
     popup.document.open();

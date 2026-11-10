@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
@@ -45,7 +45,7 @@ function props(overrides: Partial<CounterReceiptViewProps> = {}): CounterReceipt
     reprint: false,
     onLocaleChange: vi.fn(),
     onFormatChange: vi.fn(),
-    onPrint: vi.fn(),
+    onPrint: vi.fn(async () => true),
     onRetry: vi.fn(),
     ...overrides,
   };
@@ -269,8 +269,8 @@ it('keeps Rx printing disabled when receipt has no sourced directions or licence
   expect(screen.getByText(/sourced Rx directions/)).toBeTruthy();
 });
 
-it('opens isolated Rx labels and exposes popup failure with retry available', () => {
-  const input = props();
+it.each([false, true])('opens isolated Rx labels with reprint=%s and exposes popup failure with retry available', (reprint) => {
+  const input = props({ reprint });
   input.receipt!.lines[0]!.identityStatus = 'ISSUED';
   input.receipt!.lines[0]!.allocations = [
     {
@@ -479,3 +479,37 @@ it('states quantity and gross when historical per-lot pricing is unavailable', (
   expect(screen.getAllByRole('listitem')[0]).toHaveTextContent('Qty: 3 unit · Gross: 3.01');
   expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });
+
+
+it.each([true, false])(
+  'routes automatic printing through the copy allocation handler and reports success=%s once',
+  async (printed) => {
+    const reservation = { cancel: vi.fn() };
+    const onPrint = vi.fn(async () => printed);
+    const onSettlementPresented = vi.fn();
+    const input = props({
+      onPrint,
+      onSettlementPresented,
+      settlement: {
+        status: 'confirmed', saleId: 'sale-1', receiptNumber: 12,
+        autoPrint: true, printReservation: reservation,
+      },
+    });
+    const view = render(<CounterReceiptView {...input} />);
+    await waitFor(() =>
+      expect(onSettlementPresented).toHaveBeenCalledExactlyOnceWith({
+        saleId: 'sale-1', receiptNumber: 12,
+        printStatus: printed ? 'dialog-requested' : 'manual-required',
+      })
+    );
+    expect(onPrint).toHaveBeenCalledExactlyOnceWith(reservation);
+    expect(reservation.cancel).not.toHaveBeenCalled();
+    view.rerender(<CounterReceiptView {...input} />);
+    expect(onPrint).toHaveBeenCalledTimes(1);
+    expect(onSettlementPresented).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(printed
+      ? 'Browser print dialog requested. Physical printing is not confirmed.'
+      : 'The browser print dialog could not open. Retry Print receipt.'
+    )).toBeInTheDocument();
+  }
+);

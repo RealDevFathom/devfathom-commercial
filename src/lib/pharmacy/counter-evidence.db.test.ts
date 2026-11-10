@@ -449,7 +449,7 @@ describeDatabase('CAM-2 counter evidence on migrated PostgreSQL', () => {
         reprint: true,
         onLocaleChange: () => undefined,
         onFormatChange: () => undefined,
-        onPrint: () => undefined,
+        onPrint: async () => false,
         onRetry: () => undefined,
         evidence: history,
       })

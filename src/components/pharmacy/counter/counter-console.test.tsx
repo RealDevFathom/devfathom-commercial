@@ -148,6 +148,9 @@ vi.mock('@/lib/trpc', async () => {
         'addLine',
         'transition',
         'tender',
+        'counterReceiptBrowserPrint',
+        'counterReceiptBrowserPrintDispatched',
+        'counterReceiptBrowserPrintFailed',
         'openDrawer',
         'captureDemand',
         'declineSubstitute',
@@ -162,9 +165,15 @@ vi.mock('@/lib/trpc', async () => {
   };
 });
 
+const browserPrint = vi.hoisted(() => ({
+  cancel: vi.fn(),
+  ready: vi.fn(),
+}));
 vi.mock('@/lib/pharmacy/counter-browser-print', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/counter-browser-print')>()),
   printCounterBrowserReceipt: mocks.printReceipt,
+  assertCounterBrowserPrintReady: browserPrint.ready,
+  reserveCounterBrowserPrint: () => ({ cancel: browserPrint.cancel }),
 }));
 
 vi.mock('./counter-receipt-view', () => ({
@@ -372,6 +381,7 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  browserPrint.ready.mockReset();
   mocks.keymapSetData.mockImplementation((_input, saved) => {
     mocks.queries.counterKeymap = query(saved);
   });
@@ -422,6 +432,9 @@ beforeEach(() => {
     'addLine',
     'transition',
     'tender',
+    'counterReceiptBrowserPrint',
+    'counterReceiptBrowserPrintDispatched',
+    'counterReceiptBrowserPrintFailed',
     'openDrawer',
     'captureDemand',
     'declineSubstitute',
@@ -431,6 +444,17 @@ beforeEach(() => {
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
+  const copyCounts = new Map<string, number>();
+  mocks.mutations.counterReceiptBrowserPrint!.mockImplementation(async (input: {
+    branchId: string; saleId: string;
+  }) => {
+    const key = `${input.branchId}:${input.saleId}`;
+    const copyNumber = (copyCounts.get(key) ?? 0) + 1;
+    copyCounts.set(key, copyNumber);
+    return { copyNumber, reprint: copyNumber > 1 };
+  });
+  mocks.mutations.counterReceiptBrowserPrintDispatched!.mockResolvedValue({ recorded: true });
+  mocks.mutations.counterReceiptBrowserPrintFailed!.mockResolvedValue({ recorded: true });
   mocks.searchFetch
     .mockReset()
     .mockImplementation((...args: unknown[]) => mocks.searchQuery(...args));
@@ -734,11 +758,14 @@ describe('PharmacyCounterConsole tender recovery', () => {
         expect(receiptDrawer).toContainElement(document.activeElement as HTMLElement)
       );
       fireEvent.keyDown(receiptDrawer, { key: 'F10' });
-      expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
-        completeCounterReceipt,
-        'en',
-        'THERMAL',
-        false
+      await waitFor(() =>
+        expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
+          completeCounterReceipt,
+          'en',
+          'THERMAL',
+          false,
+          expect.objectContaining({ cancel: browserPrint.cancel })
+        )
       );
       expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ amountMinor: 25000, cashReceivedMinor: 30000 })
@@ -877,12 +904,18 @@ describe('PharmacyCounterConsole tender recovery', () => {
         })
       );
       fireEvent.keyDown(receiptDrawer, { key: 'F10' });
-      expect(mocks.printReceipt).toHaveBeenLastCalledWith(
-        completeCounterReceipt,
-        'en',
-        'THERMAL',
-        true
+      await waitFor(() =>
+        expect(mocks.printReceipt).toHaveBeenLastCalledWith(
+          completeCounterReceipt,
+          'en',
+          'THERMAL',
+          true,
+          expect.objectContaining({ cancel: browserPrint.cancel })
+        )
       );
+      expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenLastCalledWith({
+        branchId: 'branch-a', saleId: completeCounterReceipt.saleId, locale: 'en',
+      });
       expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     }
@@ -906,7 +939,12 @@ describe('PharmacyCounterConsole tender recovery', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Preview receipt' }));
       const receiptDrawer = screen.getByRole('dialog', { name: 'Receipt preview' });
       fireEvent.keyDown(receiptDrawer, { key: 'F10' });
-      expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
+      await waitFor(() =>
+        expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
+          receipt, 'en', 'THERMAL', false,
+          expect.objectContaining({ cancel: browserPrint.cancel })
+        )
+      );
       fireEvent.click(within(receiptDrawer).getByRole('button', { name: 'Close' }));
       await waitFor(() => expect(receiptDrawer).not.toBeVisible());
       fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
@@ -947,7 +985,12 @@ describe('PharmacyCounterConsole tender recovery', () => {
           expect.objectContaining({ receipt, state: 'ready' })
         );
         fireEvent.keyDown(savedDrawer, { key: 'F10' });
-        expect(mocks.printReceipt).toHaveBeenLastCalledWith(receipt, 'en', 'THERMAL', true);
+        await waitFor(() =>
+          expect(mocks.printReceipt).toHaveBeenLastCalledWith(
+            receipt, 'en', 'THERMAL', true,
+            expect.objectContaining({ cancel: browserPrint.cancel })
+          )
+        );
         expect(mocks.printReceipt).toHaveBeenCalledTimes(2);
         return;
       }
@@ -2249,6 +2292,117 @@ describe('PharmacyCounterConsole module boundaries', () => {
   });
 });
 
+describe('PharmacyCounterConsole browser print audit', () => {
+  function renderSettledReceipt() {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    mocks.queries.counterReceipt!.data = {
+      saleId: 'sale-a',
+      receiptNumber: 42,
+      branchName: 'Synthetic branch',
+      businessDate: '2026-11-10',
+      completedAt: '2026-11-10T12:00:00.000Z',
+      currency: 'PKR',
+      lines: [{
+        saleLineId: 'line-a',
+        medicineName: 'Paracetamol',
+        strength: null,
+        presentation: 'Tablet',
+        batchNumber: 'batch-a',
+        expiresAt: '2027-01-01',
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnits: 1,
+        unitPriceMinor: 25000,
+        discountMinor: 0,
+        lineTotalMinor: 25000,
+      }],
+      tenders: [{ tenderId: 'tender-a', type: 'CASH', amountMinor: 25000, changeGivenMinor: 0 }],
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000, changeMinor: 0 },
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const props = mocks.receiptProps.mock.calls.at(-1)![0] as {
+      onPrint: () => Promise<boolean>;
+    };
+    return props.onPrint;
+  }
+
+  it.each(['Allow pop-ups for this site.', 'The print window is no longer available.'])(
+    'audits preflight failure without allocating and preserves the first successful original: %s',
+    async (message) => {
+      browserPrint.ready.mockImplementationOnce(() => { throw new Error(message); });
+      let onPrint = renderSettledReceipt();
+      await act(async () => { expect(await onPrint()).toBe(false); });
+      expect(mocks.mutations.counterReceiptBrowserPrint).not.toHaveBeenCalled();
+      expect(mocks.printReceipt).not.toHaveBeenCalled();
+      expect(mocks.mutations.counterReceiptBrowserPrintDispatched).not.toHaveBeenCalled();
+      expect(mocks.mutations.counterReceiptBrowserPrintFailed).toHaveBeenCalledExactlyOnceWith({
+        branchId: 'branch-a', saleId: 'sale-a', locale: 'en',
+      });
+      onPrint = (mocks.receiptProps.mock.calls.at(-1)![0] as { onPrint: () => Promise<boolean> }).onPrint;
+      await act(async () => { expect(await onPrint()).toBe(true); });
+      expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(1);
+      expect(mocks.printReceipt).toHaveBeenCalledWith(
+        expect.objectContaining({ saleId: 'sale-a' }), 'en', expect.any(String), false, expect.anything()
+      );
+    }
+  );
+
+  it('audits invalid receipt rendering without allocating a copy', async () => {
+    const onPrint = renderSettledReceipt();
+    // The same source is read by the print callback; make it non-dispatchable.
+    (mocks.queries.counterReceipt!.data as CounterReceipt).lines = [];
+    await act(async () => { expect(await onPrint()).toBe(false); });
+    expect(mocks.mutations.counterReceiptBrowserPrint).not.toHaveBeenCalled();
+    expect(mocks.printReceipt).not.toHaveBeenCalled();
+    expect(mocks.mutations.counterReceiptBrowserPrintFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a successful dialog handoff when audit recording fails and retries it idempotently', async () => {
+    mocks.printReceipt.mockReset();
+    browserPrint.cancel.mockReset();
+    mocks.mutations
+      .counterReceiptBrowserPrint!.mockResolvedValueOnce({ copyNumber: 1, reprint: false })
+      .mockResolvedValueOnce({ copyNumber: 2, reprint: true });
+    mocks.mutations
+      .counterReceiptBrowserPrintDispatched!.mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValue({ recorded: true });
+
+    let onPrint = renderSettledReceipt();
+    let printed: boolean | undefined;
+    await act(async () => {
+      printed = await onPrint();
+    });
+
+    // The dialog opened, so the print is reported as successful, not failed.
+    expect(printed).toBe(true);
+    expect(mocks.printReceipt).toHaveBeenCalledTimes(1);
+    expect(browserPrint.cancel).not.toHaveBeenCalled();
+    expect(screen.queryByText('network down')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.mutations.counterReceiptBrowserPrintDispatched).toHaveBeenCalledTimes(1)
+    );
+
+    // The pending event is retried for the same copy rather than re-allocated.
+    onPrint = (mocks.receiptProps.mock.calls.at(-1)![0] as { onPrint: () => Promise<boolean> })
+      .onPrint;
+    await act(async () => {
+      await onPrint();
+    });
+    await waitFor(() =>
+      expect(mocks.mutations.counterReceiptBrowserPrintDispatched).toHaveBeenCalledTimes(3)
+    );
+    const recorded = mocks.mutations.counterReceiptBrowserPrintDispatched!.mock.calls.map(
+      ([input]) => (input as { copyNumber: number }).copyNumber
+    );
+    expect(recorded.filter((copy) => copy === 1)).toHaveLength(2);
+    expect(recorded.filter((copy) => copy === 2)).toHaveLength(1);
+    expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(2);
+  });
+});
 describe('DEV-618 counter composition', () => {
   it.each(['F9', 'desktop', 'phone'])('uses the same payment flow from %s', async (entry) => {
     const scroll = vi.fn();
@@ -2717,20 +2871,64 @@ describe('DEV-618 counter composition', () => {
   });
 });
 
-it('keeps F10 printing available inside the receipt drawer', async () => {
+it.each([
+  { copyNumber: 1, reprint: false },
+  { copyNumber: 2, reprint: true },
+])('prints server copy $copyNumber with F10 inside the receipt drawer', async (allocation) => {
   mocks.queries.counterCart!.data = cart({
     status: 'COMPLETED',
     receiptNumber: 42,
     totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
   });
-  const receipt = { saleId: 'sale-a', receiptNumber: 42 };
+  const receipt = {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    branchName: 'Synthetic branch',
+    businessDate: '2026-11-10',
+    completedAt: '2026-11-10T12:00:00.000Z',
+    currency: 'PKR',
+    lines: [{
+      saleLineId: 'line-a',
+      medicineName: 'Paracetamol',
+      strength: null,
+      presentation: 'Tablet',
+      batchNumber: 'batch-a',
+      expiresAt: '2027-01-01',
+      saleUnit: 'UNIT',
+      quantity: 1,
+      canonicalUnits: 1,
+      unitPriceMinor: 25000,
+      discountMinor: 0,
+      lineTotalMinor: 25000,
+    }],
+    tenders: [{ tenderId: 'tender-a', type: 'CASH', amountMinor: 25000, changeGivenMinor: 0 }],
+    totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000, changeMinor: 0 },
+  } satisfies CounterReceipt;
   mocks.queries.counterReceipt!.data = receipt;
+  mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValueOnce(allocation);
   render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
   fireEvent.click(screen.getByRole('button', { name: 'Preview receipt' }));
   const drawer = screen.getByRole('dialog', { name: 'Receipt preview' });
   await waitFor(() => expect(drawer).toContainElement(document.activeElement as HTMLElement));
   fireEvent.keyDown(drawer, { key: 'F10' });
-  expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
+  await waitFor(() =>
+    expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
+      receipt,
+      'en',
+      'THERMAL',
+      allocation.reprint,
+      expect.objectContaining({ cancel: browserPrint.cancel })
+    )
+  );
+  expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledExactlyOnceWith({
+    branchId: 'branch-a', saleId: 'sale-a', locale: 'en',
+  });
+  await waitFor(() =>
+    expect(mocks.mutations.counterReceiptBrowserPrintDispatched).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a', saleId: 'sale-a', locale: 'en', copyNumber: allocation.copyNumber,
+    })
+  );
+  expect(mocks.mutations.counterReceiptBrowserPrintFailed).not.toHaveBeenCalled();
   expect(mocks.mutations.tender).not.toHaveBeenCalled();
 });
 

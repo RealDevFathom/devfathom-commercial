@@ -46,6 +46,7 @@ import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-sour
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { randomUUID } from 'node:crypto';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
@@ -330,7 +331,11 @@ function fail(error: unknown): never {
   throw error;
 }
 
-async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
+async function loadCounterReceipt(
+  ctx: Omit<TRPCContext, 'db'> & { db: ScopedDb },
+  scope: LedgerScope,
+  saleId: string
+) {
   const [branch, organization] = await Promise.all([
     ctx.db.pharmacyBranch.findFirst({
       where: { id: scope.branchId, organizationId: scope.organizationId },
@@ -2072,9 +2077,10 @@ export const pharmacySalesRouter = router({
 
   /**
    * PH-A7: the settled receipt as a validated ESC/POS `RECEIPT` job, using the
-   * branch's saved format. A read: printing and reprinting from history
-   * re-read the same sale, so neither can issue or change a receipt number.
-   * Text the raw baseline cannot print returns the browser/OS fallback.
+   * branch's saved format. Each delivered job atomically claims a durable copy
+   * number; only copy one is an original, regardless of caller hints, reloads,
+   * retries, or concurrent requests. This never changes the sale's receipt
+   * number. Text the raw baseline cannot print returns the browser/OS fallback.
    */
   counterReceiptPrintJob: auditedProtectedProcedure
     .input(
@@ -2083,29 +2089,57 @@ export const pharmacySalesRouter = router({
           branchId,
           saleId: z.string().min(1),
           locale: z.enum(['en', 'ur']),
-          reprint: z.boolean(),
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
-        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
-        if (receipt.receiptNumber === null || !receipt.completedAt) {
-          throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
-        }
-        const [format, taxIdentity] = await Promise.all([
-          readPharmacyReceiptFormat(ctx.db, scope),
-          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
-        ]);
-        return {
-          status: 'READY' as const,
-          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
-            layout: format.layout,
-            taxIdentity,
-            reprint: input.reprint,
-          }),
-        };
+        return await ctx.db.$transaction(async (tx) => {
+          const receipt = await loadCounterReceipt({ ...ctx, db: txDb(tx) }, scope, input.saleId);
+          if (receipt.receiptNumber === null || !receipt.completedAt) {
+            throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+          }
+          const [format, taxIdentity] = await Promise.all([
+            readPharmacyReceiptFormat(tx, scope),
+            readPharmacyReceiptTaxIdentity(tx, scope, new Date(receipt.completedAt)),
+          ]);
+          // Validate both variants before writing. ScopedDb may reuse an outer
+          // transaction, where returning FALLBACK would commit an allocation.
+          const options = { layout: format.layout, taxIdentity };
+          const originalJob = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            ...options,
+            reprint: false,
+          });
+          const reprintJob = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            ...options,
+            reprint: true,
+          });
+
+          // Issuance after the migration cutover creates an authoritative zero
+          // count. Missing state cannot prove original eligibility: start at two.
+          // The upsert serializes concurrent requests on the unique sale key.
+          const [state] = await tx.$queryRaw<[{ copyCount: number }]>(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_states"
+              ("id", "organizationId", "branchId", "saleId", "copyCount", "updatedAt")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId}, 2, NOW())
+            ON CONFLICT ("organizationId", "branchId", "saleId") DO UPDATE
+              SET "copyCount" = "pharmacy_receipt_print_states"."copyCount" + 1,
+                  "updatedAt" = NOW()
+            RETURNING "copyCount"
+          `);
+          if (!state) throw new Error('Receipt print copy allocation failed.');
+          const job = state.copyCount > 1 ? reprintJob : originalJob;
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_dispatches"
+              ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
+               ${state.copyCount}, ${ctx.session.user.id}, ${input.locale})
+          `);
+          return { status: 'READY' as const, ...job, copyNumber: state.copyCount };
+        });
       } catch (error) {
         if (error instanceof RawPrintValidationError) {
           return {
@@ -2121,6 +2155,148 @@ export const pharmacySalesRouter = router({
             message: 'This bill is not settled, so it has no receipt to print.',
           });
         }
+        fail(error);
+      }
+    }),
+
+  /** Allocate a browser/OS receipt copy. A separate call records dialog handoff. */
+  counterReceiptBrowserPrint: auditedProtectedProcedure
+    .input(
+      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const receipt = await loadCounterReceipt({ ...ctx, db: txDb(tx) }, scope, input.saleId);
+          if (receipt.receiptNumber === null || !receipt.completedAt) {
+            throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+          }
+          const [state] = await tx.$queryRaw<[{ copyCount: number }]>(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_states"
+              ("id", "organizationId", "branchId", "saleId", "copyCount", "updatedAt")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId}, 2, NOW())
+            ON CONFLICT ("organizationId", "branchId", "saleId") DO UPDATE
+              SET "copyCount" = "pharmacy_receipt_print_states"."copyCount" + 1,
+                  "updatedAt" = NOW()
+            RETURNING "copyCount"
+          `);
+          if (!state) throw new Error('Receipt print copy allocation failed.');
+          // Bind the copy to this operator and locale; only this allocation's
+          // owner can later confirm its dialog handoff.
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_allocations"
+              ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
+               ${state.copyCount}, ${ctx.session.user.id}, ${input.locale})
+          `);
+          return { copyNumber: state.copyCount, reprint: state.copyCount > 1 };
+        });
+      } catch (error) {
+        if (error instanceof PharmacyReceiptPrintError) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This bill is not settled, so it has no receipt to print.',
+          });
+        }
+        fail(error);
+      }
+    }),
+
+  /** Failed browser preflight is durable evidence, without claiming a copy. */
+  counterReceiptBrowserPrintFailed: auditedProtectedProcedure
+    .input(
+      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        await loadCounterReceipt(ctx, scope, input.saleId);
+        // Await this write directly: the general tRPC audit is best-effort.
+        await ctx.db.auditLog.create({
+          data: {
+            organizationId: scope.organizationId,
+            actorId: ctx.session.user.id,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'EXECUTE',
+            action: 'pharmacySales.counterReceiptBrowserPrintFailed',
+            targetType: 'PharmacySale',
+            targetId: input.saleId,
+            outcome: 'FAILURE',
+            errorCode: 'BROWSER_PRINT_NOT_READY',
+            metadata: { branchId: scope.branchId, locale: input.locale },
+          },
+        });
+        return { recorded: true as const };
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * Append the audit event only after the browser accepted the print-dialog
+   * request. The event must match an allocation made by the same operator in
+   * the same locale, and repeating a confirmation that is already recorded is
+   * an idempotent success so clients can safely retry after a lost response.
+   */
+  counterReceiptBrowserPrintDispatched: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).max(128),
+          locale: z.enum(['en', 'ur']),
+          copyNumber: z.number().int().positive(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const actorId = ctx.session.user.id;
+      try {
+        const inserted = await ctx.db.$executeRaw(Prisma.sql`
+          INSERT INTO "pharmacy_receipt_print_dispatches"
+            ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+          SELECT ${randomUUID()}, "organizationId", "branchId", "saleId",
+                 "copyNumber", "actorId", "locale"
+          FROM "pharmacy_receipt_print_allocations"
+          WHERE "organizationId" = ${scope.organizationId}
+            AND "branchId" = ${scope.branchId}
+            AND "saleId" = ${input.saleId}
+            AND "copyNumber" = ${input.copyNumber}
+            AND "actorId" = ${actorId}
+            AND "locale" = ${input.locale}
+          ON CONFLICT ("organizationId", "branchId", "saleId", "copyNumber") DO NOTHING
+        `);
+        if (inserted === 1) return { recorded: true as const };
+        // Retry of an already-recorded confirmation by the allocation's owner.
+        const [existing] = await ctx.db.$queryRaw<{ recorded: boolean }[]>(Prisma.sql`
+          SELECT TRUE AS "recorded"
+          FROM "pharmacy_receipt_print_dispatches" d
+          JOIN "pharmacy_receipt_print_allocations" a
+            ON a."organizationId" = d."organizationId"
+           AND a."branchId" = d."branchId"
+           AND a."saleId" = d."saleId"
+           AND a."copyNumber" = d."copyNumber"
+           AND a."actorId" = d."actorId"
+           AND a."locale" = d."locale"
+          WHERE d."organizationId" = ${scope.organizationId}
+            AND d."branchId" = ${scope.branchId}
+            AND d."saleId" = ${input.saleId}
+            AND d."copyNumber" = ${input.copyNumber}
+            AND d."actorId" = ${actorId}
+            AND d."locale" = ${input.locale}
+          LIMIT 1
+        `);
+        if (existing?.recorded) return { recorded: true as const };
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This print allocation is invalid or belongs to another operator.',
+        });
+      } catch (error) {
         fail(error);
       }
     }),
