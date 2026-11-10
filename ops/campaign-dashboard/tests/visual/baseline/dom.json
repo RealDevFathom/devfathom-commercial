@@ -1,0 +1,108 @@
+{
+ "activityBars": true,
+ "filters": [
+  "All10",
+  "Running3",
+  "Failed2",
+  "Blocked1",
+  "Passed1",
+  "Merged2",
+  "Queued1"
+ ],
+ "insights": [
+  "DEV-13: 55 fewer passing tests than baseline",
+  "Pharmacy review 50: 1 tasks not moving for >24 h",
+  "DEV-13 changes test runner config",
+  "DEV-13: complete_unit failed in 2 runs",
+  "DEV-10 typecheck running 93 min",
+  "Unblock 1 tasks in Pharmacy campaign repair \u00b7 2026-11-08 13:06",
+  "1 queued tasks with Codex at 3/50"
+ ],
+ "kpis": [
+  [
+   "Tasks",
+   "10"
+  ],
+  [
+   "Codex now",
+   "3/50"
+  ],
+  [
+   "Passed",
+   "3"
+  ],
+  [
+   "Failed",
+   "2"
+  ],
+  [
+   "Merged",
+   "2"
+  ],
+  [
+   "Done",
+   "2"
+  ],
+  [
+   "Spend",
+   "268.71"
+  ]
+ ],
+ "lanes": true,
+ "matrix": [
+  [
+   "DEV-10",
+   "Running Typecheck"
+  ],
+  [
+   "DEV-11",
+   "Running"
+  ],
+  [
+   "DEV-12",
+   "Passed on final SHA"
+  ],
+  [
+   "DEV-13",
+   "Failed: Unit, Differential"
+  ],
+  [
+   "DEV-14",
+   "Blocked: Typecheck"
+  ],
+  [
+   "DEV-15",
+   "Done"
+  ]
+ ],
+ "pipeline": [
+  [
+   "Codex",
+   "3"
+  ],
+  [
+   "Gates",
+   "3"
+  ],
+  [
+   "QA & security",
+   "1"
+  ],
+  [
+   "Merge",
+   "1"
+  ],
+  [
+   "Close",
+   "0"
+  ],
+  [
+   "Done",
+   "2"
+  ]
+ ],
+ "taskDialog": [
+  "DEV-13 Failed: Unit, Differential",
+  "FAILED on Complete unit, Differential vs baseline. Final SHA a1b2c3d4e5."
+ ]
+}
