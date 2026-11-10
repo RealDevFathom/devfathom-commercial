@@ -1,4 +1,5 @@
 import { Prisma } from '@/generated/prisma/client';
+import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
 
@@ -10,26 +11,54 @@ export function registerBalanceAfter(previous: number, delta: number): number | 
   return next;
 }
 
-/**
- * Emergency supply with no prescription on file.
- * Ten canonical units, and not again for the same patient and medicine inside 72 hours
- * or while the missing-prescription follow-up is still open.
- */
-export const EMERGENCY_NO_RX_MAX_UNITS = 10;
-export const EMERGENCY_NO_RX_WINDOW_MS = 72 * 60 * 60 * 1000;
+/** Conservative legacy policy, not a statement of provincial law. */
+export const DEFAULT_EMERGENCY_SUPPLY_POLICY = {
+  maxUnits: 10,
+  repeatWindowHours: 72,
+  source: 'DEFAULT_POLICY' as const,
+};
+
+const emergencySupplyFlagsSchema = z.object({
+  values: z.object({
+    emergencySupply: z.object({
+      maxUnits: z.number().int().positive().refine(Number.isSafeInteger),
+      // Keep the resulting lookback within JavaScript's representable date range.
+      repeatWindowHours: z.number().int().positive().max(2_400_000_000),
+      source: z.enum(['DEFAULT_POLICY', 'JURISDICTION_RULE_SET']).optional(),
+    }),
+  }),
+});
+
+export function resolveEmergencySupplyPolicy(
+  ruleSet: { id: string; controlledRegisterFlags: unknown } | null
+) {
+  const parsed = emergencySupplyFlagsSchema.safeParse(ruleSet?.controlledRegisterFlags);
+  const policy = parsed.success
+    ? {
+        ...parsed.data.values.emergencySupply,
+        source: parsed.data.values.emergencySupply.source ?? 'JURISDICTION_RULE_SET',
+      }
+    : DEFAULT_EMERGENCY_SUPPLY_POLICY;
+  return {
+    ...policy,
+    ruleSetId: ruleSet?.id ?? null,
+    repeatWindowMs: policy.repeatWindowHours * 60 * 60 * 1000,
+  };
+}
 
 /** Null when the supply is allowed. Otherwise the sentence the counter shows. */
 export function emergencyNoRxDecision(input: {
   units: number;
   recentSupplies: number;
   openFollowUp: boolean;
+  policy: ReturnType<typeof resolveEmergencySupplyPolicy>;
 }): string | null {
   if (
     !Number.isSafeInteger(input.units) ||
     input.units < 1 ||
-    input.units > EMERGENCY_NO_RX_MAX_UNITS
+    input.units > input.policy.maxUnits
   ) {
-    return `An emergency supply without a prescription is limited to ${EMERGENCY_NO_RX_MAX_UNITS} units. File the prescription before dispensing more.`;
+    return `An emergency supply without a prescription is limited to ${input.policy.maxUnits} units. File the prescription before dispensing more.`;
   }
   if (input.recentSupplies > 0 || input.openFollowUp) {
     return 'This patient already has an emergency supply of this medicine. File the missing prescription before another supply.';

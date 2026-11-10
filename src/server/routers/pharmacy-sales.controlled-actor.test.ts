@@ -17,8 +17,14 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),
 }));
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(),
+}));
 
 import { addSaleLine } from '@/lib/pharmacy/sales';
+import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -107,11 +113,44 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { credential, register, lock, caller: app.createCaller(context).pharmacySales };
+  return { db, credential, register, lock, caller: app.createCaller(context).pharmacySales };
+}
+
+function emergencyCallerFor(
+  jurisdictionRuleSet: { id: string; controlledRegisterFlags: unknown } | null
+) {
+  const fixture = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+  vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+  fixture.credential.mockResolvedValue({
+    id: 'credential-1',
+    credentialHash: 'hash',
+    failedAttempts: 0,
+    lockedUntil: null,
+    staffProfile: {
+      status: 'ACTIVE',
+      user: { id: 'pharmacist-1', organizationId: 'org-1', status: 'ACTIVE', role: 'EMPLOYEE' },
+    },
+  });
+  const profile = vi.fn().mockResolvedValue({ provinceCode: 'PB', jurisdictionRuleSet });
+  const recentSupplies = vi.fn().mockResolvedValue(0);
+  const openFollowUp = vi.fn().mockResolvedValue(null);
+  const consent = vi.fn().mockResolvedValue(null);
+  Object.assign(fixture.db.restaurantOperatorCredential, { update: vi.fn() });
+  Object.assign(fixture.db.branchRegulatoryProfile, { findFirst: profile });
+  Object.assign(fixture.db.pharmacyControlledRegisterEntry, { count: recentSupplies });
+  Object.assign(fixture.db, {
+    pharmacyPatient: {
+      findFirst: async () => ({ id: 'patient-1', cnic: '35202-1234567-1' }),
+    },
+    pharmacyEmergencyRxFollowUp: { findFirst: openFollowUp },
+    patientConsent: { findFirst: consent },
+  });
+  return { ...fixture, profile, recentSupplies, openFollowUp, consent };
 }
 
 beforeEach(() => {
   vi.mocked(addSaleLine).mockReset();
+  vi.mocked(annotateAudit).mockClear();
 });
 
 describe('pharmacySales.addLine controlled actor', () => {
@@ -214,4 +253,130 @@ describe('pharmacySales.addLine controlled actor', () => {
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
+
+  it('enforces the branch rule-set emergency cap and audits the policy it used', async () => {
+    const { caller, register, profile } = emergencyCallerFor({
+      id: 'pk_pb_v2',
+      controlledRegisterFlags: {
+        values: { emergencySupply: { maxUnits: 1, repeatWindowHours: 24 } },
+      },
+    });
+
+    await expect(caller.addLine(line)).resolves.toEqual({
+      blocked: expect.stringMatching(/limited to 1 units/),
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(profile).toHaveBeenCalledOnce();
+    const { where } = profile.mock.calls[0][0];
+    expect(where).toMatchObject({ organizationId: 'org-1', branchId: 'branch-1' });
+    expect(where).not.toHaveProperty('jurisdictionRuleSet');
+    expect(annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      metadata: {
+        emergencySupply: {
+          ruleSetId: 'pk_pb_v2',
+          provinceCode: 'PB',
+          source: 'JURISDICTION_RULE_SET',
+          maxUnits: 1,
+          repeatWindowHours: 24,
+          medicineId: 'medicine-1',
+          requestedCanonicalUnits: 2,
+        },
+      },
+    });
+  });
+
+  it.each([24, 96])(
+    'uses a configured %i-hour repeat window and permits units above the legacy cap',
+    async (repeatWindowHours) => {
+      const { caller, register, profile, recentSupplies, consent } = emergencyCallerFor({
+        id: 'pk_pb_v2',
+        controlledRegisterFlags: {
+          values: { emergencySupply: { maxUnits: 20, repeatWindowHours } },
+        },
+      });
+
+      // Stop at the independent consent guard after emergency eligibility succeeds.
+      await expect(caller.addLine({ ...line, quantity: 12 })).resolves.toEqual({
+        blocked: 'Patient dispensing consent is required.',
+      });
+      expect(consent).toHaveBeenCalledOnce();
+      const now = profile.mock.calls[0][0].where.effectiveFrom.lte as Date;
+      expect(profile).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          effectiveFrom: { lte: now },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+        },
+        select: {
+          provinceCode: true,
+          jurisdictionRuleSet: { select: { id: true, controlledRegisterFlags: true } },
+        },
+        orderBy: { effectiveFrom: 'desc' },
+      });
+      expect(recentSupplies).toHaveBeenCalledExactlyOnceWith({
+        where: {
+          organizationId: 'org-1',
+          patientId: 'patient-1',
+          medicineId: 'medicine-1',
+          entryKind: 'SALE',
+          emergency: true,
+          createdAt: { gte: new Date(now.getTime() - repeatWindowHours * 60 * 60 * 1000) },
+        },
+      });
+      expect(annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+        metadata: {
+          emergencySupply: {
+            ruleSetId: 'pk_pb_v2',
+            provinceCode: 'PB',
+            source: 'JURISDICTION_RULE_SET',
+            maxUnits: 20,
+            repeatWindowHours,
+            medicineId: 'medicine-1',
+            requestedCanonicalUnits: 12,
+          },
+        },
+      });
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([null, { id: 'legacy', controlledRegisterFlags: {} }])(
+    'audits the legacy default when the rule-set policy is absent: %j',
+    async (ruleSet) => {
+      const { caller, profile, recentSupplies, consent } = emergencyCallerFor(ruleSet);
+
+      await expect(caller.addLine({ ...line, quantity: 11 })).resolves.toEqual({
+        blocked: expect.stringMatching(/limited to 10 units/),
+      });
+      const now = profile.mock.calls[0][0].where.effectiveFrom.lte as Date;
+      expect(recentSupplies).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          patientId: 'patient-1',
+          medicineId: 'medicine-1',
+          entryKind: 'SALE',
+          emergency: true,
+          createdAt: { gte: new Date(now.getTime() - 72 * 60 * 60 * 1000) },
+        },
+      });
+      expect(annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+        metadata: {
+          emergencySupply: {
+            ruleSetId: ruleSet?.id ?? null,
+            provinceCode: 'PB',
+            source: 'DEFAULT_POLICY',
+            maxUnits: 10,
+            repeatWindowHours: 72,
+            medicineId: 'medicine-1',
+            requestedCanonicalUnits: 11,
+          },
+        },
+      });
+      expect(consent).not.toHaveBeenCalled();
+      expect(addSaleLine).not.toHaveBeenCalled();
+    }
+  );
 });

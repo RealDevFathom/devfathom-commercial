@@ -45,6 +45,7 @@ import {
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
+import { DEFAULT_EMERGENCY_SUPPLY_POLICY } from '@/lib/pharmacy/controlled-register';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
@@ -1683,7 +1684,14 @@ async function runCommand(
           permittedSchedules: { values: ['*'], provisional: false, label },
           prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
           prescriptionRetentionDays: { values: {}, provisional: false, label },
-          controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false, label },
+          controlledRegisterFlags: {
+            values: {
+              recordEverySale: true,
+              emergencySupply: DEFAULT_EMERGENCY_SUPPLY_POLICY,
+            },
+            provisional: false,
+            label,
+          },
           pharmacistCoverageRule: {
             values: { dispenseGrantRequired: true },
             provisional: false,
