@@ -1,8 +1,11 @@
 import { render, screen, within } from '@testing-library/react';
+import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
+const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
+const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -21,7 +24,11 @@ const commandCentre = vi.fn(async () => ({
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
     organization: { id: 'org-a', currency: 'PKR' },
-    entitlements: { organizationId: 'org-a' },
+    entitlements: {
+      organizationId: 'org-a',
+      enabledModules: reportModules.enabled,
+      modules: [{ key: 'pharmacy-reports', name: 'Pharmacy Reports' }],
+    },
     session: { user: actor },
   })),
 }));
@@ -47,7 +54,7 @@ vi.mock('./daily-work-pack', () => ({
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
     createCaller: () => ({
-      branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
+      branches: reportBranches,
       commandCentre,
       anomalySignals: async () => [
         {
@@ -141,6 +148,66 @@ describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+    reportModules.enabled = ['pharmacy-reports'];
+    reportBranches.mockClear();
+    commandCentre.mockClear();
+  });
+
+  it('names the missing reports capability and who can grant it', async () => {
+    actor.role = 'MEMBER';
+    reportBranches.mockRejectedValueOnce(
+      new TRPCError({ code: 'FORBIDDEN', message: 'You do not have permission for this action.' })
+    );
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/You need the operational reports permission/)).toHaveTextContent(
+      'Ask your workspace administrator to grant it.'
+    );
+    expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'The Pharmacy Reports module is not enabled for this organization.',
+    'Pharmacy reports are not licensed.',
+  ])('names the missing reports module for an authorized administrator (%s)', async (message) => {
+    reportModules.enabled = [];
+    reportBranches.mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN', message }));
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/Pharmacy Reports module is not enabled/)).toHaveTextContent(
+      'Ask your workspace administrator to enable it.'
+    );
+    expect(screen.queryByText(/You need the operational reports permission/)).toBeNull();
+    expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new Error('Database unavailable'),
+    new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Change your temporary password before continuing.',
+    }),
+  ])('does not describe an unrelated report failure as missing access (%s)', async (error) => {
+    reportModules.enabled = [];
+    reportBranches.mockRejectedValueOnce(error);
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/Reports could not be loaded. Try again/)).toBeVisible();
+    expect(screen.queryByText(/operational reports permission|Pharmacy Reports module/)).toBeNull();
+    expect(screen.queryByText('Database unavailable')).toBeNull();
+    expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it('asks an unauthenticated report viewer to sign in again', async () => {
+    reportBranches.mockRejectedValueOnce(new TRPCError({ code: 'UNAUTHORIZED' }));
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Sign in again to access pharmacy reports.')).toBeVisible();
+    expect(commandCentre).not.toHaveBeenCalled();
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {

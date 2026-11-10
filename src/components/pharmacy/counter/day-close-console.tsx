@@ -46,20 +46,31 @@ export function PharmacyDayCloseConsole() {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
+  const sessionVerdict = evaluateSessionUser(user);
   if (
     status !== 'authenticated' ||
-    !evaluateSessionUser(user).ok ||
+    !sessionVerdict.ok ||
     user?.role !== 'ADMIN' ||
     user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
+    let detail =
+      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.';
+    if (status === 'loading') {
+      detail = 'Checking day-close access…';
+    } else if (status !== 'authenticated') {
+      detail = 'Sign in to this pharmacy workspace to reconcile and close a day.';
+    } else if (!sessionVerdict.ok) {
+      detail = sessionVerdict.message;
+    } else if (user?.organizationId !== entitlements.organizationId) {
+      detail = 'Sign in to this pharmacy workspace to reconcile and close a day.';
+    } else if (!isModuleGranted('pharmacy-counter', entitlements.enabledModules)) {
+      detail =
+        'The Pharmacy Counter module is not enabled for this workspace. Ask your workspace administrator to enable it for day close.';
+    }
     return (
       <SectionCard title="Day close unavailable">
-        <p role="status">
-          {status === 'loading'
-            ? 'Checking day-close access…'
-            : 'Sign in as a pharmacy administrator to reconcile and close a day.'}
-        </p>
+        <p role="status">{detail}</p>
       </SectionCard>
     );
   }

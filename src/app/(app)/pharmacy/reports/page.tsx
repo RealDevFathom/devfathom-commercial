@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
@@ -9,6 +10,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
@@ -73,7 +75,29 @@ export default async function PharmacyReportsPage({
   let catalog: Awaited<ReturnType<typeof caller.catalog>>;
   try {
     [branchResult, catalog] = await Promise.all([caller.branches(), caller.catalog()]);
-  } catch {
+  } catch (error) {
+    let detail =
+      'Reports could not be loaded. Try again, or contact your workspace administrator if the problem continues.';
+    if (error instanceof TRPCError) {
+      if (error.code === 'UNAUTHORIZED') {
+        detail = 'Sign in again to access pharmacy reports.';
+      } else if (error.code === 'FORBIDDEN') {
+        const moduleName =
+          ctx.entitlements.modules.find((module) => module.key === 'pharmacy-reports')?.name ??
+          'pharmacy-reports';
+        if (error.message === 'You do not have permission for this action.') {
+          detail =
+            'You need the operational reports permission to view pharmacy reports. Ask your workspace administrator to grant it.';
+        } else if (
+          !isModuleGranted('pharmacy-reports', ctx.entitlements.enabledModules) &&
+          (error.message === 'Pharmacy reports are not licensed.' ||
+            error.message === `The ${moduleName} module is not enabled for this organization.`)
+        ) {
+          detail =
+            'The Pharmacy Reports module is not enabled for this workspace. Ask your workspace administrator to enable it.';
+        }
+      }
+    }
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader
@@ -81,10 +105,7 @@ export default async function PharmacyReportsPage({
           heading="Reports"
           description="Bounded, permission-scoped command centre and report catalog."
         />
-        <ReportNotice
-          title="Reports unavailable"
-          detail="Your pharmacy reports permission or license is not available. Contact your workspace administrator."
-        />
+        <ReportNotice title="Reports unavailable" detail={detail} />
       </main>
     );
   }
