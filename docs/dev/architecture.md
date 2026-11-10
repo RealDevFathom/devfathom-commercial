@@ -75,7 +75,7 @@ PostgreSQL with FORCE ROW LEVEL SECURITY (policies live in migrations only)
 
 ## AI (Ask Fathom and AI features)
 
-`src/lib/ai/`. **AI is off unless `AI_PROVIDER` is set**, and production defaults to disabled. With `AI_PROVIDER=auto`, `router.ts` tries Anthropic, then OpenAI, then Bedrock, failing over on availability errors only, with a circuit breaker. The model tier for each call (cheap, standard or deep) comes from `tiers.ts` and `workload.ts`. Per-provider monthly caps and prices are in `model-defaults.ts` and `spend.ts`, and SuperAdmins can change them through the `ai-settings` router. AI writes are recorded as `AIAssistantAction` and run once, after the user confirms. Every figure in an answer must come from a tool. **Do not add Azure to the routed chain.**
+`src/lib/ai/`. **AI is off unless `AI_PROVIDER` is set**, and production defaults to disabled. With `AI_PROVIDER=auto`, `router.ts` tries Anthropic, then OpenAI, then Bedrock, failing over on availability errors only, with a circuit breaker. The model tier for each call (cheap, standard or deep) comes from `tiers.ts` and `workload.ts`. Per-provider monthly caps and prices are in `model-defaults.ts` and `spend.ts`, and SuperAdmins can change them through the `ai-settings` router. AI writes are recorded as `AIAssistantAction` and run once, after the user confirms. Every figure in an answer must come from a tool. **Do not add Azure to the routed chain.** Saad ordered Azure removed from all code on 10 Nov 2026. The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 
 ## Cameras
 

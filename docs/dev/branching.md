@@ -25,9 +25,9 @@ feature branch ──PR──▶ develop ──PR──▶ staging ──PR─�
 
 1. **Never push directly to `develop`, `staging` or `main`.** That includes agents and "tiny" fixes.
 2. Branch from an up-to-date `develop`. Keep branches short-lived and delete them after merge.
-3. **Review is policy, not enforced.** `develop` currently has **no branch protection** (the GitHub API returns 404 for it), so nothing technically stops a direct push or a self-merge. Get a CTO review on every PR and QA on code PRs, and never merge your own PR. The CTO tracks this as an open gap.
+3. **Review is policy, not enforced.** `develop` has **no branch protection**. This is **Saad's decision (10 Nov 2026)**: `develop` stays unprotected, and merges are held until every gate passes on the final commit. Nothing technically stops a direct push or a self-merge, so the rules here are what hold the line. `main` protection: TO CONFIRM. Get a CTO review on every PR and QA on code PRs, and never merge your own PR.
 4. **"Merged to develop" isn't "released".** A feature is only on production once `main` has been promoted.
-5. **Never deploy to Azure.** `deploy-staging.yml` and `promote-production.yml` still reference Azure and are manual-dispatch only. Don't run them.
+5. **Never deploy to Azure.** `deploy-staging.yml` and `promote-production.yml` still reference Azure and are manual-dispatch only. Don't run them. Saad ordered Azure removed from all code on 10 Nov 2026. The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 6. **Never commit secrets** (`.env*`, tokens, passwords, demo logins). Run `gitleaks` locally before opening a PR.
 
 ## Making a PR

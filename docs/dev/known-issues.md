@@ -5,8 +5,8 @@
 ## Process and tooling
 
 1. **GitHub Actions is disabled**, so no CI runs on any PR or push. Run the checks locally ([testing-and-ci.md](testing-and-ci.md)).
-2. **`develop` has no branch protection.** Review is by policy only ([branching.md](branching.md)).
-3. **Deploy workflows still reference Azure** (`deploy-staging.yml`, `promote-production.yml`), and the dependencies still include `@ai-sdk/azure` and `@azure/identity`. Azure is deprecated; don't run or extend these.
+2. **`develop` has no branch protection, by Saad's decision (10 Nov 2026).** Review is by policy only, and merges wait until every gate passes on the final commit ([branching.md](branching.md)). `main` protection: TO CONFIRM.
+3. **Deploy workflows still reference Azure** (`deploy-staging.yml`, `promote-production.yml`), and the dependencies still include `@ai-sdk/azure` and `@azure/identity`. Azure is deprecated; don't run or extend these. Saad ordered Azure removed from all code on 10 Nov 2026. The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 4. **`staging` and `main` are behind `develop`.** Both are at `08a247c1`. "Live on develop" doesn't mean released or QA-passed.
 5. **The full typecheck can run out of memory.** PR #1240 merged as "[Draft]" for this reason. Give `tsc` 8–12 GB.
 6. **`docs/technical-overview.md` is outdated** (Azure topology). Use [architecture.md](architecture.md).

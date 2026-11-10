@@ -28,6 +28,6 @@ Start with the architecture overview, then set up your machine, then read the pe
 
 - Never push to `main`, `develop` or `staging` directly. Open a PR into `develop`.
 - Never deploy, and never merge to `staging` or `main`, without Saad's explicit go-ahead.
-- **Never deploy to Azure.** Azure files in the repo are deprecated and kept only for reference.
+- **Never deploy to Azure.** Azure files in the repo are deprecated. Saad ordered Azure removed from all code on 10 Nov 2026. The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437). Don't add new Azure code in the meantime.
 - Never put passwords, keys, tokens or login details in code, docs, PR bodies or screenshots.
 - If you aren't sure something is true, write `TODO(confirm)` instead of guessing.

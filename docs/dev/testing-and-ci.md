@@ -31,6 +31,6 @@ Static checks: `bun run typecheck` (`tsc --noEmit`; give it memory with `NODE_OP
 | `image-build.yml` | PRs with `ci-ready` | Builds the container image on native amd64. Pushes nothing. |
 | `deploy-develop.yml` | After a successful QA gate on a push to `develop`, or manual | Deploys `develop` to the develop environment. Infrastructure details are CTO-owned. |
 | `deploy-staging.yml` | Manual only | **Still targets the retired Azure staging. Don't run it.** |
-| `promote-production.yml` | Manual, with an image digest | **Still references Azure. Don't run it.** Production promotion is Saad's call. |
+| `promote-production.yml` | Manual, with an image digest | **Still references Azure. Don't run it.** Production promotion is Saad's call. Azure removal: DEV-755 / #1437. |
 
 Before you open a PR, run at least `typecheck`, `lint`, `format:check` and `test`, plus `test:rls` and the relevant DB and E2E suites for the area you changed.
