@@ -96,6 +96,52 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
   }
 });
 
+describe('purchasing reversal witness enumeration', () => {
+  function query(f: ReturnType<typeof fixture>) {
+    return (
+      f.caller.purchasing as unknown as {
+        controlledReversalWitnesses: (input: {
+          branchId: string;
+          goodsReceiptId: string;
+        }) => Promise<unknown>;
+      }
+    ).controlledReversalWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
+  }
+  it.each(['pharmacy.counter', 'pharmacy:dispense'])(
+    'denies %s without pharmacy:safety before enumerating PIN holders',
+    async (capability) => {
+      const f = fixture(capability);
+      await expect(query(f)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+    }
+  );
+  it('offers any other PIN-holding pharmacist, not only the original qualified person', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ id: 'receipt' });
+    await expect(query(f)).resolves.toEqual([]);
+    expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'receipt', organizationId: 'org', branchId: 'branch', status: 'POSTED' },
+      })
+    );
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          user: { organizationId: 'org', status: 'ACTIVE' },
+          userId: { not: 'actor' },
+        }),
+      })
+    );
+  });
+  it('offers nobody when the receipt is not posted in this branch', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(null);
+    await expect(query(f)).resolves.toEqual([]);
+    expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+  });
+});
+
 function purchasingWitnesses(f: ReturnType<typeof fixture>) {
   return f.purchasing.controlledWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
 }

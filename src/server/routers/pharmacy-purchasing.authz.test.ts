@@ -341,6 +341,8 @@ const CALLS = {
     c.postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'gr_a' }),
   controlledWitnesses: (c: Caller) =>
     c.controlledWitnesses({ branchId: 'branch_a', goodsReceiptId: 'gr_a' }),
+  controlledReversalWitnesses: (c: Caller) =>
+    c.controlledReversalWitnesses({ branchId: 'branch_a', goodsReceiptId: 'gr_a' }),
   reverseGoodsReceipt: (c: Caller) =>
     c.reverseGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'gr_a', reason: 'Wrong' }),
   receivingExceptions: (c: Caller) => c.receivingExceptions({ branchId: 'branch_a' }),
@@ -464,6 +466,7 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   createGoodsReceipt: PROCUREMENT,
   postGoodsReceipt: PROCUREMENT,
   controlledWitnesses: PROCUREMENT,
+  controlledReversalWitnesses: PROCUREMENT,
   reverseGoodsReceipt: PROCUREMENT,
   receivingExceptions: PROCUREMENT,
   resolveReceivingException: PROCUREMENT,
@@ -499,6 +502,7 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'createGoodsReceipt',
   'postGoodsReceipt',
   'controlledWitnesses',
+  'controlledReversalWitnesses',
   'reverseGoodsReceipt',
   'receivingExceptions',
   'resolveReceivingException',
@@ -1133,10 +1137,16 @@ describe('a procurement member acts only at branches they are assigned to', () =
   });
 
   it.each(BRANCH_SCOPED)('%s refuses an unassigned branch', async (name) => {
-    // The financial follow-up reads are the Finance role's; give the buyer that too.
+    // Give the buyer the financial and clinical permissions so each call reaches
+    // the branch boundary, including controlled reversal witness enumeration.
     PEOPLE.buyer = {
       role: 'EMPLOYEE',
-      grants: [...template('procurement'), 'reports:financial', 'pharmacy:dispense'],
+      grants: [
+        ...template('procurement'),
+        'reports:financial',
+        'pharmacy:dispense',
+        'pharmacy:safety',
+      ],
     };
     try {
       await expect(CALLS[name](caller('buyer'))).rejects.toMatchObject({

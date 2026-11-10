@@ -4,6 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   appendControlledCorrection,
   appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
   appendControlledSaleEntries,
   DEFAULT_EMERGENCY_SUPPLY_POLICY,
   derivedCorrectionDelta,
@@ -327,6 +328,59 @@ describe('appendControlledCorrection', () => {
       })
     ).rejects.toThrow('CAP');
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('appendControlledPurchaseReversals', () => {
+  it('appends a movement-backed zero-quantity correction with a fresh witness', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'correction' });
+    const purchase = {
+      ...original,
+      entryKind: 'PURCHASE' as const,
+      quantityCanonicalUnits: 2,
+      witnessedByUserId: 'pharmacist',
+      signatureRef: 'pin:pharmacist',
+      stockMovementId: 'receipt-movement',
+    };
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyControlledRegisterEntry: {
+        findMany: vi.fn().mockResolvedValue([purchase]),
+        findFirst: vi.fn().mockResolvedValue({ runningBalance: 2 }),
+        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        create,
+      },
+      pharmacyStockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      },
+      pharmacyStockMovement: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'reversal-movement', quantityUnits: -2 }),
+      },
+    } as unknown as ScopedDb;
+
+    await appendControlledPurchaseReversals(db, {
+      organizationId: 'org',
+      branchId: 'branch',
+      recordedByUserId: 'receiver',
+      reason: 'Supplier sent the wrong consignment.',
+      reversedMovementIds: Object.freeze(['receipt-movement']),
+      witness: { witnessedByUserId: 'fresh-witness', signatureRef: 'pin:fresh-verification' },
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entryKind: 'CORRECTION',
+        correctsEntryId: 'entry_1',
+        quantityCanonicalUnits: 0,
+        balanceDelta: -2,
+        runningBalance: 0,
+        restorationMovementId: 'reversal-movement',
+        recordedByUserId: 'receiver',
+        witnessedByUserId: 'fresh-witness',
+        signatureRef: 'pin:fresh-verification',
+        correctionReason: 'Supplier sent the wrong consignment.',
+      }),
+    });
   });
 });
 

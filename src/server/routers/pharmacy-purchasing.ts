@@ -7,6 +7,7 @@ import {
   verifyPurchaseApprover,
 } from '@/lib/pharmacy/purchase-approval';
 import { TRPCError } from '@trpc/server';
+import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import {
   issueOperatorCredential,
   CredentialLifecycleError,
@@ -123,6 +124,9 @@ const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
+  if (error instanceof ControlledRestorationDenied) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
       code:
@@ -1887,6 +1891,48 @@ const purchasingRouter = router({
     }),
 
   /**
+   * Fresh independent witnesses for reversing a posted controlled receipt: any
+   * active PIN-holding pharmacist other than the person reversing. Unlike
+   * posting, this is not limited to the receipt's original qualified person.
+   */
+  controlledReversalWitnesses: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy procurement access required.',
+        });
+      }
+      const actorId = ctx.session.user.id;
+      const actor = subjectFromSession(ctx.session.user);
+      // Reversing controlled stock requires pharmacy:safety; do not enumerate otherwise.
+      if (!(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db }))) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const { organizationId } = await receivingScope(ctx, input.branchId);
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId,
+          branchId: input.branchId,
+          status: 'POSTED',
+        },
+        select: { id: true },
+      });
+      if (!receipt) return [];
+      return listControlledPinWitnesses(ctx.db, organizationId, actorId);
+    }),
+
+  /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
    * posted is edited or deleted; if the stock has already moved on, the ledger
    * refuses rather than driving a balance negative.
@@ -1899,6 +1945,13 @@ const purchasingRouter = router({
           branchId,
           goodsReceiptId: z.string().min(1),
           reason: z.string().trim().min(1).max(1000),
+          controlledWitness: z
+            .object({
+              staffProfileId: z.string().min(1),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     )
@@ -1911,6 +1964,7 @@ const purchasingRouter = router({
             goodsReceiptId: input.goodsReceiptId,
             reason: input.reason,
             at: new Date(),
+            controlledWitness: input.controlledWitness,
           })
         );
       } catch (error) {

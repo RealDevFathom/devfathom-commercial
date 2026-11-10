@@ -41,6 +41,7 @@ import {
 } from './purchasing';
 import { readSupplierCompliancePolicy, supersededLicenceIds } from './supplier-compliance-policy';
 import { creditPosition } from './supplier-returns';
+import { goodsReceiptMovementKeys } from './goods-receipt-keys';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type OrganizationScope = { organizationId: string };
@@ -597,7 +598,7 @@ export async function receivedAgainstOrder(
 // ---------------------------------------------------------------------------
 
 export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
-  return db.pharmacyGoodsReceipt.findMany({
+  const receipts = await db.pharmacyGoodsReceipt.findMany({
     where: { organizationId: scope.organizationId, branchId: scope.branchId },
     orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
     include: {
@@ -615,6 +616,44 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
       exceptions: { orderBy: [{ raisedAt: 'asc' }, { id: 'asc' }] },
     },
   });
+  const keys = receipts
+    .filter((receipt) => receipt.status === 'POSTED')
+    .flatMap((receipt) => goodsReceiptMovementKeys(receipt.lines.map((line) => line.id)));
+  const movements = keys.length
+    ? await db.pharmacyStockMovement.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          idempotencyKey: { in: keys },
+        },
+        select: { id: true, idempotencyKey: true },
+      })
+    : [];
+  const purchases = movements.length
+    ? await db.pharmacyControlledRegisterEntry.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          entryKind: 'PURCHASE',
+          stockMovementId: { in: movements.map((movement) => movement.id) },
+        },
+        select: { stockMovementId: true },
+      })
+    : [];
+  const purchaseMovementIds = new Set(purchases.map((entry) => entry.stockMovementId));
+  const registeredKeys = new Set(
+    movements
+      .filter((movement) => purchaseMovementIds.has(movement.id))
+      .map((m) => m.idempotencyKey)
+  );
+  return receipts.map((receipt) => ({
+    ...receipt,
+    reversalRequiresWitness:
+      receipt.status === 'POSTED' &&
+      goodsReceiptMovementKeys(receipt.lines.map((line) => line.id)).some((key) =>
+        registeredKeys.has(key)
+      ),
+  }));
 }
 
 export type GoodsReceiptDetail = Awaited<ReturnType<typeof listGoodsReceipts>>[number];

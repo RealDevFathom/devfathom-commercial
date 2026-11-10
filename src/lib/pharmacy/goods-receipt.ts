@@ -25,7 +25,12 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
-import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
+  assignedRegisterBranchIds,
+  lockRegister,
+} from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
@@ -34,6 +39,11 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
+import {
+  authorizeControlledRestoration,
+  ControlledRestorationDenied,
+  type ControlledRestorationPin,
+} from './controlled-restoration-authorization';
 import {
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
@@ -56,17 +66,9 @@ import {
   reverseMovements,
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { acceptedKey, goodsReceiptMovementKeys, quarantineKey } from './goods-receipt-keys';
 
 export type ReceivingScope = LedgerScope;
-
-/** Deterministic, so a reversal can find exactly the postings a receipt made. */
-function acceptedKey(receiptLineId: string): string {
-  return `pharmacy-receipt:${receiptLineId}:accepted`;
-}
-
-function quarantineKey(receiptLineId: string): string {
-  return `pharmacy-receipt:${receiptLineId}:quarantine`;
-}
 
 export type PostGoodsReceiptResult = {
   goodsReceiptId: string;
@@ -581,7 +583,12 @@ export type ReverseGoodsReceiptResult = {
 export async function reverseGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; reason: string; at: Date }
+  input: {
+    goodsReceiptId: string;
+    reason: string;
+    at: Date;
+    controlledWitness?: ControlledRestorationPin;
+  }
 ): Promise<ReverseGoodsReceiptResult> {
   if (input.reason.trim().length === 0) {
     throw new PharmacyReceivingError('BYPASS_EVIDENCE_MISSING');
@@ -598,7 +605,7 @@ export async function reverseGoodsReceipt(
 
   // The keys are derived, not stored, so this finds precisely the movements
   // this receipt posted and nothing that happened to the lot afterwards.
-  const keys = receipt.lines.flatMap((line) => [acceptedKey(line.id), quarantineKey(line.id)]);
+  const keys = goodsReceiptMovementKeys(receipt.lines.map((line) => line.id));
   const posted = await db.pharmacyStockMovement.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -610,11 +617,66 @@ export async function reverseGoodsReceipt(
   });
   if (posted.length === 0) throw new PharmacyInventoryError('NOT_FOUND');
 
-  const reversals = await reverseMovements(db, scope, {
-    movementIds: posted.map((movement) => movement.id),
-    reason: input.reason,
-    at: input.at,
+  const controlled = await db.pharmacyControlledRegisterEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: posted.map((movement) => movement.id) },
+    },
+    select: { id: true },
   });
+  let witness;
+  if (controlled) {
+    const assigned = await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId);
+    const branch = await db.pharmacyBranch.findFirst({
+      where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
+      select: { id: true },
+    });
+    if (!assigned.includes(scope.branchId) || !branch) throw new ControlledRestorationDenied(true);
+    witness = await authorizeControlledRestoration(
+      db,
+      scope,
+      input.controlledWitness,
+      'pharmacy:safety'
+    );
+    // Dispensing takes the branch register lock before any stock balance lock.
+    // Use the same order even when a receipt has multiple movements to reverse.
+    await lockRegister(db, scope.organizationId, scope.branchId);
+  }
+
+  // Reverse one movement, then write its register row, before the next one.
+  // The register trigger checks each row's running balance against sellable
+  // stock at insert time, so two posted lines landing on the same controlled
+  // lot only reconcile if each correction is written right after its movement.
+  const reversals: Awaited<ReturnType<typeof reverseMovements>> = [];
+  for (const movement of posted) {
+    reversals.push(
+      ...(await reverseMovements(db, scope, {
+        movementIds: [movement.id],
+        reason: input.reason,
+        at: input.at,
+      }))
+    );
+    if (!controlled) continue;
+    try {
+      await appendControlledPurchaseReversals(db, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        recordedByUserId: scope.actorId,
+        reason: input.reason,
+        reversedMovementIds: [movement.id],
+        witness,
+      });
+    } catch (error) {
+      // The register refuses when stock has moved on since posting; surface
+      // that as a domain error instead of a generic server failure.
+      if (error instanceof Error && (error.message === 'STOCK' || error.message === 'BALANCE')) {
+        throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+      }
+      throw error;
+    }
+  }
 
   await db.pharmacyGoodsReceipt.update({
     where: { id: receipt.id },

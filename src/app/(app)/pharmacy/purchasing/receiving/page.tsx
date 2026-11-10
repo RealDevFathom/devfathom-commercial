@@ -228,13 +228,24 @@ export default async function PharmacyReceivingPage({
   }
   const needsWitness = Boolean(
     selectedReceipt &&
-    selectedReceipt.status === 'DRAFT' &&
-    (selectedReceipt.qualifiedPersonUserId ||
-      selectedReceipt.lines.some((line) => line.medicine.controlled))
+    (selectedReceipt.status === 'POSTED'
+      ? selectedReceipt.reversalRequiresWitness
+      : selectedReceipt.status === 'DRAFT' &&
+        (selectedReceipt.qualifiedPersonUserId ||
+          selectedReceipt.lines.some((line) => line.medicine.controlled)))
   );
+  let witnessLoadFailed = false;
   const witnesses =
     needsWitness && selectedReceipt
-      ? await caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+      ? await (
+          selectedReceipt.status === 'POSTED'
+            ? // Reversal needs a fresh independent witness, not the original qualified person.
+              caller.controlledReversalWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+            : caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+        ).catch(() => {
+          witnessLoadFailed = true;
+          return [];
+        })
       : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
@@ -460,6 +471,12 @@ export default async function PharmacyReceivingPage({
         branchId: branch,
         goodsReceiptId,
         reason: field(form, 'reversalReason'),
+        controlledWitness: optionalField(form, 'witnessStaffProfileId')
+          ? {
+              staffProfileId: field(form, 'witnessStaffProfileId'),
+              pin: field(form, 'witnessPin'),
+            }
+          : undefined,
       });
       revalidatePath(ROUTE);
       next = destination(
@@ -1101,6 +1118,7 @@ export default async function PharmacyReceivingPage({
             onReverse={reverseReceipt}
             receipt={selectedReceipt}
             witnesses={witnesses}
+            witnessLoadFailed={witnessLoadFailed}
           />
         ) : (
           <SectionCard title="No receipt selected" titleLevel={2}>
@@ -1374,6 +1392,7 @@ function ReceiptDetail({
   onPost,
   onReverse,
   witnesses,
+  witnessLoadFailed,
 }: {
   receipt: GoodsReceiptDetail;
   lots: {
@@ -1387,6 +1406,7 @@ function ReceiptDetail({
   onPost: (form: FormData) => Promise<string>;
   onReverse: (form: FormData) => Promise<string>;
   witnesses: ReadonlyArray<{ id: string; name: string }>;
+  witnessLoadFailed: boolean;
 }) {
   return (
     <SectionCard
@@ -1551,7 +1571,39 @@ function ReceiptDetail({
               notice={notice}
               required
             />
-            <SubmitButton variant="destructive">Reverse posting</SubmitButton>
+            {receipt.reversalRequiresWitness ? (
+              <div className="grid w-full gap-3 sm:grid-cols-2">
+                <SelectField
+                  emptyHint={
+                    witnessLoadFailed
+                      ? 'Witness choices could not load. Check your pharmacy safety access and reload before reversing controlled stock.'
+                      : 'No other active user with a dispensing PIN can witness this reversal.'
+                  }
+                  hint="A different pharmacist must approve this controlled stock reversal."
+                  label="Reversal witness"
+                  name="witnessStaffProfileId"
+                  notice={notice}
+                  options={witnesses.map((witness) => ({ value: witness.id, label: witness.name }))}
+                  placeholder="Select a pharmacist"
+                  required
+                />
+                <TextField
+                  autoComplete="off"
+                  inputMode="numeric"
+                  label="PIN"
+                  name="witnessPin"
+                  notice={notice}
+                  required
+                  type="password"
+                />
+              </div>
+            ) : null}
+            <SubmitButton
+              variant="destructive"
+              disabled={receipt.reversalRequiresWitness && witnesses.length === 0}
+            >
+              Reverse posting
+            </SubmitButton>
             <p className="w-full text-sm text-text-muted">
               A reversal writes linked compensating movements. If the stock has already moved on,
               the ledger refuses rather than driving a balance negative.

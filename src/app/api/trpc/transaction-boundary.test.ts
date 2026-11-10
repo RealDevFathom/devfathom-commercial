@@ -31,9 +31,18 @@ const harness = vi.hoisted(() => ({
   scopeStatements: [] as string[],
   scopeTenants: [] as string[],
   scopeActors: [] as string[],
+  credential: { failedAttempts: 0, lockedUntil: null as Date | null },
+  verifyPin: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', () => ({ can: vi.fn(async () => true) }));
+vi.mock('@/lib/restaurant/operator-credentials', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/restaurant/operator-credentials')>(
+    '@/lib/restaurant/operator-credentials'
+  )),
+  verifyOperatorCredential: harness.verifyPin,
+}));
 
 vi.mock('@/lib/db', () => {
   const tx = {
@@ -55,8 +64,32 @@ vi.mock('@/lib/db', () => {
     db: {
       async $transaction(run: (client: typeof tx) => Promise<unknown>) {
         const snapshot = [...harness.writes];
+        // Each connection buffers its own credential writes. An outer rollback
+        // cannot undo a credential update committed on a separate connection.
+        let credentialUpdate: typeof harness.credential | undefined;
+        const client = {
+          ...tx,
+          $queryRaw: async () => [],
+          user: { findFirst: async () => ({ id: 'user_1', status: 'ACTIVE' }) },
+          restaurantOperatorCredential: {
+            findFirst: async () => ({
+              id: 'credential',
+              credentialHash: 'hash',
+              ...(credentialUpdate ?? harness.credential),
+              staffProfile: {
+                status: 'ACTIVE',
+                user: { id: 'witness', organizationId: 'org_acme', status: 'ACTIVE' },
+              },
+            }),
+            update: async ({ data }: { data: typeof harness.credential }) => {
+              credentialUpdate = data;
+              return data;
+            },
+          },
+        };
         try {
-          const result = await run(tx);
+          const result = await run(client);
+          if (credentialUpdate) harness.credential = credentialUpdate;
           harness.outcomes.push('COMMIT');
           return result;
         } catch (error) {
@@ -74,6 +107,8 @@ vi.mock('@/lib/db', () => {
 vi.mock('@/server/routers/_app', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server');
   const superjson = (await import('superjson')).default;
+  const { authorizeControlledRestoration, ControlledRestorationDenied } =
+    await import('@/lib/pharmacy/controlled-restoration-authorization');
 
   const t = initTRPC
     .context<{
@@ -84,6 +119,22 @@ vi.mock('@/server/routers/_app', async () => {
 
   return {
     appRouter: t.router({
+      witnessPin: t.procedure.mutation(async ({ ctx }) => {
+        try {
+          await authorizeControlledRestoration(
+            ctx.db as never,
+            { organizationId: 'org_acme', branchId: 'branch', actorId: 'user_1' },
+            { staffProfileId: 'staff', pin: '1234' },
+            'pharmacy:safety'
+          );
+        } catch (error) {
+          if (error instanceof ControlledRestorationDenied) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+          }
+          throw error;
+        }
+        return { witnessed: true };
+      }),
       write: t.procedure.mutation(async ({ ctx }) => {
         await ctx.db.ledger.create({ data: { label: 'requisition' } });
         return { committed: true };
@@ -207,8 +258,48 @@ beforeEach(() => {
   harness.scopeStatements.length = 0;
   harness.scopeTenants.length = 0;
   harness.scopeActors.length = 0;
+  harness.credential = { failedAttempts: 0, lockedUntil: null };
+  harness.verifyPin.mockReset().mockResolvedValue(false);
   mocks.resolveTenantActor.mockResolvedValue({ session: SESSION, support: null });
   mocks.requireOrganizationForRequest.mockResolvedValue(ORGANIZATION);
+});
+
+describe('durable witness PIN lockout through HTTP', () => {
+  it('accepts a fresh valid PIN and clears prior failed attempts', async () => {
+    harness.credential.failedAttempts = 2;
+    harness.verifyPin.mockResolvedValue(true);
+    expect((await mutate(['witnessPin'])).status).toBe(200);
+    expect(harness.credential).toEqual({ failedAttempts: 0, lockedUntil: null });
+    expect(harness.outcomes).toEqual(['COMMIT', 'COMMIT']);
+  });
+
+  it('commits each failed attempt despite request rollback and refuses a correct PIN while locked', async () => {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      expect((await mutate(['witnessPin'])).status).toBe(403);
+      expect(harness.credential.failedAttempts).toBe(attempt < 5 ? attempt : 0);
+    }
+    expect(harness.credential.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(harness.outcomes).toEqual(
+      Array.from({ length: 5 }, () => ['COMMIT', 'ROLLBACK']).flat()
+    );
+    expect(harness.verifyPin).toHaveBeenCalledTimes(5);
+    harness.verifyPin.mockResolvedValue(true);
+    expect((await mutate(['witnessPin'])).status).toBe(403);
+    expect(harness.verifyPin).toHaveBeenCalledTimes(5);
+    expect(harness.writes).toEqual([]);
+    expect(harness.scopeTenants.every((id) => id === 'org_acme')).toBe(true);
+    expect(harness.scopeActors.every((id) => id === 'user_1')).toBe(true);
+  });
+
+  it('keeps the failed attempt when a sibling mutation also rolls back', async () => {
+    const response = await mutate(['write', 'witnessPin']);
+    const body = await response.json();
+    expect(body[0].error.json.data.code).toBe('INTERNAL_SERVER_ERROR');
+    expect(body[1].error.json.data.code).toBe('FORBIDDEN');
+    expect(harness.credential.failedAttempts).toBe(1);
+    expect(harness.writes).toEqual([]);
+    expect(harness.outcomes).toEqual(['COMMIT', 'ROLLBACK']);
+  });
 });
 
 describe('a procedure that fails after writing', () => {

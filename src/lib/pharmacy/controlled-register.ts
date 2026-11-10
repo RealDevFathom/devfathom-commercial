@@ -88,7 +88,7 @@ export function derivedCorrectionDelta(
   return delta;
 }
 
-async function lockRegister(db: ScopedDb, organizationId: string, branchId: string) {
+export async function lockRegister(db: ScopedDb, organizationId: string, branchId: string) {
   await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${organizationId + ':' + branchId}, 0))`;
 }
 
@@ -293,6 +293,85 @@ export async function appendControlledPurchaseEntries(
       counterpartyName: line.counterpartyName,
       rxSerialWritten: false,
       emergency: false,
+    });
+  }
+}
+
+/** Append a movement-backed reversal independently of any manual correction. */
+export async function appendControlledPurchaseReversals(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    recordedByUserId: string;
+    reason: string;
+    reversedMovementIds: readonly string[];
+    witness?: import('./controlled-restoration-authorization').ControlledRestorationWitness;
+  }
+) {
+  if (input.reversedMovementIds.length === 0) return;
+  const purchases = await db.pharmacyControlledRegisterEntry.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: [...input.reversedMovementIds] },
+    },
+    orderBy: { serial: 'asc' },
+  });
+  if (purchases.length === 0) return;
+  if (!input.witness) throw new Error('Fresh controlled reversal witness is required');
+  await lockRegister(db, input.organizationId, input.branchId);
+  for (const purchase of purchases) {
+    if (!purchase.medicineId) throw new Error('STOCK');
+    const movement = await db.pharmacyStockMovement.findFirst({
+      where: {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        inventoryLotId: purchase.inventoryLotId,
+        kind: 'ADJUSTMENT',
+        reversesMovementId: purchase.stockMovementId,
+      },
+    });
+    if (!movement || movement.quantityUnits !== -purchase.quantityCanonicalUnits) {
+      throw new Error('STOCK');
+    }
+    const balanceDelta = movement.quantityUnits;
+    const runningBalance = await runningFromLot(
+      db,
+      {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        medicineId: purchase.medicineId,
+        inventoryLotId: purchase.inventoryLotId,
+      },
+      balanceDelta
+    );
+    const sellable = await sellableOnHand(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      inventoryLotId: purchase.inventoryLotId,
+    });
+    if (runningBalance !== sellable) throw new Error('STOCK');
+    await createRegisterRow(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      serial: await nextSerial(db, input.organizationId, input.branchId),
+      entryKind: 'CORRECTION',
+      medicineId: purchase.medicineId,
+      manufacturer: purchase.manufacturer,
+      inventoryLotId: purchase.inventoryLotId,
+      batchNumber: purchase.batchNumber,
+      counterpartyName: purchase.counterpartyName,
+      correctsEntryId: purchase.id,
+      restorationMovementId: movement.id,
+      quantityCanonicalUnits: 0,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: input.witness.witnessedByUserId,
+      signatureRef: input.witness.signatureRef,
+      correctionReason: input.reason,
     });
   }
 }

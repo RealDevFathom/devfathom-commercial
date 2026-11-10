@@ -23,7 +23,7 @@ describe.skipIf(!url)('controlled corrections against restricted PostgreSQL', ()
     expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
     await client.query(`CREATE SCHEMA ${schema}; SET search_path TO ${schema};
       CREATE TABLE pharmacy_stock_movements (id text, "organizationId" text, "branchId" text, "inventoryLotId" text, kind text, disposition text, "quantityUnits" integer, "reversesMovementId" text, UNIQUE("organizationId",id));
-      CREATE TABLE pharmacy_controlled_register_entries (id text PRIMARY KEY, "organizationId" text, "branchId" text, serial integer, "entryKind" text, "correctsEntryId" text, "inventoryLotId" text, "medicineId" text, "batchNumber" text, "stockMovementId" text, "quantityCanonicalUnits" integer, "balanceDelta" integer, "runningBalance" integer);
+      CREATE TABLE pharmacy_controlled_register_entries (id text PRIMARY KEY, "organizationId" text, "branchId" text, serial integer, "entryKind" text, "correctsEntryId" text, "inventoryLotId" text, "medicineId" text, "batchNumber" text, "stockMovementId" text, "quantityCanonicalUnits" integer CHECK ("quantityCanonicalUnits">0), "balanceDelta" integer, "runningBalance" integer);
       CREATE TABLE pharmacy_register_incidents (id text, "organizationId" text, "branchId" text, status text, "registerEntryId" text, "expectedBalance" integer, "actualBalance" integer);
       CREATE TABLE pharmacy_stock_balances ("organizationId" text, "branchId" text, "inventoryLotId" text, disposition text, "onHandUnits" integer);
       CREATE TABLE pharmacy_inventory_lots (id text, "organizationId" text, "manufacturingBatchId" text);
@@ -35,6 +35,7 @@ describe.skipIf(!url)('controlled corrections against restricted PostgreSQL', ()
       CREATE POLICY tenant_isolation ON pharmacy_controlled_register_entries USING ("organizationId"=current_setting('app.current_organization_id',true)) WITH CHECK ("organizationId"=current_setting('app.current_organization_id',true));
       SET app.current_organization_id='org';`);
     await client.query(migration);
+    await client.query(readFileSync('prisma/migrations/20261110111000/migration.sql', 'utf8'));
     await client.query(
       `CREATE TRIGGER pharmacy_controlled_register_reconcile AFTER INSERT ON pharmacy_controlled_register_entries FOR EACH ROW EXECUTE FUNCTION pharmacy_rx_reconcile_controlled_register()`
     );
@@ -129,5 +130,83 @@ describe.skipIf(!url)('controlled corrections against restricted PostgreSQL', ()
     await expect(
       insert({ restorationMovementId: 'restore', quantityCanonicalUnits: 2 })
     ).rejects.toThrow(/compensating/);
+  });
+  describe('movement-backed purchase reversals', () => {
+    beforeEach(async () => {
+      await client.query(`TRUNCATE pharmacy_controlled_register_entries, pharmacy_stock_movements,
+        pharmacy_stock_balances, pharmacy_inventory_lots, pharmacy_manufacturing_batches CASCADE;
+        INSERT INTO pharmacy_inventory_lots VALUES ('lot','org','batch-id');
+        INSERT INTO pharmacy_manufacturing_batches VALUES ('batch-id','org','batch');
+        INSERT INTO pharmacy_stock_balances VALUES ('org','branch','lot','AVAILABLE',10);
+        INSERT INTO pharmacy_stock_movements VALUES ('receipt','org','branch','lot','RECEIPT','AVAILABLE',10,null);
+        INSERT INTO pharmacy_controlled_register_entries VALUES
+          ('original','org','branch',1,'PURCHASE',null,'lot','med','batch','receipt',10,10,10,null);`);
+    });
+
+    async function reverseStock(
+      overrides: { source?: string; quantity?: number; disposition?: string } = {}
+    ) {
+      await client.query('UPDATE pharmacy_stock_balances SET "onHandUnits"=0');
+      await client.query(
+        `INSERT INTO pharmacy_stock_movements VALUES
+          ('reverse','org','branch','lot','ADJUSTMENT',$1,$2,$3)`,
+        [
+          overrides.disposition ?? 'AVAILABLE',
+          overrides.quantity ?? -10,
+          overrides.source ?? 'receipt',
+        ]
+      );
+    }
+
+    const reversal = {
+      restorationMovementId: 'reverse',
+      quantityCanonicalUnits: 0,
+      balanceDelta: -10,
+      runningBalance: 0,
+    };
+
+    it('accepts a zero-quantity purchase reversal against the real quantity constraint', async () => {
+      await reverseStock();
+      await insert(reversal);
+      const result = await client.query(
+        `SELECT "runningBalance" FROM pharmacy_controlled_register_entries ORDER BY serial DESC LIMIT 1`
+      );
+      expect(result.rows[0].runningBalance).toBe(0);
+    });
+
+    it('accepts reversal after a manual correction without consuming its identity', async () => {
+      await insert({ quantityCanonicalUnits: 10, balanceDelta: 0, runningBalance: 10 });
+      await reverseStock();
+      await insert({ ...reversal, serial: 3 });
+      expect(
+        (await client.query('SELECT * FROM pharmacy_controlled_register_entries')).rowCount
+      ).toBe(3);
+      await expect(insert({ ...reversal, serial: 4 })).rejects.toMatchObject({ code: '23505' });
+    });
+
+    it.each([{ source: 'unrelated' }, { quantity: -9 }, { disposition: 'QUARANTINE' }])(
+      'rejects an invalid compensating movement %j',
+      async (movement) => {
+        await reverseStock(movement);
+        await expect(insert(reversal)).rejects.toThrow(/compensating receipt/);
+      }
+    );
+
+    it('still rejects zero-quantity purchases, sales and manual corrections', async () => {
+      await expect(
+        insert({ entryKind: 'PURCHASE', quantityCanonicalUnits: 0 })
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(insert({ entryKind: 'SALE', quantityCanonicalUnits: 0 })).rejects.toMatchObject({
+        code: '23514',
+      });
+      await expect(insert({ quantityCanonicalUnits: 0 })).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('rejects an invented reversal delta even when the final balance matches stock', async () => {
+      await reverseStock();
+      await expect(insert({ ...reversal, balanceDelta: -9 })).rejects.toThrow(
+        /compensating receipt/
+      );
+    });
   });
 });

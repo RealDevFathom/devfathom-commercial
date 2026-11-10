@@ -2179,6 +2179,21 @@ describe('PUR-06 — the returns and settlement transport', () => {
   });
 });
 
+it('refuses receipt reversal without procurement permission before reading the receipt', async () => {
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: { permissions: [] },
+    permissionOverrides: [],
+  });
+  await expect(
+    caller().reverseGoodsReceipt({
+      branchId: 'branch_a',
+      goodsReceiptId: 'receipt',
+      reason: 'Wrong delivery',
+    })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(db.pharmacyGoodsReceipt.findFirst).not.toHaveBeenCalled();
+});
+
 describe('#979 supplier, requisition and order writes need the procurement capability', () => {
   const gated = [
     ['createSupplier', () => caller().createSupplier({ name: 'Karachi Distributors' })],
@@ -2724,6 +2739,8 @@ const readActions = {
   landedCost: () => caller().landedCost({ purchaseOrderId: 'po_a' }),
   controlledWitnesses: () =>
     caller().controlledWitnesses({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
+  controlledReversalWitnesses: () =>
+    caller().controlledReversalWitnesses({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
   receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
   debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
   workspace: () => caller().workspace(),

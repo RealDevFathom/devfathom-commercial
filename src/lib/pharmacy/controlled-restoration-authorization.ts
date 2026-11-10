@@ -16,25 +16,46 @@ export class ControlledRestorationDenied extends Error {
   constructor(readonly forbidden = false) {
     super(
       forbidden
-        ? 'Dispense permission is required.'
+        ? 'Permission to change controlled stock is required.'
         : 'A different pharmacist must enter a fresh witness PIN.'
     );
   }
 }
 
-/** Called inside the sale transaction, before any stock or status mutation. */
+/**
+ * Check the actor inside the stock transaction, before any stock or status write.
+ * PIN verification owns an independent tenant transaction: a refusal (or a later
+ * stock failure) must never roll back the credential's lockout state.
+ */
 export async function authorizeControlledRestoration(
   db: ScopedDb,
   scope: LedgerScope,
-  input?: ControlledRestorationPin
+  input?: ControlledRestorationPin,
+  actorCapability: 'pharmacy:dispense' | 'pharmacy:safety' = 'pharmacy:dispense'
 ): Promise<ControlledRestorationWitness> {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   });
-  if (!actor || !(await can(actor, 'pharmacy:dispense', undefined, { db }))) {
+  if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
     throw new ControlledRestorationDenied(true);
   }
   if (!input) throw new ControlledRestorationDenied();
+  const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+  const result = await withTenantDb(
+    scope.organizationId,
+    (credentialDb) => verifyRestorationPin(credentialDb, scope, input),
+    { userId: scope.actorId, skipDrain: true }
+  );
+  // Throw only after the credential transaction has committed failed attempts.
+  if (!result) throw new ControlledRestorationDenied();
+  return result;
+}
+
+async function verifyRestorationPin(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: ControlledRestorationPin
+): Promise<ControlledRestorationWitness | null> {
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
@@ -58,14 +79,14 @@ export async function authorizeControlledRestoration(
     isLockedOut(credential, now) ||
     !(await can(witness, 'pharmacy:dispense', undefined, { db, now }))
   ) {
-    throw new ControlledRestorationDenied();
+    return null;
   }
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
     });
-    throw new ControlledRestorationDenied();
+    return null;
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
