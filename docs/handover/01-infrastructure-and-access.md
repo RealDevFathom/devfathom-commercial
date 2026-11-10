@@ -105,7 +105,7 @@ Leftover: a staging DNS stack is still present in `me-central-1`; an older, empt
 | `deploy-staging.yml` | Disabled. Manual-dispatch only, and it **points only at Azure** (retired Azure staging). Not usable for the AWS staging stack |
 | `promote-production.yml` | Disabled. Manual-dispatch only, and it **points only at Azure**. Not usable for AWS production |
 | Real AWS deploys | Done by hand (CodeBuild image + ECS update for Singapore; SSM for develop), only with Saad's go-ahead for production |
-| `main` | **Protection unchanged.** It requires two `verify / …` status checks (`verify / Lint, typecheck and formatting` and `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off |
+| `main` | **Protection unchanged.** It requires two `verify / …` status checks (`verify / Lint, typecheck and formatting` and `verify / Tests, RLS, build and end-to-end`), but no workflow on `main` produces them (the names come from an old workflow that is no longer there), so a PR into `main` can never pass them and can only be merged by an admin, because admins are exempt from `main`'s protection. Nobody should change this unless Saad decides (CTO-confirmed 10 Nov 2026, 06:08 PKT). `main` currently has four workflow files: `deploy-staging.yml`, `image-build.yml`, `promote-production.yml` and `qa.yml` |
 | `develop` | **Unprotected, by Saad's decision (10 Nov 2026).** The pre-merge checks above are what hold the line |
 
 ---
@@ -116,7 +116,7 @@ Leftover: a staging DNS stack is still present in `me-central-1`; an older, empt
 |---|---|---|---|
 | **AWS** | All product infra | Saad authorizes `aws login` / IAM access. Two automation IAM users have long-lived access keys | Remove/rotate both automation users' access keys on CTO change; review the product IAM roles; prefer SSO/`aws login` for humans; transfer root/account ownership **TO CONFIRM** (billing contact, MFA devices) |
 | **Cloudflare** | DNS for `devfathom.com` (and tenant CNAMEs/A records); optional proxy | **TO CONFIRM** (Saad) | Transfer Cloudflare account ownership; rotate any API tokens (scope **TO CONFIRM**); document zone settings (SSL Full/strict if proxied) |
-| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners | Transfer org ownership; revoke stale personal access tokens; **never commit tokens**. Actions is off and `develop` is unprotected, both by Saad's decision (10 Nov 2026); `main`'s protection is unchanged (two required `verify / …` checks). See §2.5 |
+| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners | Transfer org ownership; revoke stale personal access tokens; **never commit tokens**. Actions is off and `develop` is unprotected, both by Saad's decision (10 Nov 2026); `main`'s protection is unchanged (two required `verify / …` checks that no workflow on `main` produces, so only an admin can merge into `main`). See §2.5 |
 | **Linear** | Issue tracking — workspace team **DevFathom** (`DEV`) | Connected to this bot's Linear connector | Transfer workspace admin; rotate bot OAuth |
 | **Anthropic (Claude)** | Ask Fathom first provider (budget cap $190/mo across pharmacies) | **TO CONFIRM** | Rotate the key in the provider console and in AWS; update spend alerts. Production wiring is still `AiProvider=disabled` |
 | **OpenAI** | Ask Fathom second provider (budget cap $190/mo) | **TO CONFIRM** | Same as above |

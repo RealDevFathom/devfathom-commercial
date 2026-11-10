@@ -185,7 +185,7 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 16. **QA/agent EC2 fleets** in eu-north-1 with large instance types — attack surface and cost; ensure SSM/IAM scoped.  
 17. **Day-close counted cash wiped on full remount** — QA filed **DEV-754** (Sev2); product bug, integrity of cash reconciliation.  
 18. **Email still capture mode in production** — reduces email-based reset risk but also means operational mail paths differ from staging plans.  
-19. **Branch protection.** `develop` is **unprotected, by Saad's decision (10 Nov 2026)**. `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off. Nothing merges until the AWS worker checks pass on the exact final commit.
+19. **Branch protection.** `develop` is **unprotected, by Saad's decision (10 Nov 2026)**. `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), but no workflow on `main` produces them (the names come from an old workflow that is no longer there), so a PR into `main` can never pass them and can only be merged by an admin, because admins are exempt from `main`'s protection. Nobody should change this unless Saad decides. Nothing merges until the AWS worker checks pass on the exact final commit.
 
 ---
 
