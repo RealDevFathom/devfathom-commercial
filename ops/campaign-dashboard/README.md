@@ -1,0 +1,223 @@
+# DevFathom Campaign Ops Dashboard
+
+A private, **read-only** monitoring dashboard for the Codex / machine-gate campaign that fixes
+Linear/GitHub issues in batches and merges them into `develop`. It covers every batch automatically:
+each job root under `/workspace/jobs/` is a batch, and each `codex-*` / `gates-*` / `baseline-*`
+directory inside it is a run. New roots and runs appear on the next collection with no config change,
+and historical batches are kept.
+
+```
+ worker (Ubuntu, root)                      ops box (Inky)
+ ┌────────────────────────────┐             ┌──────────────────────────────┐
+ │ worker_collector.py  (30 s)│             │ box_collector.py --loop 60   │
+ │  reads /workspace/jobs,    │             │  aws ec2 describe-* (RO)     │
+ │  /proc, statvfs, systemctl │             │  gh api -X GET (RO), Linear  │
+ └─────────────┬──────────────┘             └──────────────┬───────────────┘
+               │ POST /api/ingest/worker (Bearer)          │ POST /api/ingest/box
+               ▼                                           ▼
+        ┌──────────────────────────────────────────────────────────┐
+        │ server/app.py  (ECS Fargate, port 8080, stdlib only)      │
+        │  /healthz · Basic-auth UI + /api/state · sanitised store  │
+        └──────────────────────────────────────────────────────────┘
+```
+
+Everything is Python 3 standard library plus vanilla JS. There are no external CDNs or fonts.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `server/app.py` | HTTP server: auth, ingest, state merge, alerts |
+| `server/sanitize.py` | Sanitiser (byte-identical copy of `collector/sanitize.py`) |
+| `server/static/` | `index.html`, `app.css`, `app.js` (UI: inline SVG charts, CSP `'self'` only) |
+| `server/Dockerfile` | `python:3.12-slim`, non-root uid 10001, port 8080, linux/amd64 |
+| `collector/worker_collector.py` | Worker collector (read-only) |
+| `collector/box_collector.py` | Ops-box collector (whitelisted read-only `aws`/`gh`) |
+| `collector/systemd/` | `ops-collector.service` + `.timer` (worker), `ops-box-collector.service` (optional, ops box) |
+| `collector/ops-collector.env.example` | Env file template (placeholders only) |
+| `deploy/ecs-task-def.template.json` | Fargate task definition template (0.25 vCPU / 0.5 GB) |
+| `fixtures/` | Fake data that mirrors the real layout |
+| `tests/` | stdlib `unittest`: sanitiser, batch discovery, auth/ingest |
+
+## Run locally with fixtures
+
+```bash
+cd ops/campaign-dashboard
+```
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Start the server in a separate terminal:
+
+```bash
+DASH_USER=ops DASH_PASSWORD=devpass INGEST_TOKEN=devtoken DATA_DIR=/tmp/dash PORT=8080 python3 server/app.py
+```
+
+Print what the worker collector would send (no push). `--live-window 0` treats the static fixture ledgers as live:
+
+```bash
+python3 collector/worker_collector.py --root fixtures/jobs --once --print --live-window 0 --state-dir /tmp/ops-collector-state
+```
+
+Push the fixtures into the local server:
+
+```bash
+DASH_URL=http://localhost:8080 INGEST_TOKEN=devtoken python3 collector/worker_collector.py --root fixtures/jobs --once --live-window 0 --state-dir /tmp/ops-collector-state --env-file /dev/null
+```
+
+```bash
+curl -s -X POST -H 'Authorization: Bearer devtoken' -H 'Content-Type: application/json' --data-binary @fixtures/box.json http://localhost:8080/api/ingest/box
+```
+
+Open http://localhost:8080 and log in as `ops` / `devpass`.
+
+## Deploy
+
+All commands run from the repository root. Replace every `<PLACEHOLDER>`. Region is `eu-north-1`.
+
+### 1. Secrets (once)
+
+```bash
+aws secretsmanager create-secret --region eu-north-1 --name campaign-dashboard/DASH_PASSWORD --secret-string "$(openssl rand -base64 24)"
+```
+
+```bash
+aws secretsmanager create-secret --region eu-north-1 --name campaign-dashboard/INGEST_TOKEN --secret-string "$(openssl rand -hex 32)"
+```
+
+The ECS **execution role** needs `secretsmanager:GetSecretValue` on both secret ARNs. It also needs
+the standard `AmazonECSTaskExecutionRolePolicy` (ECR pull and CloudWatch Logs).
+
+### 2. Build and push the image
+
+```bash
+aws ecr create-repository --region eu-north-1 --repository-name campaign-dashboard
+```
+
+```bash
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com
+```
+
+```bash
+docker build --platform linux/amd64 -t <ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com/campaign-dashboard:<TAG> ops/campaign-dashboard/server
+```
+
+```bash
+docker push <ACCOUNT_ID>.dkr.ecr.eu-north-1.amazonaws.com/campaign-dashboard:<TAG>
+```
+
+### 3. Task definition and service
+
+Copy `deploy/ecs-task-def.template.json` to `taskdef.json`. Fill in the account id, role names, image tag
+and the full secret ARNs (`aws secretsmanager describe-secret --name ... --query ARN`). Then register it:
+
+```bash
+aws ecs register-task-definition --region eu-north-1 --cli-input-json file://taskdef.json
+```
+
+```bash
+aws ecs create-service --region eu-north-1 --cluster <CLUSTER> --service-name campaign-dashboard --task-definition campaign-dashboard --desired-count 1 --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[<PRIVATE_SUBNET_IDS>],securityGroups=[<SG_ID>],assignPublicIp=DISABLED}" --load-balancers "targetGroupArn=<TG_ARN>,containerName=campaign-dashboard,containerPort=8080"
+```
+
+Put it behind an ALB **HTTPS** listener (ACM certificate). The target group health check path is
+`/healthz` (expects `200 ok`). Restrict the ALB security group to the IPs that need the UI and to the
+worker and ops-box egress addresses that post to `/api/ingest/*`. The server sends HSTS, so serve it
+over HTTPS only. `TRUST_PROXY=1` (already in the template) makes the failed-login rate limit use the
+client address from the ALB's `X-Forwarded-For`.
+
+To redeploy after a new image, register the task definition again with the new tag, then:
+
+```bash
+aws ecs update-service --region eu-north-1 --cluster <CLUSTER> --service campaign-dashboard --task-definition campaign-dashboard --force-new-deployment
+```
+
+Data note: the latest payload per source is persisted to `DATA_DIR=/data` inside the task. A process
+restart reloads it, but a new task starts empty and fills again within 30–60 s from the collectors.
+
+### 4. Worker collector (on the worker, as root)
+
+```bash
+install -d -m 0755 /opt/ops-collector && install -m 0644 ops/campaign-dashboard/collector/worker_collector.py ops/campaign-dashboard/collector/sanitize.py /opt/ops-collector/
+```
+
+```bash
+install -m 0600 ops/campaign-dashboard/collector/ops-collector.env.example /etc/ops-collector.env
+```
+
+Edit `/etc/ops-collector.env`: set `DASH_URL=https://<dashboard-host>` and `INGEST_TOKEN=<value of the INGEST_TOKEN secret>`.
+
+```bash
+install -m 0644 ops/campaign-dashboard/collector/systemd/ops-collector.service ops/campaign-dashboard/collector/systemd/ops-collector.timer /etc/systemd/system/
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now ops-collector.timer
+```
+
+Check it:
+
+```bash
+systemctl list-timers ops-collector.timer && journalctl -u ops-collector.service -n 20 --no-pager
+```
+
+The unit runs at `Nice=19`, `IOSchedulingClass=idle`, `CPUQuota=15%`, `MemoryMax=256M`,
+`ProtectSystem=strict`, `ReadOnlyPaths=/workspace` and `ReadWritePaths=/var/lib/ops-collector`.
+The collector only reads campaign files. It never writes under `/workspace`, never starts, stops or
+kills anything, and never calls git, gh or codex. Its only subprocesses are whitelisted read-only
+`systemctl list-units|show` calls and, every 5 minutes, `ip netns exec codex-home tailscale ... status --json`.
+Only pass/fail is reported from that check, never an address.
+
+### 5. Ops-box collector (on Inky's ops box, as the user that has `aws` and `gh` configured)
+
+```bash
+mkdir -p ~/ops-collector ~/.config && cp ops/campaign-dashboard/collector/box_collector.py ops/campaign-dashboard/collector/sanitize.py ~/ops-collector/
+```
+
+Create `~/.config/ops-box-collector.env` (mode 600) with `DASH_URL`, `INGEST_TOKEN`, `WORKER_INSTANCE_ID`,
+and optionally `LINEAR_API_KEY`. The commented section of `ops-collector.env.example` shows the format. Then
+either run it directly:
+
+```bash
+set -a; . ~/.config/ops-box-collector.env; set +a; python3 ~/ops-collector/box_collector.py --loop 60
+```
+
+or as a user service:
+
+```bash
+mkdir -p ~/.config/systemd/user && cp ops/campaign-dashboard/collector/systemd/ops-box-collector.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now ops-box-collector
+```
+
+The box collector refuses any `aws` call except `ec2 describe-instances|describe-spot-price-history|describe-spot-instance-requests`.
+It refuses any `gh` call except `gh api -X GET ...` (no `-f/-F/--input`) and `pr|issue list|view`. Linear is a GraphQL
+`query` only, and is skipped when `LINEAR_API_KEY` is unset.
+
+## Security model
+
+* `GET /healthz` returns only `ok`. Everything else needs auth: HTTP Basic (`DASH_USER` / `DASH_PASSWORD`,
+  compared in constant time) for the UI and `/api/state`, and `Bearer INGEST_TOKEN` (constant time) for
+  `POST /api/ingest/{worker,box}` and `GET /api/known-issues`. More than 10 failed attempts from one IP in
+  5 min gets HTTP 429. If either secret is unset, that side is disabled.
+* Ingest accepts `application/json` objects only, max 8 MB. The server sanitises again before storing and
+  writes atomically to `DATA_DIR/<source>.json`.
+* The sanitiser (collectors and server) drops keys matching
+  `token|secret|password|passwd|apikey|api_key|authorization|cookie|credential|private|email|phone|ip(v4|v6)?$|host$|url$`.
+  It redacts IPv4/IPv6 addresses, e-mails, `ghp_`/`gho_`/`sk-`/`xox` tokens and JWTs, and strips paths to
+  the part after `/workspace/jobs/`.
+* Response headers: strict CSP (`'self'` only, no inline script or style), `X-Frame-Options: DENY`, HSTS,
+  `nosniff`, `no-referrer`, and `Cache-Control: no-store` on `/api`. Static files come from a fixed
+  whitelist, so there is no directory listing. Logs record method, path and status only, never headers
+  or bodies.
+
+## Data model and gate vocabulary
+
+* **Batch** = job root. **Run** = `codex-*` / `gates-*` / `baseline-*` directory. `*-attempt*` directories
+  are not processed but are counted as history. `BASE-*` issues are baseline-fix jobs and are not tasks.
+  The older `pharmacy-review-50/<ISSUE>/` layout, with `*-checkpoint.json` sub-gates, is a `review` run.
+* Gate columns: prisma, typecheck, lint, complete_unit, host_build, docker, differential (unit failures
+  minus baseline failures, by file), QA/browser, security, final SHA, merged, Linear closed, GH closed.
+  Unknown step names become extra columns.
+* **Done** = every required gate passes on the final SHA, the task is merged, and its issues are closed.
+* Alerts: load > 0.9 × cores for 5 min, disk > 85 %, `/workspace` free < 200 GiB reserve, failed systemd
+  units, kill-switch FAIL, data stale > 3 min, spot price > $2.50, weekly usage ≥ 95 %.

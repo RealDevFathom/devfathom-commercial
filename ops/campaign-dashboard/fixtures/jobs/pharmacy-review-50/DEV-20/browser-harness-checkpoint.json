@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "steps": {
+    "pharmacy_counter_smoke": {
+      "status": "PASS"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "steps": {
+    "migrate": {
+      "status": "PASS"
+    },
+    "seed": {
+      "status": "PASS"
+    }
+  }
+}

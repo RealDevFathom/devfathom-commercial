@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the DevFathom campaign ops collector every 30 seconds
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=ops-collector.service
+
+[Install]
+WantedBy=timers.target

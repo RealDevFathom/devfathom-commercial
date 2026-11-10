@@ -1,0 +1,22 @@
+{
+  "atPKT": "2026-11-10T12:41:00+05:00",
+  "activeCodexOrVerify": 1,
+  "maxConcurrent": 50,
+  "jobs": [
+    {
+      "issue": "DEV-101",
+      "status": "CODEX_RUNNING",
+      "sourceSHA": "0718293a4b5c6d7e8f90123456789abcdef01234",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "steps": {}
+    },
+    {
+      "issue": "DEV-102",
+      "status": "QUEUED",
+      "model": "gpt-6.1-terra",
+      "reasoningEffort": "medium",
+      "steps": {}
+    }
+  ]
+}

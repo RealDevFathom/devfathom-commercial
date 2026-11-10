@@ -1,0 +1,14 @@
+[
+  {
+    "issue": "DEV-12",
+    "status": "TERMINAL_EXACT_SOURCE_GATES_NOT_FULL_QA"
+  },
+  {
+    "issue": "DEV-14",
+    "status": "TERMINAL_HARNESS_OR_PRECONDITION_BLOCKER"
+  },
+  {
+    "issue": "DEV-15",
+    "status": "TERMINAL_EXACT_SOURCE_GATES_FULL_QA"
+  }
+]

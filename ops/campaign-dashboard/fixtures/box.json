@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "collector": "box",
+  "collectedAt": 1794297600,
+  "repo": "RealDevFathom/devfathom-commercial",
+  "workers": [
+    {
+      "instanceId": "i-0fixture0000000001",
+      "name": "devfathom-qa-worker",
+      "state": "running",
+      "instanceType": "c7i.12xlarge",
+      "az": "eu-north-1a",
+      "launchTime": 1794200000,
+      "lifecycle": "spot",
+      "spotRequestState": "active",
+      "spotRequestStatus": "fulfilled",
+      "spotPrice": 0.84
+    }
+  ],
+  "machine": {
+    "hours": 312.4,
+    "costUsd": 268.71,
+    "since": 1793000000
+  },
+  "github": {
+    "developSha": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "developAt": 1794290000,
+    "merged": [
+      {
+        "number": 994,
+        "title": "fix(DEV-15): purchasing capability checks",
+        "mergedAt": 1794289000,
+        "sha": "1906b53aa1b2c3d4",
+        "issues": [
+          "DEV-15"
+        ]
+      },
+      {
+        "number": 990,
+        "title": "fix(DEV-20): pharmacy review counter totals",
+        "mergedAt": 1794100000,
+        "sha": "88aa77bb66cc55dd",
+        "issues": [
+          "DEV-20"
+        ]
+      }
+    ],
+    "closedIssues": [
+      {
+        "number": 1010,
+        "title": "[Sev1] Purchasing capability checks (DEV-15)",
+        "closedAt": 1794289100,
+        "issues": [
+          "DEV-15"
+        ]
+      },
+      {
+        "number": 1002,
+        "title": "Pharmacy counter totals (DEV-20)",
+        "closedAt": 1794100100,
+        "issues": [
+          "DEV-20"
+        ]
+      }
+    ]
+  },
+  "linear": {
+    "available": true,
+    "states": {
+      "DEV-15": {
+        "state": "Done",
+        "type": "completed"
+      },
+      "DEV-20": {
+        "state": "Done",
+        "type": "completed"
+      },
+      "DEV-12": {
+        "state": "In Review",
+        "type": "started"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "issue": "DEV-12",
+  "sourceSHA": "c3d4e5f60718293a4b5c6d7e8f90123456789ab",
+  "status": "TERMINAL_EXACT_SOURCE_GATES_NOT_FULL_QA",
+  "fullQA": false,
+  "steps": {
+    "canonical_prisma_generate": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T12:10:00+05:00",
+      "endPKT": "2026-11-10T12:10:40+05:00",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T12:10:50+05:00",
+      "endPKT": "2026-11-10T12:15:00+05:00",
+      "exitCode": 0
+    },
+    "lint": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T12:15:10+05:00",
+      "endPKT": "2026-11-10T12:18:00+05:00",
+      "exitCode": 0
+    },
+    "complete_unit": {
+      "status": "FAIL",
+      "startPKT": "2026-11-10T12:18:10+05:00",
+      "endPKT": "2026-11-10T12:39:00+05:00",
+      "exitCode": 1,
+      "numPassedTests": 4183,
+      "numFailedTests": 1,
+      "failedFiles": [
+        "src/lib/money.test.ts"
+      ]
+    },
+    "host_build": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T12:39:10+05:00",
+      "endPKT": "2026-11-10T12:47:00+05:00",
+      "exitCode": 0
+    },
+    "docker_build_contract": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T12:47:10+05:00",
+      "endPKT": "2026-11-10T12:58:00+05:00",
+      "exitCode": 0
+    }
+  },
+  "startPKT": "2026-11-10T12:10:00+05:00",
+  "endPKT": "2026-11-10T12:58:00+05:00",
+  "error": null
+}

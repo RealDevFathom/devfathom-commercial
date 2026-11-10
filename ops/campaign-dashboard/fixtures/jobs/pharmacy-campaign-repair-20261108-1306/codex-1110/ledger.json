@@ -1,0 +1,74 @@
+{
+  "atPKT": "2026-11-10T12:40:00+05:00",
+  "activeCodexOrVerify": 2,
+  "maxConcurrent": 50,
+  "jobs": [
+    {
+      "issue": "DEV-10",
+      "status": "VERIFYING",
+      "sourceSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "newSourceSHA": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "changedFiles": [
+        "src/server/pharmacy/counter.ts",
+        "src/app/(app)/pharmacy/page.tsx"
+      ],
+      "codexExitCode": 0,
+      "steps": {
+        "canonical_prisma_generate": "PASS",
+        "typecheck": "RUNNING"
+      }
+    },
+    {
+      "issue": "DEV-11",
+      "status": "CODEX_RUNNING",
+      "sourceSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "model": "gpt-6.1-terra",
+      "reasoningEffort": "medium",
+      "steps": {}
+    },
+    {
+      "issue": "DEV-12",
+      "status": "TERMINAL_FIXED",
+      "sourceSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "newSourceSHA": "c3d4e5f60718293a4b5c6d7e8f90123456789ab",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "changedFiles": [
+        "src/server/pharmacy/batches.ts"
+      ],
+      "codexExitCode": 0,
+      "steps": {
+        "canonical_prisma_generate": "PASS",
+        "typecheck": "PASS",
+        "lint": "PASS"
+      }
+    },
+    {
+      "issue": "DEV-13",
+      "status": "TERMINAL_CODEX_FAILED",
+      "sourceSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "model": "gpt-6.1-terra",
+      "reasoningEffort": "medium",
+      "failedGate": "complete_unit",
+      "changedFiles": [
+        "src/server/pharmacy/returns.ts"
+      ],
+      "codexExitCode": 1,
+      "steps": {
+        "canonical_prisma_generate": "PASS",
+        "typecheck": "PASS",
+        "complete_unit": "FAIL"
+      }
+    },
+    {
+      "issue": "BASE-0001",
+      "status": "TERMINAL_FIXED",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "codexExitCode": 0,
+      "steps": {}
+    }
+  ]
+}

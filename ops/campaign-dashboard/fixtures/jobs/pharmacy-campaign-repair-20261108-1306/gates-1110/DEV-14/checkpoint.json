@@ -1,0 +1,23 @@
+{
+  "issue": "DEV-14",
+  "sourceSHA": "d4e5f60718293a4b5c6d7e8f90123456789abcde",
+  "status": "TERMINAL_HARNESS_OR_PRECONDITION_BLOCKER",
+  "fullQA": false,
+  "steps": {
+    "canonical_prisma_generate": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T11:00:00+05:00",
+      "endPKT": "2026-11-10T11:00:40+05:00",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "status": "BLOCKED",
+      "startPKT": "2026-11-10T11:00:50+05:00",
+      "endPKT": "2026-11-10T11:01:10+05:00",
+      "exitCode": 1
+    }
+  },
+  "startPKT": "2026-11-10T11:00:00+05:00",
+  "endPKT": "2026-11-10T11:01:10+05:00",
+  "error": "postgres not reachable at /workspace/jobs/pharmacy-campaign-repair-20261108-1306/gates-1110/DEV-14/db.sock"
+}

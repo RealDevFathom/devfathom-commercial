@@ -1,0 +1,16 @@
+# Optional: run the box collector on the ops box as a user service.
+#   cp ops-box-collector.service ~/.config/systemd/user/ && systemctl --user enable --now ops-box-collector
+[Unit]
+Description=DevFathom campaign ops-box collector (read-only aws/gh)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/ops-box-collector.env
+ExecStart=/usr/bin/python3 %h/ops-collector/box_collector.py --loop 60
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=default.target

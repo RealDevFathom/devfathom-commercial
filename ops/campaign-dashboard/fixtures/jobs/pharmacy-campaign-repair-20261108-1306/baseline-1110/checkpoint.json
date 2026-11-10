@@ -1,0 +1,16 @@
+{
+  "baseSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "status": "TERMINAL_BASELINE_RECORDED",
+  "startPKT": "2026-11-10T08:00:00+05:00",
+  "endPKT": "2026-11-10T08:41:00+05:00",
+  "steps": {
+    "complete_unit": {
+      "status": "FAIL",
+      "numPassedTests": 4175,
+      "numFailedTests": 9
+    }
+  },
+  "numFailedTests": 9,
+  "numPassedTests": 4175,
+  "failedFileCount": 3
+}

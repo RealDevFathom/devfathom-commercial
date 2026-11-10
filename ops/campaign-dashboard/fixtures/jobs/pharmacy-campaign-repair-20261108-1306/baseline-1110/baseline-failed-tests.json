@@ -1,0 +1,7 @@
+{
+  "files": [
+    "src/lib/money.test.ts",
+    "src/server/reports/daily.test.ts",
+    "src/app/api/health.test.ts"
+  ]
+}

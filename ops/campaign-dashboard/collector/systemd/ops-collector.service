@@ -1,0 +1,32 @@
+[Unit]
+Description=DevFathom campaign ops collector (read-only)
+Documentation=file:///opt/ops-collector/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/ops-collector.env
+ExecStart=/usr/bin/python3 /opt/ops-collector/worker_collector.py --once
+TimeoutStartSec=25s
+
+# Be a polite neighbour to the campaign.
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=15%
+MemoryMax=256M
+
+# Read-only everywhere except our own state dir.
+ProtectSystem=strict
+ReadOnlyPaths=/workspace
+ReadWritePaths=/var/lib/ops-collector
+StateDirectory=ops-collector
+StateDirectoryMode=0750
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=read-only
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0027
