@@ -42,10 +42,6 @@
           "value": "1"
         },
         {
-          "name": "AI_MODEL",
-          "value": "claude-opus-5-5"
-        },
-        {
           "name": "AI_DAILY_TOKEN_BUDGET",
           "value": "3000000"
         },
@@ -56,6 +52,22 @@
         {
           "name": "AI_CHAT_PER_MIN",
           "value": "6"
+        },
+        {
+          "name": "AI_CHAT_MODEL",
+          "value": "claude-opus-5-5"
+        },
+        {
+          "name": "AI_CHAT_EFFORT",
+          "value": "medium"
+        },
+        {
+          "name": "AI_ANALYSIS_MODEL",
+          "value": "claude-opus-5-5"
+        },
+        {
+          "name": "AI_ANALYSIS_EFFORT",
+          "value": "high"
         }
       ],
       "secrets": [

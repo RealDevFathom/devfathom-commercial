@@ -214,9 +214,31 @@ opens the matching drill-down.
 * **Cost controls** (env, defaults in brackets): `AI_DAILY_TOKEN_BUDGET` [3,000,000 weighted tokens/day,
   cache reads count 10 %], `AI_CHAT_PER_MIN` [6] and `AI_CHAT_PER_DAY` [150] per client IP,
   `AI_MAX_CONCURRENT` [2], at most 8 tool rounds per answer, a cached system prompt and tools,
-  `AI_CHAT_EFFORT` / `AI_ANALYSIS_EFFORT` [medium], and `AI_MODEL` [claude-opus-5-5].
+  `AI_CHAT_EFFORT` [medium] / `AI_ANALYSIS_EFFORT` [high], and the per-task models below.
 * **CSRF.** `POST /api/ai/*` needs Basic auth, a same-origin `Origin` (when sent) and the custom
   `X-Requested-With: ops-dash` header.
+
+### Model and effort per AI task
+
+Each task picks its model and effort from the environment: `AI_CHAT_MODEL`, `AI_CHAT_EFFORT`,
+`AI_ANALYSIS_MODEL` and `AI_ANALYSIS_EFFORT`. A model left unset falls back to `AI_MODEL`, and then to
+`claude-opus-5-5`. Prices are per million input/output tokens. Per-call costs assume about 40k input
+tokens for an analysis of a ~120-task campaign, and 10-30k input tokens for a chat answer with 2-4 tool rounds.
+
+| Task | Recommended | Why | Alternatives |
+|---|---|---|---|
+| **Chat assistant** (interactive, tool use, read-only) | **Claude Opus 5.5, effort `medium`** (default). About $0.05-0.15 per answer at $4 / $20 | Strong multi-step reasoning over gates and SHAs with chat-friendly latency | **Sonnet 5.5, `medium`** ($2 / $10): about half the cost, fine for most questions. **Fable 5.2, `medium`** ($8 / $40): best answers on hard investigations, but about twice the cost and noticeably slower replies, so not the default for chat. **Haiku 5.5** ($0.10 / $0.50): cheapest, but too weak for multi-step tool use over the gate and merge rules |
+| **Background warnings & suggestions** (structured JSON, at most every 15 min, only when data changed) | **Claude Opus 5.5, effort `high`** (default). About $0.30 per run | Low frequency and highest stakes: connecting failures across tasks and spotting weakened tests rewards deeper reasoning | **Fable 5.2, `high`**: the most capable option, about $0.60 per run, worth it if the budget allows. Raise `AI_DAILY_TOKEN_BUDGET` to match. **Sonnet 5.5, `medium`**: about $0.14 per run, for cost-sensitive periods. **Haiku 5.5**: not recommended; the analysis needs judgement, not just extraction |
+
+Notes:
+* **Fable 5.2:**
+  * Thinking is always on and effort is the only control, so start at `high`.
+  * Requests can run for minutes; the server allows up to 10 minutes per call for it.
+  * It needs an organization with 30-day data retention; zero-data-retention orgs get a 400.
+  * Structured outputs (used by the analysis) are unavailable in organizations that use customer-managed encryption keys.
+* **Server-side refusal fallbacks** (`fallbacks: "default"`) are sent only to Fable 5.2/5.1, Opus 5.5/5 and Sonnet 5.5. Haiku 5.5 has none.
+* **Daily budget:** a worst case of 96 analyses a day on Opus 5.5 is about $30/day, and about $60 on Fable 5.2. Both the chat and the
+  analysis also stop at `AI_DAILY_TOKEN_BUDGET` (3,000,000 weighted tokens/day by default).
 
 ### Automatic warnings and suggestions
 

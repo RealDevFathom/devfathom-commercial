@@ -28,6 +28,11 @@ API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2026-10-21"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 DEFAULT_MODEL = "claude-opus-5-5"
+# Models that accept server-side refusal fallbacks (`fallbacks: "default"` + the beta header).
+# Claude Haiku 5.5 has no server-side fallback, so the parameter is omitted for it and for unknown models.
+FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
+# Claude Fable 5.2 can take several minutes on hard requests.
+SLOW_MODELS = {"claude-fable-5-2", "claude-fable-5-1"}
 MAX_TOOL_ROUNDS = 8
 MAX_TOOL_RESULT_CHARS = 60_000
 MAX_DIGEST_CHARS = 180_000
@@ -355,8 +360,10 @@ class AIService:
         env = env if env is not None else os.environ
         self._key = env.get("ANTHROPIC_API_KEY", "").strip()
         self.model = env.get("AI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        self.chat_model = env.get("AI_CHAT_MODEL", "").strip() or self.model
+        self.analysis_model = env.get("AI_ANALYSIS_MODEL", "").strip() or self.model
         self.chat_effort = env.get("AI_CHAT_EFFORT", "medium")
-        self.analysis_effort = env.get("AI_ANALYSIS_EFFORT", "medium")
+        self.analysis_effort = env.get("AI_ANALYSIS_EFFORT", "high")
         self.daily_budget = int(env.get("AI_DAILY_TOKEN_BUDGET", "3000000"))
         self.min_interval = int(env.get("AI_ANALYSIS_MIN_INTERVAL", "900"))
         self.max_age = int(env.get("AI_ANALYSIS_MAX_AGE", "21600"))
@@ -389,7 +396,8 @@ class AIService:
     def status(self):
         self._roll_day()
         a = self.analysis or {}
-        return {"enabled": self.enabled, "model": self.model if self.enabled else None,
+        return {"enabled": self.enabled, "model": self.chat_model if self.enabled else None,
+                "analysisConfig": f"{self.analysis_model} ({self.analysis_effort})" if self.enabled else None,
                 "lastAnalysisAt": a.get("generatedAt"), "analysisModel": a.get("model"),
                 "budgetUsedPct": round(100.0 * self.usage["tokens"] / self.daily_budget, 1) if self.daily_budget else None,
                 "budgetExhausted": self._exhausted(), "error": self.last_error}
@@ -429,14 +437,17 @@ class AIService:
 
     # -- HTTP
     def _call(self, body, timeout=120):
+        if body.get("model") in SLOW_MODELS:
+            timeout = max(timeout, 600)
         if not self.enabled:
             raise AIError("AI is not configured (ANTHROPIC_API_KEY missing)")
         self._roll_day()
         if self._exhausted():
             raise AIError("daily AI token budget reached; resets at 00:00 UTC")
         data = json.dumps(body).encode()
-        headers = {"Content-Type": "application/json", "x-api-key": self._key, "anthropic-version": API_VERSION,
-                   "anthropic-beta": FALLBACK_BETA}
+        headers = {"Content-Type": "application/json", "x-api-key": self._key, "anthropic-version": API_VERSION}
+        if "fallbacks" in body:
+            headers["anthropic-beta"] = FALLBACK_BETA
         delay = 2.0
         for attempt in range(3):
             req = urllib.request.Request(API_URL, data=data, headers=headers, method="POST")
@@ -469,10 +480,14 @@ class AIService:
                 delay *= 2
         raise AIError("Claude API unavailable")
 
-    def _base(self, effort, max_tokens):
-        return {"model": self.model, "max_tokens": max_tokens, "thinking": {"type": "adaptive"},
-                "output_config": {"effort": effort}, "fallbacks": "default",
+    def _base(self, effort, max_tokens, model=None):
+        model = model or self.model
+        body = {"model": model, "max_tokens": max_tokens, "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
                 "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]}
+        if model in FALLBACK_MODELS:
+            body["fallbacks"] = "default"
+        return body
 
     # -- chat
     def chat(self, history):
@@ -497,9 +512,9 @@ class AIService:
             tools = ReadOnlyTools(state)
             stamp = f"[Dashboard time: {fmt_pkt(state.get('serverTime'))}]"
             msgs[-1] = {"role": "user", "content": [{"type": "text", "text": stamp}, {"type": "text", "text": msgs[-1]["content"]}]}
-            used, model = [], self.model
+            used, model = [], self.chat_model
             for _ in range(MAX_TOOL_ROUNDS):
-                body = self._base(self.chat_effort, 16000) | {"tools": TOOLS, "messages": msgs}
+                body = self._base(self.chat_effort, 16000, self.chat_model) | {"tools": TOOLS, "messages": msgs}
                 resp = self._call(body)
                 model = resp.get("model") or model
                 stop = resp.get("stop_reason")
@@ -560,7 +575,7 @@ class AIService:
             prompt = (f"{ANALYSIS_INSTRUCTIONS}\n\nDashboard time: {fmt_pkt(now)}\n\n"
                       f"<rule_findings>\n{json.dumps(rules, separators=(',', ':'))}\n</rule_findings>\n\n"
                       f"<state_digest>\n{text}\n</state_digest>")
-            body = self._base(self.analysis_effort, 16000)
+            body = self._base(self.analysis_effort, 16000, self.analysis_model)
             body["output_config"]["format"] = {"type": "json_schema", "schema": ANALYSIS_SCHEMA}
             body["messages"] = [{"role": "user", "content": prompt}]
             try:
@@ -577,7 +592,7 @@ class AIService:
             except ValueError:
                 self.last_error = "analysis returned invalid JSON"
                 return self.analysis
-            result = {"generatedAt": now, "model": resp.get("model") or self.model, "digestHash": dig_hash,
+            result = {"generatedAt": now, "model": resp.get("model") or self.analysis_model, "digestHash": dig_hash,
                       "summary": scrub_string(str(data.get("summary") or ""))[:1500],
                       "warnings": [_clean_item(i) | {"kind": "warning"} for i in (data.get("warnings") or [])[:12] if isinstance(i, dict)],
                       "suggestions": [_clean_item(i) | {"kind": "suggestion"} for i in (data.get("suggestions") or [])[:12] if isinstance(i, dict)],

@@ -1281,7 +1281,7 @@
   function renderAIStatus() {
     const st = S.ai || {};
     $('ai-open').classList.toggle('hidden', !st.enabled);
-    $('ai-status').textContent = st.enabled ? `${st.model}. ${st.budgetExhausted ? 'Daily budget reached' : `${st.budgetUsedPct ?? 0}% of daily budget used`}` : 'AI not configured';
+    $('ai-status').textContent = st.enabled ? `${st.model}. Analysis ${st.analysisConfig || st.model}. ${st.budgetExhausted ? 'Daily budget reached' : `${st.budgetUsedPct ?? 0}% of daily budget used`}` : 'AI not configured';
   }
   async function refreshAnalysis() {
     const btn = $('ai-refresh');

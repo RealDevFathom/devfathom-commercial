@@ -195,3 +195,26 @@ class AIEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_per_task_models_and_fallbacks(self):
+        s = ai.AIService(lambda: {}, self.tmp, env={"ANTHROPIC_API_KEY": FAKE_KEY, "AI_CHAT_MODEL": "claude-haiku-5-5",
+                                                       "AI_ANALYSIS_MODEL": "claude-fable-5-2"})
+        chat = s._base(s.chat_effort, 1000, s.chat_model)
+        ana = s._base(s.analysis_effort, 1000, s.analysis_model)
+        self.assertEqual(chat["model"], "claude-haiku-5-5")
+        self.assertNotIn("fallbacks", chat)  # Haiku 5.5 has no server-side fallback
+        self.assertEqual((ana["model"], ana["fallbacks"], ana["output_config"]["effort"]), ("claude-fable-5-2", "default", "high"))
+        self.assertIn("claude-fable-5-2 (high)", s.status()["analysisConfig"])
+
+    def test_defaults(self):
+        s = ai.AIService(lambda: {}, self.tmp, env={"ANTHROPIC_API_KEY": FAKE_KEY})
+        self.assertEqual((s.chat_model, s.chat_effort, s.analysis_model, s.analysis_effort),
+                         ("claude-opus-5-5", "medium", "claude-opus-5-5", "high"))
