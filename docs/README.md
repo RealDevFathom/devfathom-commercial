@@ -18,8 +18,8 @@ This is the starting point for all DevFathom documentation. Find the row that de
 - **[product/pharmacy-guide.md](product/pharmacy-guide.md)**: a feature-by-feature guide for pharmacy owners and counter staff, including who is allowed to do what.
 - **[product/glossary.md](product/glossary.md)**: short meanings of the words you will see in the app and in these guides.
 - **[dev/README.md](dev/README.md)**: the developer handbook (architecture, repo map, setup, data model, auth and permissions, branching, migrations and seeds, testing and CI, known issues).
-- **[features/](features/)**: full feature lists for the business app and the SuperAdmin console, with status and code evidence (added in a separate PR).
-- **[handover/](handover/)**: CTO-owned infrastructure and access, running costs and security summary (added in a separate PR).
+- **[features/](features/)**: full feature lists for the business app and the SuperAdmin console, with status and code evidence (PRs #1433 and #1434).
+- **[handover/](handover/)**: CTO-owned infrastructure and access, running costs and security summary (PR #1436).
 
 ## Coming next
 

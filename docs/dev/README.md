@@ -18,11 +18,11 @@ Start with the architecture overview, then set up your machine, then read the pe
 | [Testing and CI](testing-and-ci.md) | Unit, database, RLS and end-to-end tests, and what CI does today |
 | [Known issues](known-issues.md) | Open gaps a developer should know before building on an area |
 
-**Not covered here:** infrastructure and access, running costs and the security summary. The CTO owns those; they live under [`../handover/`](../handover/) (added in a separate PR).
+**Not covered here:** infrastructure and access, running costs and the security summary. The CTO owns those; they live under [`../handover/`](../handover/) (added in PR #1436).
 
 **Other technical references already in `docs/`:** the [admin platform handbook](../admin-platform/README.md) (tenancy/RLS, identity, entitlements, runbooks), [AI providers](../ai-providers.md), [deploy-develop notes](../deploy-develop.md) and the [living status ledger](../status-ledger.md). `docs/technical-overview.md` is outdated (it describes the retired Azure setup); use [architecture.md](architecture.md) instead.
 
-**Feature lists:** the full feature inventory, with status and evidence paths, is under [`../features/`](../features/) (added in a separate PR).
+**Feature lists:** the full feature inventory, with status and evidence paths, is under [`../features/`](../features/) (added in PRs #1433 and #1434).
 
 ## House rules
 
