@@ -215,6 +215,7 @@ describe('command palette navigation access', () => {
   it('opens pharmacy commands with Ctrl+K and excludes incompatible and unlicensed modules', () => {
     mocks.vertical = 'PHARMACY';
     mocks.session.user.role = 'ADMIN';
+    mocks.pharmacyCapabilities = ['pharmacy:counter'];
     mocks.enabledModules = [
       'pharmacy-core', 'pharmacy-counter', 'projects', 'clients', 'finance', 'hotel-core',
     ];
@@ -244,7 +245,7 @@ describe('command palette navigation access', () => {
     const view = render(<Topbar />);
     const nav = openNavigation();
     const restricted = [
-      'Purchasing', 'Prescriptions', 'Pharmacist queue', 'Substitution',
+      'Counter', 'Purchasing', 'Prescriptions', 'Pharmacist queue', 'Substitution',
       'Reports & Insights', 'Controlled register', 'Procedures',
     ];
     for (const label of restricted) {
@@ -253,9 +254,8 @@ describe('command palette navigation access', () => {
     for (const label of ['Medicine catalog', 'Day close', 'Regulatory profile', 'Organization']) {
       expect(nav.queryByRole('button', { name: label })).toBeNull();
     }
-    expect(nav.getByRole('button', { name: 'Counter' })).toBeInTheDocument();
-
     mocks.pharmacyCapabilities = [
+      'pharmacy:counter',
       'pharmacy:procurement', 'pharmacy:prescriptions', 'pharmacy:dispense', 'reports:operational',
     ];
     mocks.safetyAllowed = true;
@@ -268,8 +268,35 @@ describe('command palette navigation access', () => {
     mocks.enabledModules = ['pharmacy-core', 'pharmacy-counter'];
     view.rerender(<Topbar />);
     for (const label of restricted) {
+      if (label === 'Counter') {
+        expect(nav.getByRole('button', { name: label })).toBeInTheDocument();
+        continue;
+      }
       expect(nav.queryByRole('button', { name: label })).toBeNull();
     }
+  });
+
+  it('hides Counter from Procurement and reacts to server counter access being granted or revoked', () => {
+    mocks.vertical = 'PHARMACY';
+    mocks.enabledModules = ['pharmacy-core', 'pharmacy-counter', 'pharmacy-procurement'];
+    mocks.pharmacyCapabilities = ['pharmacy:procurement'];
+    const view = render(<Topbar />);
+    const nav = openNavigation();
+    expect(nav.getByRole('button', { name: 'Purchasing' })).toBeInTheDocument();
+    expect(nav.queryByRole('button', { name: 'Counter' })).toBeNull();
+
+    mocks.pharmacyCapabilities.push('pharmacy:counter');
+    view.rerender(<Topbar />);
+    expect(nav.getByRole('button', { name: 'Counter' })).toBeInTheDocument();
+
+    mocks.pharmacyAccessUserId = 'another-member';
+    view.rerender(<Topbar />);
+    expect(nav.queryByRole('button', { name: 'Counter' })).toBeNull();
+
+    mocks.pharmacyAccessUserId = 'user-1';
+    mocks.pharmacyCapabilities = ['pharmacy:procurement'];
+    view.rerender(<Topbar />);
+    expect(nav.queryByRole('button', { name: 'Counter' })).toBeNull();
   });
 
   it('rejects pharmacy navigation capabilities cached for a different member', () => {

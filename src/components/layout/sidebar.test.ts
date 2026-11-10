@@ -242,6 +242,7 @@ describe('pharmacy navigation', () => {
     const hrefs = (role: string, held: string[] = [], entitlements = everyPharmacyModule) =>
       visibleNavigation(entitlements, role, [], held).map((item) => item.href);
     const capabilityGated = [
+      ['/pharmacy/counter', 'pharmacy:counter'],
       ['/pharmacy/purchasing', 'pharmacy:procurement'],
       ['/pharmacy/reports', 'reports:operational'],
       ['/pharmacy/prescriptions', 'pharmacy:prescriptions'],
@@ -250,7 +251,7 @@ describe('pharmacy navigation', () => {
     ] as const;
 
     it('offers a cashier the counter but none of the surfaces their role cannot open', () => {
-      const visible = hrefs('EMPLOYEE');
+      const visible = hrefs('EMPLOYEE', ['pharmacy:counter']);
       expect(visible).toContain('/pharmacy/counter');
       for (const hidden of [
         '/pharmacy/counter/close',
@@ -339,7 +340,9 @@ describe('pharmacy navigation', () => {
         vertical: 'PHARMACY',
         enabledModules: ['pharmacy-core', 'pharmacy-counter'],
       },
-      'ADMIN'
+      'ADMIN',
+      [],
+      ['pharmacy:counter']
     ).map((item) => item.href);
 
     expect(visible).toEqual(expect.arrayContaining(pharmacyRoutes));

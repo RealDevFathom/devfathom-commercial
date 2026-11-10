@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ can: vi.fn() }));
+const mocks = vi.hoisted(() => ({ can: vi.fn(), counterAccess: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
+vi.mock('./pharmacy-sales', () => ({ canAccessPharmacyCounter: mocks.counterAccess }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -42,6 +43,7 @@ function caller(user: { id: string; role: string } = { id: 'cashier', role: 'EMP
 
 beforeEach(() => {
   mocks.can.mockReset().mockResolvedValue(false);
+  mocks.counterAccess.mockReset().mockResolvedValue(false);
 });
 
 describe('#979 pharmacy rail capability read', () => {
@@ -53,7 +55,9 @@ describe('#979 pharmacy rail capability read', () => {
     const result = await caller().navigation();
 
     expect(result).toEqual({ userId: 'cashier', organizationId: 'org_a', capabilities: [] });
+    expect(mocks.counterAccess).toHaveBeenCalledWith(expect.objectContaining({ db }));
     for (const capability of PHARMACY_NAVIGATION_CAPABILITIES) {
+      if (capability === 'pharmacy:counter') continue;
       expect(mocks.can).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'cashier' }),
         capability,
@@ -78,6 +82,18 @@ describe('#979 pharmacy rail capability read', () => {
     await caller().navigation();
 
     const asked = mocks.can.mock.calls.map(([, action]) => action);
-    expect(asked.sort()).toEqual([...PHARMACY_NAVIGATION_CAPABILITIES].sort());
+    expect(asked.sort()).toEqual(
+      PHARMACY_NAVIGATION_CAPABILITIES.filter((capability) => capability !== 'pharmacy:counter').sort()
+    );
+    expect(asked).not.toContain('pharmacy:counter');
+    expect(mocks.counterAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('advertises Counter only when the counter server guard authorizes access', async () => {
+    // A coarse ABAC grant must not bypass the counter's alias DENYs or branch scope.
+    mocks.can.mockResolvedValue(true);
+    expect((await caller().navigation()).capabilities).not.toContain('pharmacy:counter');
+    mocks.counterAccess.mockResolvedValue(true);
+    expect((await caller().navigation()).capabilities).toContain('pharmacy:counter');
   });
 });

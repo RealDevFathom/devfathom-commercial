@@ -77,7 +77,7 @@ import {
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
 import { router, type TRPCContext } from '../trpc';
-import { pharmacySalesRouter } from './pharmacy-sales';
+import { canAccessPharmacyCounter, pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 
@@ -190,6 +190,75 @@ beforeEach(() => {
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
+
+describe('DEV-52 server-authorized Counter navigation', () => {
+  const access = (f: ReturnType<typeof fixture>) =>
+    canAccessPharmacyCounter(f.context as unknown as TRPCContext);
+
+  it('refuses an assigned Procurement employee in a licensed pharmacy', async () => {
+    const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'procurement')!;
+    const f = fixture(template.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })));
+    assign(f, ['branch-a']);
+    await expect(access(f)).resolves.toBe(false);
+  });
+
+  it.each([
+    'pharmacy:counter', 'pharmacy.counter', 'pharmacy:receipt', 'pharmacy.receipt',
+    'pharmacy:dispense', 'pharmacy.dispense',
+  ])('preserves assigned counter access through %s', async (capability) => {
+    const f = fixture([{ capability, effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(access(f)).resolves.toBe(true);
+    expect(f.db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a', active: true,
+        branchAssignments: { some: { organizationId: 'org-a', userId: 'user-a', active: true } },
+      },
+      select: { id: true },
+    });
+  });
+
+  it('honors an explicit DENY on another counter-family alias', async () => {
+    const f = fixture(
+      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      'EMPLOYEE',
+      [{ capability: 'pharmacy.receipt', effect: 'DENY' }]
+    );
+    assign(f, ['branch-a']);
+    await expect(access(f)).resolves.toBe(false);
+  });
+
+  it('refuses an unassigned member and preserves the granted administrator exception', async () => {
+    await expect(access(fixture(dispense))).resolves.toBe(false);
+    const admin = fixture([{ capability: 'pharmacy:*', effect: 'ALLOW' }], 'ADMIN');
+    await expect(access(admin)).resolves.toBe(true);
+    expect(admin.context.audit.detail).toEqual({});
+    await expect(access(fixture([], 'ADMIN'))).resolves.toBe(false);
+  });
+
+  it('refuses missing active branches, inactive members and tenant mismatches', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    f.db.pharmacyBranch.findFirst.mockResolvedValueOnce(null);
+    await expect(access(f)).resolves.toBe(false);
+    f.db.user.findUnique.mockResolvedValueOnce({
+      status: 'DISABLED', organizationId: 'org-a',
+      organizationRole: { permissions: dispense }, permissionOverrides: [],
+    });
+    await expect(access(f)).resolves.toBe(false);
+    f.user.organizationId = 'another-org';
+    await expect(access(f)).resolves.toBe(false);
+  });
+
+  it('requires the counter license and propagates unexpected database failures', async () => {
+    const f = fixture(dispense);
+    vi.mocked(hasModule).mockReturnValueOnce(false);
+    await expect(access(f)).resolves.toBe(false);
+    expect(f.db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+    f.db.pharmacyBranch.findFirst.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(access(f)).rejects.toThrow('database unavailable');
+  });
+});
 
 const paths: {
   name: string;

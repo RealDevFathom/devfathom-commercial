@@ -333,6 +333,7 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
+    pharmacyCapabilities: ['pharmacy:counter'],
   },
   {
     label: 'Inventory',

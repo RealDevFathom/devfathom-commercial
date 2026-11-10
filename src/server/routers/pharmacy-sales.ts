@@ -524,6 +524,39 @@ async function requireCounterReceiptAccess(
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
+/** Navigation uses the counter's grant and branch rules without recording an access. */
+export async function canAccessPharmacyCounter(ctx: TRPCContext): Promise<boolean> {
+  const user = ctx.session?.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !user ||
+    !organizationId ||
+    user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  ) {
+    return false;
+  }
+
+  const branch = await ctx.db.pharmacyBranch.findFirst({
+    where: {
+      organizationId,
+      active: true,
+      ...(user.role === 'ADMIN'
+        ? {}
+        : { branchAssignments: { some: { organizationId, userId: user.id, active: true } } }),
+    },
+    select: { id: true },
+  });
+  if (!branch) return false;
+  try {
+    const { assigned, orgAdmin } = await counterReceiptGrant(ctx, branch.id);
+    return orgAdmin || assigned.has(branch.id);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') return false;
+    throw error;
+  }
+}
+
 const closeDate = z
   .date()
   .refine(

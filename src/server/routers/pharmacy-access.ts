@@ -1,6 +1,7 @@
 import { can, subjectFromSession } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
 import { protectedProcedure, router } from '../trpc';
+import { canAccessPharmacyCounter } from './pharmacy-sales';
 
 /**
  * The capabilities the pharmacy rail asks about, each exactly as the page
@@ -10,12 +11,14 @@ import { protectedProcedure, router } from '../trpc';
  * - `pharmacy:prescriptions` — the prescription workspace.
  * - `pharmacy:dispense` — the pharmacist queue and substitution evidence.
  * - `reports:operational` — the pharmacy reports command centre.
+ * - `pharmacy:counter` — the counter's capability family and active branch scope.
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
   'pharmacy:prescriptions',
   'pharmacy:dispense',
   'reports:operational',
+  'pharmacy:counter',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];
@@ -32,9 +35,13 @@ export const pharmacyAccessRouter = router({
     const subject = subjectFromSession(user);
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     const decisions = await Promise.all(
-      PHARMACY_NAVIGATION_CAPABILITIES.map(async (capability) =>
-        (await can(subject, capability, undefined, options)) ? capability : null
-      )
+      PHARMACY_NAVIGATION_CAPABILITIES.map(async (capability) => {
+        const allowed =
+          capability === 'pharmacy:counter'
+            ? await canAccessPharmacyCounter(ctx)
+            : await can(subject, capability, undefined, options);
+        return allowed ? capability : null;
+      })
     );
     return {
       userId: user.id,
