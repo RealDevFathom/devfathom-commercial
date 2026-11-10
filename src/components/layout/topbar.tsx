@@ -29,6 +29,7 @@ import {
 import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
+import { getSearchCategoryAccess } from '@/lib/search-access';
 import { cn } from '@/lib/utils';
 import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
@@ -36,7 +37,8 @@ import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
 import type { TenantBrand } from '@/lib/tenant-brand';
-import { routeLabels, TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { useVisibleNavigation } from './sidebar';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -64,6 +66,22 @@ const preloadCommandPalette = () => import('@/components/ui/command');
 
 const subscribeToHydration = () => () => {};
 
+function NavigationCommands({ onSelect }: { onSelect: (href: string) => void }) {
+  // Use the same grants, vertical, roles and server-resolved capabilities as
+  // the workspace navigation, rather than the breadcrumb label dictionary.
+  const { filteredNav } = useVisibleNavigation();
+
+  return (
+    <CommandGroup heading="Navigation">
+      {filteredNav.map(({ href, label }) => (
+        <CommandItem key={href} onSelect={() => onSelect(href)}>
+          {label}
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  );
+}
+
 export function Topbar({
   onMenuClick,
   brand,
@@ -79,6 +97,7 @@ export function Topbar({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const router = useRouter();
   const { data: session } = useSession();
+  const { vertical, enabledModules } = useEntitlements();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
   const assistantAvailable = useAssistant((state) =>
@@ -117,9 +136,11 @@ export function Topbar({
     }
   }, []);
 
+  const searchAccess = getSearchCategoryAccess({ vertical, enabledModules });
+  const canSearchRecords = Object.values(searchAccess).some(Boolean);
   const searchQuery = trpc.search.global.useQuery(
     { query: debouncedSearch },
-    { enabled: debouncedSearch.length > 0, staleTime: 30_000 }
+    { enabled: commandOpen && debouncedSearch.length > 0 && canSearchRecords, staleTime: 30_000 }
   );
 
   const goTo = (href: string) => {
@@ -216,10 +237,17 @@ export function Topbar({
             className="studio-search"
           >
             <Search className="h-4 w-4 shrink-0" />
-            <span className="sr-only min-w-0 flex-1 truncate whitespace-nowrap text-left lg:not-sr-only">
+            <span className="sr-only">Search company hub</span>
+            <span
+              aria-hidden="true"
+              className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block"
+            >
               Search workspace
             </span>
-            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex">
+            <kbd
+              aria-hidden="true"
+              className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex"
+            >
               ⌘K
             </kbd>
           </button>
@@ -306,26 +334,35 @@ export function Topbar({
           commandProps={{ shouldFilter: false }}
         >
           <CommandInput
-            placeholder="Search projects, tasks, clients, notes, team…"
+            aria-label="Search records"
+            placeholder="Search workspace…"
             value={searchInput}
             onValueChange={setSearchInput}
           />
           <CommandList>
             {debouncedSearch.length === 0 ? (
-              <CommandGroup heading="Navigation">
-                {Object.entries(routeLabels).map(([href, label]) => (
-                  <CommandItem key={href} onSelect={() => goTo(href)}>
-                    {label}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : searchQuery.isLoading ? (
+              <NavigationCommands onSelect={goTo} />
+            ) : canSearchRecords && searchQuery.isLoading ? (
               <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
                 <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
               </div>
             ) : (
               (() => {
-                const r = searchQuery.data;
+                // Cached data can outlive a licence or vertical change.
+                const r = searchQuery.data
+                  ? {
+                      projects: searchAccess.projects
+                        ? searchQuery.data.projects.map((project) => ({
+                            ...project,
+                            client: searchAccess.clients ? project.client : null,
+                          }))
+                        : [],
+                      tasks: searchAccess.tasks ? searchQuery.data.tasks : [],
+                      clients: searchAccess.clients ? searchQuery.data.clients : [],
+                      notes: searchAccess.notes ? searchQuery.data.notes : [],
+                      team: searchAccess.team ? searchQuery.data.team : [],
+                    }
+                  : undefined;
                 const empty =
                   !r ||
                   (r.projects.length === 0 &&

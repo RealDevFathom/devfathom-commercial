@@ -594,7 +594,7 @@ export function visibleNavigation(
     .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
 }
 
-function useVisibleNavigation() {
+export function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
+import { getSearchCategoryAccess } from '@/lib/search-access';
 import { router, protectedProcedure } from '../trpc';
 
 /**
@@ -25,95 +27,114 @@ export const searchRouter = router({
       const userId = ctx.session.user.id;
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const insensitive = { contains: q, mode: 'insensitive' as const };
+      const access = getSearchCategoryAccess(ctx.entitlements);
+      // A custom role or override that denies `team:view` takes the directory
+      // away in team.getAll/getRoster/getById; search must not be a side door.
+      const directory =
+        access.team &&
+        (await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+          source: 'TRPC',
+          db: ctx.db,
+        }));
 
       const [projects, tasks, clients, notes, team] = await Promise.all([
         // PROJECTS — admin sees all, employees only their projects
-        ctx.db.project.findMany({
-          where: {
-            name: insensitive,
-            ...(isAdmin ? {} : { members: { some: { userId } } }),
-          },
-          select: {
-            id: true,
-            name: true,
-            type: true,
-            status: true,
-            client: { select: { id: true, name: true } },
-          },
-          take: 6,
-          orderBy: { updatedAt: 'desc' },
-        }),
+        access.projects
+          ? ctx.db.project.findMany({
+              where: {
+                name: insensitive,
+                ...(isAdmin ? {} : { members: { some: { userId } } }),
+              },
+              select: {
+                id: true,
+                name: true,
+                type: true,
+                status: true,
+                client: access.clients ? { select: { id: true, name: true } } : false,
+              },
+              take: 6,
+              orderBy: { updatedAt: 'desc' },
+            })
+          : [],
 
         // TASKS — admin sees all, employees only tasks in their projects
-        ctx.db.task.findMany({
-          where: {
-            title: insensitive,
-            ...(isAdmin
-              ? {}
-              : { column: { board: { project: { members: { some: { userId } } } } } }),
-          },
-          select: {
-            id: true,
-            title: true,
-            priority: true,
-            column: {
+        access.tasks
+          ? ctx.db.task.findMany({
+              where: {
+                title: insensitive,
+                ...(isAdmin
+                  ? {}
+                  : { column: { board: { project: { members: { some: { userId } } } } } }),
+              },
               select: {
-                board: {
-                  select: { id: true, project: { select: { id: true, name: true } } },
+                id: true,
+                title: true,
+                priority: true,
+                column: {
+                  select: {
+                    board: {
+                      select: { id: true, project: { select: { id: true, name: true } } },
+                    },
+                  },
                 },
               },
-            },
-          },
-          take: 6,
-          orderBy: { updatedAt: 'desc' },
-        }),
+              take: 6,
+              orderBy: { updatedAt: 'desc' },
+            })
+          : [],
 
         // CLIENTS — everyone can see clients (no revenue exposed here)
-        ctx.db.client.findMany({
-          where: { name: insensitive },
-          select: { id: true, name: true, industry: true },
-          take: 6,
-          orderBy: { name: 'asc' },
-        }),
+        access.clients
+          ? ctx.db.client.findMany({
+              where: { name: insensitive },
+              select: { id: true, name: true, industry: true },
+              take: 6,
+              orderBy: { name: 'asc' },
+            })
+          : [],
 
         // NOTES — only those visible to the user
-        ctx.db.note.findMany({
-          where: {
-            AND: [
-              {
-                OR: [{ title: insensitive }, { contentText: insensitive }],
-              },
-              {
-                OR: [
-                  { authorId: userId },
-                  { visibility: 'TEAM' },
-                  { visibility: 'SHARED', shares: { some: { userId } } },
+        access.notes
+          ? (ctx.db.note.findMany({
+              where: {
+                AND: [
+                  {
+                    OR: [{ title: insensitive }, { contentText: insensitive }],
+                  },
+                  {
+                    OR: [
+                      { authorId: userId },
+                      { visibility: 'TEAM' },
+                      { visibility: 'SHARED', shares: { some: { userId } } },
+                    ],
+                  },
                 ],
               },
-            ],
-          },
-          select: {
-            id: true,
-            title: true,
-            visibility: true,
-            author: { select: { id: true, name: true } },
-          },
-          take: 6,
-          orderBy: { updatedAt: 'desc' },
-        }) satisfies Prisma.PrismaPromise<unknown>,
+              select: {
+                id: true,
+                title: true,
+                visibility: true,
+                author: { select: { id: true, name: true } },
+              },
+              take: 6,
+              orderBy: { updatedAt: 'desc' },
+            }) satisfies Prisma.PrismaPromise<unknown>)
+          : [],
 
-        // TEAM — everyone can see the directory
-        ctx.db.user.findMany({
-          where: {
-            OR: [{ name: insensitive }, { email: insensitive }, { title: insensitive }],
-            // IMP-HR-07: include ON_LEAVE (still-active) members; only laid-off /
-            // deactivated (INACTIVE) people are excluded from search.
-            status: { not: 'INACTIVE' },
-          },
-          select: { id: true, name: true, title: true, avatar: true },
-          take: 6,
-          orderBy: { name: 'asc' },
-        }),
+        // TEAM — the licensed directory, unless `team:view` is denied
+        directory
+          ? ctx.db.user.findMany({
+              where: {
+                OR: [{ name: insensitive }, { email: insensitive }, { title: insensitive }],
+                // IMP-HR-07: include ON_LEAVE (still-active) members; only laid-off /
+                // deactivated (INACTIVE) people are excluded from search.
+                status: { not: 'INACTIVE' },
+              },
+              select: { id: true, name: true, title: true, avatar: true },
+              take: 6,
+              orderBy: { name: 'asc' },
+            })
+          : [],
       ]);
 
       return { projects, tasks, clients, notes, team };
