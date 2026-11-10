@@ -88,7 +88,8 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: true,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            validFrom: new Date('2026-01-01T00:00:00.000Z'),
+            validUntil: new Date('2026-12-01T00:00:00.000Z'),
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -107,7 +108,8 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: false,
-            expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+            validFrom: new Date('2025-12-01T00:00:00.000Z'),
+            validUntil: new Date('2026-01-01T00:00:00.000Z'),
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -122,6 +124,37 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(alerts.every((alert) => alert.severity === 'SAFETY_BLOCK')).toBe(true);
   });
 
+  it.each([
+    ['Asia/Karachi', '2026-10-21T18:59:59.999Z', true],
+    ['Asia/Karachi', '2026-10-21T19:00:00.000Z', false],
+    ['Asia/Karachi', '2026-10-22T12:00:00.000Z', false],
+    ['Asia/Karachi', '2026-10-22T18:59:59.999Z', false],
+    ['Asia/Karachi', '2026-10-22T19:00:00.000Z', true],
+    ['America/Los_Angeles', '2026-10-23T06:59:59.999Z', false],
+    ['America/Los_Angeles', '2026-10-23T07:00:00.000Z', true],
+    ['PKT', '2026-10-22T23:59:59.999Z', false],
+    [undefined, '2026-10-23T00:00:00.000Z', true],
+  ])('checks calendar validity in %s at %s', (timeZone, at, blocked) => {
+    const alerts = counterAlertsFor(
+      [
+        line({
+          medicine: medicine({ rx: true }),
+          prescription: {
+            id: 'rx-1',
+            verified: true,
+            validFrom: new Date('2026-10-22T00:00:00.000Z'),
+            validUntil: new Date('2026-10-22T00:00:00.000Z'),
+            remainingAuthorizedUnits: 30,
+          },
+        }),
+      ],
+      { at: new Date(at), timeZone }
+    );
+
+    expect(hasBlockingAlert(alerts)).toBe(blocked);
+    expect(alerts.map((alert) => alert.code)).toEqual(blocked ? ['PRESCRIPTION_EXPIRED'] : []);
+  });
+
   it('never offers acknowledgement as a way past a block', () => {
     const alerts = counterAlertsFor(
       [
@@ -130,7 +163,8 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: false,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            validFrom: new Date('2026-01-01T00:00:00.000Z'),
+            validUntil: new Date('2026-12-01T00:00:00.000Z'),
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -215,7 +249,8 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: true,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            validFrom: new Date('2026-01-01T00:00:00.000Z'),
+            validUntil: new Date('2026-12-01T00:00:00.000Z'),
             remainingAuthorizedUnits: 30,
           },
         }),

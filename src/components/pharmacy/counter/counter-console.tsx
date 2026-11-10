@@ -685,7 +685,8 @@ function ScopedPharmacyCounterConsole({
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
-              expiresAt: new Date(prescriptionLine.prescription.validUntil),
+              validFrom: new Date(prescriptionLine.prescription.validFrom),
+              validUntil: new Date(prescriptionLine.prescription.validUntil),
               remainingAuthorizedUnits:
                 prescriptionLine.entry.remainingAuthorizedUnits +
                 (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),
@@ -696,8 +697,8 @@ function ScopedPharmacyCounterConsole({
         discountMinor: line.discountMinor,
       };
     });
-    return counterAlertsFor(lines, { at: new Date() });
-  }, [cart, patient]);
+    return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone });
+  }, [cart, patient, workspaceZone]);
 
   const blocked = hasBlockingAlert(alerts);
   const safetyLabel = blocked

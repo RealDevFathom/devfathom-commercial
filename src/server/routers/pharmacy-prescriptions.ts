@@ -35,6 +35,16 @@ import {
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+const prescriptionCalendarDate = z
+  .date()
+  .refine(
+    (value) =>
+      value.getUTCHours() === 0 &&
+      value.getUTCMinutes() === 0 &&
+      value.getUTCSeconds() === 0 &&
+      value.getUTCMilliseconds() === 0,
+    'Prescription validity must be a calendar date.'
+  );
 
 async function requireCounterPatientAccess(
   ctx: Pick<TRPCContext, 'db' | 'requestMeta'> & {
@@ -300,8 +310,8 @@ export const pharmacyPrescriptionsRouter = router({
           custodyState: z
             .enum(['NOT_HELD', 'HELD_AT_PHARMACY', 'RETURNED_TO_PATIENT', 'TRANSFERRED'])
             .optional(),
-          validFrom: z.date(),
-          validUntil: z.date(),
+          validFrom: prescriptionCalendarDate,
+          validUntil: prescriptionCalendarDate,
           authorizedRepeats: z.number().int().nonnegative(),
           lines: z
             .array(
@@ -319,6 +329,10 @@ export const pharmacyPrescriptionsRouter = router({
             .max(30),
         })
         .strict()
+        .refine((value) => value.validFrom <= value.validUntil, {
+          message: 'Valid until must be on or after valid from.',
+          path: ['validUntil'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { lines, ...prescription } = input;

@@ -21,6 +21,7 @@
 
 import { duplicateSaltGroups, type DuplicateSaltGroup } from './duplicate-salt';
 import type { BlockReason } from './inventory';
+import { prescriptionIsCurrent } from './prescription-calendar';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
 export type CounterAlertSeverity = (typeof COUNTER_ALERT_SEVERITIES)[number];
@@ -92,7 +93,9 @@ export type CounterAlertLine = {
   prescription: {
     id: string;
     verified: boolean;
-    expiresAt: Date;
+    /** UTC-midnight calendar-date carriers; validUntil is inclusive. */
+    validFrom: Date;
+    validUntil: Date;
     remainingAuthorizedUnits: number;
   } | null;
   /**
@@ -110,6 +113,8 @@ export type CounterAlertLine = {
 
 export type CounterAlertContext = {
   at: Date;
+  /** Organization calendar timezone; missing or invalid zones fall back to UTC. */
+  timeZone?: string | null;
   /** Days before expiry at which the counter starts warning commercially. */
   nearExpiryDays?: number;
 };
@@ -176,7 +181,14 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
           remedy: 'A pharmacist must verify this prescription; a cashier cannot self-approve it.',
         });
       }
-      if (prescription.expiresAt.getTime() <= context.at.getTime()) {
+      if (
+        !prescriptionIsCurrent(
+          prescription.validFrom,
+          prescription.validUntil,
+          context.at,
+          context.timeZone
+        )
+      ) {
         push(alerts, {
           key: `rx-expired:${prescription.id}`,
           severity: 'SAFETY_BLOCK',
