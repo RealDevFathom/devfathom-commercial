@@ -255,4 +255,31 @@ describe('cash-flow loader reconciliation', () => {
       expect.objectContaining({ currency: 'USD', closing: BigInt(0), discrepancy: BigInt(9) }),
     ]);
   });
+
+  it('retains an unknown source as unclassified even with a supported counterpart', async () => {
+    const entry = evidence('FUTURE_CASH_ADAPTER', null, [
+      debit('CASH', BigInt(125)),
+      credit('SALES_CLEARING', BigInt(125)),
+    ]);
+    const { result } = load(
+      { balances: [{ currency: 'PKR', opening: '0' }], evidence: [raw(entry)] },
+      [{ accountCode: 'CASH', currency: 'PKR', closingMinor: '125' }]
+    );
+    const projection = await result;
+
+    expect(projection.evidence).toEqual([
+      expect.objectContaining({
+        sourceKind: 'FUTURE_CASH_ADAPTER',
+        classification: 'UNCLASSIFIED',
+        netMinor: BigInt(125),
+      }),
+    ]);
+    expect(projection.totals[0]).toMatchObject({
+      operating: BigInt(0),
+      unclassified: BigInt(125),
+      closing: BigInt(125),
+      discrepancy: BigInt(0),
+    });
+    expect(projection.metadata.completeness).toBe('unknown');
+  });
 });

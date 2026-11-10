@@ -142,6 +142,32 @@ const controls = (db: ScopedDb) =>
   financialStatements(db, scope, { ...period, page: 1 }).then((result) => result.accounts);
 
 suite('cash-flow projection on migrated PostgreSQL with RLS', () => {
+  it('includes an entry exactly at the lower bound as movement, not opening', async () => {
+    const boundaryPeriod = {
+      from: new Date('2026-10-02T00:00:00Z'),
+      to: new Date('2026-10-03T00:00:00Z'),
+    };
+    const result = await withTenantDb(org, async (db) => {
+      const accounts = (await financialStatements(db, scope, { ...boundaryPeriod, page: 1 }))
+        .accounts;
+      return loadCashFlowProjection(db, scope, boundaryPeriod, accounts);
+    });
+
+    expect(result.evidence.map((entry) => entry.id)).toEqual([`${org}_original`]);
+    expect(result.evidence[0]).toMatchObject({
+      occurredAt: boundaryPeriod.from,
+      netMinor: BigInt(50),
+      classification: 'OPERATING',
+    });
+    expect(result.totals.find((row) => row.currency === 'PKR')).toMatchObject({
+      opening: BigInt(100),
+      operating: BigInt(50),
+      closing: BigInt(150),
+      canonicalClosing: BigInt(150),
+      discrepancy: BigInt(0),
+    });
+  });
+
   it('reconciles every scoped cash posting per currency against canonical controls', async () => {
     const result = await withTenantDb(org, async (db) =>
       loadCashFlowProjection(db, scope, period, await controls(db))

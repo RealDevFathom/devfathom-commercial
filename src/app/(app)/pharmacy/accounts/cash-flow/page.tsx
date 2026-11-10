@@ -233,6 +233,13 @@ export default async function CashFlowPage({
                   {entry.reversesEntryId ? ` · reverses ${entry.reversesEntryId}` : ''} ·{' '}
                   {entry.reason}
                 </p>
+                <ul aria-label="Classification journal lines" className="mt-3 space-y-1 text-sm">
+                  {entry.lines.map((line, index) => (
+                    <li key={`${line.accountCode}:${line.side}:${index}`} className="font-mono">
+                      {line.accountCode} · {line.side} · {entry.currency} {money(line.amountMinor)}
+                    </li>
+                  ))}
+                </ul>
               </details>
             ))}
             {evidenceRange.pages > 1 && (
