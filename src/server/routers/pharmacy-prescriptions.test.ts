@@ -461,6 +461,8 @@ describe('prescription capture and private delivery', () => {
     );
     expect(mocks.patient).not.toHaveBeenCalled();
     expect(mocks.patients).not.toHaveBeenCalled();
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(mocks.patientAudit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -477,6 +479,8 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.can).not.toHaveBeenCalled();
     expect(mocks.patient).not.toHaveBeenCalled();
     expect(mocks.patients).not.toHaveBeenCalled();
+    expect(mocks.find).not.toHaveBeenCalled();
+    expect(mocks.patientAudit).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -43,7 +43,11 @@ const input = {
   idempotencyKey: 'refund-attempt',
 };
 
-function fixture(returnedUnits: number, priorRefunds: number[] = []) {
+function fixture(
+  returnedUnits: number,
+  priorRefunds: number[] = [],
+  unidentifiedReturnedUnits = 0
+) {
   let payloadHash = '';
   const db = {
     user: {
@@ -95,7 +99,9 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
             unitPriceMinor: 100,
             discountMinor: 0,
             canonicalUnits: 10,
-            unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
+            unidentifiedReturnHolds: unidentifiedReturnedUnits
+              ? [{ canonicalUnits: unidentifiedReturnedUnits }]
+              : [],
             returnLines: returnedUnits ? [{ canonicalUnits: returnedUnits }] : [],
           },
         ],
@@ -195,14 +201,16 @@ for (const boundary of ['service', 'API'] as const) {
   });
 }
 
-it('includes unidentified quarantine holdings in the mandatory refund cap', async () => {
-  const f = fixture(0);
-  const sale = await f.db.pharmacySale.findFirst();
-  sale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
+it('rejects refunds above the unidentified quarantine holding value', async () => {
+  const f = fixture(0, [], 2);
   await expect(f.caller.refundTender({ ...input, amountMinor: 201 })).rejects.toThrow(
     'REFUND_EXCEEDS_TENDER'
   );
   expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
+});
+
+it('allows refunds exactly at the unidentified quarantine holding value', async () => {
+  const f = fixture(0, [], 2);
   await expect(f.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
     refundId: 'refund-1',
   });
