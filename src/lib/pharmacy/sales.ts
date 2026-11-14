@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { priceFromLot } from './medicine';
+import { priceFromLot, roundingIncrementForLot } from './medicine';
 import {
   apportionDiscount,
   saleAllocationMoney,
@@ -331,7 +331,20 @@ async function addSaleLineWithAllocation(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
+    include: { batch: { select: { batchNumber: true } } },
   });
+  const mrps = lots.length
+    ? await db.medicinePackMrp.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          OR: lots.map((lot) => ({
+            packLevelId: lot.packLevelId,
+            batchReference: lot.batch.batchNumber,
+          })),
+        },
+        select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+      })
+    : [];
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
   let ceiling = 0,
     costMinor = 0;
@@ -339,10 +352,14 @@ async function addSaleLineWithAllocation(
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
+    // Printed MRP and its approved rounding are resolved per allocated lot
+    // (pack + manufacturing batch); each allocation is then charged at its own
+    // lot's price by priceMixedLotAllocation, never one lot's price for all.
     const price = priceFromLot({
       printedMrpMinor: lot.printedMrpMinor,
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+      roundingIncrementMinor: roundingIncrementForLot(lot, mrps),
     });
     pricedAllocations.push({ units: part.units, unitPriceMinor: price.unitPriceMinor });
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);

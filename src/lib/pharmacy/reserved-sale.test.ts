@@ -56,12 +56,15 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue(
         ['reserved', 'split'].map((id) => ({
           id,
+          packLevelId: 'pack',
+          batch: { batchNumber: 'batch' },
           printedMrpMinor: 100,
           unitsPerPack: 1,
           unitCostMinor: 50,
         }))
       ),
     },
+    medicinePackMrp: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacySaleLine: { create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })) },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
@@ -70,10 +73,12 @@ function fixture() {
 describe('internal reserved checkout allocation', () => {
   it('bills each mixed-MRP allocation at its own lot price', async () => {
     const db = fixture();
-    db.pharmacyInventoryLot.findMany.mockResolvedValue([
-      { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 50 },
-      { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 50 },
-    ]);
+    db.pharmacyInventoryLot.findMany.mockResolvedValue(
+      [
+        { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 50 },
+        { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 50 },
+      ].map((lot) => ({ ...lot, packLevelId: 'pack', batch: { batchNumber: 'batch' } }))
+    );
     const result = await addReservedSaleLine(
       db as never,
       scope,
@@ -197,6 +202,8 @@ describe('internal reserved checkout allocation', () => {
     db.pharmacyInventoryLot.findMany.mockResolvedValue(
       ['reserved', 'split'].map((id) => ({
         id,
+        packLevelId: 'pack',
+        batch: { batchNumber: 'batch' },
         printedMrpMinor: 100,
         unitsPerPack: 1,
         unitCostMinor: 101,

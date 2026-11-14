@@ -180,6 +180,29 @@ describe('previewSaleLine (exact quantity and price preview)', () => {
     expect(preview.shortfallUnits).toBe(0);
   });
 
+  it('charges a complete pack at its printed MRP when loose-unit division has a remainder', () => {
+    const threeUnitPack = saleUnitOptions({
+      packLevels: [
+        { id: 'pack', parentPackLevelId: null, level: 'PACK', unitsPerParent: 1 },
+        { id: 'unit', parentPackLevelId: 'pack', level: 'UNIT', unitsPerParent: 3 },
+      ],
+      rootPackLevelId: 'pack',
+      unitsPerPack: 3,
+    })[0]!;
+
+    const preview = previewSaleLine({
+      option: threeUnitPack,
+      quantity: 1,
+      printedMrpMinor: 1_000,
+      unitsPerPack: 3,
+      availableUnits: 3,
+    });
+
+    expect(preview.unitPriceMinor).toBe(1_000);
+    expect(preview.proRataCeilingMinor).toBe(1_000);
+    expect(preview.grossMinor).toBe(1_000);
+  });
+
   it('never quotes a unit price above the pro-rata ceiling', () => {
     // 999 / 100 = 9.99 per unit; the ceiling floors to 9 and rounding keeps it there.
     const preview = previewSaleLine({

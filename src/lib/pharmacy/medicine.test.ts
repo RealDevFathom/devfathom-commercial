@@ -7,6 +7,7 @@ import {
   normalizeMedicineText,
   parseDefaultPackSize,
   parseSimpleMedicineStrength,
+  priceFromLot,
 } from './medicine';
 
 describe('pharmacy medicine invariants', () => {
@@ -151,4 +152,89 @@ describe('pharmacy medicine invariants', () => {
       })
     ).not.toBe(exact);
   });
+});
+
+describe('#607 sale-unit MRP contract', () => {
+  it.each([
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 10,
+      roundingIncrementMinor: 5,
+      expectedPrice: 500,
+      expectedCeiling: 501,
+    },
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 20,
+      roundingIncrementMinor: 5,
+      expectedPrice: 1_003,
+      expectedCeiling: 1_003,
+    },
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 1,
+      roundingIncrementMinor: 1,
+      expectedPrice: 50,
+      expectedCeiling: 50,
+    },
+    {
+      printedMrpMinor: Number.MAX_SAFE_INTEGER,
+      canonicalUnitsInPack: 3,
+      canonicalUnitsPerSaleUnit: 2,
+      roundingIncrementMinor: 1,
+      expectedPrice: 6_004_799_503_160_660,
+      expectedCeiling: 6_004_799_503_160_660,
+    },
+  ])(
+    'preserves sale-unit pricing for remainder and large-integer cases: %j',
+    ({ expectedPrice, expectedCeiling, ...input }) => {
+      const price = priceFromLot(input);
+      expect(price).toEqual({
+        unitPriceMinor: expectedPrice,
+        proRataCeilingMinor: expectedCeiling,
+      });
+      expect(BigInt(price.unitPriceMinor) * BigInt(input.canonicalUnitsInPack)).toBeLessThanOrEqual(
+        BigInt(input.printedMrpMinor) * BigInt(input.canonicalUnitsPerSaleUnit)
+      );
+    }
+  );
+
+  it.each([
+    // Aggregating canonical units across source packs is valid (#68 P2).
+    { canonicalUnitsPerSaleUnit: 40, roundingIncrementMinor: 5, expected: 2_006, ceiling: 2_006 },
+    { canonicalUnitsPerSaleUnit: 21, roundingIncrementMinor: 5, expected: 1_050, ceiling: 1_053 },
+    { canonicalUnitsPerSaleUnit: 30, roundingIncrementMinor: 1, expected: 1_504, ceiling: 1_504 },
+  ])(
+    'prices a sale unit larger than one source pack: %j',
+    ({ expected, ceiling, ...input }) => {
+      const price = priceFromLot({ printedMrpMinor: 1_003, canonicalUnitsInPack: 20, ...input });
+      expect(price).toEqual({ unitPriceMinor: expected, proRataCeilingMinor: ceiling });
+    }
+  );
+
+  it('rejects a sale-unit price beyond the safe integer range', () => {
+    expect(() =>
+      priceFromLot({
+        printedMrpMinor: Number.MAX_SAFE_INTEGER,
+        canonicalUnitsInPack: 1,
+        canonicalUnitsPerSaleUnit: 2,
+      })
+    ).toThrow('INVALID_PRICE');
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid sale-unit conversion %s',
+    (canonicalUnitsPerSaleUnit) => {
+      expect(() =>
+        priceFromLot({
+          printedMrpMinor: 1_003,
+          canonicalUnitsInPack: 20,
+          canonicalUnitsPerSaleUnit,
+        })
+      ).toThrow('INVALID_PRICE');
+    }
+  );
 });
