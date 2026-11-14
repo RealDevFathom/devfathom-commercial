@@ -326,6 +326,44 @@ describe('Restaurant menu-import console', () => {
       );
     });
 
+    it('shows extracted variant prices and requires an explicit variant review before accepting', () => {
+      mocks.get.mockReturnValue({
+        data: detail({
+          pages: [
+            {
+              ...detail().pages[0],
+              lines: [
+                line({
+                  extractedVariants: [
+                    { name: 'Small', price: { amount: '500.00', currency: 'PKR' } },
+                    { name: 'Large', price: { amount: '800.00', currency: 'PKR' } },
+                  ],
+                }),
+              ],
+            },
+          ],
+        }),
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getByText('Small')).toBeInTheDocument();
+      expect(screen.getByText('500.00 PKR')).toBeInTheDocument();
+      expect(screen.getByText('Large')).toBeInTheDocument();
+      expect(screen.getByText('800.00 PKR')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept Grilled Chicken' }));
+      expect(mocks.reviewLine).not.toHaveBeenCalled();
+      expect(screen.getByText('Confirm every extracted variant price')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept line and variants' }));
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({ lineId: 'line_1', decision: 'ACCEPTED' })
+      );
+    });
+
     it('records a reject decision', () => {
       renderConsole();
 

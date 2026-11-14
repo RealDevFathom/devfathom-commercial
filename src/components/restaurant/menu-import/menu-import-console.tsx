@@ -199,6 +199,54 @@ function Extracted({ value, fallback = '—' }: { value: string | null; fallback
   return <span className="break-words text-text-strong">{value}</span>;
 }
 
+type ExtractedVariant = {
+  name: string;
+  amount: string | null;
+  currency: string | null;
+};
+
+/** Keep malformed adapter JSON visible to the server validator, but out of the UI. */
+function extractedVariants(value: unknown): ExtractedVariant[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((variant) => {
+    if (!variant || typeof variant !== 'object') return [];
+    const record = variant as Record<string, unknown>;
+    const price =
+      record.price && typeof record.price === 'object'
+        ? (record.price as Record<string, unknown>)
+        : null;
+    if (typeof record.name !== 'string') return [];
+    return [
+      {
+        name: record.name,
+        amount: typeof price?.amount === 'string' ? price.amount : null,
+        currency: typeof price?.currency === 'string' ? price.currency : null,
+      },
+    ];
+  });
+}
+
+function VariantReviewList({ variants }: { variants: ExtractedVariant[] }) {
+  if (variants.length === 0) return null;
+  return (
+    <div className="mt-2 border-l-2 border-border-default pl-2">
+      <span className="block font-mono text-[0.625rem] font-semibold uppercase tracking-wide text-text-muted">
+        Variant prices to approve
+      </span>
+      <ul className="mt-1 space-y-0.5">
+        {variants.map((variant, index) => (
+          <li key={`${variant.name}-${index}`} className="text-xs text-text-strong">
+            <span>{variant.name}</span>
+            <span className="ml-2 tabular-nums text-text-muted">
+              {variant.amount ? `${variant.amount} ${variant.currency ?? ''}`.trim() : '(no price)'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function FlagChips({ flags }: { flags: string[] }) {
   if (flags.length === 0) {
     return <span className="font-mono text-[0.625rem] tracking-wide text-text-faint">NONE</span>;
@@ -760,6 +808,7 @@ export function RestaurantMenuImportConsole({
                           </TableHeader>
                           <TableBody>
                             {page.lines.map((line, index) => {
+                              const variants = extractedVariants(line.extractedVariants);
                               const corrected =
                                 line.reviewedProductName ??
                                 line.reviewedCategoryName ??
@@ -797,6 +846,7 @@ export function RestaurantMenuImportConsole({
                                         fallback="(no price)"
                                       />
                                     </span>
+                                    <VariantReviewList variants={variants} />
                                   </TableCell>
                                   <TableCell className="max-w-[18rem] align-top">
                                     {corrected ? (
@@ -838,9 +888,13 @@ export function RestaurantMenuImportConsole({
                                         size="sm"
                                         aria-label={`Accept ${lineLabel}`}
                                         disabled={!openForReview || busy}
-                                        onClick={() => decide(line, 'ACCEPTED')}
+                                        onClick={() =>
+                                          variants.length > 0
+                                            ? setEditor(editorFor(line))
+                                            : decide(line, 'ACCEPTED')
+                                        }
                                       >
-                                        Accept
+                                        {variants.length > 0 ? 'Review variants' : 'Accept'}
                                       </Button>
                                       <Button
                                         type="button"
@@ -1066,6 +1120,17 @@ function LineEditorPanel({
             />
           </Field>
         </div>
+        {extractedVariants(line.extractedVariants).length > 0 ? (
+          <div className="md:col-span-2 rounded-md border border-border-default bg-surface-raised p-3">
+            <p className="text-sm font-medium text-text-strong">
+              Confirm every extracted variant price
+            </p>
+            <p className="mt-1 text-xs text-text-muted">
+              Accepting this line imports all of the variant prices shown below.
+            </p>
+            <VariantReviewList variants={extractedVariants(line.extractedVariants)} />
+          </div>
+        ) : null}
         <div className="md:col-span-2">
           <Field label="Review note" hint="Recorded with the decision. Not imported.">
             <Input
@@ -1115,7 +1180,9 @@ function LineEditorPanel({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Button type="button" size="sm" disabled={busy} onClick={() => onAccept(line)}>
-          Accept with edits
+          {extractedVariants(line.extractedVariants).length > 0
+            ? 'Accept line and variants'
+            : 'Accept with edits'}
         </Button>
         <Button
           type="button"
