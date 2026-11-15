@@ -14833,6 +14833,31 @@ model PharmacyCampaign {
   @@map("pharmacy_campaigns")
 }
 
+/// DEV-24 — organization-wide marketing send policy. Caps, quiet hours and the
+/// block-rate threshold are configurable defaults (research figures are estimates,
+/// not facts). `pausedAt` is set automatically by a WhatsApp quality/account
+/// webhook or a block-rate rise and blocks capture and dispatch until an owner resumes.
+model PharmacyMarketingSendPolicy {
+  id                 String    @id @default(cuid())
+  organizationId     String    @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  weeklyMax          Int       @default(1)
+  monthlyMax         Int       @default(2)
+  quietStartHour     Int       @default(22)
+  quietEndHour       Int       @default(9)
+  blockRatePauseBps  Int       @default(200)
+  blockRateMinSample Int       @default(50)
+  pausedAt           DateTime?
+  pauseReason        String?
+  pauseEvidence      Json?
+  resumedAt          DateTime?
+  resumedByUserId    String?
+  updatedByUserId    String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("pharmacy_marketing_send_policies")
+}
+
 /// Capture mode only: records intended delivery; no provider delivery state exists.
 model PharmacyCampaignCapture {
   dispatchAttempts PharmacyCampaignDispatchAttempt[]
