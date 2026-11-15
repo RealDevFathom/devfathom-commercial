@@ -131,6 +131,26 @@ describe('cash-flow page', () => {
     );
   });
 
+  it('names legacy tender and refund evidence instead of showing their internal IDs', async () => {
+    mocks.projection.mockResolvedValue({
+      totals: [],
+      evidence: [
+        { ...evidenceRow(0), description: 'Pharmacy tender cmvzinternaltender' },
+        {
+          ...evidenceRow(1),
+          sourceKind: 'PHARMACY_REFUND',
+          description: 'Refund of tender cmvzinternaltender',
+        },
+      ],
+      metadata: { retrievedAt: new Date('2026-10-31T12:00:00Z'), completenessReason: 'Test' },
+    });
+    const { container } = await show();
+    const summaries = [...container.querySelectorAll('summary')].map((s) => s.textContent);
+    expect(summaries[0]).toMatch(/· Payment received$/);
+    expect(summaries[1]).toMatch(/· Refund$/);
+    for (const summary of summaries) expect(summary).not.toContain('cmvz');
+  });
+
   it('lists cash and non-cash counterpart journal lines in each evidence drilldown', async () => {
     const amountMinor = BigInt('900719925474099312');
     mocks.projection.mockResolvedValue({
