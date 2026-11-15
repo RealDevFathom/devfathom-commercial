@@ -83,6 +83,9 @@ describe('DEV-730 Khata page', () => {
     await show({ notice: 'reminder-no-consent' });
     expect(screen.getByRole('alert')).toHaveTextContent('has not consented');
     cleanup();
+    await show({ notice: 'reminder-quiet-hours' });
+    expect(screen.getByRole('alert')).toHaveTextContent('only between 9 am and 10 pm');
+    cleanup();
     await show({ notice: 'reminder-sent' });
     expect(screen.getAllByRole('status')[0]).toHaveTextContent('WhatsApp reminder sent');
     cleanup();
