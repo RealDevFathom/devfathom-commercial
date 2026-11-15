@@ -6,6 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
+import { requireRestaurantBranchScope } from '../restaurant-branch-scope';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
 import {
@@ -44,7 +45,9 @@ import {
  * model (C10, consumed by L5a) and the manager-level order mutations.
  *
  * Reads are gated by `capabilityProcedure('orders:read')`; mutations by
- * `capabilityProcedure('orders:manage')` — both org-role-driven through the ABAC
+ * `capabilityProcedure('orders:manage')`, except the maker-checker void/cancel
+ * commands, which gate on the narrower `capabilityProcedure('orders:void')` the
+ * manager role templates grant — all org-role-driven through the ABAC
  * engine (no static policy, see `abac/policies.ts`), the licensed `restaurant-pos`
  * module (`module-catalog.ts`) and the audit middleware. Tenant scoping is the
  * RLS-forced `organizationId` default on every row (C1).
@@ -129,7 +132,8 @@ type ApproverInput = {
 /**
  * Back-office maker-checker for a void / cancel (H5 / C6). The acting staff is
  * the caller's own session staff profile — the `actor.staffProfileId` in the
- * input is ignored, so a caller cannot attribute the action to someone else.
+ * input is ignored, so a caller cannot attribute the action to someone else —
+ * and the caller must be in scope for the order's branch.
  * A named approver must prove who they are with their own PIN or badge, checked
  * server-side with durable lockout, and must hold `coauth:approve` at the
  * order's branch. A sole owner may approve their own request only after a
@@ -146,9 +150,13 @@ async function withApprovedOrderCommand<T>(
     where: { id: input.orderId },
     select: { branchId: true },
   });
+  // Branch boundary above tenant RLS (#638): `orders:void` is granted to
+  // branch-bound roles (Branch Manager), so the caller must also be scoped to the
+  // order's branch — primary branch, explicit assignment, or the org-wide
+  // `restaurant:configure`. A missing order is reported by the command itself.
+  if (order) await requireRestaurantBranchScope(ctx, order.branchId);
   // Resolved against the order's branch, so a multi-branch employee acts as their
-  // profile for that branch. A missing order on the unapproved path is reported
-  // by the command itself.
+  // profile for that branch.
   const actingStaffProfileId = await requireSessionStaffProfileId(ctx, {
     branchId: order?.branchId,
   });
@@ -255,6 +263,7 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
 
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('orders:manage');
+const voidProcedure = capabilityProcedure('orders:void');
 
 export const restaurantOrdersRouter = router({
   // ── Read model (C10) ─────────────────────────────────────────────────────────
@@ -532,7 +541,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  voidItem: manageProcedure
+  voidItem: voidProcedure
     .input(
       z
         .object({
@@ -570,7 +579,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  cancel: manageProcedure
+  cancel: voidProcedure
     .input(
       z
         .object({
