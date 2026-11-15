@@ -795,7 +795,7 @@ describe('prescription capture and private delivery', () => {
   });
 });
 
-describe('protected patient reads and exports', () => {
+describe('protected patient operations', () => {
   const patient = {
     id: 'patient-a',
     organizationId: 'org-a',
@@ -839,6 +839,125 @@ describe('protected patient reads and exports', () => {
     mocks.patientRecord.mockImplementation(async ({ include }) =>
       include ? { ...identity, consents, prescriptions } : identity
     );
+  });
+
+  describe.each([
+    [
+      'createPatient',
+      (api: ReturnType<typeof caller>) => api.createPatient({ displayName: 'Synthetic Patient' }),
+    ],
+    [
+      'recordConsent',
+      (api: ReturnType<typeof caller>) =>
+        api.recordConsent({
+          patientId: patient.id,
+          purpose: 'MARKETING',
+          channel: 'WHATSAPP',
+          granted: false,
+          source: 'QR',
+        }),
+    ],
+  ] as const)('%s authorization', (endpoint, invoke) => {
+    const createPatient = vi.fn();
+    const createConsent = vi.fn();
+    const lock = vi.fn();
+    const transaction = vi.fn();
+
+    function writeContext(role: string, denied = false) {
+      const ctx = patientContext(role, denied);
+      ctx.db = {
+        ...ctx.db,
+        pharmacyPatient: { ...ctx.db.pharmacyPatient, create: createPatient },
+        $transaction: transaction,
+      } as typeof ctx.db;
+      return ctx;
+    }
+
+    beforeEach(() => {
+      createPatient.mockResolvedValue(patient);
+      createConsent.mockImplementation(async ({ data }) => data);
+      lock.mockResolvedValue([{ id: patient.id }]);
+      transaction.mockImplementation(async (run) =>
+        run({
+          $queryRaw: lock,
+          patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create: createConsent },
+        })
+      );
+    });
+
+    it.each(['manager', 'cashier', 'procurement', 'inventory', 'finance', 'auditor'])(
+      'returns FORBIDDEN for %s before any patient or consent write',
+      async (role) => {
+        const ctx = writeContext(role);
+        await expect(invoke(caller(ctx))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.can).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: role }),
+          'pharmacy:prescriptions',
+          undefined,
+          { db: ctx.db, source: 'TRPC', ip: null }
+        );
+        expect(createPatient).not.toHaveBeenCalled();
+        expect(transaction).not.toHaveBeenCalled();
+        expect(lock).not.toHaveBeenCalled();
+        expect(createConsent).not.toHaveBeenCalled();
+        expect(mocks.audit).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ path: `pharmacyPrescriptions.${endpoint}`, outcome: 'FAILURE' })
+        );
+      }
+    );
+
+    it.each(['owner', 'owner-operator', 'pharmacist'])(
+      'honors an explicit prescription DENY for %s',
+      async (role) => {
+        await expect(invoke(caller(writeContext(role, true)))).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(createPatient).not.toHaveBeenCalled();
+        expect(transaction).not.toHaveBeenCalled();
+        expect(createConsent).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['owner', 'owner-operator', 'pharmacist'])(
+      'preserves authorized %s writes and their audit',
+      async (role) => {
+        const result = await invoke(caller(writeContext(role)));
+        if (endpoint === 'createPatient') {
+          expect(result).toEqual(patient);
+          expect(createPatient).toHaveBeenCalledExactlyOnceWith({
+            data: { displayName: 'Synthetic Patient' },
+          });
+        } else {
+          expect(result).toMatchObject({
+            organizationId: 'org-a',
+            patientId: patient.id,
+            purpose: 'MARKETING',
+            channel: 'WHATSAPP',
+            granted: false,
+            source: 'QR',
+            staffId: role,
+            recordedByUserId: role,
+            version: 1,
+            supersedesId: null,
+          });
+          expect(lock.mock.calls[0][0].values).toEqual(['org-a', patient.id]);
+          expect(createConsent).toHaveBeenCalledOnce();
+        }
+        expect(mocks.audit).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ path: `pharmacyPrescriptions.${endpoint}`, outcome: 'SUCCESS' })
+        );
+      }
+    );
+
+    it('retains the module gate for an authorized pharmacist', async () => {
+      mocks.hasModule.mockReturnValue(false);
+      await expect(invoke(caller(writeContext('pharmacist')))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(createPatient).not.toHaveBeenCalled();
+      expect(transaction).not.toHaveBeenCalled();
+      expect(createConsent).not.toHaveBeenCalled();
+    });
   });
 
   describe.each(['readPatient', 'exportPatient'] as const)('%s', (endpoint) => {
@@ -1082,7 +1201,7 @@ describe('DEV-626 patient and prescriber registration', () => {
     });
   });
 
-  it('registers a patient and returns masked identifiers', async () => {
+  it('registers a patient with trimmed fields and keeps identifiers out of the audit input', async () => {
     const { ctx, patientCreate } = directoryContext();
     const created = await caller(ctx).createPatient({
       displayName: ' Synthetic Patient ',
@@ -1092,8 +1211,7 @@ describe('DEV-626 patient and prescriber registration', () => {
     expect(patientCreate).toHaveBeenCalledWith({
       data: { displayName: 'Synthetic Patient', cnic: '35202-1234567-1', phone: undefined },
     });
-    expect(created.id).toBe('patient-new');
-    expect(created.cnic).not.toBe('35202-1234567-1');
+    expect(created).toMatchObject({ id: 'patient-new', displayName: 'Synthetic Patient' });
     expect(ctx.audit.detail.skipInput).toBe(true);
   });
 

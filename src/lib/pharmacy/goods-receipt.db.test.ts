@@ -1244,7 +1244,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         at: RECEIVED_AT,
       });
     });
-    expect(message).toContain('pharmacy_stock_balances_non_negative_check');
+    expect(message).toContain('REVERSAL_STOCK_MOVED');
   });
 
   it('refuses a compensating movement that is not the exact negation of its original', async () => {

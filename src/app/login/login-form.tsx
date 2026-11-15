@@ -108,6 +108,11 @@ export function LoginForm({
           setTwoFactor(false);
           setInvalidFields('credentials');
           setError('Password sign-in is disabled. Use your organization identity provider.');
+        } else if (result.code === 'rate_limited') {
+          // DEV-640: the limiter ran before the password was checked, so saying
+          // it was wrong would be false and send the user round the loop again.
+          setInvalidFields('credentials');
+          setError(LOGIN_ERROR_MESSAGES['rate-limited']);
         } else {
           setTwoFactor(false);
           setInvalidFields('credentials');

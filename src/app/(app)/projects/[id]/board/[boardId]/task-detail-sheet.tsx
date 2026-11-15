@@ -559,7 +559,7 @@ function LabelRow({
           <button
             onClick={save}
             disabled={!name.trim() || isBusy}
-            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             Save
           </button>
@@ -1066,7 +1066,7 @@ function TimeEntryRow({
           <button
             onClick={save}
             disabled={!hours || isBusy}
-            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             Save
           </button>
@@ -1735,7 +1735,7 @@ export function TaskDetailSheet({
                             }
                           }}
                           disabled={!newLabelName.trim() || createLabel.isPending}
-                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
                         >
                           Create
                         </button>

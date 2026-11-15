@@ -62,6 +62,15 @@ class SsoRequiredError extends CredentialsSignin {
   code = 'sso_required';
 }
 
+// DEV-640: a tripped login limiter is not a wrong password. The limiter runs
+// before any lookup or bcrypt compare and trips the same way for an address that
+// does not exist, so the code reveals nothing about the account — the same
+// reasoning as the shared host's 429 (src/app/api/login/route.ts). Without it a
+// throttled user is told their correct password is wrong.
+class RateLimitedError extends CredentialsSignin {
+  code = 'rate_limited';
+}
+
 // IMP-AUTH-02: thrown ONLY after the password is verified correct, so 2FA state is
 // never an enumeration oracle. '2fa_required' → the login form reveals the code
 // field; '2fa_invalid' → the entered code was wrong.
@@ -181,10 +190,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // (broad) and per account — so an unthrottled flood can neither brute-
         // force a password nor burn CPU on prefix-matching bcrypt compares.
         const ipRateLimitKey = `login:ip:${ip ?? 'unknown'}`;
-        const accountRateLimitKey = `login:acct:${email}`;
         const ipGate = await rateLimit(ipRateLimitKey, 30, 5 * 60_000);
-        const acctGate = await rateLimit(accountRateLimitKey, 10, 5 * 60_000);
-        if (!ipGate.ok || !acctGate.ok) {
+        if (!ipGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',
             email,
@@ -192,10 +199,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             userAgent,
             reason: 'Rate limited',
           });
-          return null;
+          throw new RateLimitedError();
         }
 
         const organization = await resolveOrganizationForRequest(request);
+
+        // DEV-640: the account budget belongs to the account this host can sign
+        // in to — the address within THIS organization — not to the bare email.
+        // A bare-email bucket was shared with every other tenant and with the
+        // shared-host login, so failures anywhere locked the user out here.
+        const accountRateLimitKey = `login:acct:${organization?.id ?? 'unknown-host'}:${email}`;
+        const acctGate = await rateLimit(accountRateLimitKey, 10, 5 * 60_000);
+        if (!acctGate.ok) {
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            organizationId: organization?.id ?? null,
+            email,
+            ip,
+            userAgent,
+            reason: 'Rate limited',
+          });
+          throw new RateLimitedError();
+        }
+
         if (!organization) {
           await compare(password, DUMMY_PASSWORD_HASH);
           recordAuthAudit({
@@ -338,8 +364,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // proven. Clearing on a correct password alone would hand an attacker
           // who already holds that password an unlimited budget for grinding
           // TOTP codes. Every failing path above returns or throws before this
-          // line, so a failure still consumes its unit, the limits are unchanged
-          // and a throttled response stays byte-identical to a wrong password.
+          // line, so a failure still consumes its unit and the limits are
+          // unchanged.
           await clearRateLimit(ipRateLimitKey);
           await clearRateLimit(accountRateLimitKey);
 

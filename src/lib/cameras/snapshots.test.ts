@@ -17,8 +17,6 @@ vi.mock('node:fs/promises', () => ({
     files.delete(name);
   }),
 }));
-vi.mock('@azure/identity', () => ({ DefaultAzureCredential: vi.fn() }));
-vi.mock('@azure/storage-blob', () => ({ BlobServiceClient: vi.fn() }));
 import * as storage from '@/lib/storage';
 import {
   CAMERA_SNAPSHOT_MAX_BYTES,
@@ -240,7 +238,6 @@ test.each(['disabled', '', 'unknown', 'azure'])(
   'unavailable %j skips camera capture and writes',
   async (adapter) => {
     vi.stubEnv('STORAGE_ADAPTER', adapter);
-    vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
     const getSnapshot = vi.fn();
     await expect(
       storeCameraSnapshot({ getSnapshot }, { organizationId: 'tenant-a', cameraId: 'camera-a' })

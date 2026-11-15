@@ -543,7 +543,34 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  branches: reports.query(({ ctx }) => scope(ctx)),
+  /**
+   * DEV-20: every pharmacy dashboard reads this list, so it never refuses a signed-in member
+   * of the licensed workspace. Operational-report holders see every active branch; anyone
+   * else sees only the active branches they are assigned to (possibly none). A session that
+   * does not belong to this organization gets an empty list.
+   */
+  branches: auditedProtectedProcedure.query(async ({ ctx }) => {
+    if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy reports are not licensed.' });
+    const organizationId = ctx.entitlements.organizationId;
+    const user = ctx.session.user;
+    if (!organizationId || !user.id || user.organizationId !== organizationId)
+      return { branches: [], organizationId };
+    const operational = await can(subjectFromSession(user), 'reports:operational', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+    if (operational) return scope(ctx);
+    const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
+    if (!assigned.length) return { branches: [], organizationId };
+    const branches = await ctx.db.pharmacyBranch.findMany({
+      where: { organizationId, active: true, id: { in: assigned } },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    return { branches, organizationId };
+  }),
   suppliers: reports.query(async ({ ctx }) => {
     const { organizationId } = await scope(ctx);
     return ctx.db.pharmacySupplier.findMany({
@@ -671,6 +698,7 @@ export const pharmacyReportsRouter = router({
           branches: available.branches,
           from: input.from,
           to: input.to,
+          timeZone: ctx.organization?.timezone,
         })
       );
     }),
@@ -709,7 +737,11 @@ export const pharmacyReportsRouter = router({
     try {
       // Khata's branch context is transaction-local; keep it and all report reads together.
       const result = await ctx.db.$transaction((tx) =>
-        readPharmacyOwnerCommandCentre(tx, { ...input, branchIds })
+        readPharmacyOwnerCommandCentre(tx, {
+          ...input,
+          branchIds,
+          timeZone: ctx.organization?.timezone,
+        })
       );
       const financial = await can(
         subjectFromSession(ctx.session!.user),

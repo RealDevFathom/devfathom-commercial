@@ -857,6 +857,103 @@ describe('Khata router trust and recovery boundary', () => {
   });
 });
 
+describe('DEV-716 khataSignup', () => {
+  const signup = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    displayName: 'Ayesha',
+    phone: '0300 1234567',
+    consentGranted: true as const,
+  };
+  function signupDb(f: ReturnType<typeof fixture>) {
+    const db = f.db as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+    db.pharmacyPatient = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi
+        .fn()
+        .mockResolvedValue({ id: 'patient-a', displayName: 'Ayesha', phone: '03001234567' }),
+    };
+    let consented = false;
+    db.patientConsent = {
+      findFirst: vi.fn(async () => (consented ? { granted: true, revokedAt: null } : null)),
+      create: vi.fn(async () => {
+        consented = true;
+        return { id: 'consent-a' };
+      }),
+    };
+    db.pharmacySaleLine = { findFirst: vi.fn().mockResolvedValue(null) };
+    db.pharmacyCustomer = {
+      upsert: vi
+        .fn()
+        .mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha', phoneLast4: '4567' }),
+    };
+    db.pharmacySale = {
+      findFirst: vi.fn().mockResolvedValue({ id: 'sale-a', status: 'OPEN' }),
+      update: vi.fn().mockResolvedValue({}),
+    };
+    db.pharmacyFamilyAccount.findFirst = vi.fn().mockResolvedValue(null);
+    db.pharmacyFamilyAccount.create = vi.fn().mockResolvedValue({ id: 'family-new' });
+    db.pharmacyFamilyMember = { create: vi.fn().mockResolvedValue({ id: 'member-new' }) };
+    db.pharmacyLoyaltyPointsEntry = { findFirst: vi.fn().mockResolvedValue(null) };
+    f.db.$queryRaw.mockResolvedValue([{ id: 'patient-a' }]);
+    return db;
+  }
+
+  it('lets a counter cashier open a 0-limit account linked to the sale', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'EMPLOYEE');
+    const db = signupDb(f);
+    await expect(f.caller().khataSignup(signup)).resolves.toEqual({
+      customerId: 'customer-a',
+      familyAccountId: 'family-new',
+      created: true,
+    });
+    expect(db.patientConsent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ purpose: 'LOYALTY', granted: true, patientId: 'patient-a' }),
+    });
+    expect(db.pharmacySale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { customerId: 'customer-a' } })
+    );
+    expect(db.pharmacyFamilyAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ creditLimitMinor: 0 }) })
+    );
+  });
+
+  it('rejects a client-supplied limit and missing consent at the input boundary', async () => {
+    const f = fixture();
+    const db = signupDb(f);
+    await expect(
+      f.caller().khataSignup({ ...signup, creditLimitMinor: 500000 } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller().khataSignup({ ...signup, consentGranted: false } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(f.caller().khataSignup({ ...signup, phone: undefined })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+  });
+
+  it('denies finance-only and dispense-only operators before any write', async () => {
+    for (const capability of ['reports:financial', 'pharmacy:dispense']) {
+      const f = fixture([{ capability, effect: 'ALLOW' }], 'EMPLOYEE');
+      const db = signupDb(f);
+      await expect(f.caller().khataSignup(signup)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyPatient.create).not.toHaveBeenCalled();
+      expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a sale that is no longer open without opening an account', async () => {
+    const f = fixture();
+    const db = signupDb(f);
+    db.pharmacySale.findFirst.mockResolvedValue(null);
+    await expect(f.caller().khataSignup(signup)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('K4 counter khata repayment (DEV-731)', () => {
   const payment = {
     branchId: 'branch-a',

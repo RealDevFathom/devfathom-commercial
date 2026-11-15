@@ -7,6 +7,7 @@ import { compile } from 'tailwindcss';
 
 const mocks = vi.hoisted(() => ({ pathname: vi.fn(() => '/dashboard') }));
 
+vi.mock('@/components/theme-provider', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('next/navigation', () => ({ usePathname: mocks.pathname }));
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));

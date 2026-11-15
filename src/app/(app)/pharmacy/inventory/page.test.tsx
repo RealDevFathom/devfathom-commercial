@@ -123,6 +123,68 @@ beforeEach(() => {
   lots.mockResolvedValue([lot]);
 });
 
+describe('physical count prerequisites', () => {
+  function countCard() {
+    return within(
+      screen
+        .getByRole('heading', { name: 'Physical count' })
+        .closest('[data-slot="section-card"]')! as HTMLElement
+    );
+  }
+
+  it.each([
+    ['no received lots', []],
+    ['depleted stock', [{ ...lot, balances: [{ ...available, onHandUnits: 0 }] }]],
+    [
+      'quarantined stock only',
+      [{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }],
+    ],
+  ])('explains unavailable stock with an existing location: %s', async (_state, rows) => {
+    lots.mockResolvedValue(rows);
+    await show();
+    const card = countCard();
+    expect(
+      card.getByText(
+        'No available received stock to count at this branch. Receive stock before starting a count.'
+      )
+    ).toBeVisible();
+    expect(card.getByRole('link', { name: 'Receive stock' })).toHaveAttribute(
+      'href',
+      `/pharmacy/purchasing/receiving?branch=${branch.id}`
+    );
+    expect(card.queryByText(/create a location/i)).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+    expect(card.queryByText('0', { exact: true })).not.toBeInTheDocument();
+  });
+
+  it('explains a missing location only when the branch has none', async () => {
+    ctx.db.pharmacyStockLocation.findMany.mockResolvedValue([]);
+    lots.mockResolvedValue([]);
+    await show();
+    const card = countCard();
+    expect(
+      card.getByText(
+        'No active stock location exists for this branch. Create a location in Locations, then receive stock before starting a count.'
+      )
+    ).toBeVisible();
+    expect(card.getByRole('link', { name: 'Receive stock' })).toHaveAttribute(
+      'href',
+      `/pharmacy/purchasing/receiving?branch=${branch.id}`
+    );
+    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+  });
+
+  it('offers the count form when available stock and a location exist', async () => {
+    await show();
+    const card = countCard();
+    expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
+    expect(card.getByRole('option', { name: 'Medicine A · batch B-100 · Rack' })).toHaveValue(
+      `${lot.id}:${location.id}`
+    );
+    expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
+  });
+});
+
 describe('inventory success notice', () => {
   const css = readFileSync(join(__dirname, '../../../globals.css'), 'utf8');
   function themeVariables(theme: 'light' | 'dark') {
@@ -326,6 +388,46 @@ describe('Inventory pack-action integration', () => {
       '/pharmacy/inventory/imports'
     );
     expect(screen.queryByText(/awaiting verification/i)).not.toBeInTheDocument();
+  });
+
+  it('shows available stock as boxes + strips with the tablet total (DEV-727)', async () => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        packLevelId: 'box',
+        unitsPerPack: 100,
+        packLevel: {
+          presentation: {
+            dosageForm: 'Tablet',
+            packLevels: [
+              { id: 'box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
+              { id: 'strip', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 10 },
+              { id: 'tab', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 10 },
+            ],
+          },
+        },
+        balances: [{ ...available, onHandUnits: 570, sealedPacks: 5, looseUnits: 70 }],
+      },
+    ]);
+    await show();
+    expect(screen.getByText('5 boxes + 7 strips (570 tabs) · 5 sealed + 70 loose')).toBeVisible();
+    expect(screen.queryByText(/570 units/)).not.toBeInTheDocument();
+    expect(lots).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          packLevel: {
+            select: {
+              presentation: {
+                select: {
+                  dosageForm: true,
+                  packLevels: expect.objectContaining({ where: { organizationId: 'org' } }),
+                },
+              },
+            },
+          },
+        }),
+      })
+    );
   });
 
   it.each(['RECALLED', 'QUARANTINED'])('disables batch state %s', async (state) => {
@@ -548,5 +650,50 @@ describe('DEV-660 — only assigned branches are offered', () => {
     const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
     expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
     expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
+  });
+});
+
+describe('expiry advice in context (DEV-594)', () => {
+  function asOwner() {
+    (ctx.session.user as { role?: string }).role = 'ADMIN';
+  }
+
+  it('links an owner from near-expiry stock to the expiry advisor for this branch', async () => {
+    asOwner();
+    await show();
+    expect(screen.getByRole('link', { name: 'Expiry advice' })).toHaveAttribute(
+      'href',
+      `/pharmacy/reports?branch=${branch.id}#expiry-advisor`
+    );
+    expect(mocks.can).toHaveBeenCalledWith(
+      ctx.session.user,
+      'reports:financial',
+      undefined,
+      expect.objectContaining({ db: ctx.db })
+    );
+  });
+
+  it('offers no advisor link to a member the advisor would refuse', async () => {
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Act on expiring stock' })).toBeVisible();
+  });
+
+  it('offers no advisor link without financial report access', async () => {
+    asOwner();
+    mocks.can.mockImplementation(
+      async (_user: unknown, action: string) => action !== 'reports:financial'
+    );
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+  });
+
+  it('offers no advisor link when Pharmacy Reports is not in the package', async () => {
+    asOwner();
+    mocks.module.mockImplementation(
+      (_entitlements: unknown, key: string) => key !== 'pharmacy-reports'
+    );
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
   });
 });

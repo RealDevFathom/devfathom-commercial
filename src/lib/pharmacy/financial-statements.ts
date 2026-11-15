@@ -2,6 +2,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { projectProfitAndLoss } from './accounts/profit-loss';
+import { journalDisplayContext } from './accounts/journal-display-context';
 
 export { projectProfitAndLoss } from './accounts/profit-loss';
 
@@ -58,6 +59,7 @@ export async function financialStatements(
         sourceKind: true,
         sourceId: true,
         description: true,
+        actorId: true,
         currency: true,
         occurredAt: true,
         reversesEntryId: true,
@@ -73,7 +75,7 @@ export async function financialStatements(
     from: input.from,
     to: input.to,
     page: input.page,
-    journal,
+    journal: await journalDisplayContext(db, scope, journal),
     journalCount,
     profitAndLoss: projectProfitAndLoss(totals),
     accounts: totals.map((t) => ({

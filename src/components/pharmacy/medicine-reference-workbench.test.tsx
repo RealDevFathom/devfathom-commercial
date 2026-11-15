@@ -387,3 +387,12 @@ it('rejects a file above 20,000 rows before any upload', async () => {
   ).not.toBeInTheDocument();
   expect(mocks.runNow).not.toHaveBeenCalled();
 });
+
+it('allows the upload controls to shrink within a narrow viewport', () => {
+  render(<MedicineReferenceWorkbench health={[]} />);
+  const input = screen.getByLabelText('CSV or Excel workbook');
+  const label = input.closest('label');
+  expect(input).toHaveClass('min-w-0');
+  expect(label).toHaveClass('min-w-0');
+  expect(label?.parentElement).toHaveClass('grid-cols-[minmax(0,1fr)]');
+});

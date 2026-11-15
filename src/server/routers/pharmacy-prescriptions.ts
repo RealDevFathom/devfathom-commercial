@@ -216,9 +216,9 @@ export const pharmacyPrescriptionsRouter = router({
         })),
       };
     }),
-  // DEV-626 / #1036: registering a patient or prescriber is prescription work,
-  // so it carries the same module + `pharmacy:prescriptions` gate (and raw-input
-  // audit suppression for patient identifiers) as capture itself.
+  // DEV-626 / DEV-53 / #1036: registering a patient or prescriber is
+  // prescription work, so it carries the same module + `pharmacy:prescriptions`
+  // gate (and raw-input audit suppression for patient identifiers) as capture.
   createPatient: fileProcedure
     .input(
       z
@@ -230,9 +230,7 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) =>
-      maskedPatient(await ctx.db.pharmacyPatient.create({ data: input }))
-    ),
+    .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
 
   createPrescriber: fileProcedure
     .input(
@@ -261,7 +259,7 @@ export const pharmacyPrescriptionsRouter = router({
       }
     }),
 
-  recordConsent: protectedProcedure
+  recordConsent: capabilityProcedure('pharmacy:prescriptions')
     .input(
       z
         .object({
