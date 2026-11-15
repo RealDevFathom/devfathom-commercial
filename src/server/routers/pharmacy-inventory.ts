@@ -1245,7 +1245,7 @@ export const pharmacyInventoryRouter = router({
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
-          disposition: z.enum(['AVAILABLE', 'QUARANTINE']).optional(),
+          disposition: z.enum(['AVAILABLE', 'QUARANTINE', 'DAMAGED']).optional(),
         })
         .strict()
     )
