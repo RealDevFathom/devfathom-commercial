@@ -97,7 +97,7 @@ const FORCED_PROVIDER: Record<AIRoutingMode, Provider | null> = {
 /**
  * The providers to try, in order. A SuperAdmin-forced provider goes first, else an
  * explicit AI_PROVIDER=<routed provider>, then the configured order. With fallback
- * off only the first is tried. Azure can never appear: it is not a routed provider.
+ * off only the first is tried. Only routed providers can appear.
  */
 export function candidateChain(settings: RoutingSettings, env: Env = process.env): Provider[] {
   if (settings.mode === 'Disabled') return [];

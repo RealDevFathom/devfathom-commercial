@@ -15,6 +15,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
+import { useTheme } from '@/components/theme-provider';
 import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
@@ -187,7 +188,8 @@ export function AppShell({
   const counterPos = pathname === '/pharmacy/counter';
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
-  const brandStyle = tenantBrandTokens(brand) as CSSProperties;
+  const { resolvedTheme } = useTheme();
+  const brandStyle = tenantBrandTokens(brand, resolvedTheme) as CSSProperties;
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
