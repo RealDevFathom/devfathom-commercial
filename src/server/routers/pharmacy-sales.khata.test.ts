@@ -847,6 +847,7 @@ describe('DEV-716 khataSignup', () => {
     const db = f.db as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
     db.pharmacyPatient = {
       findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
       create: vi
         .fn()
         .mockResolvedValue({ id: 'patient-a', displayName: 'Ayesha', phone: '03001234567' }),

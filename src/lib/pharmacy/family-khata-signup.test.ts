@@ -15,11 +15,13 @@ function fakeDb(
     patient?: { id: string; displayName: string; phone: string | null } | null;
     consent?: { granted: boolean; revokedAt: Date | null } | null;
     existingAccount?: { id: string } | null;
+    sameName?: { id: string; displayName: string; phone: string | null }[];
   } = {}
 ) {
   return {
     pharmacyPatient: {
       findFirst: vi.fn().mockResolvedValue(overrides.patient ?? null),
+      findMany: vi.fn().mockResolvedValue(overrides.sameName ?? []),
       create: vi
         .fn()
         .mockResolvedValue({ id: 'patient_new', displayName: 'Ayesha', phone: '03001234567' }),
@@ -54,11 +56,10 @@ describe('DEV-716 inline Khata signup', () => {
       })
     ).resolves.toEqual({ customerId: 'customer_1', familyAccountId: 'family_new', created: true });
 
-    expect(db.pharmacyPatient.findFirst).toHaveBeenCalledWith(
+    expect(db.pharmacyPatient.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           organizationId: 'org_a',
-          phone: '03001234567',
           displayName: { equals: 'Ayesha', mode: 'insensitive' },
         }),
       })
@@ -118,6 +119,28 @@ describe('DEV-716 inline Khata signup', () => {
     expect(writePatientConsent).not.toHaveBeenCalled();
     expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
     expect(db.pharmacyFamilyMember.create).not.toHaveBeenCalled();
+  });
+
+  it('matches an existing patient whose stored phone carries spaces or dashes', async () => {
+    const db = fakeDb({
+      sameName: [
+        { id: 'patient_other', displayName: 'Ayesha', phone: '0311-000 0000' },
+        { id: 'patient_old', displayName: 'ayesha', phone: '0300-123 4567' },
+      ],
+      consent: { granted: true, revokedAt: null },
+    });
+    await signUpSaleKhata(db as never, scope, {
+      saleId: 'sale_1',
+      displayName: 'Ayesha',
+      phone: '03001234567',
+      consentGranted: true,
+    });
+    expect(db.pharmacyPatient.create).not.toHaveBeenCalled();
+    expect(linkCustomerToSale).toHaveBeenCalledWith(
+      db,
+      scope,
+      expect.objectContaining({ patientId: 'patient_old', displayName: 'ayesha' })
+    );
   });
 
   it('re-records consent when the latest loyalty consent was revoked', async () => {

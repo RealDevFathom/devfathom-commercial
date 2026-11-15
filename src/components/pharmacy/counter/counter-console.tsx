@@ -1343,10 +1343,17 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  // A signup started on one bill must not link its customer to another branch or bill.
+  const counterScopeRef = useRef('');
+  useEffect(() => {
+    counterScopeRef.current = `${branchId}:${saleId ?? ''}`;
+  }, [branchId, saleId]);
   const signUpKhata = useCallback(
     async (input: KhataSignupInput) => {
       if (!saleId) throw new Error('Open a bill');
+      const startedIn = `${branchId}:${saleId}`;
       const result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      if (counterScopeRef.current !== startedIn) return;
       setCustomerId(result.customerId);
       setNotice({ tone: 'success', message: 'Khata account opened and linked to this bill.' });
     },

@@ -458,16 +458,19 @@ export async function signUpSaleKhata(
   } else {
     if (!phone || phone.replace('+', '').length < 7) throw new FamilyKhataError('PHONE_REQUIRED');
     // Same name and phone only: a shared family phone must not merge two people.
+    // Stored phones may carry spaces or dashes, so compare normalized numbers.
+    const sameName = await db.pharmacyPatient.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        displayName: { equals: displayName, mode: 'insensitive' },
+        phone: { not: null },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, displayName: true, phone: true },
+      take: 200,
+    });
     patient =
-      (await db.pharmacyPatient.findFirst({
-        where: {
-          organizationId: scope.organizationId,
-          phone,
-          displayName: { equals: displayName, mode: 'insensitive' },
-        },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true, displayName: true, phone: true },
-      })) ??
+      sameName.find((row) => row.phone !== null && normalizeKhataPhone(row.phone) === phone) ??
       (await db.pharmacyPatient.create({
         data: { organizationId: scope.organizationId, displayName, phone },
         select: { id: true, displayName: true, phone: true },
