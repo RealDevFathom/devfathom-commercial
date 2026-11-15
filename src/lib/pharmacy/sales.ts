@@ -512,14 +512,17 @@ export async function changeSaleStatus(
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
+  // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
-    hold: ['OPEN', 'HELD', 'HELD'],
-    resume: ['HELD', 'OPEN', 'RESUMED'],
-    convertQuotation: ['QUOTATION', 'OPEN', 'QUOTATION_CONVERTED'],
-    void: ['OPEN', 'VOID', 'VOIDED'],
+    hold: [['OPEN'], 'HELD', 'HELD'],
+    resume: [['HELD'], 'OPEN', 'RESUMED'],
+    convertQuotation: [['QUOTATION'], 'OPEN', 'QUOTATION_CONVERTED'],
+    void: [['OPEN', 'HELD'], 'VOID', 'VOIDED'],
   } as const;
-  const [from, to, kind] = transitions[action];
-  if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  const [allowed, to, kind] = transitions[action];
+  const from = sale.status;
+  if (!allowed.some((status) => status === from)) throw new PharmacySaleError('INVALID_STATE');
   // #414: re-opening a held sale or a quotation for selling is a sale-time act, so it
   // needs a licence valid now. Hold and void stay available to wind a sale down.
   if (to === 'OPEN')

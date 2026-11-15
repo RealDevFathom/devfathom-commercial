@@ -129,6 +129,86 @@ describe('POS sale voiding', () => {
     expect(reversals).toHaveLength(2);
   });
 
+  it('voids a HELD bill directly and puts its stock back (DEV-623)', async () => {
+    let status = 'HELD';
+    const original = {
+      id: 'held-movement',
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf-a',
+      disposition: 'AVAILABLE',
+      quantityUnits: -20,
+      sealedPackDelta: -2,
+      looseUnitDelta: 0,
+      idempotencyKey: 'sale:held-line:0',
+    };
+    const reversals: Array<Record<string, unknown>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    const claims: Array<Record<string, unknown>> = [];
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          claims.push(where);
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: {
+        findMany: async () => [{ stockMovementId: original.id }],
+      },
+      pharmacyStockMovement: {
+        findFirst: async ({ where }: { where: { id: string } }) =>
+          where.id === original.id ? original : null,
+        findMany: async () => [original],
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          reversals.push(data);
+          return { id: `reversal-${reversals.length}`, ...data };
+        },
+      },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          events.push(data);
+          return data;
+        },
+      },
+    };
+
+    await changeSaleStatus(db as never, scope, 'sale-held', 'void', 'Lost to a reload');
+
+    expect(status).toBe('VOID');
+    // The claim is conditional on the status read, so a concurrent resume loses.
+    expect(claims).toEqual([expect.objectContaining({ id: 'sale-held', status: 'HELD' })]);
+    expect(reversals).toEqual([
+      expect.objectContaining({ reversesMovementId: 'held-movement', quantityUnits: 20 }),
+    ]);
+    expect(events).toEqual([expect.objectContaining({ kind: 'VOIDED' })]);
+  });
+
+  it.each(['QUOTATION', 'COMPLETED', 'VOID'])(
+    'still refuses to void a %s sale',
+    async (current) => {
+      const updateMany = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({ id: 'sale-a', status: current, lines: [] }),
+          updateMany,
+        },
+      };
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+        'INVALID_STATE'
+      );
+      expect(updateMany).not.toHaveBeenCalled();
+    }
+  );
+
   it('stops a losing add-line race before stock allocation', async () => {
     let medicineReads = 0;
     const db = {
