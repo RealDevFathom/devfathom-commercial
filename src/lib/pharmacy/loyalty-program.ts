@@ -57,7 +57,8 @@ export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: s
 
 /**
  * Appends the next program version. Caller is the audited owner procedure, inside its
- * tenant transaction. Earlier versions and every points entry stay as they are.
+ * tenant transaction. Earlier versions and every points entry stay as they are. Returns
+ * the version it replaced, read under the same lock, so the audit records the real change.
  */
 export async function publishLoyaltyProgramVersion(
   db: ScopedDb,
@@ -70,7 +71,7 @@ export async function publishLoyaltyProgramVersion(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-loyalty-program:${scope.organizationId}`}, 0))`
   );
   const prior = await currentLoyaltyProgram(db, scope.organizationId);
-  return db.pharmacyLoyaltyProgramVersion.create({
+  const version = await db.pharmacyLoyaltyProgramVersion.create({
     data: {
       organizationId: scope.organizationId,
       version: (prior?.version ?? 0) + 1,
@@ -80,6 +81,7 @@ export async function publishLoyaltyProgramVersion(
       actorId: scope.actorId,
     },
   });
+  return { prior, version };
 }
 
 /**

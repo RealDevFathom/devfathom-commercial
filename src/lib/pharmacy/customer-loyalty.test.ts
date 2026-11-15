@@ -257,14 +257,33 @@ describe('CRM-L01 pharmacy loyalty', () => {
         ]),
       },
     };
-    const snapshot = await readCustomerSnapshot(db as never, scope, 'customer-a');
+    const snapshot = await readCustomerSnapshot(
+      {
+        ...db,
+        pharmacyLoyaltyProgramVersion: earningFixture({ program: null })
+          .pharmacyLoyaltyProgramVersion,
+      } as never,
+      scope,
+      'customer-a'
+    );
     expect(snapshot).toMatchObject({
       pointsBalance: 35,
+      earnRateSet: false,
       creditBalanceMinor: 800,
       availableCreditMinor: 19_200,
       history: [{ receiptNumber: 7, totalMinor: 900 }],
     });
     expect(JSON.stringify(snapshot)).not.toMatch(/patient|cnic|prescription/i);
+    await expect(
+      readCustomerSnapshot(
+        {
+          ...db,
+          pharmacyLoyaltyProgramVersion: earningFixture().pharmacyLoyaltyProgramVersion,
+        } as never,
+        scope,
+        'customer-a'
+      )
+    ).resolves.toMatchObject({ pointsBalance: 35, earnRateSet: true });
     expect(db.pharmacySale.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),

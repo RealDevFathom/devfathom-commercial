@@ -127,9 +127,9 @@ export default async function LoyaltyPage({
         {earnRate.current ? (
           <Stat label="Current earning rate" value={describeLoyaltyEarnRule(earnRate.current)} />
         ) : (
-          <p className="text-sm">
-            No earning rate is set, so customers are not earning new points. Existing balances stay
-            available to redeem.
+          <p className="text-sm font-medium text-warning">
+            Points are not being earned: set an earn rate below. Existing balances stay available to
+            redeem.
           </p>
         )}
         <p className="mt-2 mb-5 text-sm text-text-muted">

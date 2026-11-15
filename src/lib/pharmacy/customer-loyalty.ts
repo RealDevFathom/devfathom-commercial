@@ -352,7 +352,7 @@ export async function readCustomerSnapshot(
     select: { id: true, displayName: true, phoneLast4: true, creditLimitMinor: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  const [points, sales, pointsHistory, pointsCount] = await Promise.all([
+  const [points, sales, pointsHistory, pointsCount, program] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
       _sum: { points: true },
@@ -394,6 +394,7 @@ export async function readCustomerSnapshot(
     db.pharmacyLoyaltyPointsEntry.count({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
     }),
+    currentLoyaltyProgram(db, scope.organizationId),
   ]);
   const creditBalanceMinor = sales
     .flatMap((sale) => sale.tenders)
@@ -408,6 +409,8 @@ export async function readCustomerSnapshot(
   return {
     customer,
     pointsBalance: points._sum.points ?? 0,
+    // DEV-746: false until the owner sets an earn rate; nothing new is earned until then.
+    earnRateSet: Boolean(program),
     pointsHistory,
     pointsCount,
     pointsPage: page,

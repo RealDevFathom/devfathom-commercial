@@ -102,6 +102,16 @@ describe('DEV-746 owner earning rate', () => {
     );
   });
 
+  it('reads the version it replaces only under the publication lock', async () => {
+    await caller().setEarnRate({ option: 'percent-1' });
+    const lock = mocks.queryRaw.mock.invocationCallOrder[0]!;
+    expect(String(mocks.queryRaw.mock.calls[0]![0].strings.join(''))).toContain(
+      'pg_advisory_xact_lock'
+    );
+    expect(mocks.findFirst.mock.invocationCallOrder.every((order) => order > lock)).toBe(true);
+    expect(mocks.findFirst).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { option: 'custom-percent', percent: '100.01' },
     { option: 'custom-percent', percent: '0' },

@@ -61,7 +61,9 @@ describe('DEV-746 earning rate card', () => {
   it('says nobody earns new points until the owner sets a rate', async () => {
     await show();
     expect(screen.getByRole('heading', { name: 'Earning rate' })).toBeInTheDocument();
-    expect(screen.getByText(/No earning rate is set/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Points are not being earned: set an earn rate below/)
+    ).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '1% of spend' })).toBeChecked();
     expect(screen.getByRole('button', { name: 'Save earning rate' })).toHaveAttribute(
       'type',
@@ -87,6 +89,7 @@ describe('DEV-746 earning rate card', () => {
     );
     mocks.earnRate.mockResolvedValue({ current: v2, versions: [v2, v1] });
     await show();
+    expect(screen.queryByText(/Points are not being earned/)).not.toBeInTheDocument();
     expect(screen.getAllByText('1 point for every PKR 1,000 spent').length).toBeGreaterThan(0);
     expect(screen.getByText(/Version 2, in effect since 2026-11-10/)).toBeInTheDocument();
     const history = screen.getByRole('region', { name: 'Earning rate history' });

@@ -9,7 +9,6 @@ import {
   PharmacyLoyaltyError,
 } from '@/lib/pharmacy/customer-loyalty';
 import {
-  currentLoyaltyProgram,
   LOYALTY_EARN_PRESETS,
   listLoyaltyProgramVersions,
   percentRule,
@@ -103,12 +102,11 @@ export const pharmacyLoyaltyRouter = router({
   setEarnRate: adminProcedure.input(earnRateInput).mutation(async ({ ctx, input }) => {
     const scope = scopeFor(ctx);
     const rule = earnRuleFor(input);
-    const { prior, version } = await ctx.db.$transaction(async (tx) => {
-      const db = txDb(tx);
-      const prior = await currentLoyaltyProgram(db, scope.organizationId);
-      const version = await publishLoyaltyProgramVersion(db, scope, rule);
-      return { prior, version };
-    });
+    // The previous version is read under the publication lock, so concurrent saves each
+    // audit the transition they actually made.
+    const { prior, version } = await ctx.db.$transaction((tx) =>
+      publishLoyaltyProgramVersion(txDb(tx), scope, rule)
+    );
     annotateAudit(ctx, {
       category: 'PHARMACY',
       operation: 'CREATE',
