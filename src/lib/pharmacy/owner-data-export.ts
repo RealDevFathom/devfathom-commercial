@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { PlatformJob } from '@/generated/prisma/client';
+import { Prisma, type PlatformJob } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { deleteUpload, getUploadStream, putUploadFile } from '@/lib/storage';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -25,7 +25,9 @@ import {
   type OwnerDataExportView,
 } from './owner-data-export-format';
 import {
+  newOwnerDataExportArchiveToken,
   newOwnerDataExportObjectName,
+  reservedOwnerDataExportObjectName,
   storedOwnerDataExportObjectName,
 } from './owner-data-export-object';
 import { chooseRegisterPersonName } from './register-print';
@@ -181,6 +183,10 @@ export async function listOwnerDataExports(
 export const OWNER_DATA_EXPORT_REQUEST_LIMIT = 3;
 export const OWNER_DATA_EXPORT_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** DEV-844 — per-owner download limit: at most this many archive downloads per hour. */
+export const OWNER_DATA_EXPORT_DOWNLOAD_LIMIT = 5;
+export const OWNER_DATA_EXPORT_DOWNLOAD_WINDOW_MS = 60 * 60 * 1000;
+
 export type QueueOwnerDataExportResult =
   | { kind: 'created' | 'pending'; job: ExportJob }
   | { kind: 'rate_limited'; retryAfterSeconds: number };
@@ -236,7 +242,13 @@ export async function queueOwnerDataExport(
       organizationId,
       type: OWNER_DATA_EXPORT_JOB_TYPE,
       requestedById: userId,
-      payload: { from: range.from, to: range.to, requestedByTenant: true },
+      // DEV-844: the archive name is fixed now, so every attempt overwrites one object.
+      payload: {
+        from: range.from,
+        to: range.to,
+        requestedByTenant: true,
+        archiveToken: newOwnerDataExportArchiveToken(),
+      },
     },
     select: OWNER_DATA_EXPORT_JOB_SELECT,
   });
@@ -283,6 +295,43 @@ export async function purgeExpiredOwnerDataExports(
       data: { result: { ...result, filename: null, purgedAt: now.toISOString() } },
     });
     purged += 1;
+  }
+  return purged + (await purgeUnrecordedOwnerDataExports(db, now));
+}
+
+/**
+ * DEV-844 — an export that never succeeded can still have stored its archive:
+ * the upload finished but the job transaction then failed, or the job was
+ * cancelled while it ran. No job result names that archive, so the purge above
+ * never sees it. Once the failed or cancelled job is past the same 24-hour
+ * expiry, delete the archive its payload reserved. Only jobs with no result
+ * are selected, so an archive a job result names is never touched here.
+ * Recording `purgedAt` on the empty result sweeps each job once; a platform
+ * retry clears the result, so a retried job that fails again is swept again.
+ */
+async function purgeUnrecordedOwnerDataExports(db: ScopedDb, now: Date): Promise<number> {
+  const abandoned = await db.platformJob.findMany({
+    where: {
+      type: OWNER_DATA_EXPORT_JOB_TYPE,
+      status: { in: ['FAILED', 'CANCELLED'] },
+      finishedAt: { lt: new Date(now.getTime() - OWNER_DATA_EXPORT_LINK_TTL_MS) },
+      result: { equals: Prisma.AnyNull },
+    },
+    orderBy: { finishedAt: 'asc' },
+    take: PURGE_BATCH,
+    select: { id: true, organizationId: true, payload: true },
+  });
+  let purged = 0;
+  for (const job of abandoned) {
+    const filename = reservedOwnerDataExportObjectName(job.id, job.payload);
+    if (job.organizationId && filename) {
+      await deleteUpload(job.organizationId, filename);
+      purged += 1;
+    }
+    await db.platformJob.update({
+      where: { id: job.id },
+      data: { result: { filename: null, purgedAt: now.toISOString() } },
+    });
   }
   return purged;
 }
@@ -934,10 +983,12 @@ export async function loadOwnerDataExportRows(
 async function* csvChunks(
   spec: ExportFileSpec,
   source: AsyncIterable<ExportRow[]>,
-  onRows: (count: number) => void
+  onRows: (count: number) => void,
+  checkTime: () => void
 ): AsyncGenerator<string> {
   yield exportCsvHeader(spec);
   for await (const page of source) {
+    checkTime();
     onRows(page.length);
     yield exportCsvRows(spec, page);
   }
@@ -953,6 +1004,24 @@ export class OwnerDataExportTooLargeError extends Error {
       `The export is larger than ${Math.floor(maxBytes / (1024 * 1024))} MB. Choose a shorter sales date range.`
     );
     this.name = 'OwnerDataExportTooLargeError';
+  }
+}
+
+/**
+ * DEV-844 — the export runs in a 120-second job transaction (`executeJob`). The
+ * archive must be built within this limit, which leaves the rest of that time to
+ * upload it and commit, so a large export fails with a clear reason instead of
+ * hitting the transaction timeout before the size cap and being retried.
+ */
+export const OWNER_DATA_EXPORT_BUILD_TIME_LIMIT_MS = 90_000;
+
+/** A time-limit failure is permanent: retrying the same export would only time out again. */
+export class OwnerDataExportTimeLimitError extends Error {
+  constructor(readonly limitMs: number) {
+    super(
+      `The export took longer than ${Math.round(limitMs / 1000)} seconds to build. Choose a shorter sales date range.`
+    );
+    this.name = 'OwnerDataExportTimeLimitError';
   }
 }
 
@@ -973,14 +1042,20 @@ export async function runPharmacyOwnerDataExportJob(
   job: Pick<PlatformJob, 'id' | 'organizationId'>,
   payload: Record<string, unknown>,
   now: () => Date = () => new Date(),
-  options: { maxBytes?: number } = {}
+  options: { maxBytes?: number; timeLimitMs?: number } = {}
 ) {
+  const startedAt = Date.now();
+  const timeLimitMs = options.timeLimitMs ?? OWNER_DATA_EXPORT_BUILD_TIME_LIMIT_MS;
+  const checkTime = () => {
+    if (Date.now() - startedAt >= timeLimitMs) throw new OwnerDataExportTimeLimitError(timeLimitMs);
+  };
   const organizationId = job.organizationId;
   if (!organizationId) throw new Error('Owner data export requires an organization.');
   const range = parseSalesRange(payload);
   if (!range) throw new Error('Owner data export has an invalid sales range.');
   const maxBytes = options.maxBytes ?? OWNER_DATA_EXPORT_MAX_BYTES;
-  const filename = newOwnerDataExportObjectName(job.id);
+  const filename =
+    reservedOwnerDataExportObjectName(job.id, payload) ?? newOwnerDataExportObjectName(job.id);
   await db.$queryRawUnsafe(
     `SELECT set_config('app.current_organization_id', $1, true),
             set_config('app.current_user_id', '', true),
@@ -1005,7 +1080,7 @@ export async function runPharmacyOwnerDataExportJob(
         const spec: ExportFileSpec = OWNER_DATA_EXPORT_FILES[key];
         await zip.addEntry(
           spec.name,
-          csvChunks(spec, sources[key](), (count) => (counts[key] += count))
+          csvChunks(spec, sources[key](), (count) => (counts[key] += count), checkTime)
         );
       }
       const readme = exportReadme(
@@ -1018,6 +1093,7 @@ export async function runPharmacyOwnerDataExportJob(
         counts
       );
       await zip.addEntry('README.md', [readme]);
+      checkTime();
       bytes = await zip.close();
     } catch (error) {
       await zip.abort();
