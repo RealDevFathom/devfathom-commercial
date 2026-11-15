@@ -222,6 +222,15 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
   return { ...input, branchIds };
 }
 
+/** The supplier, ingredient and batch filters a reader must apply (DEV-256); unset ones omitted. */
+function reportDimensions(input: z.infer<typeof filters>) {
+  return {
+    ...(input.supplierId ? { supplierId: input.supplierId } : {}),
+    ...(input.ingredientId ? { ingredientId: input.ingredientId } : {}),
+    ...(input.batchId ? { batchId: input.batchId } : {}),
+  };
+}
+
 async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
   const available = await scope(ctx);
   if (ctx.session!.user.role !== 'ADMIN')
@@ -934,6 +943,7 @@ export const pharmacyReportsRouter = router({
     return readExpiryAdvice(ctx.db, {
       organizationId: ctx.entitlements.organizationId,
       branchIds: bounded.branchIds,
+      ...reportDimensions(input),
     });
   }),
   proposeExpiryReturn: reports
@@ -960,7 +970,10 @@ export const pharmacyReportsRouter = router({
     }),
   packAuthenticationFlags: reports.input(filters).query(async ({ ctx, input }) => {
     const resolved = await ownerFilters(ctx, input);
-    return readPackAuthenticationFlags(ctx.db, resolved.branchIds);
+    return readPackAuthenticationFlags(ctx.db, resolved.branchIds, {
+      organizationId: ctx.entitlements.organizationId,
+      ...reportDimensions(input),
+    });
   }),
   acknowledgePackAuthenticationFlag: reports
     .input(anomalyDecision)

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   stockDigest: vi.fn(),
   anomalyRead: vi.fn(),
   expiryRead: vi.fn(),
+  packRead: vi.fn(),
   returnsRead: vi.fn(),
   creditsRead: vi.fn(),
   refresh: vi.fn(),
@@ -62,6 +63,10 @@ vi.mock('@/lib/pharmacy/anomaly-signals-operations', () => ({
   refreshPharmacyAnomalySignals: mocks.refresh,
   acknowledgePharmacyAnomalySignal: vi.fn(),
   snoozePharmacyAnomalySignal: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/pack-authentication-operations', () => ({
+  readPackAuthenticationFlags: mocks.packRead,
+  acknowledgePackAuthenticationFlag: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/expiry-advisor-operations', () => ({
   readExpiryAdvice: mocks.expiryRead,
@@ -603,6 +608,35 @@ describe('pharmacy owner digest capability boundary', () => {
       { organizationId: 'org_1', branchId: 'branch_1', actorId: 'user_admin' },
       'lot_1'
     );
+  });
+
+  it('forwards supplier, ingredient and batch filters to the expiry advisor and pack flags (DEV-256)', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([]);
+    mocks.packRead.mockResolvedValue([]);
+    const input = {
+      from: '2026-09-01',
+      to: '2026-09-04',
+      supplierId: 'sup_1',
+      ingredientId: 'ing_1',
+      batchId: 'batch_1',
+    };
+    await caller().expiryAdvice(input);
+    expect(mocks.expiryRead).toHaveBeenLastCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchIds: ['branch_1'],
+      supplierId: 'sup_1',
+      ingredientId: 'ing_1',
+      batchId: 'batch_1',
+    });
+    await caller().packAuthenticationFlags(input);
+    expect(mocks.packRead).toHaveBeenLastCalledWith(expect.anything(), ['branch_1'], {
+      organizationId: 'org_1',
+      supplierId: 'sup_1',
+      ingredientId: 'ing_1',
+      batchId: 'batch_1',
+    });
   });
 });
 
