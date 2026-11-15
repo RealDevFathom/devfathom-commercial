@@ -10,6 +10,12 @@ import {
   SERIALIZED_PACK_APPROVAL_POLICY,
 } from './serialized-pack-sale';
 
+// The persisted regulatory gate has its own suites (regulatory.test.ts, sale-regulatory-gate.test.ts).
+vi.mock('./regulatory', async () => ({
+  ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
+
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 const GS = '\u001d';
 const NOW = new Date('2026-10-21T00:00:00.000Z');
