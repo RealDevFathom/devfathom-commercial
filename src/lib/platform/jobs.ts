@@ -25,7 +25,10 @@ import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
-import { purgeExpiredPharmacyRecords } from '@/lib/pharmacy/retention-purge';
+import {
+  previousRetentionPurgeResume,
+  purgeExpiredPharmacyRecords,
+} from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -844,8 +847,13 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
         // DEV-96: the result (per-class counts, refused record ids and reasons;
-        // never record contents) is stored on the job row.
-        PHARMACY_RECORD_RETENTION_V1: (database) => purgeExpiredPharmacyRecords(database),
+        // never record contents) is stored on the job row. QA-3: each run
+        // resumes where the last successful run's scan stopped, so records the
+        // database keeps refusing cannot stall the purge behind them.
+        PHARMACY_RECORD_RETENTION_V1: async (database) =>
+          purgeExpiredPharmacyRecords(database, {
+            resumeAfter: await previousRetentionPurgeResume(database),
+          }),
         PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
       return handlers[job.type](db, job, payload);

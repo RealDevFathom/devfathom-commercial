@@ -29,6 +29,7 @@ import {
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
 } from '@/lib/pharmacy/action-error-message';
+import { formatLotExpiry } from '@/lib/pharmacy/product-class';
 import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 import { writeOffWitnessOptions } from '@/lib/pharmacy/write-off-witness';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -659,7 +660,7 @@ export default async function PharmacyInventoryPage({
                       Batch {lot.batch.batchNumber} · {lot.supplierName}
                     </span>
                   </TableCell>
-                  <TableCell>{when(lot.batch.expiresAt)}</TableCell>
+                  <TableCell>{formatLotExpiry(lot.batch.expiresAt, when)}</TableCell>
                   <TableCell>{balance.location.name}</TableCell>
                   <TableCell>
                     <StatusPill

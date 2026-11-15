@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type SaveError = {
   data: { validation: Record<string, string[]> };
@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   fetch: vi.fn(),
   onError: undefined as ((error: SaveError) => void) | undefined,
+  provinceMutate: vi.fn(),
+  provinceOnSuccess: undefined as
+    ((result: { branchId: string; provinceCode: string; changed: boolean }) => void) | undefined,
+  provinceOnError: undefined as ((error: SaveError) => void) | undefined,
 }));
 
 vi.mock('@/lib/trpc', () => ({
@@ -20,6 +24,16 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: (options: { onError: (error: SaveError) => void }) => {
           mocks.onError = options.onError;
           return { mutate: mocks.mutate, isPending: false };
+        },
+      },
+      setBranchProvince: {
+        useMutation: (options: {
+          onSuccess: NonNullable<typeof mocks.provinceOnSuccess>;
+          onError: (error: SaveError) => void;
+        }) => {
+          mocks.provinceOnSuccess = options.onSuccess;
+          mocks.provinceOnError = options.onError;
+          return { mutate: mocks.provinceMutate, isPending: false };
         },
       },
     },
@@ -242,6 +256,56 @@ it("blames DevFathom's unreviewed rule config, not the province, when categories
   expect(text).toContain("DevFathom's schedule list for this province is unreviewed");
   expect(text).toContain('operating gate stays in place');
   expect(text).not.toContain('This province has not published');
+});
+
+describe('branch province (QA-3)', () => {
+  it('offers every province, preselects the branch’s own, and saves only a change', () => {
+    mocks.fetch.mockResolvedValue(initial);
+    render(<PharmacyRegulatoryProfileForm initial={initial} />);
+    const picker = screen.getByLabelText('Province this branch operates in');
+    expect(picker).toHaveValue('PK-PB');
+    expect(Array.from(picker.querySelectorAll('option')).map((o) => o.textContent)).toContain(
+      'Sindh'
+    );
+    const save = screen.getByRole('button', { name: 'Save province' });
+    expect(save).toBeDisabled();
+    fireEvent.change(picker, { target: { value: 'PK-SD' } });
+    expect(save).toBeEnabled();
+    fireEvent.submit(save.closest('form')!);
+    expect(mocks.provinceMutate).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-1',
+      provinceCode: 'PK-SD',
+    });
+    // The regulatory profile save is a separate action.
+    expect(mocks.mutate).not.toHaveBeenCalled();
+    act(() =>
+      mocks.provinceOnSuccess!({ branchId: 'branch-1', provinceCode: 'PK-SD', changed: true })
+    );
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((notice) => notice.textContent === 'Main pharmacy now operates in Sindh.')
+    ).toBe(true);
+    expect(mocks.fetch).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  });
+
+  it('shows a refused change on the province picker', () => {
+    render(<PharmacyRegulatoryProfileForm initial={initial} />);
+    const picker = screen.getByLabelText('Province this branch operates in');
+    fireEvent.change(picker, { target: { value: 'PK-KP' } });
+    act(() =>
+      mocks.provinceOnError!({
+        data: { validation: { provinceCode: ['Choose the province this branch operates in.'] } },
+        message: 'Invalid',
+      })
+    );
+    expect(picker).toHaveAttribute('aria-invalid', 'true');
+    expect(picker).toHaveAttribute('aria-describedby', 'branch-province-error');
+    expect(picker).toHaveValue('PK-KP');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Choose the province this branch operates in.'
+    );
+  });
 });
 
 const jurisdictions = [

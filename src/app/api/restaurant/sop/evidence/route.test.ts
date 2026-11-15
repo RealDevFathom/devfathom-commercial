@@ -24,6 +24,19 @@ vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }))
 
 import { POST } from './route';
 import { StorageUnavailableError } from '@/lib/storage';
+import { packageByKey } from '@/lib/vertical-catalog';
+
+/** Entitlements as resolved for an organization holding exactly one package. */
+function entitlementsFor(packageKey: string) {
+  const pkg = packageByKey(packageKey);
+  if (!pkg) throw new Error(`Unknown package ${packageKey}`);
+  return {
+    organizationId: 'org-1',
+    enabledModules: [...pkg.moduleKeys],
+    limits: { ...pkg.defaultLimits } as Record<string, number>,
+  };
+}
+const PROOF_ENTITLED = entitlementsFor('restaurant-enterprise');
 
 function request(overrides?: {
   type?: string;
@@ -72,7 +85,7 @@ beforeEach(() => {
         findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
       },
     },
-    entitlements: { organizationId: 'org-1' },
+    entitlements: PROOF_ENTITLED,
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -113,7 +126,7 @@ describe('POST SOP evidence', () => {
           // No branch context to choose between several profiles.
           restaurantSopOccurrence: { findUnique: vi.fn().mockResolvedValue(null) },
         },
-        entitlements: { organizationId: 'org-1' },
+        entitlements: PROOF_ENTITLED,
         organization: { id: 'org-1' },
         session: { user: { id: 'user-1' } },
       });
@@ -136,7 +149,7 @@ describe('POST SOP evidence', () => {
           findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
         },
       },
-      entitlements: { organizationId: 'org-1' },
+      entitlements: PROOF_ENTITLED,
       organization: { id: 'org-1' },
       session: { user: { id: 'user-1' } },
     });
@@ -195,7 +208,7 @@ describe('POST SOP evidence', () => {
           findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
         },
       },
-      entitlements: { organizationId: 'org-1' },
+      entitlements: PROOF_ENTITLED,
       organization: { id: 'org-1' },
       session: { user: { id: 'user-1' } },
     });
@@ -299,6 +312,42 @@ describe('POST SOP evidence', () => {
     expect(response.status).toBe(303);
     expect(response.headers.get('location')).toContain('Proof+capture+failed');
     expect(mocks.putUpload).not.toHaveBeenCalled();
+  });
+
+  it('DEV-837: refuses proof on a plan without evidence capture before storage', async () => {
+    const warn = warnings();
+    const execution = entitlementsFor('restaurant-essentials');
+    mocks.createTRPCContext.mockResolvedValue({
+      db: {
+        restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) },
+        restaurantSopOccurrence: {
+          findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
+        },
+      },
+      entitlements: execution,
+      organization: { id: 'org-1' },
+      session: { user: { id: 'user-1' } },
+    });
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.attachEvidence).not.toHaveBeenCalled();
+    expect(mocks.deleteUpload).not.toHaveBeenCalled();
+    expectWarningAt(warn, 'authorization');
+  });
+
+  it('DEV-837: marks proof stored by this route as server-captured', async () => {
+    await POST(request());
+    expect(mocks.attachEvidence).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        serverCaptured: true,
+        storageRef: expect.stringMatching(/^\/api\/files\/sop-.+\.jpg$/),
+      })
+    );
   });
 
   it('preserves authorization and redacts internal failures', async () => {
