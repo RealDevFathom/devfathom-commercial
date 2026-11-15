@@ -14,6 +14,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { AccessDeniedState, Field, WorkspaceState, fieldClass, isAccessDenied } from './field';
 import { MedicationCard } from './medication-card';
+import { PrescriptionDirectoryCard } from './prescription-directory';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -114,6 +115,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     () => ''
   );
   const patientId = selectedPatientId ?? initialPatientId ?? counterPatientId;
+  const [prescriberId, setPrescriberId] = useState('');
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState('');
@@ -132,15 +134,13 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     captureRequirements.push(
       workspace.data?.patients.length
         ? 'Select a patient above.'
-        : 'Ask a workspace administrator to add a patient, then reload this page.'
+        : 'Add the patient under Patients and prescribers.'
     );
   }
   if (!sourceFile) captureRequirements.push('Choose a prescription image above.');
   else if (sourceError) captureRequirements.push(sourceError);
   if (!workspace.data?.prescribers.length)
-    captureRequirements.push(
-      'Ask a workspace administrator to add a prescriber, then reload this page.'
-    );
+    captureRequirements.push('Add the prescribing doctor under Patients and prescribers.');
   if (!medicines.some((item) => item.presentations.length > 0))
     captureRequirements.push(
       'Ask a workspace administrator to add a medicine with a medicine form, then reload this page.'
@@ -245,6 +245,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
       });
       setSavedAttachment({ url: evidence.url, name: sourceFile.name });
       form.reset();
+      setPrescriberId('');
       setLines([
         { id: nextLineId.current++, medicineId: '', presentationId: '', medicineQuery: '' },
       ]);
@@ -296,6 +297,13 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
       ) : null}
       {workspace.data ? (
         <>
+          <PrescriptionDirectoryCard
+            onPatientAdded={(id) => {
+              setPatientId(id);
+              uploaded.current = null;
+            }}
+            onPrescriberAdded={setPrescriberId}
+          />
           <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             <SectionCard title="Capture prescription" titleLevel={2}>
               <form aria-label="Capture prescription" aria-busy={busy} onSubmit={submit}>
@@ -334,7 +342,17 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       </select>
                     </Field>
                     <Field label="Prescriber">
-                      <select required name="prescriberId" className={fieldClass} defaultValue="">
+                      <select
+                        required
+                        name="prescriberId"
+                        className={fieldClass}
+                        value={
+                          workspace.data.prescribers.some((p) => p.id === prescriberId)
+                            ? prescriberId
+                            : ''
+                        }
+                        onChange={(event) => setPrescriberId(event.target.value)}
+                      >
                         <option value="" disabled>
                           Select from directory
                         </option>

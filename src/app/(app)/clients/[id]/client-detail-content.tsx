@@ -425,7 +425,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                   })
                 }
                 disabled={updateClient.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {updateClient.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -734,7 +734,7 @@ function ContactForm({
               })
             }
             disabled={!name.trim() || pending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40"
           >
             {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             Save
@@ -770,7 +770,7 @@ function ContactsTab({ clientId, contacts }: { clientId: string; contacts: Clien
         {!showAdd && (
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover transition-colors"
           >
             <Plus className="h-3.5 w-3.5" /> Add Contact
           </button>
@@ -974,7 +974,7 @@ function ClientProjectsTab({
         </p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           <Plus className="h-3.5 w-3.5" />
           New Project
@@ -1071,7 +1071,7 @@ function ClientProjectsTab({
               <button
                 onClick={handleSubmit}
                 disabled={!name.trim() || createProject.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {createProject.isPending ? (
                   <>
@@ -1097,7 +1097,7 @@ function ClientProjectsTab({
           </p>
           <button
             onClick={() => setShowCreate(true)}
-            className="mt-4 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] active:scale-[0.98] transition-all"
+            className="mt-4 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover active:scale-[0.98] transition-all"
           >
             <Plus className="h-3.5 w-3.5" />
             Create First Project
@@ -1372,7 +1372,7 @@ function ClientContractsTab({
             </button>
             <button
               onClick={openCreate}
-              className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+              className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
             >
               <Plus className="h-3.5 w-3.5" />
               New Contract
@@ -1578,7 +1578,7 @@ function ClientContractsTab({
               <button
                 onClick={handleSubmit}
                 disabled={!title.trim() || isSaving || uploading}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {isSaving ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1602,7 +1602,7 @@ function ClientContractsTab({
           </p>
           <button
             onClick={openCreate}
-            className="mt-4 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] active:scale-[0.98] transition-all"
+            className="mt-4 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover active:scale-[0.98] transition-all"
           >
             <Plus className="h-3.5 w-3.5" />
             Add First Contract

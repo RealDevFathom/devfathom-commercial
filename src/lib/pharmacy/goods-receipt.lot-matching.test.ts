@@ -89,12 +89,18 @@ function receiptLine(lot: LotInput) {
     stockLocationId: 'loc_shelf',
     quarantineLocationId: rejected > 0 ? 'loc_quarantine' : null,
     unitCostMinor: 100,
+    receivedPacks: lot.received / (lot.unitsPerPack ?? 10),
+    bonusPacks: (lot.bonus ?? 0) / (lot.unitsPerPack ?? 10),
     receivedCanonicalUnits: lot.received,
     bonusCanonicalUnits: lot.bonus ?? 0,
     acceptedCanonicalUnits: lot.received + (lot.bonus ?? 0) - rejected,
     rejectedCanonicalUnits: rejected,
     rejectionReason: rejected > 0 ? 'Crushed carton' : null,
     invoicedPricePerPackMinor: lot.invoicedPricePerPackMinor ?? LIST_PRICE,
+    discountBps: 0,
+    taxBps: 0,
+    taxCreditable: false,
+    allocatedOrderChargeMinor: 0,
     gs1Warnings: [] as string[],
   };
 }
@@ -168,6 +174,10 @@ function receiptDb(input: {
       }),
     },
     pharmacyPurchaseOrderLine: {
+      // PUR-03: posting prices each lot from its order's lines.
+      findMany: vi.fn(({ where }: { where: { purchaseOrderId: string } }) =>
+        Promise.resolve(where.purchaseOrderId === purchaseOrderId ? orderLines : [])
+      ),
       findFirst: vi.fn(({ where }: { where: { id: string; organizationId: string } }) =>
         Promise.resolve(
           where.organizationId === SCOPE.organizationId
@@ -251,6 +261,44 @@ beforeEach(() => {
       movement: { id: `move_${seq}` },
       quarantineMovement: null,
     });
+  });
+});
+
+describe('postGoodsReceipt — received time of the posted lot (DEV-726)', () => {
+  it('never makes a lot received later than its posting instant', async () => {
+    const { db } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [{ id: 'grl_1', lineNumber: 1, purchaseOrderLineId: 'pol_a', received: 100 }],
+    });
+    // Keyed for 21 October (stored as UTC midnight) and posted at 01:30 PKT that day,
+    // which is still 20:30 UTC on the 20th.
+    const postedAt = new Date('2026-10-20T20:30:00.000Z');
+
+    await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr_current', at: postedAt });
+
+    expect(receiveLot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ receivedAt: postedAt })
+    );
+  });
+
+  it('keeps an earlier received date as keyed', async () => {
+    const { db } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [{ id: 'grl_1', lineNumber: 1, purchaseOrderLineId: 'pol_a', received: 100 }],
+    });
+
+    await postGoodsReceipt(db, SCOPE, {
+      goodsReceiptId: 'gr_current',
+      at: new Date('2026-10-22T09:00:00.000Z'),
+    });
+
+    expect(receiveLot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ receivedAt: AT })
+    );
   });
 });
 

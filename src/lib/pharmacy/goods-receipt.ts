@@ -50,11 +50,13 @@ import {
   assertSaleableOnReceipt,
   matchReceiptLine,
   PharmacyReceivingError,
+  receiptLineAllocatedChargeMinor,
+  receiptLineUnitCostMinor,
   type MatchException,
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { assertSupplierEligible } from './purchasing';
+import { assertSupplierEligible, landedCost } from './purchasing';
 import {
   readSupplierCompliancePolicy,
   recordSupplierComplianceSkip,
@@ -95,6 +97,9 @@ export type PostGoodsReceiptResult = {
  * Must run inside the caller's transaction.
  */
 const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+/** The eligible qualified person was chosen but typed the wrong PIN (#283). */
+const WITNESS_PIN_INCORRECT =
+  'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.';
 
 /**
  * PIN witness for a controlled purchase. A receipt with no controlled line
@@ -161,7 +166,7 @@ export async function verifyControlledPurchaseWitness(
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
     });
-    return { blocked: WITNESS_BLOCKED };
+    return { blocked: WITNESS_PIN_INCORRECT };
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
@@ -196,6 +201,109 @@ export async function lockReceivablePurchaseOrder(
   return order;
 }
 
+/**
+ * PUR-03: the order terms a goods receipt against a purchase order is costed
+ * with. The order's freight and other charges are allocated across its lines
+ * exactly as the order's landed cost shows them, and `termsFor` hands each
+ * delivered lot its order line's rebate and its share of that line's charge.
+ * The share is cumulative from the paid units already posted against the line
+ * and advances lot by lot, so a split or over-delivered line never capitalises
+ * its charge more than once. Drafting prices a receipt through here as a
+ * preview and keeps the share on the line; posting settles the share again
+ * under the order's row lock, so receipts drafted side by side, or a draft
+ * that never posts, cannot double-count or strand a charge.
+ */
+export async function orderReceiptCostTerms(
+  db: ScopedDb,
+  organizationId: string,
+  order: { id: string; freightMinor: number; otherChargesMinor: number }
+) {
+  const orderLines = new Map(
+    (
+      await db.pharmacyPurchaseOrderLine.findMany({
+        where: { purchaseOrderId: order.id },
+        orderBy: { lineNumber: 'asc' },
+        select: {
+          id: true,
+          medicineId: true,
+          packLevelId: true,
+          orderedPacks: true,
+          bonusPacks: true,
+          canonicalUnitsPerPack: true,
+          listPricePerPackMinor: true,
+          discountBps: true,
+          rebateBps: true,
+          taxBps: true,
+          taxCreditable: true,
+        },
+      })
+    ).map((line) => [line.id, line] as const)
+  );
+
+  const charges = new Map<string, number>();
+  if (orderLines.size > 0 && order.freightMinor + order.otherChargesMinor > 0) {
+    const lines = [...orderLines.values()];
+    const costed = landedCost({
+      lines,
+      freightMinor: order.freightMinor,
+      otherChargesMinor: order.otherChargesMinor,
+    });
+    lines.forEach((line, index) => charges.set(line.id, costed.lines[index]!.allocatedChargeMinor));
+  }
+
+  const paidUnitsReceived = new Map<string, number>();
+  if (charges.size > 0) {
+    // Only posted receipts have put their share into stock. A draft's stamped
+    // cost is a preview: postGoodsReceipt settles it under the order's lock.
+    for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
+      where: {
+        organizationId,
+        purchaseOrderLineId: { in: [...charges.keys()] },
+        goodsReceipt: { status: 'POSTED' },
+      },
+      select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
+    })) {
+      if (!earlier.purchaseOrderLineId) continue;
+      paidUnitsReceived.set(
+        earlier.purchaseOrderLineId,
+        (paidUnitsReceived.get(earlier.purchaseOrderLineId) ?? 0) + earlier.receivedCanonicalUnits
+      );
+    }
+  }
+
+  return {
+    orderLines,
+    /**
+     * The rebate and allocated charge for one lot of `receivedPaidCanonicalUnits`
+     * paid units against `orderLineId`. A lot with no order line carries neither:
+     * the order's charges were allocated over its ordered lines only.
+     */
+    termsFor(
+      orderLineId: string | null | undefined,
+      receivedPaidCanonicalUnits: number
+    ): { rebateBps: number; allocatedChargeMinor: number } {
+      const orderLine = orderLineId ? orderLines.get(orderLineId) : undefined;
+      if (!orderLine) return { rebateBps: 0, allocatedChargeMinor: 0 };
+      const charge = charges.get(orderLine.id);
+      if (charge === undefined) return { rebateBps: orderLine.rebateBps, allocatedChargeMinor: 0 };
+      const previouslyReceivedPaidCanonicalUnits = paidUnitsReceived.get(orderLine.id) ?? 0;
+      paidUnitsReceived.set(
+        orderLine.id,
+        previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits
+      );
+      return {
+        rebateBps: orderLine.rebateBps,
+        allocatedChargeMinor: receiptLineAllocatedChargeMinor({
+          orderLineAllocatedChargeMinor: charge,
+          orderedPaidCanonicalUnits: orderLine.orderedPacks * orderLine.canonicalUnitsPerPack,
+          previouslyReceivedPaidCanonicalUnits,
+          receivedPaidCanonicalUnits,
+        }),
+      };
+    },
+  };
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
@@ -222,6 +330,8 @@ export async function postGoodsReceipt(
     branchId: string | null;
     supplierId: string;
     status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+    freightMinor: number;
+    otherChargesMinor: number;
   } | null = null;
   if (receipt.purchaseOrderId) {
     const [lockedOrder] = await db.$queryRaw<
@@ -230,8 +340,10 @@ export async function postGoodsReceipt(
         branchId: string | null;
         supplierId: string;
         status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+        freightMinor: number;
+        otherChargesMinor: number;
       }>
-    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+    >`SELECT id, "branchId", "supplierId", status, "freightMinor", "otherChargesMinor" FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
     purchaseOrder = lockedOrder ?? null;
     if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
     if (purchaseOrder.supplierId !== receipt.supplierId) {
@@ -319,10 +431,49 @@ export async function postGoodsReceipt(
     });
   }
 
+  // PUR-03: the landed cost is settled here, under the order's row lock, from
+  // the receipts that have actually posted, so each order line's freight and
+  // other charges reach stock exactly once in posting order.
+  const orderCostTerms = purchaseOrder
+    ? await orderReceiptCostTerms(db, scope.organizationId, purchaseOrder)
+    : null;
+
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
 
   for (const line of receipt.lines) {
+    // The draft's stamped cost already holds the order-line rebate and its
+    // order-charge share as they stood at drafting, plus anything else the
+    // receipt itself charged. Only the order-charge share can have moved since,
+    // so the cost is adjusted by that difference and everything else in it is
+    // kept exactly as stamped.
+    let unitCostMinor = line.unitCostMinor;
+    const orderLineTerms = orderCostTerms?.termsFor(
+      line.purchaseOrderLineId,
+      line.receivedCanonicalUnits
+    );
+    // A receipt that bills its own invoice freight (DEV-77) takes no share of
+    // the order's charges, as when it was drafted; its units still count.
+    const orderTerms = orderLineTerms && {
+      rebateBps: orderLineTerms.rebateBps,
+      allocatedChargeMinor: receipt.freightMinor > 0 ? 0 : orderLineTerms.allocatedChargeMinor,
+    };
+    if (orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor) {
+      const costed = (allocatedChargeMinor: number) =>
+        receiptLineUnitCostMinor({
+          receivedPacks: line.receivedPacks,
+          bonusPacks: line.bonusPacks,
+          canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+          invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+          discountBps: line.discountBps,
+          rebateBps: orderTerms.rebateBps,
+          taxBps: line.taxBps,
+          taxCreditable: line.taxCreditable,
+          allocatedChargeMinor,
+        });
+      unitCostMinor +=
+        costed(orderTerms.allocatedChargeMinor) - costed(line.allocatedOrderChargeMinor);
+    }
     const batch = await resolveManufacturingBatch(db, scope, {
       medicineId: line.medicineId,
       batchNumber: line.batchNumber,
@@ -340,13 +491,16 @@ export async function postGoodsReceipt(
       // invoice and batch collide on the ledger's own uniqueness rule rather
       // than silently duplicating stock.
       supplierInvoiceRef: `${receipt.supplierInvoiceRef}#${line.lineNumber}`,
-      unitCostMinor: line.unitCostMinor,
+      unitCostMinor,
       printedMrpMinor: line.printedMrpMinor,
       receivedExpiresAt: batch.expiresAt,
       receivedExpiryPrecision: line.expiryPrecision,
       quantityUnits: line.acceptedCanonicalUnits,
       idempotencyKey: acceptedKey(line.id),
-      receivedAt: receipt.receivedAt,
+      // The receipt keeps the calendar date keyed on it (UTC midnight). Stock being posted is
+      // on hand now, so the lot is never received later than the posting instant: a GRN keyed
+      // at 01:30 PKT for today's Karachi date must be sellable at once, not from 05:00 PKT.
+      receivedAt: receipt.receivedAt > input.at ? input.at : receipt.receivedAt,
       quarantine:
         line.rejectedCanonicalUnits > 0 && line.quarantineLocationId
           ? {
@@ -364,6 +518,9 @@ export async function postGoodsReceipt(
       where: { id: line.id },
       data: {
         inventoryLotId: posted.lot.id,
+        ...(orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor
+          ? { unitCostMinor, allocatedOrderChargeMinor: orderTerms.allocatedChargeMinor }
+          : {}),
         ...(near && !line.gs1Warnings.includes(near.code)
           ? { gs1Warnings: [...line.gs1Warnings, near.code] }
           : {}),
@@ -388,11 +545,19 @@ export async function postGoodsReceipt(
         (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
         0
       );
+    const earlierBonusOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce((total, other) => total + other.bonusCanonicalUnits, 0);
     const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
     const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
       ordered: terms
-        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        ? {
+            ...terms,
+            previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt,
+            previouslyReceivedBonusUnits:
+              (terms.previouslyReceivedBonusUnits ?? 0) + earlierBonusOnReceipt,
+          }
         : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
@@ -400,10 +565,16 @@ export async function postGoodsReceipt(
         rejectedCanonicalUnits: line.rejectedCanonicalUnits,
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+        bonusCanonicalUnits: line.bonusCanonicalUnits,
+        receivedAt: receipt.receivedAt,
       },
     }).filter(
       (exception) =>
-        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+        lastLotOfOrderLine ||
+        (exception.kind !== 'SHORTAGE' &&
+          exception.kind !== 'OVERAGE' &&
+          exception.kind !== 'BONUS_SHORTAGE' &&
+          exception.kind !== 'SCHEME_EXPIRED')
     )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
@@ -548,6 +719,7 @@ async function orderedTermsFor(
   if (!purchaseOrderLineId) return null;
   const orderLine = await db.pharmacyPurchaseOrderLine.findFirst({
     where: { id: purchaseOrderLineId, organizationId: scope.organizationId },
+    include: { purchaseOrder: { select: { quote: { select: { validUntil: true } } } } },
   });
   if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
 
@@ -570,6 +742,12 @@ async function orderedTermsFor(
       (total, line) => total + line.receivedCanonicalUnits + line.bonusCanonicalUnits,
       0
     ),
+    previouslyReceivedBonusUnits: earlier.reduce(
+      (total, line) => total + line.bonusCanonicalUnits,
+      0
+    ),
+    // The scheme comes from the distributor quote the order was raised from.
+    schemeValidUntil: orderLine.purchaseOrder?.quote?.validUntil ?? null,
   };
 }
 
@@ -586,9 +764,10 @@ export type ReverseGoodsReceiptResult = {
  * Nothing about the original receipt is rewritten. Its lines, its lot and its
  * movements stay exactly as posted; what changes is that a negating ADJUSTMENT
  * now names each of them, and the receipt itself moves to REVERSED with an
- * actor and a reason. If the stock has already moved on, the ledger's
- * non-negative balance refuses the reversal rather than inventing a negative
- * shelf (§8A invariant 6) — the operator has to write off or return instead.
+ * actor and a reason. If the stock has already moved on, the reversal is
+ * refused with REVERSAL_STOCK_MOVED or REVERSAL_PACKS_OPENED rather than
+ * inventing a negative shelf (§8A invariant 6) — the operator has to write off
+ * or return instead.
  *
  * Open exceptions are deliberately left open: a shortage that was really
  * reported is still a fact about the delivery after the paperwork is undone,
@@ -629,7 +808,15 @@ export async function reverseGoodsReceipt(
       idempotencyKey: { in: keys },
     },
     orderBy: { idempotencyKey: 'asc' },
-    select: { id: true },
+    select: {
+      id: true,
+      inventoryLotId: true,
+      stockLocationId: true,
+      disposition: true,
+      quantityUnits: true,
+      sealedPackDelta: true,
+      looseUnitDelta: true,
+    },
   });
   if (posted.length === 0) throw new PharmacyInventoryError('NOT_FOUND');
 
@@ -684,6 +871,8 @@ export async function reverseGoodsReceipt(
     // Use the same order even when a receipt has multiple movements to reverse.
     await lockRegister(db, scope.organizationId, scope.branchId);
   }
+
+  await assertReceiptStockStillOnHand(db, scope, posted);
 
   // Reverse one movement, then write its register row, before the next one.
   // The register trigger checks each row's running balance against sellable
@@ -747,6 +936,95 @@ export async function reverseGoodsReceipt(
     reversedAt: input.at,
     reversalMovementIds: reversals.map((movement) => movement.id),
   };
+}
+
+type PostedReceiptMovement = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  disposition: string;
+  quantityUnits: number;
+  sealedPackDelta: number;
+  looseUnitDelta: number;
+};
+
+/**
+ * PUR-04 / §8A invariant 6. A reversal is the exact negation of each receipt
+ * movement at the same lot, location and disposition, so it is only possible
+ * while that bucket still holds what the receipt put there. Check that first,
+ * under the balance row locks, and refuse with a reason the operator can act
+ * on instead of letting the non-negative CHECK surface as a server error.
+ * The CHECK stays the backstop behind this.
+ */
+async function assertReceiptStockStillOnHand(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  movements: readonly PostedReceiptMovement[]
+) {
+  const needed = new Map<string, PostedReceiptMovement>();
+  for (const movement of movements) {
+    const key = `${movement.inventoryLotId}:${movement.stockLocationId}:${movement.disposition}`;
+    const total = needed.get(key);
+    needed.set(
+      key,
+      total
+        ? {
+            ...total,
+            quantityUnits: total.quantityUnits + movement.quantityUnits,
+            sealedPackDelta: total.sealedPackDelta + movement.sealedPackDelta,
+            looseUnitDelta: total.looseUnitDelta + movement.looseUnitDelta,
+          }
+        : { ...movement }
+    );
+  }
+  const buckets = [...needed.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([, bucket]) => bucket);
+
+  // Lock in a deterministic order, then read in a separate statement so the
+  // read sees anything that committed while the lock was waited on.
+  for (const bucket of buckets) {
+    await db.$queryRaw`
+      SELECT "inventoryLotId" FROM "pharmacy_stock_balances"
+      WHERE "organizationId" = ${scope.organizationId}
+        AND "inventoryLotId" = ${bucket.inventoryLotId}
+        AND "stockLocationId" = ${bucket.stockLocationId}
+        AND "disposition"::text = ${bucket.disposition}
+      FOR UPDATE`;
+  }
+  const balances = await db.pharmacyStockBalance.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: { in: [...new Set(buckets.map((bucket) => bucket.inventoryLotId))] },
+    },
+    select: {
+      inventoryLotId: true,
+      stockLocationId: true,
+      disposition: true,
+      onHandUnits: true,
+      sealedPacks: true,
+      looseUnits: true,
+    },
+  });
+
+  for (const bucket of buckets) {
+    const balance = balances.find(
+      (row) =>
+        row.inventoryLotId === bucket.inventoryLotId &&
+        row.stockLocationId === bucket.stockLocationId &&
+        row.disposition === bucket.disposition
+    );
+    const onHand = balance?.onHandUnits ?? 0;
+    if (onHand < bucket.quantityUnits) {
+      throw new PharmacyReceivingError('REVERSAL_STOCK_MOVED');
+    }
+    if (
+      (balance?.sealedPacks ?? 0) < bucket.sealedPackDelta ||
+      (balance?.looseUnits ?? 0) < bucket.looseUnitDelta
+    ) {
+      throw new PharmacyReceivingError('REVERSAL_PACKS_OPENED');
+    }
+  }
 }
 
 /**

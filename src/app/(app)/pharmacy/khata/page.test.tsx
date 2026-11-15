@@ -81,7 +81,7 @@ describe('DEV-730 Khata page', () => {
 
   it('reports the action outcome carried on the redirect', async () => {
     await show({ notice: 'reminder-no-consent' });
-    expect(screen.getByRole('alert')).toHaveTextContent('has not opted in');
+    expect(screen.getByRole('alert')).toHaveTextContent('has not consented');
     cleanup();
     await show({ notice: 'reminder-sent' });
     expect(screen.getAllByRole('status')[0]).toHaveTextContent('WhatsApp reminder sent');

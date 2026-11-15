@@ -7,6 +7,7 @@ import {
   formatMinor,
   formatReceiptDate,
   formatReceiptIssuedAt,
+  localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
   type CounterReceipt,
@@ -254,10 +255,14 @@ export function buildCounterZReportPreview(
       ? []
       : tenderTotalsSchema
           .parse(report.tenderTotals)
-          .map(
-            (row) =>
-              `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`
-          )),
+          .flatMap((row) => [
+            `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`,
+            // DEV-713: who confirmed this type's manual card or wallet payments.
+            ...(row.confirmers ?? []).map(
+              (confirmer) =>
+                `  ${locale === 'ur' ? 'تصدیق کنندہ' : 'Confirmed by'} ${confirmer.name} · ${localizeReceiptNumber(String(confirmer.count), locale)} · ${formatMinor(confirmer.amountMinor, locale)}`
+            ),
+          ])),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

@@ -15,6 +15,7 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
+import { useTheme } from '@/components/theme-provider';
 import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
@@ -187,7 +188,8 @@ export function AppShell({
   const counterPos = pathname === '/pharmacy/counter';
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
-  const brandStyle = tenantBrandTokens(brand) as CSSProperties;
+  const { resolvedTheme } = useTheme();
+  const brandStyle = tenantBrandTokens(brand, resolvedTheme) as CSSProperties;
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -242,13 +244,13 @@ export function AppShell({
         {pharmacyPlaceholder ? (
           <div
             role="alert"
-            className="min-h-10 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950"
+            className="min-h-10 border-b border-warning/40 bg-warning/10 px-4 py-2 text-center text-xs font-semibold text-foreground"
           >
             Licence details are PLACEHOLDER – not a real licence
           </div>
         ) : null}
         {session?.user.isSupportSession ? (
-          <div className="flex min-h-10 items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-950">
+          <div className="flex min-h-10 items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-foreground">
             <span className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4 shrink-0" />
               Audited support access · acting as {session.user.name}

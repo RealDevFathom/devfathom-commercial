@@ -258,6 +258,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyCameras: 'pharmacy-core',
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
+  // CEO-JVCORE-20261025: manual journal vouchers are Pharmacy Finance bookkeeping.
+  pharmacyGeneralJournal: 'pharmacy-finance',
   pharmacyOffline: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
   // DEV-753: the owner switch for supplier compliance checks belongs to the
@@ -408,6 +410,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/pharmacy/inventory', 'pharmacy-inventory'],
   ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
+  ['/pharmacy/accounts/general-journal', 'pharmacy-finance'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],

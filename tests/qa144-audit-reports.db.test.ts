@@ -57,7 +57,8 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
   }, 30000);
   afterAll(async () => {
     if (owner) {
-      await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
+      // Audit rows are append-only (DEV-155) and stay behind under this run's
+      // unique organization id; deleting their actor only clears `actorId`.
       await owner.query('DELETE FROM restaurant_daily_closes WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM restaurant_drawer_sessions WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM users WHERE "organizationId"=$1', [org]);

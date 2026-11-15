@@ -244,7 +244,8 @@ export async function stopRestaurantGrowthSandbox(
     })
     .strict()
     .parse(raw);
-  if (input.text.trim().toUpperCase() !== 'STOP') throw new GrowthReviewError('INVALID');
+  const keyword = input.text.trim().toUpperCase();
+  if (keyword !== 'STOP' && keyword !== 'بند') throw new GrowthReviewError('INVALID');
   return h.db.$transaction(async (tx) => {
     const actor = { ...h, db: tx as ScopedDb };
     const policy = await admit(actor.db, admission);
@@ -261,7 +262,7 @@ export async function stopRestaurantGrowthSandbox(
       h.ctx.organizationId,
       input.customerId
     );
-    return appendCustomerConsent(actor.db, {
+    const consent = await appendCustomerConsent(actor.db, {
       customerId: input.customerId,
       channel: 'WHATSAPP',
       granted: false,
@@ -270,6 +271,12 @@ export async function stopRestaurantGrowthSandbox(
       policyVersion: policy.policyVersion,
       idempotencyKey: 'restaurant-growth-stop:' + input.eventId,
     });
+    return {
+      ...consent,
+      confirmation:
+        'You will no longer receive WhatsApp marketing messages from this restaurant.\n' +
+        'آپ کو اب اس ریسٹورنٹ سے واٹس ایپ تشہیری پیغامات نہیں ملیں گے۔',
+    };
   });
 }
 /** Bounded, internal operational receipt diagnostic. No attribution write or money guess. */

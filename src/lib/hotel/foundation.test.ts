@@ -31,7 +31,9 @@ const priorCatalogDigests = {
   // later, it recomputes this pin with its day-close change and names it here.
   // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner /
   // Operator templates; the hashed catalog data differs only by those grants.
-  PHARMACY: '259c422c8d031e258714eb533a8efe682deefd4361d8994fc69c8bcc272e95b0',
+  // DEV-509 (#1071): the procurement, dispensing, safety and CRM module route
+  // prefixes now name existing pages; the hashed data differs only by those four.
+  PHARMACY: 'a3e301ec26c4b31e7c807aff989528a399f8f959c1981db9361fa87af5ea27ab',
 };
 
 const property = {

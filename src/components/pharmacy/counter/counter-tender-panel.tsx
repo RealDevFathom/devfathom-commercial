@@ -12,21 +12,26 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
+  MANUAL_CARD_APPROVAL_CODE,
+  MANUAL_CARD_REFERENCE,
+  manualCardCaptureSchema,
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
 import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
+import type { CounterCartTender } from '@/lib/pharmacy/counter';
 
 /**
- * The tenders POS-05 recognises, in button order. Card needs a certified
- * adapter. `offer` decides which buttons the counter shows: the four core
- * tenders always, a manual wallet only when the branch has merchant details
- * for it. Wallet and legacy Credit are no longer offered; they stay here so a
- * restored attempt of either type still renders and can be resolved.
+ * The tenders POS-05 recognises, in button order. `offer` decides which
+ * buttons the counter shows: the four core tenders always, a manual wallet
+ * only once loaded branch settings show it is enabled. DEV-713: Card is a
+ * payment received on the shop's standalone terminal, so it needs no provider.
+ * Wallet and legacy Credit are no longer offered; they stay here so a restored
+ * attempt of either type still renders and can be resolved.
  */
 const TENDER_TYPES = [
   { value: 'CASH', label: 'Cash', requiresAdapter: false, offer: 'always' },
-  { value: 'CARD', label: 'Card', requiresAdapter: true, offer: 'always' },
+  { value: 'CARD', label: 'Card', requiresAdapter: false, offer: 'always' },
   { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false, offer: 'always' },
   { value: 'KHATA', label: 'Khata', requiresAdapter: false, offer: 'always' },
   { value: 'JAZZCASH', label: 'JazzCash', requiresAdapter: false, offer: 'configured' },
@@ -58,6 +63,8 @@ export type KhataSignupInput =
   | { patientId: string; displayName: string; consentGranted: true }
   | { displayName: string; phone: string; consentGranted: true };
 export type CounterTenderPanelProps = {
+  /** #722: payments already recorded on this bill, in the order taken. */
+  tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
   manualSettings?: ManualPaymentSettings;
@@ -89,6 +96,7 @@ export type CounterTenderPanelProps = {
     payerName?: string;
     providerRef?: string;
     referenceSkipped?: boolean;
+    approvalCode?: string;
   };
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
@@ -104,12 +112,14 @@ export type CounterTenderPanelProps = {
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
+      approvalCode?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
 };
 
-function parseAmountMinor(value: string): number | null {
+/** A typed money amount (up to two decimals) in minor units, or null when it is not one. */
+export function parseAmountMinor(value: string): number | null {
   const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(value.trim());
   if (!match) return null;
   const major = Number.parseInt(match[1]!, 10);
@@ -134,6 +144,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      tenders = [],
       confirmedChangeMinor,
       state,
       blocked,
@@ -178,6 +189,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
     );
+    const [approvalCode, setApprovalCode] = useState(initialDraft?.approvalCode ?? '');
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
@@ -216,12 +228,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         entry.value === type ||
         entry.offer === 'always' ||
         (entry.offer === 'configured' &&
+          !manualSettingsLoading &&
           !manualSettingsError &&
           Boolean(manualSettings?.[entry.value]))
     );
     const cashDrawerClosed = drawerOpen === false;
+    // DEV-713 (15 Nov decision): Wallet is its own tender, never taken as Card.
+    // Each enabled wallet records its provider and transaction reference.
+    const walletOptions = offered.filter((entry) => entry.offer === 'configured');
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
+    const manualCard = type === 'CARD';
+    const cardCapture = manualCard
+      ? manualCardCaptureSchema.safeParse({ providerRef, approvalCode })
+      : null;
     const merchant = manual ? manualSettings?.[type] : undefined;
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
@@ -317,6 +337,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           Boolean(merchant) &&
           capture?.success === true &&
           (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
+      (!manualCard || cardCapture?.success === true) &&
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
@@ -358,6 +379,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     : { providerRef: capture.data.providerRef }),
                 }
               : {}),
+            ...(manualCard && cardCapture?.success ? cardCapture.data : {}),
           },
           { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
         );
@@ -369,6 +391,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setProviderRef('');
           setPayerName('');
           setReferenceSkipped(false);
+          setApprovalCode('');
           if (isKhata && loadKhataAccounts) {
             try {
               setAccounts(await loadKhataAccounts());
@@ -414,6 +437,40 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       }
     }
 
+    const renderTenderButton = (entry: (typeof TENDER_TYPES)[number]) => {
+      const active = entry.value === type;
+      const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
+      return (
+        <div key={entry.value} className="min-w-0 space-y-1">
+          <Button
+            type="button"
+            size="touch"
+            variant={active ? 'secondary' : 'outline'}
+            className="w-full rounded-sm"
+            aria-pressed={active}
+            aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
+            disabled={!editable}
+            onClick={() => {
+              if (active) return;
+              setType(entry.value);
+              setProviderRef('');
+              setPayerName('');
+              setReferenceSkipped(false);
+              setApprovalCode('');
+            }}
+          >
+            {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
+            {entry.label}
+          </Button>
+          {drawerNote ? (
+            <p id="tender-cash-drawer" className="text-xs text-destructive">
+              {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
+            </p>
+          ) : null}
+        </div>
+      );
+    };
+
     return (
       <div ref={ref} tabIndex={-1} className="min-w-0 space-y-5 focus-visible:outline-none">
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
@@ -436,6 +493,29 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         </div>
 
         <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
+
+        {tenders.length > 0 ? (
+          <ol aria-label="Recorded tenders" className="space-y-2">
+            {tenders.map((tender, index) => (
+              <li
+                key={tender.tenderId}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border-subtle bg-surface-card px-3 py-2 text-sm"
+              >
+                <span className="text-text-body">
+                  {index + 1}.{' '}
+                  {tender.type === 'CREDIT' || tender.type === 'KHATA'
+                    ? 'Khata'
+                    : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
+                      tender.type)}{' '}
+                  · Recorded
+                </span>
+                <span className="font-mono tabular-nums text-text-strong">
+                  {formatMinor(tender.amountMinor)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
 
         <p
           ref={statusRef}
@@ -503,38 +583,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             aria-labelledby="tender-type-label"
             className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3"
           >
-            {offered.map((entry) => {
-              const active = entry.value === type;
-              const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
-              return (
-                <div key={entry.value} className="min-w-0 space-y-1">
-                  <Button
-                    type="button"
-                    size="touch"
-                    variant={active ? 'secondary' : 'outline'}
-                    className="w-full rounded-sm"
-                    aria-pressed={active}
-                    aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
-                    disabled={!editable}
-                    onClick={() => {
-                      if (active) return;
-                      setType(entry.value);
-                      setProviderRef('');
-                      setPayerName('');
-                      setReferenceSkipped(false);
-                    }}
-                  >
-                    {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
-                    {entry.label}
-                  </Button>
-                  {drawerNote ? (
-                    <p id="tender-cash-drawer" className="text-xs text-destructive">
-                      {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
-                    </p>
-                  ) : null}
+            {offered.filter((entry) => entry.offer !== 'configured').map(renderTenderButton)}
+            {walletOptions.length ? (
+              <div
+                role="group"
+                aria-labelledby="tender-wallet-label"
+                className="col-span-full space-y-1.5 border-t border-border-subtle pt-2"
+              >
+                <p id="tender-wallet-label" className="text-xs font-medium text-text-muted">
+                  Wallet
+                </p>
+                <div className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3">
+                  {walletOptions.map(renderTenderButton)}
                 </div>
-              );
-            })}
+              </div>
+            ) : null}
           </div>
           {manualSettingsError && !manual ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -586,7 +649,56 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               Enter an amount between 0.01 and the balance due.
             </p>
           ) : null}
+          {editable && amountValid && amountMinor! < balanceMinor! ? (
+            <p className="text-sm text-text-body" aria-live="polite">
+              {tenders.length > 0 ? `Tender ${tenders.length + 1}. ` : ''}Remaining after this
+              tender{' '}
+              <span className="font-mono tabular-nums text-text-strong">
+                {formatMinor(balanceMinor! - amountMinor!)}
+              </span>
+            </p>
+          ) : null}
         </div>
+
+        {manualCard ? (
+          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+            <p className="text-sm text-text-muted">
+              Take the card on the shop’s terminal first. Enter the details from the approved slip;
+              you are recorded as the person who confirmed this payment. Take JazzCash, Easypaisa or
+              Raast under Wallet, not Card.
+            </p>
+            <Label htmlFor="manual-card-reference">Card last 4 digits or terminal reference</Label>
+            <Input
+              id="manual-card-reference"
+              className="min-h-11 font-mono"
+              autoComplete="off"
+              value={providerRef}
+              maxLength={24}
+              disabled={!editable}
+              aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
+              aria-describedby="manual-card-help"
+              onChange={(event) => setProviderRef(event.target.value)}
+            />
+            <Label htmlFor="manual-card-approval">Approval code</Label>
+            <Input
+              id="manual-card-approval"
+              className="min-h-11 font-mono"
+              autoComplete="off"
+              value={approvalCode}
+              maxLength={12}
+              disabled={!editable}
+              aria-invalid={
+                approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
+              }
+              aria-describedby="manual-card-help"
+              onChange={(event) => setApprovalCode(event.target.value)}
+            />
+            <p id="manual-card-help" className="text-sm text-text-muted">
+              Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
+              enter the full card number.
+            </p>
+          </div>
+        ) : null}
 
         {manual ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
@@ -594,8 +706,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
             {!manualSettingsLoading && !manualSettingsError && !merchant ? (
               <p role="alert">
-                This branch has no merchant details for {type}. Ask an administrator to configure
-                them in Finance.
+                {type} is not enabled at this branch. Ask an administrator to enable it in Finance.
               </p>
             ) : null}
             {onReloadManualSettings ? (
@@ -628,8 +739,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   </>
                 ) : null}
                 <p className="text-sm text-text-muted">
-                  Confirm receipt in the merchant bank or wallet account before taking payment. This
-                  QR is static; the payer enters the amount shown.
+                  Confirm receipt in the merchant bank or wallet account before taking payment; you
+                  are recorded as the person who confirmed it.
+                  {merchant.qrImageDataUrl
+                    ? ' This QR is static; the payer enters the amount shown.'
+                    : ''}
                 </p>
                 <Label htmlFor="manual-payer-name">Payer’s name</Label>
                 <Input

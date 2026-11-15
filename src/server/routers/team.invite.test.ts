@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   count: vi.fn(),
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
-  can: vi.fn(async () => true),
+  can: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -59,6 +60,7 @@ const db = {
     run({
       user: {
         findFirst: mocks.findFirst,
+        findUnique: mocks.findUnique,
         create: mocks.create,
         update: mocks.update,
         count: mocks.count,
@@ -148,6 +150,39 @@ describe('team.inviteMember duplicate guard', () => {
     );
   });
 
+  it.each([undefined, null])(
+    'preserves the pending role when no template is selected (%s)',
+    async (organizationRoleId) => {
+      mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+      mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+      mocks.invitationUpsert.mockResolvedValue({});
+
+      await caller().inviteMember({ ...invite, email: 'manager@company.com', organizationRoleId });
+
+      const data = mocks.update.mock.calls[0]![0].data;
+      expect(data).not.toHaveProperty('organizationRoleId');
+      expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('replaces a pending role when a valid template is explicitly selected', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+    mocks.roleFindFirst.mockResolvedValue({ id: 'role_branch', name: 'Branch Manager' });
+
+    await caller().inviteMember({
+      ...invite,
+      email: 'manager@company.com',
+      organizationRoleId: 'role_branch',
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationRoleId: 'role_branch' }),
+      })
+    );
+  });
+
   it('rejects a role template outside the tenant catalog', async () => {
     mocks.roleFindFirst.mockResolvedValue(null);
 
@@ -208,5 +243,83 @@ describe('team.inviteMember duplicate guard', () => {
       caller().inviteMember({ ...invite, email: 'new.person@company.com' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Invalid department.' });
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+// #435: an admin with a DENY `team:setRole` override keeps `admin:access` but
+// may not grant a role or role template through an invite.
+describe('team.inviteMember team:setRole gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: unknown) => action !== 'team:setRole'
+    );
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.roleFindFirst.mockResolvedValue({ id: 'role_gm', name: 'General Manager' });
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(1);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+  });
+
+  it.each([
+    ['an ADMIN role', { role: 'ADMIN' as const }],
+    ['an HR role', { role: 'HR' as const }],
+    ['a role template', { organizationRoleId: 'role_gm' }],
+  ])('refuses to invite with %s', async (_label, extra) => {
+    await expect(
+      caller().inviteMember({ ...invite, email: 'grant@company.com', ...extra })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      expect.objectContaining({ type: 'User' }),
+      expect.anything()
+    );
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an ADMIN role', { role: 'ADMIN', organizationRoleId: null }],
+    ['an HR role', { role: 'HR', organizationRoleId: null }],
+    ['a role template', { role: 'EMPLOYEE', organizationRoleId: 'role_gm' }],
+  ])('refuses a baseline re-invite that would revoke %s', async (_label, current) => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.findUnique.mockResolvedValue(current);
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'pending@company.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      { type: 'User', id: 'user_pending', targetRole: 'EMPLOYEE' },
+      expect.anything()
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('still re-invites a pending baseline employee', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.findUnique.mockResolvedValue({ role: 'EMPLOYEE', organizationRoleId: null });
+    mocks.update.mockResolvedValue({ id: 'user_pending', name: 'Alex Carter' });
+
+    await caller().inviteMember({ ...invite, email: 'pending@company.com' });
+
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+
+  it('still invites a baseline employee with no role template', async () => {
+    await caller().inviteMember({ ...invite, email: 'plain@company.com' });
+
+    expect(mocks.can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mocks.create).toHaveBeenCalledOnce();
   });
 });

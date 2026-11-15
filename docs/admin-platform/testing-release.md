@@ -122,7 +122,7 @@ Create a disposable shared-provisioning job, then:
 bun run platform:jobs -- --max-jobs=1
 ```
 
-Expected result contains one claimed/succeeded job and a READY shared deployment. Dedicated Azure automation is not provider-verified and remains blocked until a controlled isolated environment reaches READY and passes acceptance.
+Expected result contains one claimed/succeeded job and a READY shared deployment. Dedicated AWS automation is not provider-verified and remains blocked until a controlled isolated environment reaches READY and passes acceptance.
 
 ## Fresh database gate
 
@@ -154,4 +154,4 @@ The full-repository `bun run format:check` is not currently a clean baseline: it
 
 ## Evidence policy
 
-Record command, date, environment, result, and any intentionally skipped external integration in [STATUS](STATUS.md). Never convert a local build into a claim that DNS, Azure resources, Blob, email, IdP, or production backup is configured.
+Record command, date, environment, result, and any intentionally skipped external integration in [STATUS](STATUS.md). Never convert a local build into a claim that DNS, AWS resources, Blob, email, IdP, or production backup is configured.

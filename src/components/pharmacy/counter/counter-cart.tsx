@@ -198,7 +198,7 @@ export function CounterCartPanel({
                           {allocation.overridden ? (
                             <StatusPill status="override" tone="warning" label="Batch override" />
                           ) : allocation.overridden === false ? (
-                            <StatusPill status="fefo" tone="neutral" label="FEFO" />
+                            <StatusPill status="fefo" tone="neutral" label="Earliest expiry" />
                           ) : null}
                           <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
                         </div>
@@ -277,9 +277,6 @@ export type CounterLotOption = {
  * choosing the recommended lot is not an override and records nothing.
  */
 export type CounterLotOverrideValue = { inventoryLotId: string | null; reason: string };
-
-/** The policy a counter override is recorded under: the pharmacist on duty decides. */
-export const COUNTER_OVERRIDE_APPROVAL_POLICY = 'PHARMACIST_ON_DUTY';
 
 const BLOCK_LABEL: Record<string, string> = {
   EXPIRED: 'Expired',
@@ -386,7 +383,7 @@ export function CounterLotOverride({
                 <span>Batch {lot.batchNumber}</span>
                 <span>Exp {formatReceiptDate(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
-                {fefo ? <StatusPill status="fefo" tone="neutral" label="FEFO" /> : null}
+                {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}
                 {blocked ? (
                   <StatusPill
                     status="blocked"
@@ -435,7 +432,7 @@ export function CounterLotOverride({
         disabled={disabled}
         onClick={() => onChange(null)}
       >
-        Keep FEFO batch
+        Use earliest-expiry batch
       </button>
     </div>
   );

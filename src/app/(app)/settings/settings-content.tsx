@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import { toast } from 'sonner';
@@ -35,6 +35,7 @@ import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Dialog,
+  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -165,7 +166,9 @@ export function SettingsContent() {
                 <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
                   Email
                 </p>
-                <p className="break-all font-mono text-xs text-foreground">{session?.user?.email}</p>
+                <p className="break-all font-mono text-xs text-foreground">
+                  {session?.user?.email}
+                </p>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
@@ -192,6 +195,8 @@ export function SettingsContent() {
         {/* Leave the company */}
         <ResignationSection />
       </div>
+
+      <SecurityDangerZone />
     </div>
   );
 }
@@ -284,6 +289,7 @@ function PreferenceRow({
 }
 
 function AppearanceSection() {
+  const { vertical } = useEntitlements();
   const { theme, setTheme } = useTheme();
   const { density, type, accent, layout, icons, setPreference } = usePreferences();
   // Best-effort, non-blocking mirror to the user record so prefs follow the
@@ -365,23 +371,25 @@ function AppearanceSection() {
           />
         </PreferenceRow>
 
-        <PreferenceRow
-          label="Navigation layout"
-          description="A left side rail or a top navigation bar."
-        >
-          <SegmentedControl<Layout>
-            aria-label="Navigation layout"
-            value={layout}
-            options={[
-              { value: 'rail', label: 'Side rail' },
-              { value: 'top', label: 'Top nav' },
-            ]}
-            onChange={(v) => {
-              setPreference('layout', v);
-              persist.mutate({ layout: v });
-            }}
-          />
-        </PreferenceRow>
+        {vertical !== 'PHARMACY' && (
+          <PreferenceRow
+            label="Navigation layout"
+            description="A left side rail or a top navigation bar."
+          >
+            <SegmentedControl<Layout>
+              aria-label="Navigation layout"
+              value={layout}
+              options={[
+                { value: 'rail', label: 'Side rail' },
+                { value: 'top', label: 'Top nav' },
+              ]}
+              onChange={(v) => {
+                setPreference('layout', v);
+                persist.mutate({ layout: v });
+              }}
+            />
+          </PreferenceRow>
+        )}
 
         <PreferenceRow label="Nav icons" description="Numbered indices or architectural icons.">
           <SegmentedControl<Icons>
@@ -643,7 +651,7 @@ export function ProfileSection() {
               <button
                 onClick={handleSave}
                 disabled={updateProfile.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {updateProfile.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -671,11 +679,6 @@ function PasswordSection() {
       setTimeout(() => setSuccess(false), 3000);
     },
     onError: (err) => setError(err.message),
-  });
-
-  // IMP-AUTH-03: revoke every other session, then sign this device out too.
-  const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
-    onSuccess: () => void signOutEverything(),
   });
 
   const [current, setCurrent] = useState('');
@@ -721,10 +724,15 @@ function PasswordSection() {
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div>
-            <label className="block text-xs font-medium text-foreground mb-1">
+            <label
+              htmlFor="current-password"
+              className="block text-xs font-medium text-foreground mb-1"
+            >
               Current Password
             </label>
             <input
+              id="current-password"
+              autoComplete="current-password"
               type="password"
               value={current}
               onChange={(e) => setCurrent(e.target.value)}
@@ -732,8 +740,16 @@ function PasswordSection() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground mb-1">New Password</label>
+            <label
+              htmlFor="new-password"
+              className="block text-xs font-medium text-foreground mb-1"
+            >
+              New Password
+            </label>
             <input
+              id="new-password"
+              autoComplete="new-password"
+              aria-describedby="password-requirements"
               type="password"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
@@ -741,8 +757,15 @@ function PasswordSection() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground mb-1">Confirm</label>
+            <label
+              htmlFor="confirm-password"
+              className="block text-xs font-medium text-foreground mb-1"
+            >
+              Confirm
+            </label>
             <input
+              id="confirm-password"
+              autoComplete="new-password"
               type="password"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
@@ -753,31 +776,35 @@ function PasswordSection() {
             />
           </div>
         </div>
-        {/* IMP-AUTH-05: live password-policy checklist (shared passwordRules). */}
-        {newPw.length > 0 && (
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
-            {passwordRules.map((rule) => {
-              const ok = rule.test(newPw);
-              return (
-                <li
-                  key={rule.id}
-                  className={cn(
-                    'flex items-center gap-1.5 text-[11px]',
-                    ok ? 'text-emerald-500' : 'text-muted-foreground'
-                  )}
-                >
-                  <Check className={cn('h-3 w-3', ok ? 'opacity-100' : 'opacity-30')} />
-                  {rule.label}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <ul id="password-requirements" className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+          {passwordRules.map((rule) => {
+            const ok = rule.test(newPw);
+            return (
+              <li
+                key={rule.id}
+                className={cn(
+                  'flex items-center gap-1.5 text-xs',
+                  ok ? 'text-success' : 'text-muted-foreground'
+                )}
+              >
+                {ok ? (
+                  <Check aria-hidden="true" className="h-3 w-3" />
+                ) : (
+                  <span aria-hidden="true" className="h-3 w-3">
+                    •
+                  </span>
+                )}
+                <span className="sr-only">{ok ? 'Met: ' : 'Required: '}</span>
+                <span>{rule.label}</span>
+              </li>
+            );
+          })}
+        </ul>
         <div className="flex justify-end">
           <button
             onClick={handleSubmit}
             disabled={!current || !newPw || !confirm || changePassword.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {changePassword.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -787,24 +814,89 @@ function PasswordSection() {
             Change Password
           </button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-        {/* IMP-AUTH-03: cross-device session kill switch. */}
-        <div className="flex items-center justify-between border-t border-border/60 pt-4">
-          <div>
-            <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
-            <p className="text-[11px] text-muted-foreground">
-              Revoke all sessions on every device. Use this if you suspect your account is
-              compromised.
-            </p>
-          </div>
-          <button
-            onClick={() => signOutEverywhere.mutate()}
-            disabled={signOutEverywhere.isPending}
-            className="shrink-0 rounded-xl border border-border px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-          >
-            {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
-          </button>
+function SecurityDangerZone() {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState('');
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
+    onSuccess: () => void signOutEverything(),
+    onError: (err) => setError(err.message),
+  });
+
+  return (
+    <Card
+      role="region"
+      aria-labelledby="security-danger-title"
+      className="mt-8 border-destructive/40"
+    >
+      <CardHeader>
+        <CardTitle>
+          <h2 id="security-danger-title" className="text-base font-semibold text-destructive">
+            Danger zone
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-foreground">Sign out everywhere</p>
+          <p className="text-sm text-muted-foreground">
+            Sign out of your account on every device, including this one. Use this if you think
+            someone else has access to your account.
+          </p>
         </div>
+        <Dialog
+          open={open}
+          onOpenChange={(nextOpen) => {
+            if (signOutEverywhere.isPending) return;
+            setOpen(nextOpen);
+            setError('');
+          }}
+        >
+          <DialogTrigger render={<Button variant="destructive" size="touch" />}>
+            Sign out everywhere
+          </DialogTrigger>
+          <DialogContent initialFocus={cancelRef} showCloseButton={!signOutEverywhere.isPending}>
+            <DialogHeader>
+              <DialogTitle>Sign out everywhere?</DialogTitle>
+              <DialogDescription>
+                You will be signed out on all devices, including this device. Save any unfinished
+                work first. You will need to sign in again to continue.
+              </DialogDescription>
+            </DialogHeader>
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                ref={cancelRef}
+                variant="outline"
+                size="touch"
+                disabled={signOutEverywhere.isPending}
+                onClick={() => setOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="touch"
+                disabled={signOutEverywhere.isPending}
+                onClick={() => {
+                  setError('');
+                  signOutEverywhere.mutate();
+                }}
+              >
+                {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );
@@ -814,7 +906,7 @@ function PasswordSection() {
    Recent sign-ins (IMP-AUTH-03 — visibility half)
    Surfaces the caller's own successful LOGIN rows from the audit trail.
    Auth is stateless JWT, so individual sessions can't be enumerated or
-   revoked one-by-one — "Sign out everywhere" (Password section) is the only
+   revoked one-by-one — "Sign out everywhere" (Danger zone) is the only
    kill switch. This card is the matching visibility view.
    ============================================================ */
 
@@ -823,7 +915,8 @@ function PasswordSection() {
 // specific brands are checked first. Falls back to a trimmed raw UA so a row
 // never renders blank.
 function parseUserAgent(ua: string | null): string {
-  if (!ua) return 'Unknown device';
+  ua = ua?.trim() ?? '';
+  if (!ua) return 'Successful sign-in';
   const browser = /Edg\//.test(ua)
     ? 'Edge'
     : /OPR\/|Opera/.test(ua)
@@ -867,7 +960,7 @@ function RecentSignInsSection() {
         <p className="text-xs text-muted-foreground mt-1">
           Your latest successful sign-ins. Individual sessions can&apos;t be listed or revoked
           one-by-one — use <span className="font-medium text-foreground">Sign out everywhere</span>{' '}
-          in the Password section to revoke them all.
+          in the Danger zone below to sign out on all devices.
         </p>
       </CardHeader>
       <CardContent>
@@ -886,9 +979,9 @@ function RecentSignInsSection() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {parseUserAgent(s.userAgent)}
                   </p>
-                  <p className="text-[11px] font-mono text-muted-foreground">
-                    {s.ip ?? 'Unknown IP'}
-                  </p>
+                  {s.ip?.trim() && (
+                    <p className="text-[11px] font-mono text-muted-foreground">{s.ip.trim()}</p>
+                  )}
                 </div>
                 <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">
                   {formatDeliveryTime(s.createdAt)}
@@ -1069,7 +1162,8 @@ function TwoFactorSection() {
           Two-Factor Authentication
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
-          Require a time-based code from an authenticator app at sign-in.
+          Add an extra sign-in check: enter a code from an app on your phone along with your
+          password.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1082,7 +1176,8 @@ function TwoFactorSection() {
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-2">
             <p className="text-sm font-semibold text-foreground">Save your recovery codes</p>
             <p className="text-xs text-muted-foreground">
-              Each code works once if you lose your authenticator. They won&apos;t be shown again.
+              Keep them somewhere safe. Each code lets you sign in once if you lose access to the
+              app on your phone. They won&apos;t be shown again.
             </p>
             <div className="grid grid-cols-2 gap-1.5 font-mono text-xs">
               {recoveryCodes.map((c) => (
@@ -1096,7 +1191,7 @@ function TwoFactorSection() {
             </div>
             <button
               onClick={() => setRecoveryCodes(null)}
-              className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C]"
+              className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
             >
               I&apos;ve saved them
             </button>
@@ -1141,10 +1236,23 @@ function TwoFactorSection() {
           </div>
         ) : enrolling ? (
           <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Add this account to your authenticator app — scan the URI or enter the key manually —
-              then enter the 6-digit code to confirm.
-            </p>
+            <ol
+              aria-label="Set up two-factor authentication"
+              className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground"
+            >
+              <li>
+                Open an authenticator app on your phone, such as Google Authenticator or Microsoft
+                Authenticator.
+              </li>
+              <li>
+                Add an account using a setup key. Give it a name you recognize, enter the key below,
+                and choose &quot;Time based&quot; if asked.
+              </li>
+              <li>
+                Enter the 6-digit code shown in the app below, then select &quot;Verify &amp;
+                enable&quot;.
+              </li>
+            </ol>
             <div>
               <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 Setup key
@@ -1154,13 +1262,21 @@ function TwoFactorSection() {
               </code>
             </div>
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer">otpauth:// URI</summary>
+              <summary className="cursor-pointer">Advanced setup link</summary>
               <code className="mt-1 block break-all rounded-lg bg-background border border-border px-3 py-2 font-mono text-foreground">
                 {enrolling.otpauthUri}
               </code>
             </details>
-            <div className="flex items-center gap-2">
+            <label
+              htmlFor="two-factor-setup-code"
+              className="block text-xs font-medium text-foreground"
+            >
+              6-digit code from your app
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
               <input
+                id="two-factor-setup-code"
+                autoComplete="one-time-code"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="123456"
@@ -1170,7 +1286,7 @@ function TwoFactorSection() {
               <button
                 onClick={() => confirm.mutate({ token: code })}
                 disabled={code.length < 6 || confirm.isPending}
-                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
               >
                 {confirm.isPending ? 'Verifying…' : 'Verify & enable'}
               </button>
@@ -1187,7 +1303,7 @@ function TwoFactorSection() {
             <button
               onClick={() => begin.mutate()}
               disabled={begin.isPending}
-              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-50"
             >
               {begin.isPending ? 'Starting…' : 'Enable two-factor authentication'}
             </button>
@@ -1378,7 +1494,7 @@ export function ApiTokensSection() {
               </code>
               <button
                 onClick={handleCopy}
-                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary-hover transition-colors"
               >
                 {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? 'Copied' : 'Copy'}
@@ -1619,7 +1735,7 @@ export function ApiTokensSection() {
                   }
                 }}
                 disabled={!name.trim() || selectedScopes.length === 0 || createToken.isPending}
-                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {createToken.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -1825,7 +1941,7 @@ export function WebhooksSection() {
               </code>
               <button
                 onClick={handleCopy}
-                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary-hover transition-colors"
               >
                 {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? 'Copied' : 'Copy'}
@@ -1915,7 +2031,7 @@ export function WebhooksSection() {
                       <span
                         className={cn(
                           'flex h-4 w-4 items-center justify-center rounded border',
-                          on ? 'border-primary bg-primary text-white' : 'border-border'
+                          on ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
                         )}
                       >
                         {on && <Check className="h-3 w-3" />}
@@ -1946,7 +2062,7 @@ export function WebhooksSection() {
               <button
                 onClick={handleCreate}
                 disabled={!url.trim() || selectedEvents.length === 0 || createWebhook.isPending}
-                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {createWebhook.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />

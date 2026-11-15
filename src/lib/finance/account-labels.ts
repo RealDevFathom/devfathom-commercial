@@ -20,6 +20,7 @@ export const FINANCE_ACCOUNT_LABELS = {
   ACCOUNTS_PAYABLE: 'Accounts payable',
   CASH_OVER_SHORT: 'Cash over or short',
   OPENING_BALANCE_EQUITY: 'Opening balance equity',
+  MANUAL_NONTRADE_ACCRUAL: 'Non-trade accruals',
 } as const satisfies Readonly<Record<FinanceAccountCode, string>>;
 
 /**

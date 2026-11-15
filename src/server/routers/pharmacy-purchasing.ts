@@ -22,6 +22,7 @@ import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
   lockReceivablePurchaseOrder,
+  orderReceiptCostTerms,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -79,8 +80,8 @@ import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
+  receiptLandedCosts,
   receiptLineQuantities,
-  receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -1401,6 +1402,8 @@ const purchasingRouter = router({
             .optional(),
           note: z.string().trim().max(2000).optional(),
           qualifiedPersonUserId: z.string().trim().min(1).optional(),
+          /** DEV-77: freight the supplier billed on this invoice, spread into lot landed cost. */
+          freightMinor: z.number().int().nonnegative().max(999_999_999).default(0),
           lines: z
             .array(
               z
@@ -1469,6 +1472,8 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
+            null;
           if (input.purchaseOrderId) {
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
@@ -1476,6 +1481,11 @@ const purchasingRouter = router({
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
             });
+            costedOrder = {
+              id: input.purchaseOrderId,
+              freightMinor: order.freightMinor,
+              otherChargesMinor: order.otherChargesMinor,
+            };
             // An organization-wide order raised from a branch requisition is
             // still that branch's demand: receiving against it needs reach
             // there too, as every other order-scoped procedure does (#979).
@@ -1540,18 +1550,15 @@ const purchasingRouter = router({
             if ('blocked' in attempt) return attempt;
           }
 
-          const ownOrderLines = new Map(
-            input.purchaseOrderId
-              ? (
-                  await db.pharmacyPurchaseOrderLine.findMany({
-                    where: { purchaseOrderId: input.purchaseOrderId },
-                    select: { id: true, medicineId: true, packLevelId: true },
-                  })
-                ).map((line) => [line.id, line] as const)
-              : []
-          );
+          // PUR-03: the lot carries the landed cost the order was approved at:
+          // its line rebate and its share of the order's freight and charges.
+          const orderTerms = costedOrder
+            ? await orderReceiptCostTerms(db, scope.organizationId, costedOrder)
+            : null;
 
           const lines = [];
+          const orderCostTermsByLine: Array<{ rebateBps: number; allocatedChargeMinor: number }> =
+            [];
           const seenSerials = new Set<string>();
           for (const [index, line] of input.lines.entries()) {
             if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
@@ -1561,8 +1568,10 @@ const purchasingRouter = router({
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
+            const orderLine = line.purchaseOrderLineId
+              ? orderTerms?.orderLines.get(line.purchaseOrderLineId)
+              : undefined;
             if (line.purchaseOrderLineId) {
-              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
               if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
               // The referenced order line is the authority for item identity. Without
               // this check, unrelated goods could inherit its price and quantity terms,
@@ -1581,6 +1590,21 @@ const purchasingRouter = router({
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               rejectedCanonicalUnits: line.rejectedCanonicalUnits,
             });
+            // The order line's rebate always applies. Its share of the order's
+            // freight and other charges applies only when this receipt bills no
+            // freight of its own: the invoice is then the authority for what
+            // this delivery's freight was, and the two never stack. Either way
+            // the delivery's paid units count against the order line's share.
+            const orderLineTerms = orderTerms?.termsFor(
+              line.purchaseOrderLineId,
+              quantities.receivedCanonicalUnits
+            ) ?? { rebateBps: 0, allocatedChargeMinor: 0 };
+            const orderCostTerms = {
+              rebateBps: orderLineTerms.rebateBps,
+              allocatedChargeMinor:
+                input.freightMinor > 0 ? 0 : orderLineTerms.allocatedChargeMinor,
+            };
+            orderCostTermsByLine.push(orderCostTerms);
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
               batchNumber: line.batchNumber,
@@ -1649,17 +1673,12 @@ const purchasingRouter = router({
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // PUR-03: bonus units divide the same money over more units, so a
-              // scheme lowers the landed cost and never adds revenue.
-              unitCostMinor: receiptLineUnitCostMinor({
-                receivedPacks: line.receivedPacks,
-                bonusPacks: line.bonusPacks,
-                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-                discountBps: line.discountBps,
-                taxBps: line.taxBps,
-                taxCreditable: line.taxCreditable,
-              }),
+              // PUR-03 / DEV-77 / DEV-161: bonus units divide the same money over
+              // more units, so a scheme lowers the landed cost and never adds
+              // revenue; the charge shares are added once every line is known.
+              allocatedFreightMinor: 0,
+              allocatedOrderChargeMinor: orderCostTerms.allocatedChargeMinor,
+              unitCostMinor: 0,
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
               gtin: identity.gtin,
@@ -1669,11 +1688,36 @@ const purchasingRouter = router({
             });
           }
 
+          // DEV-77: one landed-cost pass over the whole receipt, so the freight
+          // shares sum to the billed freight exactly and every lot carries
+          // (net − rebate + non-creditable tax + charge share) / (received +
+          // bonus). DEV-161: each line also brings its order-line rebate and,
+          // when the invoice bills no freight, its share of the PO's charges.
+          const landed = receiptLandedCosts({
+            freightMinor: input.freightMinor,
+            lines: input.lines.map((line, index) => ({
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+              discountBps: line.discountBps,
+              rebateBps: orderCostTermsByLine[index]!.rebateBps,
+              taxBps: line.taxBps,
+              taxCreditable: line.taxCreditable,
+              allocatedChargeMinor: orderCostTermsByLine[index]!.allocatedChargeMinor,
+            })),
+          });
+          for (const [index, line] of lines.entries()) {
+            line.allocatedFreightMinor = landed[index]!.allocatedFreightMinor;
+            line.unitCostMinor = landed[index]!.unitCostMinor;
+          }
+
           const receipt = await db.pharmacyGoodsReceipt.create({
             data: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
               reference: input.reference,
+              freightMinor: input.freightMinor,
               supplierId: input.supplierId,
               purchaseOrderId: input.purchaseOrderId ?? null,
               supplierInvoiceRef: input.supplierInvoiceRef,

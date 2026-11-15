@@ -112,7 +112,7 @@ export function PnlReport() {
               className={cn(
                 'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
                 selected === c
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >

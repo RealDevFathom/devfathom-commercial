@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, type ReactNode } from 'react';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,6 +10,8 @@ import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharma
 
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
+  /** Safe stock available in the selected branch, supplied by the catalog row. */
+  onHandUnits: number;
   selected: SaleUnitKind | null;
   quantity: string;
   preview: SaleLinePreview | null;
@@ -20,6 +22,8 @@ export type CounterUnitToggleProps = {
   onQuantityChange: (quantity: string) => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
+  /** Why there is no sale unit, in shop words (out of stock, pack setup to fix). */
+  emptyMessage?: ReactNode;
 };
 
 const KIND_LABEL: Record<SaleUnitKind, string> = {
@@ -42,6 +46,7 @@ const KIND_LABEL: Record<SaleUnitKind, string> = {
  */
 export function CounterUnitToggle({
   options,
+  onHandUnits,
   selected,
   quantity,
   preview,
@@ -50,6 +55,7 @@ export function CounterUnitToggle({
   onSelect,
   onQuantityChange,
   chordFor,
+  emptyMessage,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
   const parsedQuantity = Number(quantity);
@@ -64,8 +70,10 @@ export function CounterUnitToggle({
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        No sale unit is available for this medicine. Its pack hierarchy does not match the received
-        lot, so no price can be derived.
+        {emptyMessage ??
+          (onHandUnits === 0
+            ? 'Out of stock at this branch. Capture as unfulfilled demand or receive stock before selling.'
+            : 'No sale unit is available for this medicine. Its pack hierarchy does not match the received lot, so no price can be derived.')}
       </p>
     );
   }
@@ -192,7 +200,7 @@ export function CounterUnitToggle({
         >
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              {inline ? 'Units' : 'Canonical units'}
+              Units
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
@@ -236,7 +244,7 @@ export function CounterUnitToggle({
                 />
                 <span className="text-sm text-text-body">
                   Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
-                  capture the shortfall as unfulfilled demand.
+                  record the shortage.
                 </span>
               </span>
             )}

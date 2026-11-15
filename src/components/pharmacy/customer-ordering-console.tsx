@@ -12,6 +12,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { DeliveryEvidenceForm } from './delivery-evidence-form';
 import { trpc } from '@/lib/trpc';
+import { formatOrderDateTime, formatOrderMoney } from '@/lib/pharmacy/customer-order-format';
 import type { AppRouter } from '@/server/routers/_app';
 
 type Outputs = inferRouterOutputs<AppRouter>;
@@ -19,18 +20,6 @@ type CatalogItem = Outputs['pharmacyOrdering']['catalog'][number];
 type CustomerOrder = NonNullable<Outputs['pharmacyOrdering']['mine'][number]>;
 type CartLine = CatalogItem & { quantity: number };
 type Notice = { tone: 'success' | 'danger' | 'neutral'; message: string };
-
-function money(minor: number, currency: string) {
-  return new Intl.NumberFormat('en-PK', { style: 'currency', currency }).format(minor / 100);
-}
-
-function dateTime(value: Date) {
-  return new Intl.DateTimeFormat('en-PK', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: 'Asia/Karachi',
-  }).format(value);
-}
 
 function message(error: { message: string }) {
   const messages: Record<string, string> = {
@@ -97,7 +86,7 @@ function OrderCard({
         <div className="text-right">
           <StatusPill status={order.status} />
           <p className="mt-2 font-mono text-xs tabular-nums text-text-strong">
-            Quoted total: {money(total, currency)}
+            Quoted total: {formatOrderMoney(total, currency)}
           </p>
         </div>
       </div>
@@ -108,7 +97,7 @@ function OrderCard({
               {line.quantity} × {line.medicine.brandName ?? line.medicine.productName}
             </span>
             <span className="font-mono tabular-nums text-text-muted">
-              {money(line.lineTotalMinor, currency)}
+              {formatOrderMoney(line.lineTotalMinor, currency)}
             </span>
           </li>
         ))}
@@ -116,12 +105,12 @@ function OrderCard({
       <ol aria-label="Order tracking" className="mt-3 space-y-1 text-sm text-text-muted">
         {order.events.map((event) => (
           <li key={event.id}>
-            {event.kind.replaceAll('_', ' ')} · {dateTime(event.occurredAt)}
+            {event.kind.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt)}
           </li>
         ))}
         {order.deliveryEvidence.map((event) => (
           <li key={event.id}>
-            {event.action.replaceAll('_', ' ')} · {dateTime(event.occurredAt)}
+            {event.action.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt)}
           </li>
         ))}
       </ol>
@@ -133,7 +122,7 @@ function OrderCard({
       ) : null}
       {['PROPOSED', 'ACCEPTED', 'PACKING'].includes(order.status) ? (
         <p className="mt-3 text-xs text-text-muted">
-          Reservation expires {dateTime(order.reservationExpiresAt)}
+          Reservation expires {formatOrderDateTime(order.reservationExpiresAt)}
         </p>
       ) : null}
       {staff && next ? (
@@ -431,7 +420,7 @@ export function PharmacyCustomerOrderingConsole() {
                   </div>
                   <div className="mt-4 flex items-center justify-between">
                     <span className="font-mono text-sm tabular-nums text-text-strong">
-                      {money(item.unitPriceMinor, currency)}
+                      {formatOrderMoney(item.unitPriceMinor, currency)}
                     </span>
                     <Button size="lg" disabled={item.availablePacks < 1} onClick={() => add(item)}>
                       Add
@@ -626,7 +615,7 @@ export function PharmacyCustomerOrderingConsole() {
                 Total
               </p>
               <p className="font-display text-xl font-semibold text-text-strong">
-                {money(totalMinor, currency)}
+                {formatOrderMoney(totalMinor, currency)}
               </p>
             </div>
             <Button

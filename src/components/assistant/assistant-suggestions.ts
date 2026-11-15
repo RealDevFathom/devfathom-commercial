@@ -15,6 +15,30 @@ export const ASSISTANT_SUGGESTION_CONDITIONS = [
   },
   { text: 'Find notes I can access', module: 'notes', tool: 'searchNotes' },
   { text: 'What meetings are on my schedule?', module: 'meetings', tool: 'listMeetings' },
+  {
+    text: "What are today's sales?",
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: 'Which medicines are expiring soon?',
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: 'Which items are running low on stock?',
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: "How did today's orders go?",
+    module: 'restaurant-core',
+    tool: 'askRestaurantReports',
+    vertical: 'RESTAURANT',
+  },
 ] as const;
 
 export function assistantEntry(
@@ -22,7 +46,7 @@ export function assistantEntry(
   user: Session['user'] | undefined,
   sessionStatus: 'loading' | 'authenticated' | 'unauthenticated'
 ) {
-  const neutral = { title: 'Ask Fathom', suggestions: [] as string[], canChat: false };
+  const neutral = { title: 'Ask Fathom', suggestions: [] as string[], canChat: false, accessLimited: true };
   if (sessionStatus === 'loading') {
     return { ...neutral, description: 'Loading your workspace access…' };
   }
@@ -71,5 +95,8 @@ export function assistantEntry(
     description,
     suggestions,
     canChat: true,
+    // Owners/admins have full workspace access, so an empty list is not an
+    // access problem for them; other roles keep the access-based wording.
+    accessLimited: user.role !== 'ADMIN',
   };
 }

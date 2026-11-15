@@ -218,3 +218,52 @@ describeDb('FIN-04 tax profile versioning', () => {
     });
   });
 });
+
+describeDb('CEO-JVCORE-20261025 common ledger lock', () => {
+  it('makes a post wait for a concurrent close and then honour the closed period', async () => {
+    let releaseClose!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let closeLocked!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      closeLocked = resolve;
+    });
+    const closing = deps.withTenantDb(
+      organizationId,
+      async (db) => {
+        const period = await deps.bookkeeping.closeAccountingPeriod(db, scope, {
+          startsAt: new Date('2024-02-01T00:00:00Z'),
+          endsAt: new Date('2024-03-01T00:00:00Z'),
+        });
+        closeLocked();
+        await gate;
+        return period;
+      },
+      { timeout: 30_000 }
+    );
+    await locked;
+    let postSettled = false;
+    const posting = deps
+      .withTenantDb(
+        organizationId,
+        (db) =>
+          deps.bookkeeping.postBookkeepingTransaction(db, scope, {
+            reference: `LOCK-${suffix}`,
+            kind: 'EXPENSE',
+            amountMinor: 700,
+            occurredAt: new Date('2024-02-10T10:00:00Z'),
+            idempotencyKey: `lock-${suffix}`,
+          }),
+        { timeout: 30_000 }
+      )
+      .finally(() => {
+        postSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(postSettled).toBe(false);
+    releaseClose();
+    await closing;
+    await expect(posting).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+  }, 60_000);
+});

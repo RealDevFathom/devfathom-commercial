@@ -445,7 +445,9 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'ORDER_NOT_BILLABLE' ||
       err.reason === 'BILL_NOT_OPEN' ||
       err.reason === 'RESPLIT_LOCKED' ||
-      err.reason === 'ALREADY_COMPED';
+      err.reason === 'ALREADY_COMPED' ||
+      err.reason === 'NOT_COMPED' ||
+      err.reason === 'IDEMPOTENCY_CONFLICT';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }
   if (err instanceof TenderError) {

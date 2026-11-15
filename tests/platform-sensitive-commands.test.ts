@@ -24,7 +24,16 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
-  user: { update: vi.fn(async () => ({ id: 'user_1', organizationId: 'org_1' })) },
+  user: {
+    update: vi.fn(async () => ({
+      id: 'user_1',
+      organizationId: 'org_1',
+      email: 'owner@tenant.test',
+      role: 'ADMIN',
+    })),
+    findMany: vi.fn(async () => [{ id: 'user_1' }, { id: 'admin_2' }]),
+  },
+  notification: { createMany: vi.fn(async ({ data }: any) => ({ count: data.length })) },
   organization: {
     findUnique: vi.fn(async () => state.organization),
     update: vi.fn(async ({ data }: any) => {
@@ -441,6 +450,7 @@ describe('sensitive commands', () => {
         });
       }
       expect(db.user.update).not.toHaveBeenCalled();
+      expect(db.notification.createMany).not.toHaveBeenCalled();
     }
   );
   it.each(actions)('%s requires a nonblank reason before writes', async (action) => {
@@ -462,6 +472,66 @@ describe('sensitive commands', () => {
       passwordReset: true,
     });
     expect(JSON.stringify(state.audits)).not.toContain('a-secret-password');
+  });
+  it('forces a password change at next sign-in and revokes sessions after a platform reset', async () => {
+    await execute('organization.user.password', {
+      id: 'user_1',
+      password: 'a-secret-password',
+      reason: 'Verified owner recovery',
+    });
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'user_1' },
+        data: expect.objectContaining({
+          password: 'hashed',
+          passwordChangedAt: null,
+          mustChangePassword: true,
+          tokenVersion: { increment: 1 },
+        }),
+      })
+    );
+    expect(state.audits[0]).toMatchObject({
+      action: 'organization.user.password',
+      actorPlatformUserId: 'actor_1',
+      targetId: 'user_1',
+      organizationId: 'org_1',
+      success: true,
+      after: {
+        email: 'owner@tenant.test',
+        role: 'ADMIN',
+        mustChangePassword: true,
+        sessionsRevoked: true,
+        notifiedUserIds: ['user_1', 'admin_2'],
+        reason: 'Verified owner recovery',
+      },
+    });
+  });
+  it('notifies the target user and tenant administrators of a platform password reset', async () => {
+    await executePlatformCommand(
+      { id: 'actor_1', role: 'SUPER_ADMIN', name: 'Platform Operator' } as any,
+      'organization.user.password',
+      { id: 'user_1', password: 'a-secret-password', reason: 'Verified owner recovery' },
+      req
+    );
+    expect(db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_1', role: 'ADMIN' }),
+      })
+    );
+    const rows = db.notification.createMany.mock.calls[0][0].data;
+    expect(rows.map((row: any) => row.userId)).toEqual(['user_1', 'admin_2']);
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        organizationId: 'org_1',
+        type: 'platform_password_reset',
+        entityType: 'User',
+        entityId: 'user_1',
+      });
+      expect(row.message).toContain('Platform Operator');
+      expect(row.message).toContain('owner@tenant.test');
+      expect(row.message).toContain('Verified owner recovery');
+      expect(row.message).not.toContain('a-secret-password');
+    }
   });
   it('denies an OPERATIONS vertical correction before mutation', async () => {
     await expect(

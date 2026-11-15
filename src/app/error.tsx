@@ -10,18 +10,18 @@ export default function GlobalError({
   reset: () => void;
 }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0A0F14] p-8">
+    <div className="flex min-h-screen items-center justify-center bg-background p-8">
       <div className="text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-500/10 mx-auto mb-5">
-          <AlertCircle className="h-8 w-8 text-red-500" />
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10 mx-auto mb-5">
+          <AlertCircle className="h-8 w-8 text-destructive" />
         </div>
-        <h2 className="font-display text-xl font-bold text-[#E6EBEE]">Something went wrong</h2>
-        <p className="mt-2 text-sm text-[#8A97A1] max-w-sm">
+        <h2 className="font-display text-xl font-bold text-foreground">Something went wrong</h2>
+        <p className="mt-2 text-sm text-muted-foreground max-w-sm">
           {error.message || 'An unexpected error occurred.'}
         </p>
         <button
           onClick={reset}
-          className="mt-6 flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white mx-auto hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="mt-6 flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground mx-auto hover:bg-primary-hover active:scale-[0.98]"
         >
           <RefreshCw className="h-4 w-4" />
           Try Again

@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * `src/lib/platform/auth.ts` already clears its bucket after a verified
  * credential; this pins the same contract for the tenant provider, and pins the
  * three properties that must NOT move with it: a failure still consumes a unit,
- * the limits are unchanged, and a throttled result stays indistinguishable from
- * a wrong password.
+ * and the limits are unchanged. DEV-640: a throttled attempt now says so with
+ * the `rate_limited` code instead of posing as a wrong password, and the
+ * account budget is scoped to the host's organization rather than the bare
+ * email shared with every tenant and the shared-host login.
  *
  * The rate limiter itself is deliberately NOT mocked — the assertions below are
  * about real counter state across a sequence of attempts, which a stubbed
@@ -19,7 +21,11 @@ const IP = '203.0.113.7';
 const EMAIL = 'alex@company.com';
 const PASSWORD = 'correct-horse-battery-staple';
 const IP_KEY = `login:ip:${IP}`;
-const ACCOUNT_KEY = `login:acct:${EMAIL}`;
+const ORGANIZATION_ID = 'org_chai_chowk';
+const ACCOUNT_KEY = `login:acct:${ORGANIZATION_ID}:${EMAIL}`;
+/** The bare-email bucket the shared-host login (/api/login) spends. */
+const SHARED_HOST_ACCOUNT_KEY = `login:acct:${EMAIL}`;
+const OTHER_ORGANIZATION_ACCOUNT_KEY = `login:acct:org_other:${EMAIL}`;
 /** Mirrors the production limits in auth.ts — not a knob for the test to relax. */
 const ACCOUNT_LIMIT = 10;
 const IP_LIMIT = 30;
@@ -77,7 +83,7 @@ vi.mock('@/lib/auth/login-intent', () => ({
   peekLoginIntent: vi.fn(),
 }));
 
-import { clearRateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 
 await import('./auth');
 
@@ -90,7 +96,7 @@ function credentialsProvider(): Provider {
 }
 
 const organization = {
-  id: 'org_chai_chowk',
+  id: ORGANIZATION_ID,
   slug: 'chai-chowk',
   status: 'ACTIVE',
   isDemo: false,
@@ -135,8 +141,7 @@ async function attempt(password: string, totp?: string) {
   }
 }
 
-/** The reason recorded for the most recent attempt — the only way to tell a
- * throttled attempt from a wrong password, since both return a uniform null. */
+/** The reason recorded for the most recent attempt (admin-only audit trail). */
 function lastAuditReason(): string | undefined {
   const calls = mocks.recordAuthAudit.mock.calls;
   if (calls.length === 0) return undefined;
@@ -154,6 +159,8 @@ beforeEach(async () => {
   // The limiter is real and module-scoped: reset only the two keys under test.
   await clearRateLimit(IP_KEY);
   await clearRateLimit(ACCOUNT_KEY);
+  await clearRateLimit(SHARED_HOST_ACCOUNT_KEY);
+  await clearRateLimit(OTHER_ORGANIZATION_ACCOUNT_KEY);
 
   mocks.compare.mockImplementation(async (plain: string) => plain === PASSWORD);
   mocks.verifyTotp.mockReturnValue(false);
@@ -230,12 +237,70 @@ describe('tenant login rate limiting', () => {
     expect(lastAuditReason()).toBe('Rate limited');
     // Throttling happens ahead of the bcrypt compare, as REST-04 requires.
     expect(mocks.compare).toHaveBeenCalledTimes(comparesBefore);
-    // A throttled attempt is byte-identical to a wrong password at the boundary.
-    expect(throttled).toBeNull();
+    // DEV-640: a throttled attempt says it was throttled, not that the password
+    // was wrong — the password was never checked.
+    expect(throttled).toBeInstanceOf(Error);
+    expect(throttled).toMatchObject({ code: 'rate_limited' });
     // And the correct password is refused too while the window is open, so the
     // limiter is not a bypass in either direction.
-    expect(await attempt(PASSWORD)).toBeNull();
+    const correctWhileThrottled = await attempt(PASSWORD);
+    expect(correctWhileThrottled).toMatchObject({ code: 'rate_limited' });
+    expect(correctWhileThrottled).not.toHaveProperty('id');
+    expect(mocks.compare).toHaveBeenCalledTimes(comparesBefore);
+    expect(mocks.updateUser).not.toHaveBeenCalled();
     expect(lastAuditReason()).toBe('Rate limited');
+  });
+
+  it('throttles an unknown address exactly like a known one, so the code is no oracle', async () => {
+    mocks.findFirstUser.mockResolvedValue(null);
+    for (let i = 0; i < ACCOUNT_LIMIT; i += 1) {
+      expect(await attempt('wrong-password')).toBeNull();
+      expect(lastAuditReason()).toBe('No such account');
+    }
+    expect(await attempt('wrong-password')).toMatchObject({ code: 'rate_limited' });
+    expect(lastAuditReason()).toBe('Rate limited');
+  });
+
+  it('reports the per-IP limit with the same rate_limited code', async () => {
+    const otherEmails = Array.from({ length: IP_LIMIT }, (_, i) => `probe${i}@example.com`);
+    mocks.findFirstUser.mockResolvedValue(null);
+    for (const email of otherEmails) {
+      expect(
+        await credentialsProvider().authorize({ email, password: 'wrong' }, request())
+      ).toBeNull();
+    }
+    expect(await attempt(PASSWORD)).toMatchObject({ code: 'rate_limited' });
+    expect(lastAuditReason()).toBe('Rate limited');
+    for (const email of otherEmails) {
+      await clearRateLimit(`login:acct:${ORGANIZATION_ID}:${email}`);
+    }
+  });
+
+  it('is not locked out by failures spent on the shared host or another organization', async () => {
+    // Exhaust the bare-email bucket the shared-host login spends, and the same
+    // address's bucket in another organization.
+    for (let i = 0; i <= ACCOUNT_LIMIT; i += 1) {
+      await rateLimit(SHARED_HOST_ACCOUNT_KEY, ACCOUNT_LIMIT, 5 * 60_000);
+      await rateLimit(OTHER_ORGANIZATION_ACCOUNT_KEY, ACCOUNT_LIMIT, 5 * 60_000);
+    }
+    expect((await rateLimit(SHARED_HOST_ACCOUNT_KEY, ACCOUNT_LIMIT, 5 * 60_000)).ok).toBe(false);
+
+    expect(await attempt(PASSWORD)).toMatchObject({ id: 'user_alex' });
+    expect(auditReasons()).not.toContain('Rate limited');
+  });
+
+  it('keeps failures on this host out of the shared-host and other-organization buckets', async () => {
+    for (let i = 0; i < ACCOUNT_LIMIT; i += 1) {
+      expect(await attempt('wrong-password')).toBeNull();
+    }
+    expect(await attempt('wrong-password')).toMatchObject({ code: 'rate_limited' });
+
+    expect((await rateLimit(SHARED_HOST_ACCOUNT_KEY, ACCOUNT_LIMIT, 5 * 60_000)).remaining).toBe(
+      ACCOUNT_LIMIT - 1
+    );
+    expect(
+      (await rateLimit(OTHER_ORGANIZATION_ACCOUNT_KEY, ACCOUNT_LIMIT, 5 * 60_000)).remaining
+    ).toBe(ACCOUNT_LIMIT - 1);
   });
 
   it('does not clear the budget when the password is right but the second factor is wrong', async () => {
@@ -248,7 +313,7 @@ describe('tenant login rate limiting', () => {
       expect(lastAuditReason()).toBe('Invalid 2FA code');
     }
 
-    expect(await attempt(PASSWORD, '000000')).toBeNull();
+    expect(await attempt(PASSWORD, '000000')).toMatchObject({ code: 'rate_limited' });
     expect(lastAuditReason()).toBe('Rate limited');
   });
 });

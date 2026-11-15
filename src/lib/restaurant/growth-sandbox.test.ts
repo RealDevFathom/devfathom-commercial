@@ -209,6 +209,47 @@ it('does not accept an arbitrary inbound message', async () => {
   ).rejects.toMatchObject({ code: 'INVALID' });
   expect(mocks.consent).not.toHaveBeenCalled();
 });
+it.each(['STOP', ' stop ', 'StOp', 'بند', ' بند '])(
+  'returns a bilingual growth opt-out confirmation after recording %s',
+  async (text) => {
+    const stored = { id: 'withdrawal', granted: false };
+    mocks.consent.mockResolvedValue(stored);
+    const result = await stopRestaurantGrowthSandbox(
+      h,
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
+      policy
+    );
+    expect(mocks.consent).toHaveBeenCalledExactlyOnceWith(
+      h.db,
+      {
+        customerId: 'c1',
+        channel: 'WHATSAPP',
+        granted: false,
+        source: 'TEST_SANDBOX_STOP',
+        actorId: 'u',
+        policyVersion: policy.policyVersion,
+        idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
+      }
+    );
+    expect(result).toEqual({
+      ...stored,
+      confirmation:
+        'You will no longer receive WhatsApp marketing messages from this restaurant.\n' +
+        'آپ کو اب اس ریسٹورنٹ سے واٹس ایپ تشہیری پیغامات نہیں ملیں گے۔',
+    });
+  }
+);
+it('does not confirm an opt-out when recording consent fails', async () => {
+  const error = new Error('Consent write failed');
+  mocks.consent.mockRejectedValueOnce(error);
+  await expect(
+    stopRestaurantGrowthSandbox(
+      h,
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'STOP' },
+      policy
+    )
+  ).rejects.toBe(error);
+});
 it('diagnostic keeps costs and money unknown and predicates exact receipt lineage', async () => {
   const result = await diagnoseRestaurantGrowthSandbox(
     h,

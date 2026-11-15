@@ -196,8 +196,11 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {formatKarachiDateTime(e.occurredAt)} · {financeSourceLabel(e.sourceKind)} ·{' '}
-            {e.billNumber == null ? 'Bill unavailable' : `Bill ${e.billNumber}`} · User:{' '}
+            {formatKarachiDateTime(e.occurredAt)} · {financeSourceLabel(e.sourceKind)}
+            {result.journalLabels?.paymentMethods[e.id]
+              ? ` · ${result.journalLabels.paymentMethods[e.id]}`
+              : ''}{' '}
+            · {e.billNumber == null ? 'Bill unavailable' : `Bill ${e.billNumber}`} · User:{' '}
             {e.userName ?? 'Unavailable'}
             {e.reversesEntryId ? ' · reversal' : ''}
             <span className="mt-1 block font-mono text-sm tabular-nums">
@@ -236,7 +239,7 @@ export async function FinancialStatements({
               >
                 <span title={l.accountCode}>
                   {financeAccountLabel(l.accountCode)} · {l.side === 'DEBIT' ? 'Debit' : 'Credit'}
-                  {l.lotId ? ` · lot ${l.lotId}` : ''}
+                  {l.lotId ? ` · ${result.journalLabels?.lots[l.lotId] ?? `lot ${l.lotId}`}` : ''}
                 </span>
                 <span className="font-mono">
                   {e.currency} {money(l.amountMinor)}

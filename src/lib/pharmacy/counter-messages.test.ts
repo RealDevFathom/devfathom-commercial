@@ -67,6 +67,7 @@ describe('counterErrorMessage', () => {
    */
   it('has a sentence for every reason PharmacySettlementError can raise', () => {
     const settlementReasons = [
+      'BUSINESS_DATE_NOT_CURRENT',
       'SALE_NOT_OPEN',
       'INVALID_AMOUNT',
       'OVER_TENDER',
@@ -77,6 +78,7 @@ describe('counterErrorMessage', () => {
       'MOCK_PROVIDER_IN_RELEASE',
       'OPEN_DRAWER',
       'REOPEN_REASON_REQUIRED',
+      'INVALID_MANUAL_CAPTURE',
     ] as const;
 
     for (const reason of settlementReasons) {
@@ -109,5 +111,11 @@ describe('counterErrorMessage', () => {
       expect(message, `${reason} is not a sentence`).toMatch(/[a-z]/);
       expect(message, `${reason} reads as a code`).not.toMatch(/^[A-Z][A-Z0-9_]*$/);
     }
+  });
+
+  it('DEV-713 names the provider gap without blaming a card terminal', () => {
+    const message = counterErrorMessage(new PharmacySettlementError('UNCERTIFIED_PROVIDER'));
+    expect(message).toBe('This tender needs a connected provider. Take another tender.');
+    expect(message).not.toMatch(/card terminal/i);
   });
 });

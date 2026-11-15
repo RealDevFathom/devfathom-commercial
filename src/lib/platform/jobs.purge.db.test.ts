@@ -83,6 +83,10 @@ const BRANCH_ID = `wha1209_branch_${suffix}`;
 const LIVE_BRANCH_ID = `wha1209_live_branch_${suffix}`;
 const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
+// The platform administrator who scheduled the purges (DEV-155: a purge names
+// its platform actor in the permanent record of the audit rows it removes).
+const PLATFORM_ACTOR = `wha1209_platform_admin_${suffix}`;
+const PURGE_REASON = 'Contract terminated; retention window elapsed.';
 const CUSTOMER_ID = `wa_consent_customer_${suffix}`;
 const CONSENT_CHANGED_AT = new Date('2026-10-22T09:10:11.000Z');
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
@@ -249,11 +253,26 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       await db.$executeRawUnsafe(
         // maxAttempts 1: a failure is terminal, so it lands in `error` for the
         // assertion to report instead of being rescheduled silently.
-        `INSERT INTO platform_jobs (id, "organizationId", type, status, payload, "maxAttempts", "updatedAt")
-         VALUES ($1, $2, 'PURGE_DATA', 'QUEUED', '{}'::jsonb, 1, now())`,
+        `INSERT INTO platform_jobs (id, "organizationId", type, status, payload, "maxAttempts", "requestedById", "updatedAt")
+         VALUES ($1, $2, 'PURGE_DATA', 'QUEUED', jsonb_build_object('reason', $4::text), 1, $3, now())`,
         JOB_ID,
-        PURGED_ORG
+        PURGED_ORG,
+        PLATFORM_ACTOR,
+        PURGE_REASON
       );
+      // Tenant audit evidence on both tenants: the purge removes only its own.
+      for (const [auditId, organizationId] of [
+        [`wha1209_audit_a_${suffix}`, PURGED_ORG],
+        [`wha1209_audit_b_${suffix}`, PURGED_ORG],
+        [`wha1209_audit_live_${suffix}`, LIVE_ORG],
+      ]) {
+        await db.$executeRawUnsafe(
+          `INSERT INTO audit_logs (id, "organizationId", source, category, action)
+           VALUES ($1, $2, 'TRPC', 'SYSTEM', 'fixture.audit')`,
+          auditId,
+          organizationId
+        );
+      }
       await db.$executeRawUnsafe(
         `UPDATE platform_jobs SET "scheduledAt" = '1900-01-01', "createdAt" = '1900-01-01'
          WHERE id = $1`,
@@ -352,6 +371,34 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       )
     );
     expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
+
+    // DEV-155: the tenant's audit rows go only with a permanent platform record,
+    // written first, of what was removed, for whom, by whom and why.
+    const [auditRows] = await withPlatformDb((db) =>
+      db.$queryRawUnsafe<Array<Record<string, bigint>>>(
+        `SELECT (SELECT count(*) FROM audit_logs WHERE "organizationId" = $1) AS purged,
+                (SELECT count(*) FROM audit_logs WHERE "organizationId" = $2) AS live`,
+        PURGED_ORG,
+        LIVE_ORG
+      )
+    );
+    expect(auditRows).toEqual({ purged: BigInt(0), live: BigInt(1) });
+    const purgeRecords = await withPlatformDb((db) =>
+      db.platformAuditLog.findMany({
+        where: { organizationId: PURGED_ORG, action: 'organization.audit_logs.purge' },
+      })
+    );
+    expect(purgeRecords).toHaveLength(1);
+    expect(purgeRecords[0]).toMatchObject({
+      actorPlatformUserId: PLATFORM_ACTOR,
+      reason: PURGE_REASON,
+      requestId: JOB_ID,
+      targetType: 'AuditLog',
+      metadata: expect.objectContaining({ jobId: JOB_ID, table: 'audit_logs', rows: 2 }),
+    });
+    expect((purgeRecords[0]!.metadata as { idDigest: string }).idDigest).toMatch(
+      /^sha256:[0-9a-f]{64}$/
+    );
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({
@@ -616,10 +663,11 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
 
     await withPlatformDb(async (db) => {
       await db.$executeRawUnsafe(
-        `INSERT INTO platform_jobs (id, "organizationId", type, status, payload, "maxAttempts", "updatedAt")
-         VALUES ($1, $2, 'PURGE_DATA', 'QUEUED', '{}'::jsonb, 1, now())`,
+        `INSERT INTO platform_jobs (id, "organizationId", type, status, payload, "maxAttempts", "requestedById", "updatedAt")
+         VALUES ($1, $2, 'PURGE_DATA', 'QUEUED', '{}'::jsonb, 1, $3, now())`,
         HOTEL_JOB_ID,
-        HOTEL_PURGED_ORG
+        HOTEL_PURGED_ORG,
+        PLATFORM_ACTOR
       );
       await db.$executeRawUnsafe(
         `UPDATE platform_jobs SET "scheduledAt" = '1900-01-01', "createdAt" = '1900-01-01' WHERE id = $1`,

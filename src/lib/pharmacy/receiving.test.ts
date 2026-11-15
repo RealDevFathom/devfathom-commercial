@@ -15,9 +15,11 @@ import {
   matchReceiptLine,
   PharmacyReceivingError,
   receiptLineQuantities,
+  receiptLineAllocatedChargeMinor,
   receiptLineUnitCostMinor,
   type SaleableEvidence,
 } from './receiving';
+import { landedCost } from './purchasing';
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
 const LICENCE = {
@@ -323,6 +325,128 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
       })
     ).toBe(0);
   });
+
+  it('matches the purchase order landed cost: rebate before tax, then allocated freight and charges', () => {
+    const orderLine = {
+      orderedPacks: 10,
+      bonusPacks: 2,
+      canonicalUnitsPerPack: 10,
+      listPricePerPackMinor: 10_000,
+      discountBps: 1_000,
+      rebateBps: 500,
+      taxBps: 1_700,
+      taxCreditable: false,
+    };
+    const order = landedCost({ lines: [orderLine], freightMinor: 3_000, otherChargesMinor: 1_200 });
+    const [costed] = order.lines;
+    const unitCost = receiptLineUnitCostMinor({
+      receivedPacks: 10,
+      bonusPacks: 2,
+      canonicalUnitsPerPack: 10,
+      invoicedPricePerPackMinor: 10_000,
+      discountBps: 1_000,
+      rebateBps: 500,
+      taxBps: 1_700,
+      taxCreditable: false,
+      allocatedChargeMinor: costed!.allocatedChargeMinor,
+    });
+    // 100_000 − 10% = 90_000; − 5% rebate = 85_500; + 17% tax = 100_035;
+    // + 4_200 freight and charges = 104_235 over 120 units.
+    expect(costed!.landedCostMinor).toBe(104_235);
+    expect(unitCost).toBe(869);
+    expect(unitCost).toBe(Math.round(costed!.landedCostMinor / costed!.canonicalUnits));
+  });
+
+  it('spreads an allocated charge over an all-bonus line instead of dropping it', () => {
+    expect(
+      receiptLineUnitCostMinor({
+        receivedPacks: 0,
+        bonusPacks: 5,
+        canonicalUnitsPerPack: 10,
+        invoicedPricePerPackMinor: 10_000,
+        allocatedChargeMinor: 500,
+      })
+    ).toBe(10);
+  });
+
+  it('refuses a negative or fractional allocated charge and an out-of-range rebate', () => {
+    const terms = {
+      receivedPacks: 10,
+      bonusPacks: 0,
+      canonicalUnitsPerPack: 10,
+      invoicedPricePerPackMinor: 10_000,
+    };
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, allocatedChargeMinor: -1 }))).toBe(
+      'INVALID_MONEY'
+    );
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, allocatedChargeMinor: 1.5 }))).toBe(
+      'INVALID_MONEY'
+    );
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, rebateBps: 10_001 }))).toBe(
+      'INVALID_MONEY'
+    );
+  });
+
+  it('prorates an order line charge by the paid canonical units a delivery brings', () => {
+    const charge = {
+      orderLineAllocatedChargeMinor: 4_200,
+      orderedPaidCanonicalUnits: 100,
+      previouslyReceivedPaidCanonicalUnits: 0,
+    };
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 100 })).toBe(
+      4_200
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 40 })).toBe(
+      1_680
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 0 })).toBe(0);
+    expect(
+      reasonOf(() =>
+        receiptLineAllocatedChargeMinor({
+          ...charge,
+          orderedPaidCanonicalUnits: 0,
+          receivedPaidCanonicalUnits: 1,
+        })
+      )
+    ).toBe('INVALID_QUANTITY');
+  });
+
+  it('never capitalises more than the whole allocation however a line is split or over-delivered', () => {
+    const charge = { orderLineAllocatedChargeMinor: 10_000, orderedPaidCanonicalUnits: 100 };
+    // One over-delivery carries the allocation once.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 0,
+        receivedPaidCanonicalUnits: 200,
+      })
+    ).toBe(10_000);
+    // Two full lots: the second finds the allocation already spent.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 100,
+        receivedPaidCanonicalUnits: 100,
+      })
+    ).toBe(0);
+    // Three uneven partial lots sum to the allocation exactly, with no rounding drift.
+    const thirds = [33, 33, 34].reduce<{ received: number; shares: number[] }>(
+      (acc, units) => ({
+        received: acc.received + units,
+        shares: [
+          ...acc.shares,
+          receiptLineAllocatedChargeMinor({
+            orderLineAllocatedChargeMinor: 1_001,
+            orderedPaidCanonicalUnits: 100,
+            previouslyReceivedPaidCanonicalUnits: acc.received,
+            receivedPaidCanonicalUnits: units,
+          }),
+        ],
+      }),
+      { received: 0, shares: [] }
+    );
+    expect(thirds.shares.reduce((sum, share) => sum + share, 0)).toBe(1_001);
+  });
 });
 
 describe('PUR-04 — the three-way match', () => {
@@ -445,6 +569,81 @@ describe('PUR-04 — the three-way match', () => {
       }).map((exception) => exception.kind)
     ).toEqual(['DAMAGE']);
     expect(matchReceiptLine({ ordered: null, received: RECEIVED })).toEqual([]);
+  });
+});
+
+describe('DEV-690 — bonus-scheme check at goods-in', () => {
+  // A 10+2 scheme on 10 packs of 10: 100 paid units and 20 free ones.
+  const ORDERED = {
+    canonicalUnitsPerPack: 10,
+    orderedCanonicalUnits: 100,
+    bonusCanonicalUnits: 20,
+    listPricePerPackMinor: 10_000,
+    previouslyReceivedUnits: 0,
+    previouslyReceivedBonusUnits: 0,
+    schemeValidUntil: new Date('2026-11-30T23:59:59Z'),
+  };
+  const RECEIVED = {
+    canonicalUnitsPerPack: 10,
+    arrivedCanonicalUnits: 120,
+    rejectedCanonicalUnits: 0,
+    rejectionReason: null,
+    invoicedPricePerPackMinor: 10_000,
+    bonusCanonicalUnits: 20,
+    receivedAt: new Date('2026-11-15T10:00:00Z'),
+  };
+
+  it('raises nothing when every free unit arrives inside the scheme window', () => {
+    expect(matchReceiptLine({ ordered: ORDERED, received: RECEIVED })).toEqual([]);
+  });
+
+  it('flags missing free units even when paid extras make the total quantity match', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, bonusCanonicalUnits: 0 },
+    });
+    expect(exceptions).toEqual([
+      expect.objectContaining({ kind: 'BONUS_SHORTAGE', expectedUnits: 20, observedUnits: 0 }),
+    ]);
+  });
+
+  it('accumulates free units across deliveries', () => {
+    expect(
+      matchReceiptLine({
+        ordered: { ...ORDERED, previouslyReceivedUnits: 60, previouslyReceivedBonusUnits: 10 },
+        received: { ...RECEIVED, arrivedCanonicalUnits: 60, bonusCanonicalUnits: 10 },
+      })
+    ).toEqual([]);
+    expect(
+      matchReceiptLine({
+        ordered: { ...ORDERED, previouslyReceivedUnits: 60, previouslyReceivedBonusUnits: 5 },
+        received: { ...RECEIVED, arrivedCanonicalUnits: 60, bonusCanonicalUnits: 10 },
+      }).map((exception) => [exception.kind, exception.observedUnits])
+    ).toEqual([['BONUS_SHORTAGE', 15]]);
+  });
+
+  it('flags a scheme that had lapsed before the goods arrived', () => {
+    const [exception, ...rest] = matchReceiptLine({
+      ordered: { ...ORDERED, schemeValidUntil: new Date('2026-11-01T00:00:00Z') },
+      received: RECEIVED,
+    });
+    expect(rest).toEqual([]);
+    expect(exception?.kind).toBe('SCHEME_EXPIRED');
+    expect(exception?.detail).toContain('2026-11-01');
+  });
+
+  it('checks nothing on a line with no scheme', () => {
+    expect(
+      matchReceiptLine({
+        ordered: {
+          ...ORDERED,
+          orderedCanonicalUnits: 120,
+          bonusCanonicalUnits: 0,
+          schemeValidUntil: new Date('2026-01-01T00:00:00Z'),
+        },
+        received: { ...RECEIVED, bonusCanonicalUnits: 0 },
+      })
+    ).toEqual([]);
   });
 });
 

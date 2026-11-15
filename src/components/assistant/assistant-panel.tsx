@@ -147,6 +147,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     'permission' | 'configuration' | 'provider' | null
   >(null);
   const [notice, setNotice] = useState('');
+  const [emptyHint, setEmptyHint] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(false);
   const submittedInput = useRef('');
@@ -220,6 +221,11 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
   const failed = requestError !== null || status === 'error';
   const send = async (text: string) => {
     const t = text.trim();
+    if (!t && entry.canChat && !busy) {
+      setEmptyHint(true);
+      return;
+    }
+    setEmptyHint(false);
     if (
       !conversation.isActive() ||
       !t ||
@@ -256,6 +262,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
       <SheetContent
         side="right"
         showCloseButton={false}
+        initialFocus={() => {
+          const input = inputRef.current;
+          return input && !input.disabled ? input : true;
+        }}
         className="gap-0 p-0 motion-reduce:transition-none motion-reduce:transform-none"
         style={{ width: '100%', maxWidth: 460 }}
       >
@@ -309,7 +319,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                   ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
                   : requestError === 'configuration'
                     ? "Ask Fathom isn't set up yet, contact support."
-                    : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
+                    : "Ask Fathom can't answer right now. Your question is saved. Try again in a few minutes; if it keeps happening, contact support."}
               </p>
               {requestError === 'provider' && (
                 <Button
@@ -321,7 +331,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                     inputRef.current?.focus();
                   }}
                 >
-                  Review and retry
+                  Try again
                 </Button>
               )}
             </div>
@@ -348,7 +358,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               id="assistant-question"
               disabled={!entry.canChat || requestError === 'permission'}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setEmptyHint(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
@@ -389,6 +402,11 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               </Button>
             )}
           </div>
+          {emptyHint && (
+            <p role="status" className="mt-2 px-1 text-xs text-destructive">
+              Type a question before sending.
+            </p>
+          )}
           <p className="mt-2 px-1 text-center text-[10px] text-muted-foreground">
             Access is checked for each request. Supported changes require your confirmation.
           </p>
@@ -451,7 +469,7 @@ function MessageBubble({
         {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
-              <p key={i} className="whitespace-pre-wrap break-words text-current">
+              <p key={i} dir="auto" className="whitespace-pre-wrap break-words text-start text-current">
                 {part.text}
               </p>
             ) : (
@@ -757,7 +775,9 @@ function EmptyState({
       </p>
       {entry.canChat && entry.suggestions.length === 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
-          No suggested actions are available for your current access.
+          {entry.accessLimited
+            ? 'No suggested actions are available for your current access.'
+            : 'Type a question below to get started.'}
         </p>
       )}
       <div className="mt-5 grid w-full gap-2">

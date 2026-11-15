@@ -9,6 +9,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyKhataRouter } from './khata-router';
+import { reminderOutcome } from './reminder-outcome';
 
 export const metadata = { title: 'Khata · Pharmacy' };
 const linkClass =
@@ -25,9 +26,17 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
     tone: 'status',
     text: 'WhatsApp reminder prepared in sandbox mode. No message left the pharmacy.',
   },
+  'reminder-sms-sent': {
+    tone: 'status',
+    text: 'Reminder sent by SMS because WhatsApp could not reach this payer.',
+  },
+  'reminder-sms-prepared': {
+    tone: 'status',
+    text: 'SMS reminder prepared in sandbox mode. No message left the pharmacy.',
+  },
   'reminder-duplicate': {
     tone: 'status',
-    text: 'This account was already reminded this week or the customer already had a reminder today.',
+    text: 'This account was already reminded this week, or the customer already had a reminder today.',
   },
   'reminder-not-due': {
     tone: 'alert',
@@ -35,11 +44,11 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
   },
   'reminder-no-consent': {
     tone: 'alert',
-    text: 'No reminder sent: the payer has not opted in to WhatsApp reminders, has no valid number, or it is outside 8 am to 10 pm.',
+    text: 'No reminder sent: the payer has not consented to reminders, has no valid number, or it is outside 8 am to 10 pm.',
   },
   'reminder-not-configured': {
     tone: 'alert',
-    text: 'No reminder sent: approved WhatsApp Khata reminder templates are not configured for this workspace.',
+    text: 'No reminder sent: neither approved WhatsApp Khata templates nor an SMS sender are configured for this workspace.',
   },
   'reminder-failed': {
     tone: 'alert',
@@ -94,21 +103,7 @@ async function sendReminder(formData: FormData) {
       branchId,
       familyAccountId: String(formData.get('familyAccountId') ?? ''),
     });
-    code = !result.configured
-      ? 'reminder-not-configured'
-      : result.sent
-        ? 'reminder-sent'
-        : result.prepared
-          ? 'reminder-prepared'
-          : result.duplicate
-            ? 'reminder-duplicate'
-            : result.skippedConfiguration
-              ? 'reminder-not-configured'
-              : result.skippedNoConsent
-                ? 'reminder-no-consent'
-                : result.failed || result.unknown
-                  ? 'reminder-failed'
-                  : 'reminder-not-due';
+    code = reminderOutcome(result);
   } catch (error) {
     unstable_rethrow(error);
     code = failureCode(error);

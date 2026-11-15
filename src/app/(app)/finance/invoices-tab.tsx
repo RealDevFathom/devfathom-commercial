@@ -99,7 +99,7 @@ export function InvoicesTab() {
         <p className="text-sm text-muted-foreground">{invoices?.length ?? 0} invoices</p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           <Plus className="h-3.5 w-3.5" />
           New Invoice
@@ -476,7 +476,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           <button
             onClick={handleSubmit}
             disabled={!clientId || !dueDate || items.length === 0 || createInvoice.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (
               <>

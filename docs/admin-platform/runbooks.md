@@ -8,7 +8,7 @@
 4. Create at least one active administrator.
 5. Record the signed contract, dates, grace, modules, limits, value, billing interval, and renewal owner.
 6. Add only necessary organization overrides.
-7. For shared mode, queue shared provisioning. For dedicated mode, stop until an approved isolated Azure environment and rollout plan exist.
+7. For shared mode, queue shared provisioning. For dedicated mode, stop until an approved isolated AWS environment and rollout plan exist.
 8. Configure and test brand, email, domain, SSO, and SCIM only as contracted.
 9. Review the effective tenant license view.
 10. Transition ONBOARDING → ACTIVE with the approved reason.
@@ -50,13 +50,13 @@ Resume:
 
 ## Dedicated provisioning
 
-Status: **BLOCKED** until the Azure dedicated-environment topology and automation are implemented and verified.
+Status: **BLOCKED** until the AWS dedicated-environment topology and automation are implemented and verified.
 
 1. Confirm a signed enterprise scope, explicit rollout approval, and named owner.
-2. Validate the isolated Azure environment, separate database, managed identity, Key Vault, storage, network, backup, and observability plan.
+2. Validate the isolated AWS environment, separate database, IAM role, Secrets Manager, storage, network, backup, and observability plan.
 3. Confirm the organization slug and planned custom host.
 4. Run migrations, RLS isolation, identity, domain, support, and rollback acceptance in staging-equivalent infrastructure.
-5. Queue dedicated provisioning only after the current Azure implementation is merged and verified.
+5. Queue dedicated provisioning only after the current AWS implementation is merged and verified.
 6. Wait for READY; do not manually mark READY while provider state is pending/error.
 7. Test organization resolution, login, module enforcement, support access, custom domain, and incident rollback.
 
@@ -66,7 +66,7 @@ Status: **BLOCKED** until the Azure dedicated-environment topology and automatio
 2. Check public DNS propagation and record quoting/splitting.
 3. Retry verification.
 4. Inspect `failureReason` and job error.
-5. Confirm an approved Azure deployment exists and ingress allows domain attachment.
+5. Confirm an approved AWS deployment exists and ingress allows domain attachment.
 6. Keep the canonical slug host available.
 7. Never mark a domain verified without independent proof and authorization.
 
@@ -132,7 +132,7 @@ If the launch fails, do not copy a ticket from logs. End/restart the session aft
 4. Set the approved purge schedule.
 5. At expiry, transition to PURGING and queue purge.
 6. Verify job result/deleted row counts and final PURGED state.
-7. Reconcile Blob, email, identity, DNS, Azure, and other provider-held data under policy.
+7. Reconcile Blob, email, identity, DNS, AWS, and other provider-held data under policy.
 
 ## Restore drill
 
