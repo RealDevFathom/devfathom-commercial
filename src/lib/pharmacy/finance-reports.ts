@@ -281,7 +281,7 @@ export type TrueProfitFact = {
   category: string | null;
   /** 0–23, the hour the sale completed on the reporting clock. */
   hour: number | null;
-  /** The user who rang up the sale. Returns stay with the original seller. */
+  /** The user who completed the sale. Returns stay with the original seller. */
   staffUserId: string | null;
   revenueMinor: number;
   discountMinor: number;
@@ -308,7 +308,7 @@ export function trueProfitFactsQuery(scope: JournalReportScope, input: { from: D
       SELECT line."productId",
              medicine."productFamily"::text AS "category",
              EXTRACT(HOUR FROM ((COALESCE(sale."completedAt", entry."occurredAt") AT TIME ZONE 'UTC') AT TIME ZONE ${TRUE_PROFIT_TIMEZONE}::text))::int AS "hour",
-             sale."createdByUserId" AS "staffUserId",
+             COALESCE(completion."actorId", sale."createdByUserId") AS "staffUserId",
              line."accountCode",
              CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
         FROM "finance_journal_lines" line
@@ -320,6 +320,18 @@ export function trueProfitFactsQuery(scope: JournalReportScope, input: { from: D
           ON sale."organizationId" = sale_line."organizationId"
          AND sale."branchId" = sale_line."branchId"
          AND sale."id" = sale_line."saleId"
+        -- The user who completed payment, which can differ from the one who
+        -- opened the bill or drafted the quotation.
+        LEFT JOIN LATERAL (
+          SELECT event."actorId"
+            FROM "pharmacy_sale_events" event
+           WHERE event."organizationId" = sale."organizationId"
+             AND event."branchId" = sale."branchId"
+             AND event."saleId" = sale."id"
+             AND event."kind" = 'COMPLETED'
+           ORDER BY event."occurredAt" DESC, event."id" DESC
+           LIMIT 1
+        ) completion ON TRUE
         LEFT JOIN "pharmacy_medicines" medicine
           ON medicine."organizationId" = line."organizationId" AND medicine."id" = line."productId"
        WHERE line."organizationId" = ${scope.organizationId}
@@ -329,9 +341,9 @@ export function trueProfitFactsQuery(scope: JournalReportScope, input: { from: D
          ${branchFilter(scope)}
     )
     SELECT "productId", "category", "hour", "staffUserId",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::int AS "revenueMinor",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::int AS "discountMinor",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'COST_OF_GOODS_SOLD' THEN "debitMinor" ELSE 0 END), 0)::int AS "cogsMinor"
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::bigint AS "revenueMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "discountMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'COST_OF_GOODS_SOLD' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "cogsMinor"
       FROM signed
      GROUP BY "productId", "category", "hour", "staffUserId"`;
 }
@@ -393,8 +405,29 @@ export async function trueProfit(
   scope: ReportScope,
   input: { from: Date; to: Date; by: TrueProfitDimension }
 ): Promise<TrueProfitRow[]> {
-  const facts = await db.$queryRaw<TrueProfitFact[]>(trueProfitFactsQuery(scope, input));
+  // The per-cell sums are bigint in SQL, so a large group never overflows a
+  // 32-bit int; they are narrowed here only within JavaScript's safe range.
+  const rows = await db.$queryRaw<
+    (Omit<TrueProfitFact, 'revenueMinor' | 'discountMinor' | 'cogsMinor'> & {
+      revenueMinor: bigint | number;
+      discountMinor: bigint | number;
+      cogsMinor: bigint | number;
+    })[]
+  >(trueProfitFactsQuery(scope, input));
+  const facts = rows.map((row) => ({
+    ...row,
+    revenueMinor: safeMinor(row.revenueMinor),
+    discountMinor: safeMinor(row.discountMinor),
+    cogsMinor: safeMinor(row.cogsMinor),
+  }));
   return rollUpTrueProfit(facts, input.by);
+}
+
+function safeMinor(value: bigint | number): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || (typeof value === 'bigint' && BigInt(result) !== value))
+    throw new RangeError('Ledger totals exceed safe integer-money bounds.');
+  return result;
 }
 
 export type LeakageRow = {

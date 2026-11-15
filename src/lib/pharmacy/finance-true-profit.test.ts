@@ -150,9 +150,43 @@ describe('DEV-77 — true profit ledger read', () => {
     expect(TRUE_PROFIT_TIMEZONE).toBe('Asia/Karachi');
     expect(facts.values).toContain('Asia/Karachi');
     expect(facts.sql).toContain(`AT TIME ZONE 'UTC'`);
-    expect(facts.sql).toContain('sale."createdByUserId" AS "staffUserId"');
+    // Staff is whoever completed payment, falling back to the bill's creator.
+    expect(facts.sql).toContain(
+      'COALESCE(completion."actorId", sale."createdByUserId") AS "staffUserId"'
+    );
+    expect(facts.sql).toContain(`event."kind" = 'COMPLETED'`);
+    // Grouped sums are not narrowed to a 32-bit int in SQL.
+    expect(facts.sql).not.toMatch(/::int AS "(revenue|discount|cogs)Minor"/);
+    expect(facts.sql).toContain('::bigint AS "revenueMinor"');
     expect(facts.sql).toContain('medicine."productFamily"::text AS "category"');
     expect(facts.sql).toContain('sale_line."id" = line."sourceLineId"');
+  });
+
+  it('reads grouped totals above the 32-bit integer limit as exact numbers', async () => {
+    const $queryRaw = vi.fn().mockResolvedValue([
+      {
+        ...fact({}),
+        revenueMinor: BigInt(3_000_000_000),
+        discountMinor: BigInt(0),
+        cogsMinor: BigInt(2_500_000_000),
+      },
+    ]);
+    const rows = await trueProfit({ $queryRaw } as unknown as ScopedDb, scope, {
+      ...period,
+      by: 'item',
+    });
+    expect(rows).toEqual([row('med_a', 3_000_000_000, 0, 2_500_000_000)]);
+  });
+
+  it('refuses a grouped total beyond safe integer money instead of rounding it', async () => {
+    const $queryRaw = vi
+      .fn()
+      .mockResolvedValue([
+        { ...fact({}), revenueMinor: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(2) },
+      ]);
+    await expect(
+      trueProfit({ $queryRaw } as unknown as ScopedDb, scope, { ...period, by: 'item' })
+    ).rejects.toThrow(RangeError);
   });
 
   it('rolls the queried facts up by the requested dimension', async () => {

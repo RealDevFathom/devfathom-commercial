@@ -260,7 +260,7 @@ export const pharmacyFinanceRouter = router({
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          `Posted gross revenue minus discounts minus posted COGS at each lot's landed cost (invoice net, non-creditable tax and freight share over received plus bonus units). Hour is the sale completion hour in ${TRUE_PROFIT_TIMEZONE}; staff is the user who rang up the sale; returns stay with the original sale. Totals reconcile with ledger gross margin; this is not net profit or cash flow.`
+          `Posted gross revenue minus discounts minus posted COGS at each lot's landed cost (invoice net, non-creditable tax and freight share over received plus bonus units). Hour is the sale completion hour in ${TRUE_PROFIT_TIMEZONE}; staff is the user who completed the sale (falling back to its creator); returns stay with the original sale. Totals reconcile with ledger gross margin; this is not net profit or cash flow.`
         ),
         period: { ...period, bounds: '[from,to)' as const },
         hourTimezone: TRUE_PROFIT_TIMEZONE,
