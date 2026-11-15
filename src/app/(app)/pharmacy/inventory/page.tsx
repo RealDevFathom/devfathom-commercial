@@ -591,16 +591,19 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Lots by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+            No available lots yet. Set up a medicine and its pack, then import your opening count or receive a supplier delivery.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
+              </Link>
+              <Link href="/pharmacy/inventory/import" className={buttonVariants({ variant: 'outline' })}>
+                Import opening stock
               </Link>
               <Link
                 href="/pharmacy/purchasing/receiving"
                 className={buttonVariants({ variant: 'outline' })}
               >
-                Receive opening stock
+                Receive supplier delivery
               </Link>
               <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
                 Pharmacy setup
