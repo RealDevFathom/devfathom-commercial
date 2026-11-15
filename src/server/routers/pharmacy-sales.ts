@@ -47,6 +47,10 @@ import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/coun
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
+  counterCapabilityDecision,
+  RECEIPT_READ_CAPABILITIES,
+} from '@/lib/pharmacy/counter-capability';
+import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
   emergencyNoRxDecision,
@@ -586,45 +590,10 @@ async function loadCounterReceipt(
   });
 }
 
-// DEV-295: accept canonical colon-delimited grants beside legacy dotted grants so migrated
-// Cashier roles and un-migrated roles pass the same counter/receipt gate.
-const RECEIPT_READ_CAPABILITIES = [
-  'pharmacy:dispense',
-  'pharmacy.dispense',
-  'pharmacy:receipt',
-  'pharmacy.receipt',
-  'pharmacy:counter',
-  'pharmacy.counter',
-] as const;
 // Clinical restrictions do not revoke independently granted Khata access.
 const KHATA_CAPABILITIES = RECEIPT_READ_CAPABILITIES.filter(
   (action) => action !== 'pharmacy:dispense' && action !== 'pharmacy.dispense'
 );
-
-function capabilityCovers(rule: string, action: string): boolean {
-  // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
-  // central matcher still lets wildcard DENYs revoke that exact grant.
-  if (action === 'pharmacy:dispense') return capabilityMatches(rule, action, 'ALLOW');
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
-
-function counterCapabilityDecision(
-  rules: { capability: string; effect: string }[],
-  capabilities: readonly string[] = RECEIPT_READ_CAPABILITIES
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) =>
-    capabilities.some((action) =>
-      action === 'pharmacy:dispense' && rule.effect === 'DENY'
-        ? capabilityMatches(rule.capability, action, 'DENY')
-        : capabilityCovers(rule.capability, action)
-    )
-  );
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
 
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
