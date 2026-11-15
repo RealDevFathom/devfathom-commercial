@@ -392,6 +392,40 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
     }
   });
 
+  it('offers only fallback units every sellable lot can price, since FEFO may draw on them', () => {
+    // The recommended lot is a 100-tablet box; the next lot FEFO may allocate
+    // from was received as strips of 10. The server prices each allocated lot
+    // with priceFromLot, which refuses a 100-tablet unit for the 10-tablet lot.
+    expect(() =>
+      priceFromLot({
+        printedMrpMinor: 5_000,
+        canonicalUnitsInPack: 10,
+        canonicalUnitsPerSaleUnit: 100,
+      })
+    ).toThrowError(PharmacyMedicineError);
+    const resolved = resolveCounterSaleUnits({
+      packLevels: THREE_LEVEL,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      otherLotUnitsPerPack: [10],
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.saleUnits.map((option) => option.kind)).toEqual(['STRIP', 'UNIT']);
+    for (const option of resolved.saleUnits) {
+      for (const canonicalUnitsInPack of [100, 10]) {
+        expect(() =>
+          priceFromLot({
+            printedMrpMinor: 5_000,
+            canonicalUnitsInPack,
+            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          })
+        ).not.toThrow();
+      }
+    }
+  });
+
   it('ignores superseded pack versions when falling back to the setup', () => {
     const revised = [
       ...THREE_LEVEL,
@@ -460,5 +494,13 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
       '1 box = 10 strips × 10 tablets'
     );
     expect(describePackSetup(TWO_LEVEL, counterUnitNoun('Syrup'))).toBe('1 box = 30 units');
+    const carton: PackLevelNode[] = [
+      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+      { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 10 },
+      { id: 'unit', level: 'UNIT', parentPackLevelId: 'box', unitsPerParent: 10 },
+    ];
+    expect(describePackSetup(carton, counterUnitNoun('Tablet'))).toBe(
+      '1 carton = 10 boxes × 10 tablets'
+    );
   });
 });

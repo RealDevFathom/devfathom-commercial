@@ -2654,6 +2654,28 @@ describe('DEV-618 counter composition', () => {
     expect(next).not.toHaveTextContent(/pack hierarchy|pack setup|canonical|FEFO/i);
   });
 
+  it('says blocked stock cannot be sold rather than calling it out of stock', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        barcodeRow({
+          saleUnits: [],
+          onHandUnits: 0,
+          recommendedLotId: null,
+          batchNumber: null,
+          nearestSafeExpiry: null,
+          blocked: ['EXPIRED', 'QUARANTINED'],
+        })
+      )
+    );
+    const next = screen.getByRole('region', { name: 'Next line' });
+    expect(within(next).getByRole('status')).toHaveTextContent(
+      'None of the stock here can be sold right now (expired, quarantined). Receive fresh stock or record it as a shortage.'
+    );
+    expect(next).not.toHaveTextContent('Out of stock');
+    expect(next).toHaveTextContent('No batch can be sold here right now.');
+  });
+
   it('names the pack mismatch in shop words and links to the pack setup', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() =>

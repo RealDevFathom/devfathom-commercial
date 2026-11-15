@@ -379,6 +379,7 @@ export async function searchCounterCatalog(
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
+    const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
       for (const balance of balancesByLot.get(lot.id) ?? []) {
@@ -390,6 +391,7 @@ export async function searchCounterCatalog(
           continue;
         }
         onHandUnits += balance.onHandUnits;
+        sellableLots.set(lot.id, lot);
         const better =
           best === null ||
           lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
@@ -419,6 +421,9 @@ export async function searchCounterCatalog(
         lotPackLevelId: best.lot.packLevelId,
         lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
         lotUnitsPerPack: best.lot.unitsPerPack,
+        otherLotUnitsPerPack: [...sellableLots.values()]
+          .filter((lot) => lot.id !== best!.lot.id)
+          .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
         at,
       }));

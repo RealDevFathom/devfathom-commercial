@@ -276,16 +276,18 @@ const LINK_CLASS =
  */
 export function CounterUnsellableMessage({ row }: { row: CounterSearchRow }) {
   if (row.onHandUnits === 0) {
-    return (
-      <>
-        Out of stock at this branch. Receive stock or record it as a shortage.
-        {row.blocked.length > 0
-          ? ` Stock here that cannot be sold: ${row.blocked
-              .map((reason) => reason.toLowerCase().replace(/_/g, ' '))
-              .join(', ')}.`
-          : null}
-      </>
-    );
+    // Blocked balances are excluded from on-hand units, so zero sellable stock
+    // is not the same as no stock: say which it is.
+    if (row.blocked.length > 0) {
+      return (
+        <>
+          None of the stock here can be sold right now (
+          {row.blocked.map((reason) => reason.toLowerCase().replace(/_/g, ' ')).join(', ')}).
+          Receive fresh stock or record it as a shortage.
+        </>
+      );
+    }
+    return <>Out of stock at this branch. Receive stock or record it as a shortage.</>;
   }
   const name = counterMedicineDisplayName(row);
   const fix = (
@@ -2578,7 +2580,7 @@ function ScopedPharmacyCounterConsole({
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
                       : activeRow.recommendedLotId && activeRow.batchNumber
                         ? `Earliest-expiry batch ${activeRow.batchNumber} is used; more batches are added if needed.`
-                        : activeRow.onHandUnits === 0
+                        : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
                           ? 'No batch of this medicine is in stock here.'
                           : 'No batch can be sold here right now.'}
                   </span>

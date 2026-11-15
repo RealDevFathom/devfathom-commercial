@@ -195,7 +195,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText(`Batch ${otc.batchNumber}`);
   await expect(allocation).toContainText('Exp 2028-06-30');
   await expect(allocation).toContainText('20 units');
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
 
   // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
@@ -478,7 +478,7 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
   await expect(allocation).toContainText(`Batch ${batchNumber}`);
   await expect(allocation).not.toContainText(`Batch ${syrup.batchNumber}`);
   await expect(allocation).toContainText(`${syrup.unitsPerPack} units`);
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
   await expect(allocation).toContainText(/Near expiry · 4[4-6] d/);
 
