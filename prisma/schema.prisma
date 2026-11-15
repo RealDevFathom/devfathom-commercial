@@ -3442,6 +3442,8 @@ model Task {
   parentId       String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  // Maintained by database triggers on task/column transitions; legacy times are unknown.
+  completedAt    DateTime?
 
   // Relations
   column       Column              @relation(fields: [columnId], references: [id], onDelete: Cascade)
@@ -3461,6 +3463,7 @@ model Task {
   @@index([columnId, order])
   @@index([createdById])
   @@index([parentId])
+  @@index([organizationId, completedAt])
   @@index([organizationId])
   @@map("tasks")
 }
