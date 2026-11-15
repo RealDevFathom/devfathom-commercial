@@ -203,6 +203,8 @@ describe('DEV-764 releasing a redemption when its sale is voided', () => {
       pharmacyStockMovement: { findMany: async () => [] },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: vi.fn(async ({ data }) => data) },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: async () => ({ count: 0 }) },
     };
 
     // The cashier who rang the bill, not a manager (DEV-821 void authority).
