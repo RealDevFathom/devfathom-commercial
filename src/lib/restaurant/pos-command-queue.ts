@@ -737,9 +737,23 @@ function reviewModifiers(
 }
 
 /**
+ * A draft is only comparable with the catalog of the channel and publication it was
+ * composed on. Replay uses that original publication, so a catalog for any other menu
+ * is not evidence either way.
+ */
+function draftMatchesCatalog(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): boolean {
+  const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
+  if (!open || open.kind !== 'OPEN_ORDER') return false;
+  if (open.body.channel !== catalog.channel) return false;
+  const publicationId = open.body.publicationId ?? null;
+  return publicationId === null || publicationId === catalog.publicationId;
+}
+
+/**
  * Re-check every unresolved draft after a catalog refresh and flag the ones that now
  * need review. Drafts that are still consistent are returned to `QUEUED` so a
- * transient 86 that was reversed does not strand them.
+ * transient 86 that was reversed does not strand them. Drafts composed on another
+ * channel or publication are left as they are.
  */
 export function markDraftsForCatalogReview(
   snapshot: PosQueueSnapshot,
@@ -748,6 +762,7 @@ export function markDraftsForCatalogReview(
   let flagged = 0;
   const drafts = snapshot.drafts.map((draft) => {
     if (draft.status === 'COMPLETED' || draft.status === 'QUARANTINED') return draft;
+    if (!draftMatchesCatalog(draft, catalog)) return draft;
     const review = reviewAgainstCatalog(draft, catalog);
     if (review) {
       flagged += 1;
