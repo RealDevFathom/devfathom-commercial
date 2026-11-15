@@ -5,7 +5,7 @@
  * Every decision this module reports is made by an existing kernel rather than
  * re-derived here: `blockReasonFor` decides what is sellable (INV-03),
  * `planAllocation`'s FEFO order decides the nearest safe expiry (INV-02),
- * `priceFromLot` decides price (MED-08), and `saleUnitOptions` decides the
+ * `priceFromLot` decides price (MED-08), and `resolveCounterSaleUnits` decides the
  * pack/strip/unit toggle. A counter that computed its own "what is safe" rule
  * would eventually disagree with the ledger that actually posts the sale.
  *
@@ -22,8 +22,8 @@ import {
 } from './inventory';
 import {
   previewSaleLine,
-  saleUnitOptions,
-  type PackLevelNode,
+  resolveCounterSaleUnits,
+  type CounterPackMismatch,
   type SaleUnitKind,
   type SaleUnitOption,
 } from './counter-pricing';
@@ -76,6 +76,12 @@ export type CounterSearchRow = {
     proRataCeilingMinor: number;
   }>;
   saleUnits: SaleUnitOption[];
+  /**
+   * DEV-724: set only when stock is on hand but neither the received lot nor the
+   * medicine's own pack setup yields a priceable sale unit, so the counter can
+   * say what to fix instead of guessing.
+   */
+  packMismatch?: CounterPackMismatch | null;
   restriction: {
     rx: boolean;
     otc: boolean;
@@ -300,6 +306,8 @@ export async function searchCounterCatalog(
         parentPackLevelId: true,
         unitsPerParent: true,
         presentationId: true,
+        effectiveFrom: true,
+        effectiveTo: true,
       },
     }),
     db.medicinePackMrp.findMany({
@@ -349,7 +357,7 @@ export async function searchCounterCatalog(
     bucket.push(balance as BalanceRow);
     balancesByLot.set(balance.inventoryLotId, bucket);
   }
-  const packLevelsByPresentation = new Map<string, PackLevelNode[]>();
+  const packLevelsByPresentation = new Map<string, (typeof packLevels)[number][]>();
   for (const level of packLevels) {
     const bucket = packLevelsByPresentation.get(level.presentationId) ?? [];
     bucket.push(level);
@@ -358,6 +366,7 @@ export async function searchCounterCatalog(
   const presentationByPackLevel = new Map(
     packLevels.map((level) => [level.id, level.presentationId])
   );
+  const levelLabelByPackLevel = new Map(packLevels.map((level) => [level.id, level.level]));
   const roundingByPackLevel = new Map(
     mrps.map((mrp) => [mrp.packLevelId, mrp.roundingIncrementMinor])
   );
@@ -400,19 +409,19 @@ export async function searchCounterCatalog(
       medicine.presentations[0]!;
 
     let saleUnits: SaleUnitOption[] = [];
+    let packMismatch: CounterPackMismatch | null = null;
     if (best) {
-      try {
-        saleUnits = saleUnitOptions({
-          packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-          rootPackLevelId: best.lot.packLevelId,
-          unitsPerPack: best.lot.unitsPerPack,
-        });
-      } catch {
-        // A pack hierarchy that disagrees with the received lot cannot be
-        // priced. The row still reports stock, but offers no sale unit rather
-        // than quoting a price the server would refuse.
-        saleUnits = [];
-      }
+      // A lot whose received pack disagrees with the medicine's pack setup is
+      // still sold through that setup, priced from the same lot exactly as the
+      // server prices the line; only a setup that cannot price it reports why.
+      ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
+        packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+        lotPackLevelId: best.lot.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
+        lotUnitsPerPack: best.lot.unitsPerPack,
+        dosageForm: presentation.dosageForm,
+        at,
+      }));
     }
 
     const roundingIncrementMinor = best ? (roundingByPackLevel.get(best.lot.packLevelId) ?? 1) : 1;
@@ -460,6 +469,7 @@ export async function searchCounterCatalog(
       onHandUnits,
       saleableUnits,
       saleUnits,
+      packMismatch,
       restriction: {
         rx: medicine.rx,
         otc: medicine.otc,

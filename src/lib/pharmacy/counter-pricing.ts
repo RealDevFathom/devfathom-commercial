@@ -142,6 +142,176 @@ export function saleUnitOptions(input: {
   }));
 }
 
+/**
+ * DEV-724 — the sale units the medicine's OWN pack setup offers, for a lot whose
+ * recorded pack level or pack size disagrees with that setup.
+ *
+ * `saleUnitOptions` starts from the level the lot was received against and
+ * refuses when the two disagree. That refusal used to leave the counter unable
+ * to sell stock that is physically on the shelf. The medicine's pack setup is
+ * still a priceable arrangement: every option is priced pro-rata from the lot's
+ * printed MRP and frozen `unitsPerPack`, exactly as `addSaleLine` prices it on
+ * the server. Only options that divide the received pack evenly are offered:
+ * `priceFromLot` refuses a sale unit bigger than the pack it came in, and a
+ * unit that does not divide the pack cannot be cut from it on the shelf.
+ *
+ * Returns `[]` when the setup itself is ambiguous (no single top level, a level
+ * with two children, a cycle) or no level divides the received pack.
+ */
+export function setupSaleUnitOptions(input: {
+  packLevels: readonly PackLevelNode[];
+  lotUnitsPerPack: number;
+}): SaleUnitOption[] {
+  if (!Number.isSafeInteger(input.lotUnitsPerPack) || input.lotUnitsPerPack <= 0) return [];
+  const ids = new Set(input.packLevels.map((node) => node.id));
+  const roots = input.packLevels.filter(
+    (node) => node.parentPackLevelId === null || !ids.has(node.parentPackLevelId)
+  );
+  if (roots.length !== 1) return [];
+  const root = roots[0]!;
+  let options: SaleUnitOption[];
+  try {
+    const detached = input.packLevels.map((node) =>
+      node.id === root.id ? { ...node, parentPackLevelId: null } : node
+    );
+    options = saleUnitOptions({
+      packLevels: detached,
+      rootPackLevelId: root.id,
+      unitsPerPack: setupCanonicalUnits(detached, root.id),
+    });
+  } catch {
+    return [];
+  }
+  return options.filter((option) => input.lotUnitsPerPack % option.canonicalUnitsPerSaleUnit === 0);
+}
+
+/** A lot that cannot be sold in any unit of the medicine's setup, in shop words. */
+export type CounterPackMismatch = {
+  /** How the batch was received, e.g. `1 box = 100 tablets`. */
+  received: string;
+  /** How the medicine is set up, e.g. `1 box = 10 strips × 10 tablets`; null when unclear. */
+  setup: string | null;
+};
+
+/**
+ * The counter's sale units for one lot (DEV-724).
+ *
+ * The lot's own received pack level is preferred. When it disagrees with the
+ * medicine's pack setup, the medicine's current setup is used instead, priced
+ * from the same lot so the server's `addSaleLine` derives the same price. Only
+ * when neither yields a sale unit is a plain-words mismatch reported.
+ */
+export function resolveCounterSaleUnits(input: {
+  packLevels: readonly (PackLevelNode & { effectiveFrom?: Date; effectiveTo?: Date | null })[];
+  lotPackLevelId: string;
+  lotPackLevelLabel: string | null;
+  lotUnitsPerPack: number;
+  dosageForm: string | null;
+  at: Date;
+}): { saleUnits: SaleUnitOption[]; packMismatch: CounterPackMismatch | null } {
+  try {
+    return {
+      saleUnits: saleUnitOptions({
+        packLevels: input.packLevels,
+        rootPackLevelId: input.lotPackLevelId,
+        unitsPerPack: input.lotUnitsPerPack,
+      }),
+      packMismatch: null,
+    };
+  } catch {
+    // Fall through to the medicine's own setup below.
+  }
+  const at = input.at.getTime();
+  const effective = input.packLevels.filter(
+    (node) =>
+      (node.effectiveFrom === undefined || node.effectiveFrom.getTime() <= at) &&
+      (node.effectiveTo === undefined ||
+        node.effectiveTo === null ||
+        node.effectiveTo.getTime() > at)
+  );
+  const saleUnits = setupSaleUnitOptions({
+    packLevels: effective,
+    lotUnitsPerPack: input.lotUnitsPerPack,
+  });
+  if (saleUnits.length > 0) return { saleUnits, packMismatch: null };
+  const noun = counterUnitNoun(input.dosageForm);
+  return {
+    saleUnits: [],
+    packMismatch: {
+      received: `1 ${packWord(input.lotPackLevelLabel ?? 'pack')} = ${input.lotUnitsPerPack} ${plural(noun, input.lotUnitsPerPack)}`,
+      setup: describePackSetup(effective, noun),
+    },
+  };
+}
+
+/** Canonical units in one top-level pack of the setup, or a throw when malformed. */
+function setupCanonicalUnits(
+  packLevels: readonly PackLevelNode[],
+  rootPackLevelId: string
+): number {
+  const chain = chainFrom(packLevels, rootPackLevelId);
+  if (chain.length === 1) {
+    assertPositiveInteger(chain[0]!.unitsPerParent);
+    return chain[0]!.unitsPerParent;
+  }
+  let total = 1;
+  for (const node of chain.slice(1)) {
+    assertPositiveInteger(node.unitsPerParent);
+    total *= node.unitsPerParent;
+    if (!Number.isSafeInteger(total)) throw new PharmacyMedicineError('INVALID_CONVERSION');
+  }
+  return total;
+}
+
+/**
+ * The pack setup in shop words, outermost first: `1 box = 10 strips × 10 tablets`.
+ * Null when the setup has no single, unambiguous chain to describe.
+ */
+export function describePackSetup(
+  packLevels: readonly PackLevelNode[],
+  unitNoun: string
+): string | null {
+  const ids = new Set(packLevels.map((node) => node.id));
+  const roots = packLevels.filter(
+    (node) => node.parentPackLevelId === null || !ids.has(node.parentPackLevelId)
+  );
+  if (roots.length !== 1) return null;
+  let chain: PackLevelNode[];
+  try {
+    chain = chainFrom(packLevels, roots[0]!.id);
+  } catch {
+    return null;
+  }
+  const top = chain[0]!;
+  if (chain.length === 1) {
+    return `1 ${packWord(top.level)} = ${top.unitsPerParent} ${plural(unitNoun, top.unitsPerParent)}`;
+  }
+  const parts = chain
+    .slice(1)
+    .map((node, index, rest) =>
+      index === rest.length - 1
+        ? `${node.unitsPerParent} ${plural(unitNoun, node.unitsPerParent)}`
+        : `${node.unitsPerParent} ${plural(packWord(node.level), node.unitsPerParent)}`
+    );
+  return `1 ${packWord(top.level)} = ${parts.join(' × ')}`;
+}
+
+/** `TABLET` dosage forms count in tablets, capsules in capsules, anything else in units. */
+export function counterUnitNoun(dosageForm: string | null | undefined): string {
+  const form = (dosageForm ?? '').toLowerCase();
+  if (form.includes('tablet')) return 'tablet';
+  if (form.includes('capsule')) return 'capsule';
+  return 'unit';
+}
+
+export function plural(noun: string, count: number): string {
+  return count === 1 ? noun : `${noun}s`;
+}
+
+function packWord(level: string): string {
+  return level.toLowerCase().replace(/_/g, ' ');
+}
+
 export type SaleLinePreview = {
   option: SaleUnitOption;
   quantity: number;

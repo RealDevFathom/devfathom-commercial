@@ -303,9 +303,9 @@ describe('CounterLotOverride', () => {
     expect(props.onChange).toHaveBeenLastCalledWith({ inventoryLotId: null, reason: 'x' });
   });
 
-  it('Keep FEFO batch closes the override', () => {
+  it('Use earliest-expiry batch closes the override', () => {
     const props = picker({ value: { inventoryLotId: 'lot-later', reason: 'x' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Keep FEFO batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use earliest-expiry batch' }));
     expect(props.onChange).toHaveBeenLastCalledWith(null);
   });
 

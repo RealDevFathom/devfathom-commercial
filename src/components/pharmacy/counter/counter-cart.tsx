@@ -435,7 +435,7 @@ export function CounterLotOverride({
         disabled={disabled}
         onClick={() => onChange(null)}
       >
-        Keep FEFO batch
+        Use earliest-expiry batch
       </button>
     </div>
   );

@@ -92,7 +92,12 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  counterUnitNoun,
+  plural,
+  previewSaleLine,
+  type SaleUnitKind,
+} from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
   formatReceiptDate,
@@ -259,6 +264,55 @@ function counterSelectionPreview(
   } catch {
     return null;
   }
+}
+
+const LINK_CLASS =
+  'font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
+
+/**
+ * DEV-724: why a staged medicine offers no sale unit, in shop words. "No stock
+ * here" and "the pack setup needs fixing" are different jobs for the operator,
+ * so they are never reported with the same message.
+ */
+export function CounterUnsellableMessage({ row }: { row: CounterSearchRow }) {
+  if (row.onHandUnits === 0) {
+    return (
+      <>
+        Out of stock at this branch. Receive stock or record it as a shortage.
+        {row.blocked.length > 0
+          ? ` Stock here that cannot be sold: ${row.blocked
+              .map((reason) => reason.toLowerCase().replace(/_/g, ' '))
+              .join(', ')}.`
+          : null}
+      </>
+    );
+  }
+  const name = counterMedicineDisplayName(row);
+  const fix = (
+    <>
+      {' '}
+      Open{' '}
+      <Link href="/pharmacy/medicines" className={LINK_CLASS}>
+        Medicines › {name} › Packs for receiving
+      </Link>{' '}
+      to fix it.
+    </>
+  );
+  if (row.packMismatch) {
+    return (
+      <>
+        This batch was received as {row.packMismatch.received} but the medicine is set up as{' '}
+        {row.packMismatch.setup ?? 'a different pack'}, so it cannot be priced.
+        {fix}
+      </>
+    );
+  }
+  return (
+    <>
+      This medicine&apos;s pack setup does not match the batch on hand, so it cannot be priced.
+      {fix}
+    </>
+  );
 }
 
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
@@ -1116,13 +1170,16 @@ function ScopedPharmacyCounterConsole({
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or record the shortage.`,
         });
         return;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
       if (overrideLotId && !batchOverride?.reason.trim()) {
-        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        setNotice({
+          tone: 'warning',
+          message: 'Enter a reason before selling a batch other than the earliest-expiry one.',
+        });
         return;
       }
       setPending('addToCart');
@@ -1694,7 +1751,7 @@ function ScopedPharmacyCounterConsole({
       });
       setNotice({
         tone: 'success',
-        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
+        message: `Recorded a shortage of ${capturedUnits} ${plural(counterUnitNoun(activeRow?.dosageForm), capturedUnits)} for ${requested}.`,
       });
       focusSearch();
     } catch (error) {
@@ -2470,10 +2527,13 @@ function ScopedPharmacyCounterConsole({
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantityText}
                       chordFor={chordFor}
+                      emptyMessage={<CounterUnsellableMessage row={activeRow} />}
                     />
                     {activeRow.saleUnits.length === 0 ? (
                       <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                        <Label htmlFor="counter-demand-units">
+                          Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
+                        </Label>
                         <Input
                           id="counter-demand-units"
                           type="number"
@@ -2495,8 +2555,8 @@ function ScopedPharmacyCounterConsole({
                         onClick={() => void captureShortfall()}
                       >
                         {pending === 'captureDemand'
-                          ? 'Capturing…'
-                          : `Capture shortfall: ${shortfallUnits} canonical units`}
+                          ? 'Recording…'
+                          : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
                       </Button>
                     ) : null}
                   </div>
@@ -2517,8 +2577,10 @@ function ScopedPharmacyCounterConsole({
                     {lotOverride?.inventoryLotId
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
                       : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
-                        : 'No sellable FEFO batch is available.'}
+                        ? `Earliest-expiry batch ${activeRow.batchNumber} is used; more batches are added if needed.`
+                        : activeRow.onHandUnits === 0
+                          ? 'No batch of this medicine is in stock here.'
+                          : 'No batch can be sold here right now.'}
                   </span>
                   <CounterLotOverride
                     value={lotOverride}
