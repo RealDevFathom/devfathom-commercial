@@ -331,7 +331,8 @@ export async function restoreRefundedLoyaltyPoints(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         tenderId: input.tenderId,
-        kind: 'REFUND',
+        // DEV-764: points a void already released are given back once, never again.
+        kind: { in: ['REFUND', 'REDEMPTION_RELEASE'] },
       },
       _sum: { points: true },
     }),

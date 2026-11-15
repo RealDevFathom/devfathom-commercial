@@ -602,9 +602,13 @@ export async function refundPharmacyTender(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
-    include: { refunds: true, sale: { select: { customerId: true } } },
+    include: { refunds: true, sale: { select: { customerId: true, status: true } } },
   });
   if (!tender) throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  // DEV-764: voiding a sale releases its points tenders in full (points back, settlement
+  // reversed). Nothing is left on a released tender to refund.
+  if (tender.type === 'LOYALTY' && tender.sale.status === 'VOID')
+    throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   assertRefundWithinTender(
     tender.amountMinor,
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
