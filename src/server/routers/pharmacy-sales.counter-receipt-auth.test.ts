@@ -52,6 +52,8 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
   refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
+  // DEV-725: a counter bill is only created on a device with an OPEN drawer.
+  lockOpenPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-a' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -340,7 +342,7 @@ const paths: {
 
 describe('counter receipt authorization', () => {
   it.each<[string, (caller: Caller) => Promise<unknown>]>([
-    ['create', (caller: Caller) => caller.create({ branchId: 'branch-a', quotation: false })],
+    ['create', (caller: Caller) => caller.create({ branchId: 'branch-a', quotation: false, deviceId: 'device-a' })],
     [
       'settle',
       (caller: Caller) =>

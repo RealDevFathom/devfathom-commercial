@@ -2,8 +2,9 @@
 
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PasswordInput } from '@/components/ui/password-input';
 
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
@@ -230,31 +231,21 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
         <label htmlFor="platform-password" className="block text-sm font-semibold text-foreground">
           Password
         </label>
-        <div className="relative">
-          <input
-            id="platform-password"
-            name="password"
-            type={showPassword ? 'text' : 'password'}
-            autoComplete="current-password"
-            required
-            minLength={8}
-            maxLength={256}
-            aria-invalid={Boolean(invalidFields) || undefined}
-            aria-describedby={invalidFields ? signInErrorId : undefined}
-            onChange={clearSignInError}
-            className={`${inputClass} pr-10`}
-            placeholder="Enter your password"
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword((visible) => !visible)}
-            aria-label={showPassword ? 'Hide password' : 'Show password'}
-            className="absolute top-1/2 right-3 -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
-            tabIndex={-1}
-          >
-            {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-          </button>
-        </div>
+        <PasswordInput
+          id="platform-password"
+          name="password"
+          revealed={showPassword}
+          onReveal={() => setShowPassword((visible) => !visible)}
+          autoComplete="current-password"
+          required
+          minLength={8}
+          maxLength={256}
+          aria-invalid={Boolean(invalidFields) || undefined}
+          aria-describedby={invalidFields ? signInErrorId : undefined}
+          onChange={clearSignInError}
+          className={inputClass}
+          placeholder="Enter your password"
+        />
       </div>
 
       <div className="space-y-2">

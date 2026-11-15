@@ -9,6 +9,7 @@ import {
   cutPharmacyDailyClose,
   foldExpectedCash,
   lockPharmacyDay,
+  manualConfirmerNames,
   saleTotalMinor,
   type DrawerMovement,
 } from './settlement';
@@ -40,7 +41,10 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       where: { id: scope.organizationId },
       select: { timezone: true },
     }),
-    db.pharmacyTender.findMany({ where, select: { id: true, type: true, amountMinor: true } }),
+    db.pharmacyTender.findMany({
+      where,
+      select: { id: true, type: true, amountMinor: true, confirmedById: true },
+    }),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
   // opener and time rather than by the counter's device identifier.
@@ -78,7 +82,11 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     businessDate,
     drawers: rows,
     totals,
-    tenderTotals: aggregateTenderTotals(tenders, refunds),
+    tenderTotals: aggregateTenderTotals(
+      tenders,
+      refunds,
+      await manualConfirmerNames(db, scope.organizationId, tenders)
+    ),
     close,
     timezone: workspaceTimezone(organization?.timezone),
   };

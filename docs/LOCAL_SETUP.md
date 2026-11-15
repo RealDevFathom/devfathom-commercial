@@ -146,6 +146,12 @@ Open:
 
 Stop the server with `Ctrl+C`. Start it again with `bun run dev`.
 
+For VM or Docker production startup, run `bun run build` for the current checkout
+before `bun start`. The start script requires the generated `.next/standalone/server.js`
+and copies `public` and `.next/static` into the standalone output. Without a fresh
+standalone build, startup can fail or serve stale output. Vercel manages its own build
+and startup flow.
+
 ### First platform sign-in requires authenticator (MFA) enrollment
 
 The first platform sign-in always enrolls an authenticator, regardless of

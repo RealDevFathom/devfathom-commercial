@@ -266,6 +266,33 @@ describe('supplier-credit Reports preparation', () => {
     expect(screen.getAllByText('CREDIT-CANDIDATE')).toHaveLength(1);
   });
 
+  it('defaults to and filters by the Karachi business day, not the UTC day', async () => {
+    mocks.tenantContext.mockResolvedValue({
+      ...context(),
+      organization: { ...context().organization, timezone: 'Asia/Karachi' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 PKT on 15 November is still 14 November in UTC.
+    vi.setSystemTime(new Date('2026-11-14T20:30:00.000Z'));
+    try {
+      render(
+        await Page({
+          searchParams: Promise.resolve({ branch: scope.branchId }),
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    // 17 Oct–15 Nov on the Karachi clock: 19:00 UTC on 16 Oct to the last instant of 15 Nov PKT.
+    expect(mocks.purchaseReturns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: new Date('2026-10-16T19:00:00.000Z'),
+        to: new Date('2026-11-15T18:59:59.999Z'),
+      })
+    );
+    expect(screen.getByText(/return creation dates, inclusive, in PKT/)).toBeVisible();
+  });
+
   it('rereads changed allocations on the next preparation', async () => {
     await show();
     expect(screen.getByText('PKR 75.01')).toBeVisible();

@@ -69,4 +69,37 @@ describe('pharmacy branch comparison', () => {
       to: '2026-10-07',
     });
   });
+
+  it('bounds lost demand by workspace midnights in both reads', async () => {
+    commandCentre.mockResolvedValue({
+      metrics: { salesMinor: 0, marginMinor: 0, expiryValueMinor30: 0, khataAgingMinor: 0 },
+    });
+    const aggregate = vi
+      .fn()
+      .mockResolvedValue({ _sum: { estimatedValueMinor: null }, _count: { _all: 0 } });
+    await readPharmacyBranchComparison({ unfulfilledDemandEvent: { aggregate } } as never, {
+      branches: [{ id: 'north', name: 'North' }],
+      from: '2026-10-01',
+      to: '2026-10-07',
+      timeZone: 'Asia/Karachi',
+    });
+    // 1–7 October on the Karachi clock: 19:00 UTC on 30 September to 19:00 UTC on 7 October.
+    expect(aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          branchId: 'north',
+          createdAt: {
+            gte: new Date('2026-09-30T19:00:00.000Z'),
+            lt: new Date('2026-10-07T19:00:00.000Z'),
+          },
+        },
+      })
+    );
+    expect(commandCentre).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['north'],
+      from: '2026-10-01',
+      to: '2026-10-07',
+      timeZone: 'Asia/Karachi',
+    });
+  });
 });

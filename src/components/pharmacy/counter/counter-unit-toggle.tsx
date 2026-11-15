@@ -10,6 +10,8 @@ import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharma
 
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
+  /** Safe stock available in the selected branch, supplied by the catalog row. */
+  onHandUnits: number;
   selected: SaleUnitKind | null;
   quantity: string;
   preview: SaleLinePreview | null;
@@ -44,6 +46,7 @@ const KIND_LABEL: Record<SaleUnitKind, string> = {
  */
 export function CounterUnitToggle({
   options,
+  onHandUnits,
   selected,
   quantity,
   preview,
@@ -67,7 +70,10 @@ export function CounterUnitToggle({
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        {emptyMessage ?? 'No sale unit is available for this medicine.'}
+        {emptyMessage ??
+          (onHandUnits === 0
+            ? 'Out of stock at this branch. Capture as unfulfilled demand or receive stock before selling.'
+            : 'No sale unit is available for this medicine. Its pack hierarchy does not match the received lot, so no price can be derived.')}
       </p>
     );
   }

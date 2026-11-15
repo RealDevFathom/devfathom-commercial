@@ -278,9 +278,6 @@ export type CounterLotOption = {
  */
 export type CounterLotOverrideValue = { inventoryLotId: string | null; reason: string };
 
-/** The policy a counter override is recorded under: the pharmacist on duty decides. */
-export const COUNTER_OVERRIDE_APPROVAL_POLICY = 'PHARMACIST_ON_DUTY';
-
 const BLOCK_LABEL: Record<string, string> = {
   EXPIRED: 'Expired',
   RECALLED: 'Recalled',

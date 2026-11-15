@@ -63,6 +63,7 @@ function makeDb() {
 
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
+    $executeRaw: vi.fn().mockResolvedValue(1),
     restaurantUnit: model(),
     restaurantUnitConversion: model(),
     restaurantAllergen: model(),
@@ -714,4 +715,109 @@ describe('recipe ingredient substitutes', () => {
       })
     ).rejects.toMatchObject({ reason: 'ALREADY_ATTACHED' });
   });
+});
+
+describe('concurrent graph edge creation', () => {
+  // Model transaction-scoped PostgreSQL advisory locks: independent callbacks
+  // share the graph, and each lock is held until its owning transaction ends.
+  function graphDb(graph: 'conversions' | 'recipes') {
+    const edges: Array<{ from: string; to: string }> = [];
+    const locks = new Map<string, Promise<void>>();
+    db.restaurantUnit.findUnique.mockResolvedValue({ id: 'unit' });
+    db.restaurantRecipe.findUnique.mockResolvedValue({ id: 'recipe' });
+    db.restaurantRecipeVersion.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+        recipeId: where.id.replace('version-', ''),
+        status: 'DRAFT',
+      })
+    );
+    db.restaurantUnitConversion.findMany.mockImplementation(
+      async ({ where }: { where: { fromUnitId: string } }) =>
+        edges
+          .filter((edge) => edge.from === where.fromUnitId)
+          .map((edge) => ({ toUnitId: edge.to }))
+    );
+    db.restaurantRecipeLine.findMany.mockImplementation(
+      async ({ where }: { where: { recipeVersion: { recipeId: string } } }) =>
+        edges
+          .filter((edge) => edge.from === where.recipeVersion.recipeId)
+          .map((edge) => ({ subRecipeId: edge.to }))
+    );
+    db.restaurantUnitConversion.upsert.mockImplementation(
+      async ({ create }: { create: { fromUnitId: string; toUnitId: string } }) => {
+        edges.push({ from: create.fromUnitId, to: create.toUnitId });
+        return create;
+      }
+    );
+    db.restaurantRecipeLine.create.mockImplementation(
+      async ({ data }: { data: { recipeVersionId: string; subRecipeId: string } }) => {
+        edges.push({ from: data.recipeVersionId.replace('version-', ''), to: data.subRecipeId });
+        return data;
+      }
+    );
+    db.$transaction.mockImplementation(async (run) => {
+      const releases: Array<() => void> = [];
+      const tx = {
+        ...db,
+        $executeRaw: async (sql: TemplateStringsArray, key: string) => {
+          expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+          expect(key).toBe(`restaurant:graph:${graph}:org_1`);
+          const previous = locks.get(key) ?? Promise.resolve();
+          let release!: () => void;
+          locks.set(
+            key,
+            new Promise<void>((resolve) => {
+              release = resolve;
+            })
+          );
+          await previous;
+          releases.push(release);
+          return 1;
+        },
+      };
+      try {
+        return await run(tx);
+      } finally {
+        for (const release of releases) release();
+      }
+    });
+    return edges;
+  }
+
+  it.each([2, 3])('rejects the closing edge of %i concurrent unit conversions', async (count) => {
+    const edges = graphDb('conversions');
+    const results = await Promise.allSettled(
+      Array.from({ length: count }, (_, i) =>
+        upsertConversion(scoped(), `unit-${i}`, `unit-${(i + 1) % count}`, '1')
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(count - 1);
+    expect(results.filter((result) => result.status === 'rejected')).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ reason: 'CONVERSION_CYCLE' }) }),
+    ]);
+    expect(edges).toHaveLength(count - 1);
+  });
+
+  it.each([2, 3])(
+    'rejects the closing edge across %i concurrently edited recipes',
+    async (count) => {
+      const edges = graphDb('recipes');
+      const results = await Promise.allSettled(
+        Array.from({ length: count }, (_, i) =>
+          createRecipeLine(scoped(), {
+            recipeVersionId: `version-recipe-${i}`,
+            subRecipeId: `recipe-${(i + 1) % count}`,
+            unitId: 'unit',
+            quantity: '1',
+          })
+        )
+      );
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(count - 1);
+      expect(results.filter((result) => result.status === 'rejected')).toEqual([
+        expect.objectContaining({ reason: expect.objectContaining({ reason: 'RECIPE_CYCLE' }) }),
+      ]);
+      expect(edges).toHaveLength(count - 1);
+    }
+  );
 });

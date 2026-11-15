@@ -147,6 +147,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     'permission' | 'configuration' | 'provider' | null
   >(null);
   const [notice, setNotice] = useState('');
+  const [emptyHint, setEmptyHint] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(false);
   const submittedInput = useRef('');
@@ -220,6 +221,11 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
   const failed = requestError !== null || status === 'error';
   const send = async (text: string) => {
     const t = text.trim();
+    if (!t && entry.canChat && !busy) {
+      setEmptyHint(true);
+      return;
+    }
+    setEmptyHint(false);
     if (
       !conversation.isActive() ||
       !t ||
@@ -348,7 +354,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               id="assistant-question"
               disabled={!entry.canChat || requestError === 'permission'}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setEmptyHint(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
@@ -389,6 +398,11 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               </Button>
             )}
           </div>
+          {emptyHint && (
+            <p role="status" className="mt-2 px-1 text-xs text-destructive">
+              Type a question before sending.
+            </p>
+          )}
           <p className="mt-2 px-1 text-center text-[10px] text-muted-foreground">
             Access is checked for each request. Supported changes require your confirmation.
           </p>
@@ -451,7 +465,7 @@ function MessageBubble({
         {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
-              <p key={i} className="whitespace-pre-wrap break-words text-current">
+              <p key={i} dir="auto" className="whitespace-pre-wrap break-words text-start text-current">
                 {part.text}
               </p>
             ) : (
