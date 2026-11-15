@@ -451,10 +451,13 @@ export const restaurantDevicesRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
 
+      // Revocation is its own capability: `devices:manage` (the procedure gate)
+      // is not enough. The acting identity must hold `devices:revoke` for the
+      // device's branch before any approval evidence is built or persisted.
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage',
+        'devices:revoke',
         { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
       );
       const actingStaffProfileId = authorization.actorStaffProfileId;
