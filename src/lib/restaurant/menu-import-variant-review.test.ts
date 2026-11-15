@@ -158,6 +158,27 @@ describe('reviewing a line with extracted sizes', () => {
     }
   );
 
+  it('refuses a renamed size whose figure matches printed prices in different currencies', async () => {
+    const { db, update } = reviewDb({
+      extractedVariants: [
+        { name: 'Regular', price: { amount: '15.00', currency: 'PKR', raw: 'Rs 15' } },
+        { name: 'Lagre', price: { amount: '15.00', currency: 'USD', raw: '$15' } },
+      ],
+    });
+    await expect(
+      reviewMenuImportLine(db, {
+        lineId: 'line_1',
+        decision: 'ACCEPTED',
+        reviewedById: 'user_1',
+        variants: [
+          { name: 'Regular', priceAmount: '15' },
+          { name: 'Large', priceAmount: '15' },
+        ],
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('accepts an explicit confirmation that the line has no sizes', async () => {
     const { db, update } = reviewDb();
     await reviewMenuImportLine(db, {

@@ -624,14 +624,30 @@ function normalizeReviewedVariants(
     // against the organization currency.
     const samePrinted = (size: (typeof extracted)[number]) =>
       amount !== null && size.amount !== null && amount.equals(new Prisma.Decimal(size.amount));
-    const printed =
-      extracted.find((size) => size.name.trim().toLowerCase() === key && samePrinted(size)) ??
-      extracted.find((size) => size.currency !== null && samePrinted(size));
+    const byName = extracted.find(
+      (size) => size.name.trim().toLowerCase() === key && samePrinted(size)
+    );
+    let currency = byName?.currency?.toUpperCase() ?? null;
+    if (!byName) {
+      // Renamed size: link it to the printed size(s) with the same figure. When
+      // those were printed in different currencies the link is ambiguous, so
+      // refuse rather than guess one that might pass as local.
+      const currencies = new Set(
+        extracted.filter(samePrinted).map((size) => size.currency?.toUpperCase() ?? null)
+      );
+      if (currencies.size > 1) {
+        throw new MenuImportError(
+          `The size "${name}" matches printed prices in different currencies; keep its printed name or remove it.`,
+          'INVALID'
+        );
+      }
+      currency = currencies.values().next().value ?? null;
+    }
     return {
       name,
       price: {
         amount: amount === null ? null : amount.toFixed(2),
-        currency: printed?.currency?.toUpperCase() ?? null,
+        currency,
         raw: null,
       },
     };
@@ -788,7 +804,6 @@ export async function reviewMenuImportLine(
         ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
         ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
         ...(note !== undefined ? { reviewNote: note } : {}),
-        ...variantsUpdate,
       },
     });
   }
