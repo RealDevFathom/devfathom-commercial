@@ -5,6 +5,7 @@ import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
+import { PharmacyStaffHome } from './pharmacy-staff-home';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
 import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
@@ -12,6 +13,7 @@ import { loadHotelLanding } from '@/lib/hotel/landing';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
+import { canOpenPharmacyCommandCentre, loadPharmacyStaffHome } from '@/lib/pharmacy/staff-home';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -47,6 +49,18 @@ export default async function DashboardPage({
           (await can(subjectFromSession(user), 'admin:access', undefined, { db }))
             ? loadSetupChecklist(db, organizationId, firstRunVertical)
             : null
+        )
+      : null;
+
+  // DEV-20: only the owner, an administrator or a manager (or an operational-reports holder)
+  // gets the Owner command centre. Every other pharmacy member lands on their own staff home,
+  // decided here on the server from their grants, never from a client-side flag.
+  const pharmacyStaffHome =
+    pharmacy && organizationId && user
+      ? await withTenantDb(organizationId, async (db) =>
+          (await canOpenPharmacyCommandCentre(db, user))
+            ? null
+            : loadPharmacyStaffHome(db, organizationId, user)
         )
       : null;
 
@@ -89,6 +103,8 @@ export default async function DashboardPage({
           organizationName={ssr.organization?.displayName ?? 'Your properties'}
           isAdmin={ssr.session?.user?.role === 'ADMIN'}
         />
+      ) : pharmacyStaffHome ? (
+        <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (
         <PharmacyDashboardContent role={ssr.session?.user?.role} />
       ) : restaurant ? (
