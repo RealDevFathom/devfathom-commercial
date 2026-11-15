@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   consent: vi.fn(),
   archiveCreate: vi.fn(),
   archiveDelete: vi.fn(),
+  platformAudit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -39,6 +40,7 @@ const db = {
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
+  platformAuditLog: { create: m.platformAudit },
   organizationDeployment: { updateMany: m.deployment },
   platformSupportSession: { updateMany: m.support },
   pharmacyCustomer: { findMany: m.consent },
@@ -53,6 +55,7 @@ function job(type: string, extra = {}) {
     payload: { arbitrary: true },
     attempts: 1,
     maxAttempts: 3,
+    requestedById: 'platform-admin-1',
     ...extra,
   };
 }
@@ -66,6 +69,15 @@ function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
       return [{ id: item.id }];
     }
     if (text.includes('WITH tenant_tables')) return dependencies;
+    if (text.includes('FROM "audit_logs"'))
+      return [
+        {
+          rows: 2,
+          earliest: new Date('2026-01-02T03:04:05.000Z'),
+          latest: new Date('2026-09-10T11:12:13.000Z'),
+          digest: 'abc123',
+        },
+      ];
     return [];
   });
   m.update.mockImplementation(async ({ data }) => (data.status === 'RUNNING' ? item : data));
@@ -87,6 +99,7 @@ beforeEach(() => {
   m.consent.mockResolvedValue([]);
   m.archiveCreate.mockResolvedValue({ count: 0 });
   m.archiveDelete.mockResolvedValue({ count: 0 });
+  m.platformAudit.mockResolvedValue({ id: 'purge-record-1' });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -306,4 +319,75 @@ describe('composed platform worker boundaries', () => {
       expect(m.organizationUpdate).not.toHaveBeenCalled();
     }
   );
+  it('writes the permanent platform record of the audit purge before deleting any tenant row', async () => {
+    queue(job('PURGE_DATA', { payload: { reason: 'Contract ended; retention elapsed.' } }), [
+      { tableName: 'audit_logs', parentTable: null, nullableColumns: [] },
+    ]);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.platformAudit).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'tenant-a',
+        actorPlatformUserId: 'platform-admin-1',
+        action: 'organization.audit_logs.purge',
+        targetType: 'AuditLog',
+        requestId: 'job-1',
+        reason: 'Contract ended; retention elapsed.',
+        metadata: {
+          jobId: 'job-1',
+          table: 'audit_logs',
+          rows: 2,
+          earliestCreatedAt: '2026-01-02T03:04:05.000Z',
+          latestCreatedAt: '2026-09-10T11:12:13.000Z',
+          idDigest: 'sha256:abc123',
+        },
+      },
+      select: { id: true },
+    });
+    // `$queryRaw` is called both as a tag (strings, ...values) and with Prisma.sql.
+    const sql = m.query.mock.calls.map(([q, ...rest]) => {
+      if (Array.isArray(q)) return { text: q.join('?'), values: rest };
+      const query = q as { strings?: string[]; values?: unknown[] };
+      return { text: query.strings?.join('?') ?? '', values: query.values ?? [] };
+    });
+    const nameRecord = sql.findIndex(
+      ({ text, values }) =>
+        text.includes("set_config('app.audit_purge_record_id'") && values[0] === 'purge-record-1'
+    );
+    expect(nameRecord).toBeGreaterThan(-1);
+    const recordCall = m.platformAudit.mock.invocationCallOrder[0];
+    const nameCall = m.query.mock.invocationCallOrder[nameRecord];
+    const deleteCall = m.execute.mock.invocationCallOrder[0];
+    expect(recordCall).toBeLessThan(nameCall);
+    expect(nameCall).toBeLessThan(deleteCall);
+    expect(m.execute.mock.calls).toEqual([
+      ['DELETE FROM "audit_logs" WHERE "organizationId" = $1', 'tenant-a'],
+    ]);
+  });
+  it('falls back to the retention reason when the purge request carried none', async () => {
+    queue(job('PURGE_DATA', { payload: {} }), []);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    expect(m.platformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reason: 'Retention window elapsed and the organization is being purged.',
+        }),
+      })
+    );
+  });
+  it('refuses a purge with no platform actor before recording or deleting anything', async () => {
+    queue(job('PURGE_DATA', { attempts: 3, requestedById: null }), [
+      { tableName: 'audit_logs', parentTable: null, nullableColumns: [] },
+    ]);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ failed: 1, succeeded: 0 });
+    expect(m.platformAudit).not.toHaveBeenCalled();
+    expect(m.execute).not.toHaveBeenCalled();
+    expect(m.organizationUpdate).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          error: 'A purge requires the platform actor who requested it.',
+        }),
+      })
+    );
+  });
 });
