@@ -79,9 +79,7 @@ function store(
       ),
     },
     pharmacyDrawerSession: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({ id: 'drawer_1', businessDate, openedByActorId: 'cashier_1' }),
+      findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', businessDate }),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerMovement: {

@@ -25,6 +25,8 @@ vi.mock('./finance-postings', async () => ({
 }));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+// DEV-821: these void suites run as a manager; bill ownership has its own cases below.
+const manager = { kind: 'COUNTER', actorIsManager: true } as const;
 
 describe('POS sale voiding', () => {
   it('restores exact allocated canonical units once with append-only reversals', async () => {
@@ -96,7 +98,7 @@ describe('POS sale voiding', () => {
       pharmacyTender: { findMany: async () => [] },
     };
 
-    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', manager, 'Customer cancelled');
 
     expect(allocationQuery).toMatchObject({
       where: {
@@ -125,7 +127,7 @@ describe('POS sale voiding', () => {
       12
     );
 
-    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
       'INVALID_STATE'
     );
     expect(reversals).toHaveLength(2);
@@ -187,7 +189,7 @@ describe('POS sale voiding', () => {
       },
     };
 
-    await changeSaleStatus(db as never, scope, 'sale-held', 'void', 'Lost to a reload');
+    await changeSaleStatus(db as never, scope, 'sale-held', 'void', manager, 'Lost to a reload');
 
     expect(status).toBe('VOID');
     // The claim is conditional on the status read, so a concurrent resume loses.
@@ -229,7 +231,7 @@ describe('POS sale voiding', () => {
         pharmacySaleEvent: { create: events },
       };
 
-      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
         'BILL_HAS_PAYMENTS'
       );
       expect(tenderQueries).toEqual([
@@ -265,7 +267,8 @@ describe('POS sale voiding', () => {
         pharmacyStockMovement: { create: stockWrites },
       };
       await expect(
-        changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Lost', undefined, {
+        changeSaleStatus(db as never, scope, 'sale-a', 'void', {
+          kind: 'COUNTER',
           actorIsManager: false,
         })
       ).rejects.toThrow('NOT_BILL_OWNER');
@@ -273,6 +276,25 @@ describe('POS sale voiding', () => {
       expect(stockWrites).not.toHaveBeenCalled();
     }
   );
+
+  it('fails closed when a caller supplies no void authority', async () => {
+    const updateMany = vi.fn();
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({
+          id: 'sale-a',
+          status: 'HELD',
+          createdByUserId: 'user-a',
+          lines: [],
+        }),
+        updateMany,
+      },
+    };
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'void', undefined as never)
+    ).rejects.toThrow('NOT_BILL_OWNER');
+    expect(updateMany).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['the cashier who opened it', 'user-a', false],
@@ -293,7 +315,8 @@ describe('POS sale voiding', () => {
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: unknown }) => data },
     };
-    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Lost', undefined, {
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', {
+      kind: 'COUNTER',
       actorIsManager,
     });
     expect(status).toBe('VOID');
@@ -309,7 +332,7 @@ describe('POS sale voiding', () => {
           updateMany,
         },
       };
-      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
         'INVALID_STATE'
       );
       expect(updateMany).not.toHaveBeenCalled();

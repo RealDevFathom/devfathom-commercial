@@ -501,7 +501,7 @@ describe('counter receipt authorization', () => {
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       'sale-a',
       'hold',
-      undefined,
+      { kind: 'COUNTER', actorIsManager: false },
       undefined,
       undefined
     );
@@ -516,9 +516,9 @@ describe('counter receipt authorization', () => {
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       'sale-a',
       'void',
+      { kind: 'COUNTER', actorIsManager: true },
       undefined,
-      undefined,
-      { actorIsManager: true }
+      undefined
     );
 
     vi.mocked(changeSaleStatus).mockRejectedValueOnce(new PharmacySaleError('NOT_BILL_OWNER'));

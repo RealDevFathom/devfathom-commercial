@@ -44,7 +44,6 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
-      | 'DRAWER_NOT_YOURS'
       | 'REFUND_EXCEEDS_TENDER'
       | 'IDEMPOTENCY_CONFLICT'
       | 'UNCERTIFIED_PROVIDER'

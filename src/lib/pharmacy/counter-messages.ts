@@ -115,9 +115,6 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
-  // DEV-821: cash goes only into a drawer the signed-in user opened.
-  DRAWER_NOT_YOURS:
-    'The cash drawer on this counter was opened by someone else. Open your own drawer, or ask a manager or owner to take this payment.',
   SALE_REDEEMED_BY_OTHER_CUSTOMER:
     'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
   PATIENT_AMBIGUOUS:

@@ -520,12 +520,7 @@ function fail(error: unknown): never {
   if (error instanceof PharmacySettlementError) {
     // A drawer that is already open is a state conflict, not a malformed request.
     throw new TRPCError({
-      code:
-        error.reason === 'OPEN_DRAWER'
-          ? 'CONFLICT'
-          : error.reason === 'DRAWER_NOT_YOURS'
-            ? 'FORBIDDEN'
-            : 'BAD_REQUEST',
+      code: error.reason === 'OPEN_DRAWER' ? 'CONFLICT' : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -1107,10 +1102,7 @@ export const pharmacySalesRouter = router({
           await bindKhataBranch(db, scope);
           // DEV-630: money taken now books on today, never a client-chosen day.
           await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
-          // DEV-821: cash goes into a drawer this user opened, unless a manager or owner.
-          return recordKhataRepayment(db, scope, input, {
-            actorIsManager: await actorMayRefund(db, ctx.session!.user),
-          });
+          return recordKhataRepayment(db, scope, input);
         });
       } catch (error) {
         fail(error);
@@ -2177,12 +2169,14 @@ export const pharmacySalesRouter = router({
               scope,
               input.saleId,
               input.action,
+              {
+                kind: 'COUNTER',
+                // DEV-821: only the bill's cashier or a manager/owner may void it.
+                actorIsManager:
+                  input.action === 'void' && (await actorMayRefund(db, ctx.session!.user)),
+              },
               input.reason,
-              input.controlledWitness,
-              // DEV-821: only the bill's cashier or a manager/owner may void it.
-              input.action === 'void'
-                ? { actorIsManager: await actorMayRefund(db, ctx.session!.user) }
-                : undefined
+              input.controlledWitness
             );
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)

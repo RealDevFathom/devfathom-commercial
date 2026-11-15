@@ -1326,11 +1326,27 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await expect(f.caller().recordKhataPayment(payment)).resolves.toEqual(slip);
     expect(f.db.$transaction).toHaveBeenCalledTimes(1);
     expect(f.db.$queryRaw).toHaveBeenCalled();
-    // DEV-821: the manager/owner decision decides whose drawer the cash may go into.
-    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment, {
-      actorIsManager: true,
-    });
+    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment);
   });
+
+  // DEV-821: a client-sent device only reaches a drawer through the caller's own
+  // assigned branch, so an unassigned or other-branch user never reaches the drawer.
+  it.each(['branch-b', 'unassigned'])(
+    'refuses a cash repayment from a cashier assigned to %s before any drawer read',
+    async (assignment) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(
+        assignment === 'unassigned' ? [] : [{ branchId: assignment }]
+      );
+      await expect(f.caller().recordKhataPayment(payment)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(recordKhataRepayment).not.toHaveBeenCalled();
+    }
+  );
 
   it('lists repayment accounts for counter users without a sale', async () => {
     vi.mocked(searchKhataRepaymentAccounts).mockResolvedValue([]);

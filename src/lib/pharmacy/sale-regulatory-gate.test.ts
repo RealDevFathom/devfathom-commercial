@@ -18,6 +18,7 @@ import { applyPharmacyTender } from './settlement';
  * delivery, payment sandbox) is refused before any write.
  */
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
+const cashier = { kind: 'COUNTER', actorIsManager: false } as const;
 const denied = new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
 
 beforeEach(() => {
@@ -186,7 +187,7 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
         pharmacySaleEvent: { create: vi.fn() },
       };
 
-      await expect(changeSaleStatus(db as never, scope, 'sale-a', action)).rejects.toBe(lapsed);
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', action, cashier)).rejects.toBe(lapsed);
       expect(assertStoredPharmacyMayOperate).toHaveBeenCalledWith(db, 'org-a', 'branch-a', {
         name: `pharmacy.sale.${action}`,
       });
@@ -206,7 +207,7 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
       pharmacySaleEvent: { create: vi.fn() },
     };
 
-    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'hold')).resolves.toBe(sale);
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'hold', cashier)).resolves.toBe(sale);
     expect(assertStoredPharmacyMayOperate).not.toHaveBeenCalled();
     expect(db.pharmacySale.updateMany).toHaveBeenCalledOnce();
   });
