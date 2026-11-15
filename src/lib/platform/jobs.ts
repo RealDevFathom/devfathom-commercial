@@ -26,6 +26,9 @@ type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
 
 const STALE_JOB_MS = 15 * 60_000;
+
+/** A failure that no retry can cure: the job is marked FAILED at once. */
+class PermanentJobError extends Error {}
 const RETRY_BASE_MS = 30_000;
 const CONTROL_PLANE_TABLES = new Set([
   'organizations',
@@ -636,8 +639,67 @@ function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
+const AUDIT_LOG_PURGE_ACTION = 'organization.audit_logs.purge';
+const DEFAULT_PURGE_REASON = 'Retention window elapsed and the organization is being purged.';
+
+/**
+ * Tenant audit rows are append-only (DEV-155). The database admits their
+ * deletion only inside a control-plane purge of that tenant that has first
+ * written a permanent `platform_audit_logs` record of what it removes, for which
+ * organization, by which platform actor and why, and names that record in
+ * "app.audit_purge_record_id". `platform_audit_logs` is itself append-only and
+ * excluded from the purge, so the record outlives the tenant's data.
+ */
+async function recordAuditLogPurge(
+  db: PrismaClient,
+  job: PlatformJob,
+  organizationId: string,
+  actorPlatformUserId: string
+): Promise<number> {
+  const [summary] = await db.$queryRaw<
+    Array<{ rows: number; earliest: Date | null; latest: Date | null; digest: string | null }>
+  >(Prisma.sql`
+    SELECT count(*)::int AS "rows",
+           min("createdAt") AS "earliest",
+           max("createdAt") AS "latest",
+           encode(sha256(convert_to(string_agg("id", ',' ORDER BY "id"), 'UTF8')), 'hex') AS "digest"
+    FROM "audit_logs"
+    WHERE "organizationId" = ${organizationId}
+  `);
+  const requested = objectPayload(job.payload).reason;
+  const reason =
+    typeof requested === 'string' && requested.trim() ? requested.trim() : DEFAULT_PURGE_REASON;
+  const record = await db.platformAuditLog.create({
+    data: {
+      organizationId,
+      actorPlatformUserId,
+      action: AUDIT_LOG_PURGE_ACTION,
+      targetType: 'AuditLog',
+      requestId: job.id,
+      reason,
+      metadata: {
+        jobId: job.id,
+        table: 'audit_logs',
+        rows: summary?.rows ?? 0,
+        earliestCreatedAt: summary?.earliest?.toISOString() ?? null,
+        latestCreatedAt: summary?.latest?.toISOString() ?? null,
+        idDigest: summary?.digest ? `sha256:${summary.digest}` : null,
+      },
+    },
+    select: { id: true },
+  });
+  await db.$queryRaw`SELECT set_config('app.audit_purge_record_id', ${record.id}, true)`;
+  return summary?.rows ?? 0;
+}
+
 async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult> {
   const organizationId = requiredOrganization(job);
+  const actorPlatformUserId = job.requestedById;
+  if (!actorPlatformUserId) {
+    throw new PermanentJobError(
+      'A purge requires the platform actor who requested it: this job names no requesting platform administrator. Schedule the purge again from the platform console.'
+    );
+  }
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
     select: { status: true, purgeScheduledAt: true },
@@ -680,6 +742,7 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   // have no vanished parent row to recognise it by. Transaction-local, and
   // scoped to the organization this job names.
   await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+  const recordedAuditRows = await recordAuditLogPurge(db, job, organizationId, actorPlatformUserId);
   // The customer and message rows below are about to be destroyed. Keep only
   // pseudonymous consent state and its effective date, never contact details or
   // message content, so a later complaint can be answered without retaining the
@@ -700,6 +763,15 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
       organizationId
     );
     if (count) counts[table] = count;
+  }
+  // Audit rows are only ever added, so the DELETE saw every row the record
+  // summarised; an equal count means it saw no others either. A row written
+  // in between (a failed sign-in, say) would make the permanent record
+  // understate the purge: roll everything back and let the job retry.
+  if ((counts.audit_logs ?? 0) !== recordedAuditRows) {
+    throw new Error(
+      `Audit rows changed during the purge: recorded ${recordedAuditRows}, deleted ${counts.audit_logs ?? 0}.`
+    );
   }
   await db.organization.update({
     where: { id: organizationId },
@@ -805,7 +877,7 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  const retry = job.attempts < job.maxAttempts;
+  const retry = !(error instanceof PermanentJobError) && job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({
       where: { id: job.id },
