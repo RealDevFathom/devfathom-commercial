@@ -955,6 +955,59 @@ describe('protected patient operations', () => {
     });
   });
 
+  // DEV-832 (F09): a new grant is refused to staff outside consent capture,
+  // exactly like the withdrawal above, and still recorded for a pharmacist.
+  describe('recordConsent grant authorization', () => {
+    const createConsent = vi.fn();
+    const transaction = vi.fn();
+    const grant = (api: ReturnType<typeof caller>) =>
+      api.recordConsent({
+        patientId: patient.id,
+        purpose: 'REMINDERS',
+        channel: 'SMS',
+        granted: true,
+      });
+    function grantContext(role: string) {
+      const ctx = patientContext(role);
+      ctx.db = { ...ctx.db, $transaction: transaction } as typeof ctx.db;
+      return ctx;
+    }
+
+    beforeEach(() => {
+      createConsent.mockImplementation(async ({ data }) => data);
+      transaction.mockImplementation(async (run) =>
+        run({
+          $queryRaw: vi.fn().mockResolvedValue([{ id: patient.id }]),
+          patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create: createConsent },
+        })
+      );
+    });
+
+    it.each(['manager', 'cashier', 'procurement', 'inventory', 'finance', 'auditor'])(
+      'refuses a %s grant before any consent write',
+      async (role) => {
+        await expect(grant(caller(grantContext(role)))).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(transaction).not.toHaveBeenCalled();
+        expect(createConsent).not.toHaveBeenCalled();
+      }
+    );
+
+    it('records a pharmacist grant bound to the exact purpose, channel and decision', async () => {
+      await expect(grant(caller(grantContext('pharmacist')))).resolves.toMatchObject({
+        patientId: patient.id,
+        purpose: 'REMINDERS',
+        channel: 'SMS',
+        granted: true,
+        revokedAt: null,
+        staffId: 'pharmacist',
+        recordedByUserId: 'pharmacist',
+      });
+      expect(createConsent).toHaveBeenCalledOnce();
+    });
+  });
+
   describe.each(['readPatient', 'exportPatient'] as const)('%s', (endpoint) => {
     it.each(['cashier', 'procurement'])(
       'denies %s before patient lookup or patient audit',

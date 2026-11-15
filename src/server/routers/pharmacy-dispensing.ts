@@ -5,6 +5,11 @@ import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
 
+// DEV-832: dispensing queues show who the prescription is for, nothing more.
+// CNIC, phone, address and date of birth stay behind the audited, masked
+// patient-read route (`pharmacyPrescriptions.readPatient`).
+const queuePatient = { select: { id: true, displayName: true } } as const;
+
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
   // a verification task never grants permission to credit AVAILABLE inventory.
@@ -39,7 +44,9 @@ export const pharmacyDispensingRouter = router({
           include: {
             medicine: true,
             presentation: true,
-            prescription: { include: { patient: true, prescriber: true } },
+            prescription: {
+              include: { patient: queuePatient, prescriber: { select: { id: true, name: true } } },
+            },
           },
         },
         decisions: { orderBy: { createdAt: 'asc' } },
@@ -74,7 +81,7 @@ export const pharmacyDispensingRouter = router({
             include: {
               medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
               presentation: true,
-              prescription: { include: { patient: true } },
+              prescription: { include: { patient: queuePatient } },
             },
           },
         },
