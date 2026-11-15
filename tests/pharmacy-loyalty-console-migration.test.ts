@@ -26,11 +26,28 @@ describe('pharmacy loyalty console migration (DEV-764)', () => {
     ])
       expect(code).toContain(`ADD COLUMN IF NOT EXISTS "${column}"`);
     expect(code).toMatch(
-      /CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expiry_lot_key"/
+      /CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expiry_lot_key"\s+ON "pharmacy_loyalty_points_entries" \("organizationId", "reversesEntryId"\)\s+WHERE "reversesEntryId" IS NOT NULL;/
     );
-    expect(code).toMatch(
-      /CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_release_tender_key"/
-    );
+  });
+
+  it('uses only immutable index predicates (an enum-to-text cast is not immutable)', () => {
+    for (const index of code.match(/CREATE (?:UNIQUE )?INDEX[^;]*;/g) ?? [])
+      expect(index).not.toMatch(/::text/);
+  });
+
+  it('lets only an EXPIRY entry name a lot, so one lot has at most one expiry', () => {
+    for (const kind of [
+      'EARN',
+      'REDEEM',
+      'REFUND',
+      'EARN_REVERSAL',
+      'KHATA_EARN',
+      'ADJUSTMENT',
+      'REDEMPTION_RELEASE',
+    ])
+      expect(code).toMatch(
+        new RegExp(`\\("kind"::text = '${kind}' [^\\n]*"reversesEntryId" IS NULL`)
+      );
   });
 
   it("keeps today's behaviour for every existing program version", () => {

@@ -1,6 +1,5 @@
 import 'server-only';
 
-import { planLoyaltyExpiries } from '@/lib/restaurant/loyalty-expiry';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockCustomerConsent } from './consent-writer';
@@ -15,67 +14,75 @@ export type PharmacyPointsEntryForExpiry = {
   kind: string;
   points: number;
   saleId: string | null;
+  tenderId: string | null;
   programVersionId: string | null;
   reversesEntryId: string | null;
   expiresAt: Date | null;
   occurredAt: Date;
 };
 
+type Lot = PharmacyPointsEntryForExpiry & { remaining: number };
+
 const isLot = (entry: { kind: string }) => (LOT_KINDS as readonly string[]).includes(entry.kind);
+const chronological = (a: PharmacyPointsEntryForExpiry, b: PharmacyPointsEntryForExpiry) =>
+  a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id);
+
+/**
+ * The lots a negative entry takes from first. An expiry closes exactly its lot. An earn
+ * reversal takes back the lots it reverses: a khata (CREDIT) refund the KHATA_EARN lots of
+ * that tender, newest collection first (the tranches no longer owed); any other refund the
+ * EARN lot of its sale.
+ */
+function linkedLots(entry: PharmacyPointsEntryForExpiry, lots: readonly Lot[]): Lot[] {
+  if (entry.kind === 'EXPIRY') return lots.filter((lot) => lot.id === entry.reversesEntryId);
+  if (entry.kind !== 'EARN_REVERSAL') return [];
+  const khata = lots.filter((lot) => lot.kind === 'KHATA_EARN' && lot.tenderId === entry.tenderId);
+  if (khata.length) return [...khata].reverse();
+  return lots.filter((lot) => lot.kind === 'EARN' && lot.saleId === entry.saleId);
+}
 
 /**
  * DEV-764: which earned lots of one customer at one branch are due to expire at `at`, and how
- * many points each still holds. Reuses the restaurant's pure lot planner: earned lots are
- * consumed oldest first by spending, an earn reversal consumes the lot of its own sale, and
- * points given back (refund restorations, void releases, positive adjustments) never expire.
- * A due lot already spent in full is returned with 0 points, so it can be closed and is never
- * planned again.
+ * many points each still holds. Same lot model as the restaurant planner (earned lots are
+ * consumed oldest first by spending; points given back by refunds, void releases and positive
+ * adjustments never expire), with two pharmacy rules: a khata refund's reversal takes back
+ * its own khata collection lots, and a reversal larger than what is left of its own lots
+ * (the points were already spent) takes the rest from other lots, oldest first, so expiry
+ * never deducts those points a second time. A due lot already spent in full is returned with
+ * 0 points, so it can be closed and is never planned again.
  */
 export function planPharmacyLotExpiries(
   entries: readonly PharmacyPointsEntryForExpiry[],
   at: Date
 ) {
-  const closed = new Set(
-    entries.flatMap((entry) =>
-      entry.kind === 'EXPIRY' && entry.reversesEntryId ? [entry.reversesEntryId] : []
-    )
-  );
-  const earnBySale = new Map(
-    entries.flatMap((entry) =>
-      entry.kind === 'EARN' && entry.saleId ? [[entry.saleId, entry.id] as const] : []
-    )
-  );
-  const remaining = new Map(
-    planLoyaltyExpiries(
-      entries.map((entry) => ({
-        id: entry.id,
-        kind: isLot(entry) ? ('EARN' as const) : ('ADJUSTMENT' as const),
-        points: entry.points,
-        programVersionId: entry.programVersionId ?? '',
-        reversesEntryId:
-          entry.kind === 'EARN_REVERSAL' && entry.saleId
-            ? (earnBySale.get(entry.saleId) ?? null)
-            : entry.reversesEntryId,
-        expiresAt: entry.expiresAt,
-        occurredAt: entry.occurredAt,
-      })),
-      at
-    ).map((lot) => [lot.id, lot.remaining] as const)
-  );
-  return entries
+  const lots: Lot[] = [];
+  const closed = new Set<string>();
+  for (const entry of [...entries].sort(chronological)) {
+    if (entry.occurredAt.getTime() > at.getTime()) continue;
+    if (isLot(entry)) {
+      lots.push({ ...entry, remaining: entry.points });
+      continue;
+    }
+    if (entry.kind === 'EXPIRY' && entry.reversesEntryId) closed.add(entry.reversesEntryId);
+    if (entry.points >= 0) continue;
+    let consume = -entry.points;
+    for (const lot of [...linkedLots(entry, lots), ...lots]) {
+      if (consume === 0) break;
+      const used = Math.min(lot.remaining, consume);
+      lot.remaining -= used;
+      consume -= used;
+    }
+  }
+  return lots
     .filter(
-      (entry) =>
-        isLot(entry) &&
-        entry.expiresAt !== null &&
-        entry.expiresAt.getTime() <= at.getTime() &&
-        entry.occurredAt.getTime() <= at.getTime() &&
-        !closed.has(entry.id)
+      (lot) =>
+        lot.expiresAt !== null && lot.expiresAt.getTime() <= at.getTime() && !closed.has(lot.id)
     )
     .sort((a, b) => a.expiresAt!.getTime() - b.expiresAt!.getTime() || a.id.localeCompare(b.id))
     .map((lot) => ({
       lotId: lot.id,
       programVersionId: lot.programVersionId,
-      points: remaining.get(lot.id) ?? 0,
+      points: Math.max(0, lot.remaining),
     }));
 }
 
@@ -104,6 +111,7 @@ export async function expireCustomerLoyaltyPoints(
       kind: true,
       points: true,
       saleId: true,
+      tenderId: true,
       programVersionId: true,
       reversesEntryId: true,
       expiresAt: true,

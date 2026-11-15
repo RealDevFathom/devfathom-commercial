@@ -48,17 +48,20 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- One expiry per earned lot; also how the expiry job finds lots it has not closed yet.
+-- One expiry per earned lot; also how the expiry job finds lots it has not closed yet. Only an
+-- EXPIRY entry may name a lot (sign check below), so the predicate needs no enum comparison:
+-- an index predicate must be immutable, and an enum-to-text cast is not.
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expiry_lot_key"
   ON "pharmacy_loyalty_points_entries" ("organizationId", "reversesEntryId")
-  WHERE "kind"::text = 'EXPIRY';
+  WHERE "reversesEntryId" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expires_idx"
   ON "pharmacy_loyalty_points_entries" ("expiresAt")
   WHERE "expiresAt" IS NOT NULL;
 
 -- Every earlier shape is kept, now also requiring its sale. New shapes:
 --  ADJUSTMENT: an owner or manager correction, signed, never zero, with a written reason.
---  EXPIRY: closes one earned lot (reversesEntryId); takes its remaining points, possibly none.
+--  EXPIRY: closes one earned lot (reversesEntryId, which no other kind may set); takes its
+--  remaining points, possibly none.
 --  REDEMPTION_RELEASE: returns the points of a redemption tender on a voided sale.
 ALTER TABLE "pharmacy_loyalty_points_entries"
   DROP CONSTRAINT IF EXISTS pharmacy_loyalty_points_entries_sign_check,
@@ -66,16 +69,14 @@ ALTER TABLE "pharmacy_loyalty_points_entries"
     ("kind"::text = 'EARN' AND "saleId" IS NOT NULL AND "points" > 0 AND "requestedPoints" IS NULL AND "netPaidMinor" >= 0 AND "tenderId" IS NULL AND "refundId" IS NULL AND "earnStartMinor" IS NULL AND "reversesEntryId" IS NULL) OR
     ("kind"::text = 'REDEEM' AND "saleId" IS NOT NULL AND "points" < 0 AND "requestedPoints" > 0 AND "netPaidMinor" IS NULL AND "tenderId" IS NOT NULL AND "refundId" IS NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NULL) OR
     ("kind"::text = 'REFUND' AND "saleId" IS NOT NULL AND "points" > 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NULL AND "tenderId" IS NOT NULL AND "refundId" IS NOT NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NULL) OR
-    ("kind"::text = 'EARN_REVERSAL' AND "saleId" IS NOT NULL AND "points" < 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NOT NULL AND "netPaidMinor" >= 0 AND "tenderId" IS NOT NULL AND "refundId" IS NOT NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL) OR
+    ("kind"::text = 'EARN_REVERSAL' AND "saleId" IS NOT NULL AND "points" < 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NOT NULL AND "netPaidMinor" >= 0 AND "tenderId" IS NOT NULL AND "refundId" IS NOT NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NULL) OR
     ("kind"::text = 'KHATA_EARN' AND "saleId" IS NOT NULL AND "points" > 0 AND "requestedPoints" IS NULL AND "netPaidMinor" > 0 AND "earnStartMinor" >= 0 AND "tenderId" IS NOT NULL AND "refundId" IS NULL AND "programVersionId" IS NOT NULL AND "reversesEntryId" IS NULL) OR
     ("kind"::text = 'ADJUSTMENT' AND "saleId" IS NULL AND "points" <> 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NULL AND "tenderId" IS NULL AND "refundId" IS NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NULL AND length(btrim("reason")) BETWEEN 3 AND 500) OR
     ("kind"::text = 'EXPIRY' AND "saleId" IS NULL AND "points" <= 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NULL AND "tenderId" IS NULL AND "refundId" IS NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NOT NULL) OR
     ("kind"::text = 'REDEMPTION_RELEASE' AND "saleId" IS NOT NULL AND "points" > 0 AND "requestedPoints" IS NULL AND "netPaidMinor" IS NULL AND "tenderId" IS NOT NULL AND "refundId" IS NULL AND "earnStartMinor" IS NULL AND "expiresAt" IS NULL AND "reversesEntryId" IS NULL)
   );
 
--- One release per redemption tender.
-CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_release_tender_key"
-  ON "pharmacy_loyalty_points_entries" ("organizationId", "tenderId")
-  WHERE "kind"::text = 'REDEMPTION_RELEASE';
+-- One release per redemption tender: its idempotency key is loyalty:release:<tenderId>, and
+-- (organizationId, idempotencyKey) is already unique.
 
 COMMIT;

@@ -23,6 +23,7 @@ const entry = (
   kind,
   points,
   saleId: null,
+  tenderId: null,
   programVersionId: 'program-1',
   reversesEntryId: null,
   expiresAt: null,
@@ -71,6 +72,51 @@ describe('DEV-764 pharmacy points expiry planning', () => {
     );
     expect(plan.map((lot) => [lot.lotId, lot.points])).toEqual([
       ['earn-a', 100],
+      ['earn-b', 0],
+    ]);
+  });
+
+  it('lets a khata refund reversal take back its own collection lots, not older earnings', () => {
+    const plan = planPharmacyLotExpiries(
+      [
+        entry('old-earn', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(60) }),
+        entry('khata-1', 'KHATA_EARN', 60, 2, {
+          saleId: 'sale-k',
+          tenderId: 'credit-k',
+          expiresAt: day(32),
+        }),
+        entry('khata-2', 'KHATA_EARN', 40, 3, {
+          saleId: 'sale-k',
+          tenderId: 'credit-k',
+          expiresAt: day(33),
+        }),
+        // A cash earn on the same khata sale must not absorb the khata reversal.
+        entry('cash-k', 'EARN', 10, 2, { saleId: 'sale-k', expiresAt: day(32) }),
+        entry('reverse-k', 'EARN_REVERSAL', -100, 4, { saleId: 'sale-k', tenderId: 'credit-k' }),
+      ],
+      day(61)
+    );
+    expect(plan.map((lot) => [lot.lotId, lot.points])).toEqual([
+      ['cash-k', 10],
+      ['khata-1', 0],
+      ['khata-2', 0],
+      ['old-earn', 100],
+    ]);
+  });
+
+  it('takes a reversal of already-spent points from other lots, never expiring them twice', () => {
+    // Earn 100 on A, redeem 100, earn 100 on B, refund A in full: the balance is 0.
+    const plan = planPharmacyLotExpiries(
+      [
+        entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+        entry('redeem', 'REDEEM', -100, 2, { saleId: 'sale-r' }),
+        entry('earn-b', 'EARN', 100, 3, { saleId: 'sale-b', expiresAt: day(33) }),
+        entry('reverse-a', 'EARN_REVERSAL', -100, 4, { saleId: 'sale-a', tenderId: 'cash-a' }),
+      ],
+      day(40)
+    );
+    expect(plan.map((lot) => [lot.lotId, lot.points])).toEqual([
+      ['earn-a', 0],
       ['earn-b', 0],
     ]);
   });
