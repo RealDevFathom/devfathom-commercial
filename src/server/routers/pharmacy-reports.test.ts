@@ -824,6 +824,38 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     );
   });
 
+  it('rejects a second failure with a different reason and returns an exact retry without writing', async () => {
+    const failed = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'FAILED',
+      externalReference: null,
+      externalFailureReason: 'DRAP endpoint unavailable',
+    };
+    mocks.reportFindFirst.mockResolvedValue(failed);
+    mocks.reportUpdateManyAndReturn.mockClear();
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'FAILED',
+        failureReason: 'Different failure reason',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'FAILED',
+        failureReason: 'DRAP endpoint unavailable',
+      })
+    ).resolves.toEqual(failed);
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
   it('rejects a lifecycle transition when a concurrent writer changed the source state', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
