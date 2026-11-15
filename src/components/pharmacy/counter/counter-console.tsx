@@ -163,6 +163,12 @@ function readCounterDeviceId(): string | null {
 function useCounterDeviceId(): string | null {
   return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
 }
+const hydratedOnClient = () => true;
+const notHydratedOnServer = () => false;
+/** `false` on the server render and during hydration, `true` once on the client. */
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToNothing, hydratedOnClient, notHydratedOnServer);
+}
 
 /**
  * Today in the workspace's zone, as the date-only value the settlement tables
@@ -567,6 +573,9 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
+  // On the client a missing device id means site storage is blocked: no drawer
+  // can be read or opened, so the step says so instead of waiting forever.
+  const deviceUnavailable = useHydrated() && deviceId === null;
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
     { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
@@ -578,6 +587,11 @@ function ScopedPharmacyCounterConsole({
   // scan/search, so no bill is built that cannot be charged. A failed status read
   // keeps the step, with a retry, rather than offering a bill the server refuses.
   const drawerRequired = branchAuthorized && !openDrawerSession;
+  // Read at call time: a scan or shortcut can finish after the drawer closed.
+  const drawerRequiredRef = useRef(drawerRequired);
+  useEffect(() => {
+    drawerRequiredRef.current = drawerRequired;
+  }, [drawerRequired]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1092,8 +1106,9 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const ensureSale = useCallback(async () => {
+    // Before the open-bill shortcut too: no line is added while the drawer is closed.
+    if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     if (saleId) return saleId;
-    if (drawerRequired) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
       .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
       .catch((error: unknown) => {
@@ -1104,7 +1119,7 @@ function ScopedPharmacyCounterConsole({
       });
     setActiveSale(created.id);
     return created.id;
-  }, [branchId, createSale, drawerRequired, saleId, setActiveSale, utils]);
+  }, [branchId, createSale, saleId, setActiveSale, utils]);
 
   const addToCart = useCallback(
     async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
@@ -2334,6 +2349,7 @@ function ScopedPharmacyCounterConsole({
                 <CounterOpenDrawerStep
                   disabled={busy || !drawerStatusKnown}
                   statusError={drawerQuery.isError}
+                  deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
                   onRetry={() => void drawerQuery.refetch()}
                   onOpen={(openingFloatMinor) => {

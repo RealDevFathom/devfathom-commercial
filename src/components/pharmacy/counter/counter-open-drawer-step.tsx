@@ -12,6 +12,8 @@ export type CounterOpenDrawerStepProps = {
   disabled: boolean;
   /** The drawer status read failed: the drawer may or may not be open. */
   statusError?: boolean;
+  /** Site storage is blocked, so this browser has no counter device id. */
+  deviceUnavailable?: boolean;
   /** A drawer status read is in flight. */
   checking?: boolean;
   onRetry?: () => void;
@@ -27,6 +29,7 @@ export type CounterOpenDrawerStepProps = {
 export function CounterOpenDrawerStep({
   disabled,
   statusError = false,
+  deviceUnavailable = false,
   checking = false,
   onRetry,
   onOpen,
@@ -56,7 +59,15 @@ export function CounterOpenDrawerStep({
           open.
         </p>
       </div>
-      {statusError ? (
+      {deviceUnavailable ? (
+        <p
+          role="alert"
+          className="rounded-[var(--radius-xs)] border border-warning/30 bg-warning/10 p-3 text-sm text-text-body"
+        >
+          This browser is blocking site storage, so the counter cannot identify this device or its
+          cash drawer. Allow site storage for this site, then reload the page.
+        </p>
+      ) : statusError ? (
         <div
           role="alert"
           className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-xs)] border border-warning/30 bg-warning/10 p-3"

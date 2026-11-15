@@ -1819,6 +1819,51 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
+  it('adds no line to an open bill once the drawer is closed elsewhere (DEV-725)', async () => {
+    let resolveSearch:
+      | ((result: { rows: CounterSearchRow[]; truncated: boolean }) => void)
+      | undefined;
+    mocks.searchFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        })
+    );
+    mocks.mutations.addLine!.mockResolvedValue({});
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: '123456' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.searchFetch).toHaveBeenCalled());
+    closeDrawer();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await act(async () => resolveSearch!({ rows: [barcodeRow()], truncated: false }));
+    expect(
+      await screen.findByText(
+        'Open the cash drawer for this counter before starting a bill or taking a payment.'
+      )
+    ).toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('explains blocked site storage instead of waiting on a drawer it cannot read (DEV-725)', () => {
+    const blocked = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    try {
+      closeDrawer();
+      mocks.queries.drawerStatus = { ...query(), isSuccess: false };
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      expect(screen.getByText(/blocking site storage/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+      expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    } finally {
+      blocked.mockRestore();
+    }
+  });
+
   it('words a conflicting open for the operator instead of leaking the server failure', async () => {
     closeDrawer();
     mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
