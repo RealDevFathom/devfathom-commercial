@@ -210,7 +210,7 @@ describe('processDueWhatsAppRefillReminders', () => {
   });
 
   it('reads the send window in UTC for a stored zone Intl refuses, instead of failing the run', async () => {
-    // NOW is 08:00 UTC, inside the 08:00-22:00 window in UTC.
+    // 09:00 UTC is inside the shared 09:00-22:00 send window in UTC.
     store.timezone = 'PKT';
     store.captures = [capture('capture-1')];
     store.customers = [customer('patient-1', true)];
@@ -218,7 +218,11 @@ describe('processDueWhatsAppRefillReminders', () => {
     const provider = new MockWhatsAppProvider(config);
 
     await expect(
-      processDueWhatsAppRefillReminders({ now: NOW, config, provider })
+      processDueWhatsAppRefillReminders({
+        now: new Date('2026-09-29T09:00:00Z'),
+        config,
+        provider,
+      })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
   });
@@ -229,7 +233,7 @@ describe('processDueWhatsAppRefillReminders', () => {
     store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
     const provider = new MockWhatsAppProvider(config);
 
-    // 18:00 UTC is 23:00 in Asia/Karachi, inside the 22:00-08:00 quiet window.
+    // 18:00 UTC is 23:00 in Asia/Karachi, inside the 22:00-09:00 quiet window.
     const result = await processDueWhatsAppRefillReminders({
       now: new Date('2026-09-29T18:00:00.000Z'),
       config,
@@ -239,6 +243,19 @@ describe('processDueWhatsAppRefillReminders', () => {
     expect(result).toMatchObject({ scanned: 1, skippedQuietHours: 1, skippedNoConsent: 0 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
+  });
+
+  it.each([
+    ['08:30 PKT', '2026-09-29T03:30:00Z', 0],
+    ['09:00 PKT', '2026-09-29T04:00:00Z', 1],
+    ['22:00 PKT', '2026-09-29T17:00:00Z', 0],
+  ])('shares the khata 22:00-09:00 quiet hours at %s', async (_label, at, sends) => {
+    store.captures = [capture('capture-1')];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppRefillReminders({ now: new Date(at), config, provider });
+    expect(provider.calls).toHaveLength(sends);
   });
 
   it('does nothing until the reminder template name is configured', async () => {

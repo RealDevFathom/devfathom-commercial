@@ -10,6 +10,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import { isUtilityReminderQuietHour, reminderLocalHour } from './reminder-quiet-hours';
 import {
   emptySmsFallbackCounts,
   sendUtilitySmsFallback,
@@ -89,7 +90,7 @@ export type RefillReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
-  /** Due but held back: it is outside 8 am to 10 pm in the workspace timezone. */
+  /** Due but held back: it is outside 9 am to 10 pm in the workspace timezone. */
   skippedQuietHours: number;
   notDue: number;
   /** DEV-87 SMS fallback outcomes (no WhatsApp consent or permanent failure). */
@@ -260,15 +261,11 @@ async function deliverRefillReminder(
       )
     )
       return null;
-    const hour = Number(
-      // A stored zone Intl refuses reads as UTC rather than failing the run.
-      new Intl.DateTimeFormat('en-GB', {
-        timeZone: workspaceTimezone(organization.timezone),
-        hour: '2-digit',
-        hourCycle: 'h23',
-      }).format(now)
-    );
-    if (hour >= 22 || hour < 8) return { kind: 'quiet-hours' as const };
+    // A stored zone Intl refuses reads as UTC rather than failing the run.
+    if (
+      isUtilityReminderQuietHour(reminderLocalHour(now, workspaceTimezone(organization.timezone)))
+    )
+      return { kind: 'quiet-hours' as const };
     await lockPatientConsent(db, item.organizationId, item.patientId);
     const [customer, consent] = await Promise.all([
       db.pharmacyCustomer.findFirst({

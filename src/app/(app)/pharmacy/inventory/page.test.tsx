@@ -132,6 +132,23 @@ beforeEach(() => {
   lots.mockResolvedValue([lot]);
 });
 
+describe('inventory table keyboard scrolling', () => {
+  it('focuses the named viewport that directly scrolls the table', async () => {
+    await show();
+    const region = screen.getByRole('region', { name: 'Pharmacy inventory batches' });
+    const table = within(region).getByRole('table');
+    expect(table.parentElement).toBe(region);
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(region).toHaveClass(
+      'overflow-x-auto',
+      'focus-visible:outline-2',
+      'focus-visible:outline-ring'
+    );
+    region.focus();
+    expect(region).toHaveFocus();
+  });
+});
+
 describe('physical count prerequisites', () => {
   function countCard() {
     return within(
@@ -853,5 +870,22 @@ describe('expiry advice in context (DEV-594)', () => {
     );
     await show();
     expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+  });
+});
+
+describe('opening stock entry point (DEV-46)', () => {
+  it('uses the same opening-stock importer from the header and empty inventory', async () => {
+    lots.mockResolvedValue([]);
+    await show();
+    const links = screen.getAllByRole('link', { name: 'Import opening stock' });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute('href', '/pharmacy/inventory/import');
+    expect(screen.getByRole('link', { name: 'Receive supplier delivery' })).toHaveAttribute(
+      'href',
+      '/pharmacy/purchasing/receiving'
+    );
+    expect(screen.queryByRole('link', { name: 'Receive opening stock' })).toBeNull();
+    for (const link of screen.getAllByRole('link'))
+      expect(link.getAttribute('href') ?? '').not.toMatch(/\/pharmacy\/inventory\/counts/);
   });
 });

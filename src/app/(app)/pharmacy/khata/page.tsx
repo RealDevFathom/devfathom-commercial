@@ -48,7 +48,7 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
   },
   'reminder-quiet-hours': {
     tone: 'alert',
-    text: 'No reminder sent: reminders go out only between 8 am and 10 pm. Try again during those hours.',
+    text: 'No reminder sent: reminders go out only between 9 am and 10 pm. Try again during those hours.',
   },
   'reminder-not-configured': {
     tone: 'alert',

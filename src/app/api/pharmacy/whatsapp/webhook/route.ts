@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
+import { evaluateMarketingBlockRate } from '@/lib/pharmacy/marketing-send-policy';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -166,6 +167,11 @@ export async function POST(request: Request) {
   for (const message of messages) {
     outcomes.push(await handleInboundWhatsAppMessage(organization.id, provider, message));
   }
+  // A STOP is a block signal. Re-check after any handled sender batch, replays
+  // included, so a retried request completes a check an earlier attempt missed.
+  // The check is idempotent and returns early once sending is paused.
+  if (outcomes.length)
+    await withTenantDb(organization.id, (db) => evaluateMarketingBlockRate(db, organization.id));
   // Meta retries non-2xx responses; handled and ignored messages both return 200.
   return json({ received: messages.length, outcomes });
 }

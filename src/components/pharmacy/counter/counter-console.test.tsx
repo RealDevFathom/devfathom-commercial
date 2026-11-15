@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   cartRead: vi.fn(),
   khataApprovers: vi.fn(),
   signIn: vi.fn(),
+  signOut: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
   keymapSetData: vi.fn(),
@@ -64,6 +65,8 @@ const mocks = vi.hoisted(() => ({
     enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
   },
 }));
+
+vi.mock('@/lib/auth/sign-out', () => ({ signOutEverything: mocks.signOut }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
 vi.mock('@/components/entitlements-provider', () => ({
@@ -143,6 +146,7 @@ vi.mock('@/lib/trpc', async () => {
     trpc: {
       useUtils: () => utils,
       pharmacySales: router([
+        'settlementAccess',
         'manualPaymentSettings',
         'counterBranches',
         'counterReceiptFormat',
@@ -162,6 +166,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterReceiptBrowserPrint',
         'counterReceiptBrowserPrintDispatched',
         'counterReceiptBrowserPrintFailed',
+        'counterReceiptWhatsApp',
         'openDrawer',
         'captureDemand',
         'setDemandOutcome',
@@ -409,10 +414,8 @@ const TENDER_LABELS: Record<string, string> = {
 };
 
 function tenderButton(type: string) {
-  return within(screen.getByRole('group', { name: 'Tender', hidden: true })).getByRole('button', {
-    name: TENDER_LABELS[type],
-    hidden: true,
-  });
+  const methods = screen.getByRole('group', { name: 'Payment method', hidden: true });
+  return within(methods).getByRole('button', { name: TENDER_LABELS[type], hidden: true });
 }
 
 function chooseTender(type: string) {
@@ -478,6 +481,12 @@ beforeEach(() => {
     'openBills',
   ])
     mocks.queries[name] = query();
+  // DEV-97: the operator takes payment unless a test says otherwise.
+  mocks.queries.settlementAccess = query({
+    authorized: true,
+    userId: 'account-a',
+    organizationId: 'org-a',
+  });
   // A counter taking cash has an open drawer; tests about a closed drawer say so.
   mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-default' } });
   mocks.queries.counterBranches = query({
@@ -1329,6 +1338,39 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['without a prescription', null, false],
+    ['with a prescription no pharmacist has signed for this line', 'rx-line-a', false],
+  ])('DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one', (_label, prescriptionLineId, prescriptionSigned) => {
+    const bill = cart();
+    bill.lines[0]!.rx = true;
+    bill.lines[0]!.prescriptionLineId = prescriptionLineId;
+    bill.lines[0]!.prescriptionSigned = prescriptionSigned;
+    mocks.queries.counterCart!.data = bill;
+    mocks.queries.counterPatientPanel = query({
+      prescriptions: [
+        {
+          validFrom: '2020-01-01T00:00:00.000Z',
+          validUntil: '2999-12-31T00:00:00.000Z',
+          lines: [
+            {
+              prescriptionLineId: 'rx-line-a',
+              medicineId: bill.lines[0]!.medicineId,
+              verified: true,
+              remainingAuthorizedUnits: 10,
+            },
+          ],
+        },
+      ],
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.getAllByText(/This bill carries an unresolved safety block/)[0]
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('preserves unresolved prescription safety blocks', () => {
     const bill = cart();
     bill.lines[0]!.rx = true;
@@ -1354,6 +1396,8 @@ describe('PharmacyCounterConsole tender recovery', () => {
     try {
       const bill = cart();
       bill.lines[0]!.rx = true;
+      bill.lines[0]!.prescriptionLineId = 'rx-line-a';
+      bill.lines[0]!.prescriptionSigned = true;
       mocks.queries.counterCart!.data = bill;
       mocks.queries.counterBranches = query({
         branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
@@ -2761,6 +2805,62 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(mocks.rxPanelProps.mock.lastCall![0].controlled!.pin).toBe('');
     }
   );
+
+  it('DEV-629: adds a prescription-only scan without a reference when the patient has none', async () => {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, rx: true, otc: false } }],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan();
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledOnce();
+    expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('prescription');
+  });
+
+  it('DEV-629: sends the patient current prescription line with a prescription-only scan', async () => {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, rx: true, otc: false } }],
+      truncated: false,
+    });
+    const rxLine = (id: string, presentationId: string) => ({
+      prescriptionLineId: id,
+      medicineId: row.medicineId,
+      presentationId,
+      verified: true,
+      remainingAuthorizedUnits: 10,
+    });
+    mocks.queries.counterPatientPanel = query({
+      patientId: 'patient-a',
+      displayName: 'Patient',
+      address: 'Patient address',
+      dispensingConsent: true,
+      prescriptions: [
+        { inDate: false, lines: [rxLine('rx-line-expired', row.presentationId)] },
+        {
+          inDate: true,
+          lines: [
+            rxLine('rx-line-other-form', 'presentation-b'),
+            rxLine('rx-line-a', row.presentationId),
+          ],
+        },
+      ],
+      cnic: null,
+      phone: null,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    scan();
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        prescription: { prescriptionLineId: 'rx-line-a', patientId: 'patient-a' },
+        controlledAuthorization: undefined,
+      })
+    );
+  });
 });
 
 describe('DEV-712 the counter advances to a new bill after payment', () => {
@@ -4228,6 +4328,127 @@ describe('PharmacyCounterConsole fast typing (DEV-42)', () => {
   });
 });
 
+describe('DEV-97 counter payment controls follow the settlement grant', () => {
+  const denied = () => query({ authorized: false, userId: 'account-a', organizationId: 'org-a' });
+
+  function expectNoPaymentControls() {
+    expect(
+      screen.queryByRole('button', { name: 'Take payment', hidden: true })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('group', { name: 'Payment method', hidden: true })
+    ).not.toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: /^Pay/ }))
+      expect(button).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Khata payment' })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.queryByLabelText('Scan or search') ?? window, { key: 'F9' });
+    expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  }
+
+  it('lets a pharmacist without pharmacy:counter build a bill with no drawer step', async () => {
+    mocks.queries.settlementAccess = denied();
+    closeDrawer();
+    mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-new' });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(
+      screen.queryByRole('form', { name: 'Open the cash drawer to start the shift' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Bill status')).not.toHaveTextContent('Drawer');
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'drawerStatus',
+      expect.objectContaining({ enabled: false })
+    );
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: '123456' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.create).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.create).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'branch-a', quotation: false })
+    );
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
+
+  it('hides the drawer, tender and Take payment from a pharmacist, with a plain note', () => {
+    mocks.queries.settlementAccess = denied();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getAllByText('Payments are taken by counter staff.').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Drawer open')).not.toBeInTheDocument();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'manualPaymentSettings',
+      expect.objectContaining({ enabled: false })
+    );
+    expectNoPaymentControls();
+  });
+
+  it('keeps the drawer step (DEV-725) but withholds payment while access is unknown', () => {
+    mocks.queries.settlementAccess = { ...query(), isSuccess: false, isLoading: true };
+    closeDrawer();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.getByRole('form', { name: 'Open the cash drawer to start the shift' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.getByText('Checking payment access…')).toBeInTheDocument();
+    expectNoPaymentControls();
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { userId: 'other-account', organizationId: 'org-a' },
+    { userId: 'account-a', organizationId: 'other-org' },
+  ])('ignores a cached grant for another identity ($userId / $organizationId)', (identity) => {
+    mocks.queries.settlementAccess = query({ authorized: true, ...identity });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText('Checking payment access…')).toBeInTheDocument();
+    expectNoPaymentControls();
+  });
+
+  it('removes the payment overlay when the grant is revoked mid-session', () => {
+    const access = query({ authorized: true, userId: 'account-a', organizationId: 'org-a' });
+    mocks.queries.settlementAccess = access;
+    const { rerender } = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeInTheDocument();
+    access.data = { authorized: false, userId: 'account-a', organizationId: 'org-a' };
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expectNoPaymentControls();
+  });
+
+  it('offers a retry when payment access cannot be checked, even over a cached grant', () => {
+    const access = {
+      ...query({ authorized: true, userId: 'account-a', organizationId: 'org-a' }),
+      isError: true,
+    };
+    mocks.queries.settlementAccess = access;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText("Couldn't check payment access.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment access' }));
+    expect(access.refetch).toHaveBeenCalledOnce();
+    expectNoPaymentControls();
+  });
+
+  it('keeps the drawer and payment for a counter-authorized operator', async () => {
+    closeDrawer();
+    mocks.mutations.openDrawer!.mockResolvedValue({ id: 'drawer-new' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Khata payment' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Opening cash'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    openTheDrawer();
+    fireEvent.keyDown(window, { key: 'F9' });
+    enterPayment('BANK_TRANSFER');
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+  });
+});
+
 describe('PharmacyCounterConsole open bills (DEV-623)', () => {
   const activeBillKey = () =>
     activeBillStorageKey({ organizationId: 'org-a', accountId: 'account-a', branchId: 'branch-a' });
@@ -4365,5 +4586,109 @@ describe('PharmacyCounterConsole open bills (DEV-623)', () => {
     );
     expect(await screen.findByText('Bill voided. Its stock is back on sale.')).toBeInTheDocument();
     expect(mocks.queries.openBills!.refetch).toHaveBeenCalled();
+  });
+});
+
+describe('DEV-41 cashier actions', () => {
+  it('signs out directly when no sale is open', async () => {
+    render(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOut).toHaveBeenCalledExactlyOnceWith());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('confirms sign-out for an open sale without changing the sale', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = screen.getByRole('dialog', { name: 'Sign out with an open sale?' });
+    expect(mocks.signOut).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep working' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOut).toHaveBeenCalledExactlyOnceWith());
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+  });
+
+  it.each(['COMPLETED', 'VOID'])(
+    'does not confirm sign-out for a closed sale (%s)',
+    async (status) => {
+      mocks.queries.counterCart!.data = cart({
+        status,
+        receiptNumber: 42,
+        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+      });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+      await waitFor(() => expect(mocks.signOut).toHaveBeenCalledExactlyOnceWith());
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    }
+  );
+
+  it.each(['idle', 'loading', 'error', 'empty', 'held'])(
+    'explains both disabled Pay buttons for %s',
+    (state) => {
+      if (state === 'loading') mocks.queries.counterCart!.isFetching = true;
+      if (state === 'error') mocks.queries.counterCart!.isError = true;
+      if (state === 'empty') mocks.queries.counterCart!.data = cart({ lines: [] });
+      if (state === 'held') mocks.queries.counterCart!.data = cart({ status: 'HELD' });
+      render(
+        <PharmacyCounterConsole
+          initialSaleId={state === 'idle' ? undefined : 'sale-a'}
+          initialBranchId="branch-a"
+        />
+      );
+      const buttons = screen.getAllByRole('button', { name: /^Pay/ });
+      expect(buttons).toHaveLength(2);
+      for (const button of buttons) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveAccessibleDescription(/Add an item|Checking|Refresh|Resume/);
+        const reason = document.getElementById(button.getAttribute('aria-describedby')!);
+        expect(reason).toBeVisible();
+      }
+    }
+  );
+
+  it.each([
+    [
+      'denied',
+      () => query({ authorized: false, userId: 'account-a', organizationId: 'org-a' }),
+      /Payments are taken by counter staff/,
+    ],
+    [
+      'checking',
+      () => ({ ...query(), isSuccess: false, isLoading: true }),
+      /Checking payment access/,
+    ],
+    [
+      'unavailable',
+      () => ({ ...query(), isError: true, refetch: vi.fn() }),
+      /Couldn't check payment access/,
+    ],
+  ])('explains both Pay buttons when payment access is %s', (_state, access, reason) => {
+    mocks.queries.settlementAccess = access();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const buttons = screen.getAllByRole('button', { name: /^Pay/ });
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(reason);
+    }
+  });
+
+  it('never displays the payment test sandbox to a cashier', () => {
+    mocks.queries.counterBranches!.data = {
+      ...(mocks.queries.counterBranches!.data as object),
+      paymentSandboxAvailable: true,
+    };
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByText('Local terminal sandbox')).not.toBeInTheDocument();
+  });
+
+  it('shows no internal ticket tags on the counter or its loyalty panel', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Loyalty and khata · not linked' }));
+    expect(screen.getByRole('dialog', { name: 'Customer loyalty and khata' })).toBeVisible();
+    expect(document.body).not.toHaveTextContent(/\b(?:AI|RX|CRM|POS)-[A-Z]?\d{2}(?!\d)/);
   });
 });

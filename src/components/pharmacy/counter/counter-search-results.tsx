@@ -207,8 +207,8 @@ export function CounterSearchResults({
               <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
                 {row.presentation}
                 {row.dosageForm ? ` · ${row.dosageForm}` : ''}
-                {` · Batch ${row.batchNumber ?? '—'}`}
-                {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
+                {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
+                {row.nearestSafeExpiry ? ` · Exp ${formatReceiptDate(row.nearestSafeExpiry)}` : ''}
                 {` · ${formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}`}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}
                 {` · ${MATCH_LABEL[row.matchedOn]}`}

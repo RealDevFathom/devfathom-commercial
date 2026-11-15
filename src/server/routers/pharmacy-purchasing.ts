@@ -21,6 +21,8 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { actorIsPharmacyOwner, procurementBranchIds } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
+  decideReceiptDebitNote,
+  listReceiptDebitNotes,
   listReceivingExceptions,
   lockReceivablePurchaseOrder,
   orderReceiptCostTerms,
@@ -78,6 +80,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import { isEffective, packConversions } from '@/lib/pharmacy/pack-conversion';
 import {
   isNonDrugRetail,
   resolveReceiptBatchIdentity,
@@ -1467,6 +1470,10 @@ const purchasingRouter = router({
                   gs1Payload: z.string().trim().min(1).max(400).optional(),
                   invoiceCorrection: z.boolean().optional(),
                   gs1Warnings: z.array(z.enum(GS1_WARNING_CODES)).max(6).optional(),
+                  /** DEV-691: the distributor bill's own line, for the three-way match. */
+                  billedPacks: z.number().int().nonnegative().max(1_000_000).optional(),
+                  billedBatchNumber: z.string().trim().min(1).max(120).optional(),
+                  billedPrintedExpiry: z.date().optional(),
                 })
                 .strict()
                 // PUR-04: rejected goods need somewhere that is not the shelf,
@@ -1628,8 +1635,17 @@ const purchasingRouter = router({
               retailPriceMinor: item.retailPriceMinor,
             });
             if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
-            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // DEV-201: the pack must be one of this medicine's own pack levels, so a
+            // line cannot pair medicine A with medicine B's pack.
+            const pack = await db.packLevel.findFirst({
+              where: {
+                id: line.packLevelId,
+                organizationId: scope.organizationId,
+                presentation: { organizationId: scope.organizationId, medicineId: line.medicineId },
+              },
+              select: { id: true, presentationId: true },
+            });
+            if (!pack) throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
@@ -1647,6 +1663,33 @@ const purchasingRouter = router({
               ) {
                 throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
               }
+            }
+            // DEV-201: units per pack come from the configured pack hierarchy, never
+            // from the client. A typed multiplier would let one received pack post
+            // any number of units into the lot and the stock ledger.
+            // A version superseded since the order was raised keeps the conversion it
+            // carried while it was in force.
+            const levels = await db.packLevel.findMany({
+              where: { organizationId: scope.organizationId, presentationId: pack.presentationId },
+              select: {
+                id: true,
+                level: true,
+                unitsPerParent: true,
+                parentPackLevelId: true,
+                effectiveFrom: true,
+                effectiveTo: true,
+              },
+            });
+            const selected = levels.find((level) => level.id === pack.id);
+            const now = new Date();
+            const conversion = selected
+              ? packConversions(
+                  levels,
+                  isEffective(selected, now) ? now : selected.effectiveFrom
+                ).find((row) => row.packLevelId === pack.id)
+              : undefined;
+            if (conversion?.canonicalUnitsPerPack !== line.canonicalUnitsPerPack) {
+              throw new PharmacyReceivingError('PACK_CONVERSION_MISMATCH');
             }
 
             const quantities = receiptLineQuantities({
@@ -1751,6 +1794,9 @@ const purchasingRouter = router({
               serialNumber: identity.serialNumber,
               serialKey: identity.serialKey,
               gs1Warnings: identity.gs1Warnings,
+              billedPacks: line.billedPacks ?? null,
+              billedBatchNumber: line.billedBatchNumber ?? null,
+              billedPrintedExpiry: line.billedPrintedExpiry ?? null,
             });
           }
 
@@ -2132,6 +2178,59 @@ const purchasingRouter = router({
           resolutionNote: input.resolutionNote,
           at: new Date(),
         });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** DEV-691: draft debit notes the three-way match proposed, for a person to decide. */
+  receiptDebitNotes: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z
+        .object({
+          branchId,
+          status: z.enum(['DRAFT', 'CONFIRMED', 'DISCARDED']).default('DRAFT'),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return listReceiptDebitNotes(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        { status: input.status }
+      );
+    }),
+
+  /**
+   * DEV-691: confirm or discard a draft receipt debit note. A claim on a
+   * supplier's account is a financial act, so it needs procurement and finance,
+   * as issuing a return debit note does. The actor comes from the session.
+   */
+  decideReceiptDebitNote: purchasing
+    .meta(PROCUREMENT_AND_FINANCE)
+    .input(
+      z
+        .object({
+          branchId,
+          debitNoteId: z.string().min(1),
+          decision: z.enum(['CONFIRMED', 'DISCARDED']),
+          note: z.string().trim().max(1000).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          decideReceiptDebitNote(txDb(tx), scope, {
+            debitNoteId: input.debitNoteId,
+            decision: input.decision,
+            note: input.note,
+            at: new Date(),
+          })
+        );
       } catch (error) {
         domainError(error);
       }

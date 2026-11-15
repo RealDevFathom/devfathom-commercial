@@ -31,6 +31,8 @@ function invoice(overrides: Record<string, unknown> = {}) {
       displayName: 'Northwind Studio',
       logoUrl: null,
       supportEmail: null,
+      address: null,
+      taxId: null,
     },
     project: null,
     notes: null,
@@ -147,4 +149,51 @@ describe('InvoicePrintView', () => {
     expect(screen.getAllByText('Harbor Labs')).toHaveLength(1);
     expect(issuer.querySelector('img')).toBeNull();
   });
+
+  it('prints the agency address and tax ID in the issuer block', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({
+        issuer: {
+          legalName: 'Northwind Studio LLC',
+          displayName: 'Northwind Studio',
+          logoUrl: null,
+          supportEmail: null,
+          address: '1 Quay St, Lagos',
+          taxId: 'TIN-12345',
+        },
+      }),
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.getByTestId('invoice-issuer-address')).toHaveTextContent('1 Quay St, Lagos');
+    expect(screen.getByTestId('invoice-issuer-tax-id')).toHaveTextContent('Tax ID: TIN-12345');
+  });
+
+  it('omits address and tax ID lines when the agency has none', () => {
+    mocks.useQuery.mockReturnValue({ isLoading: false, data: invoice() });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.queryByTestId('invoice-issuer-address')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoice-issuer-tax-id')).not.toBeInTheDocument();
+  });
+});
+
+it('prints the persisted discount as a deduction with authoritative tax and total', () => {
+  mocks.useQuery.mockReturnValue({
+    isLoading: false,
+    data: invoice({ discount: '125.50', tax: '10.25', total: '884.75' }),
+  });
+  render(<InvoicePrintView invoiceId="invoice-497" />);
+  expect(screen.getByText('Discount').nextElementSibling).toHaveTextContent('-$125.5');
+  expect(screen.getByText('Tax').nextElementSibling).toHaveTextContent('$10.25');
+  expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('$884.75');
+});
+
+it('omits a zero discount for older invoices', () => {
+  mocks.useQuery.mockReturnValue({ isLoading: false, data: invoice({ discount: 0 }) });
+  render(<InvoicePrintView invoiceId="invoice-497" />);
+  expect(screen.queryByText('Discount')).not.toBeInTheDocument();
 });

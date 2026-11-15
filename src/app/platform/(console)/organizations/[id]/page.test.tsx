@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
   branchFindMany: vi.fn(),
   jobFindFirst: vi.fn(),
   pharmacyReadiness: vi.fn(),
+  provisioningConfigured: vi.fn(() => false),
+}));
+
+vi.mock('@/lib/platform/provisioning-config', () => ({
+  isDedicatedProvisioningConfigured: mocks.provisioningConfigured,
 }));
 
 vi.mock('@/lib/pharmacy/onboarding', () => ({
@@ -153,6 +158,7 @@ beforeEach(() => {
     })
   );
   mocks.jobFindFirst.mockResolvedValue(null);
+  mocks.provisioningConfigured.mockReturnValue(false);
 });
 
 describe('OrganizationDetailPage restricted database reads', () => {
@@ -883,5 +889,33 @@ describe('destructive lifecycle reason', () => {
       confirm.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('OrganizationDetailPage deployment mode edit', () => {
+  function deploymentModeOptions() {
+    const select = screen.getByLabelText('Deployment mode') as HTMLSelectElement;
+    return Array.from(select.options).map((option) => option.value);
+  }
+
+  it('does not offer Dedicated when Vercel provisioning is not configured', async () => {
+    await renderDetail();
+    expect(deploymentModeOptions()).toEqual(['SHARED']);
+    expect(
+      screen.getByText(
+        'Dedicated enterprise is unavailable until Vercel provisioning is configured for this environment.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('offers Dedicated once Vercel provisioning is configured', async () => {
+    mocks.provisioningConfigured.mockReturnValue(true);
+    await renderDetail();
+    expect(deploymentModeOptions()).toEqual(['SHARED', 'DEDICATED']);
+  });
+
+  it('keeps the current Dedicated value selectable on an unconfigured environment', async () => {
+    await renderDetail({ org: organization({ deploymentMode: 'DEDICATED' }) });
+    expect(deploymentModeOptions()).toEqual(['SHARED', 'DEDICATED']);
   });
 });

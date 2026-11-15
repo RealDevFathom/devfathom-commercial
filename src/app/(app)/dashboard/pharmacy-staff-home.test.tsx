@@ -70,4 +70,27 @@ describe('PharmacyStaffHome (DEV-20)', () => {
       '/pharmacy/purchasing'
     );
   });
+
+  it('uses logical end margin for the branch name so right-to-left layouts mirror', () => {
+    render(
+      <PharmacyStaffHome
+        home={{
+          links: [counter],
+          branches: [{ id: 'b1', name: 'Main Branch' }],
+          shifts: [
+            {
+              id: 'd1',
+              branchName: 'Main Branch',
+              businessDate: '2026-11-15',
+              openedAt: '2026-11-15T04:30:00.000Z',
+            },
+          ],
+          timeZone: 'Asia/Karachi',
+        }}
+      />
+    );
+    const name = screen.getByText('Main Branch', { selector: 'span' });
+    expect(name.className).toContain('me-auto');
+    expect(name.className).not.toContain('mr-auto');
+  });
 });

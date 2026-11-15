@@ -207,6 +207,22 @@ async function loadShift(tx: QueryDb, shiftId: string): Promise<WorkforceShift> 
   return shift;
 }
 
+function hasRecordedAttendance(shift: {
+  clockedInAt: Date | null;
+  clockedOutAt: Date | null;
+  breaks: unknown[];
+  adjustments: unknown[];
+}): boolean {
+  return Boolean(
+    shift.clockedInAt ||
+    shift.clockedOutAt ||
+    shift.breaks.length > 0 ||
+    shift.adjustments.length > 0
+  );
+}
+
+const RECORDED_ATTENDANCE_SWAP_MESSAGE = 'A shift with recorded attendance cannot be reassigned.';
+
 async function requireOwnLiveShift(tx: QueryDb, shiftId: string, userId: string) {
   await lockShift(tx, shiftId);
   const [shift, actor] = await Promise.all([loadShift(tx, shiftId), actorProfile(tx, userId)]);
@@ -416,6 +432,9 @@ export async function requestShiftSwap(
       if (request) return request;
       throw new WorkforceError('This idempotency key belongs to another request.', 'CONFLICT');
     }
+    if (hasRecordedAttendance(shift)) {
+      throw new WorkforceError(RECORDED_ATTENDANCE_SWAP_MESSAGE, 'CONFLICT');
+    }
     if (actor.id === input.replacementStaffProfileId) {
       throw new WorkforceError('Choose another employee as the replacement.', 'INVALID');
     }
@@ -494,7 +513,12 @@ export async function reviewShiftSwap(
       where: { id: input.requestId },
       include: {
         decision: true,
-        shift: { include: { breaks: { select: { id: true }, take: 1 } } },
+        shift: {
+          include: {
+            breaks: { select: { id: true }, take: 1 },
+            adjustments: { select: { id: true }, take: 1 },
+          },
+        },
         replacement: true,
       },
     });
@@ -505,15 +529,8 @@ export async function reviewShiftSwap(
       throw new WorkforceError('A cancelled shift cannot be reassigned.', 'CONFLICT');
     }
     if (input.decision === 'APPROVED') {
-      if (
-        request.shift.clockedInAt ||
-        request.shift.clockedOutAt ||
-        request.shift.breaks.length > 0
-      ) {
-        throw new WorkforceError(
-          'A shift with recorded attendance cannot be reassigned.',
-          'CONFLICT'
-        );
+      if (hasRecordedAttendance(request.shift)) {
+        throw new WorkforceError(RECORDED_ATTENDANCE_SWAP_MESSAGE, 'CONFLICT');
       }
       if (
         request.replacement.status !== 'ACTIVE' ||

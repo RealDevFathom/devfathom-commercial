@@ -58,6 +58,8 @@ describe('finance.getInvoiceById issuer', () => {
     mocks.organizationFindUnique.mockResolvedValue({
       legalName: 'Northwind Studio LLC',
       displayName: 'Northwind Studio',
+      invoiceAddress: '1 Quay St, Lagos',
+      taxId: 'TIN-12345',
       brand: { logoUrl: 'https://cdn.example.com/logo.png', supportEmail: 'billing@example.com' },
     });
 
@@ -71,6 +73,8 @@ describe('finance.getInvoiceById issuer', () => {
       displayName: 'Northwind Studio',
       logoUrl: 'https://cdn.example.com/logo.png',
       supportEmail: 'billing@example.com',
+      address: '1 Quay St, Lagos',
+      taxId: 'TIN-12345',
     });
     expect(invoice?.amountPaid).toBe(40);
     expect(invoice?.balance).toBe(60);
@@ -90,6 +94,8 @@ describe('finance.getInvoiceById issuer', () => {
       displayName: 'Harbor Labs',
       logoUrl: null,
       supportEmail: null,
+      address: null,
+      taxId: null,
     });
   });
 

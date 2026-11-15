@@ -597,16 +597,6 @@ async function loadSettlementContext(
           },
         })
       : [];
-  const fractionalBills =
-    bill.splitKind === 'FRACTIONAL'
-      ? await tx.restaurantBill.findMany({
-          where: { orderId: bill.orderId, status: { not: 'VOID' }, splitKind: 'FRACTIONAL' },
-          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-          select: { id: true, fractionNumerator: true },
-        })
-      : [];
-  const fractionalIndex = fractionalBills.findIndex((candidate) => candidate.id === bill.id);
-  const fractionalWeights = fractionalBills.map((candidate) => candidate.fractionNumerator ?? 0);
   const applications = await tx.restaurantPromotionBillApplicationSnapshot.findMany({
     where: { billId: bill.id, reversesBillApplicationId: null },
     orderBy: [{ applicationOrdinal: 'asc' }, { id: 'asc' }],
@@ -659,6 +649,23 @@ async function loadSettlementContext(
           compAmount: line.compAmount,
           modifiers: line.orderItem.modifiers,
         }));
+  // Bill cutting froze this fractional bill's floor share of the order in `subtotal`
+  // and its largest-remainder cent in `roundingAdjustment`, which the tax quote adds
+  // below. Spread exactly that floor share across the purchased units; re-splitting
+  // each unit by the fraction weights would award the remainder cent a second time.
+  const fractionalUnitShares =
+    bill.splitKind === 'FRACTIONAL'
+      ? allocateAcross(
+          bill.subtotal,
+          evidenceLines.flatMap((line) => {
+            const unitGross = line.unitPrice.plus(
+              sum(line.modifiers.map((modifier) => modifier.priceDelta))
+            );
+            return Array.from({ length: line.quantity }, () => unitGross);
+          })
+        )
+      : [];
+  let fractionalUnitIndex = 0;
   const quoteLines = evidenceLines.flatMap((line) => {
     const modifiers = sum(line.modifiers.map((modifier) => modifier.priceDelta));
     const comps =
@@ -680,9 +687,7 @@ async function loadSettlementContext(
       });
       const unitPrice =
         bill.splitKind === 'FRACTIONAL'
-          ? splitMoney(line.unitPrice.plus(modifiers), fractionalWeights.map(String))[
-              fractionalIndex
-            ]!
+          ? fractionalUnitShares[fractionalUnitIndex++]!
           : line.unitPrice;
       return {
         id: `${line.id}:${unitOrdinal}`,
@@ -704,6 +709,16 @@ async function loadSettlementContext(
   // against whichever policy happens to be effective when payment is collected.
   const serviceAmount = formatMoney(bill.serviceChargeTotal);
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
+  // Principal already returned by a refund is no longer retained by the bill, so it
+  // must not count toward settlement; otherwise a bill could settle short.
+  const refundedPrincipal = money(
+    (
+      await tx.restaurantRefund.aggregate({
+        where: { billId: bill.id },
+        _sum: { amount: true },
+      })
+    )._sum.amount ?? ZERO
+  );
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -720,7 +735,7 @@ async function loadSettlementContext(
     at,
     proposedTenderType,
     priorTenderWeights: taxablePriorTenders,
-    acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
+    acceptedPrincipal: sub(sum(priorTenders.map((tender) => tender.amount)), refundedPrincipal),
     afterTaxDiscount,
     serviceCharge: { amount: serviceAmount, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
@@ -835,7 +850,7 @@ async function finalizeTaxSettlement(
         afterTaxByLine[lineIndex] ?? ZERO
       ),
       buckets: units.flatMap((unit) =>
-        (bill.splitKind === 'FRACTIONAL' ? [] : unit.line.buckets).map((bucket) => ({
+        unit.line.buckets.map((bucket) => ({
           unitOrdinal: unit.identity.unitOrdinal,
           ruleVersionId: bucket.ruleId,
           paymentCategory: bucket.category,
@@ -854,22 +869,21 @@ async function finalizeTaxSettlement(
       ),
     };
   });
-  const tenderTaxAllocations =
-    bill.splitKind === 'FRACTIONAL'
-      ? undefined
-      : allocateTenderTax(
-          [
-            ...priorTenders,
-            {
-              id: finalTenderId,
-              type: input.tender.type,
-              amount: money(input.tender.amount),
-              createdAt: at,
-            },
-          ],
-          settlement,
-          lines
-        );
+  // Fractional bills freeze the same per-unit buckets (keyed by source order item)
+  // and per-tender tax facts, so refunds reverse exact settled tax (DEV-773).
+  const tenderTaxAllocations = allocateTenderTax(
+    [
+      ...priorTenders,
+      {
+        id: finalTenderId,
+        type: input.tender.type,
+        amount: money(input.tender.amount),
+        createdAt: at,
+      },
+    ],
+    settlement,
+    lines
+  );
   const inclusiveMerchandiseTax = sum(
     settlement.quote.lines.flatMap((line) =>
       line.buckets
