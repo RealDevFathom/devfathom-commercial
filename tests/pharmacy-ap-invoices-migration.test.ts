@@ -6,7 +6,7 @@ const sourceKind = readFileSync(
   'utf8'
 );
 const migration = readFileSync(
-  'prisma/migrations/20261116090100_pharmacy_ap_invoices/migration.sql',
+  'prisma/migrations/20261116090200_pharmacy_ap_invoices/migration.sql',
   'utf8'
 );
 
