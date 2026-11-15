@@ -187,15 +187,9 @@ export async function readRestaurantGrowthEvidence(h: AssistantHelpers, raw: unk
           return [key, readable && value !== null ? restaurantMajorToMinor(value) : null];
         })
       ) as Record<(typeof keys)[number], string | null>;
-      if (
-        readable &&
-        BigInt(values.netSales!) !==
-          BigInt(values.grossSales!) -
-            BigInt(values.compTotal!) -
-            BigInt(values.discountTotal!) -
-            BigInt(values.refundTotal!)
-      )
-        throw new Error('Inconsistent source equation');
+      // netSales deducts only the SALES part of refunds (tax/service charge refunds are
+      // excluded), while refundTotal includes them. The reader does not expose the
+      // sales-only refund, so net sales cannot be reconciled against refundTotal here.
       const recordedZero = readable && keys.every((key) => values[key] === '0');
       const state =
         freshness.status === 'STALE'

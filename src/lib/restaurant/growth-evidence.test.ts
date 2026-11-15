@@ -208,7 +208,6 @@ describe('Restaurant growth evidence boundary', () => {
     'period',
     'currency',
     'unit',
-    'equation',
     'money',
     'coverage',
     'missing',
@@ -219,7 +218,6 @@ describe('Restaurant growth evidence boundary', () => {
     if (kind === 'period') f.periods.previous.to = input.to;
     if (kind === 'currency') f.currency = 'UNKNOWN';
     if (kind === 'unit') f.moneyUnit = 'INTEGER_MINOR';
-    if (kind === 'equation') f.drivers.netSales.current = '44.99';
     if (kind === 'money') f.drivers.grossSales.current = '1e3';
     if (kind === 'coverage') f.coverage.current.closedDayCount = 1;
     if (kind === 'chronology') f.asOf = '2026-10-08T00:00:00.000Z';
