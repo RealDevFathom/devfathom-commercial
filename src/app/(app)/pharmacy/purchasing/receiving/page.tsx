@@ -5,6 +5,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { InvoiceCaptureReader } from '../_components/invoice-capture-reader';
 import { PackPhotoReader } from '../_components/pack-photo-reader';
 import { ScanSearch } from '../_components/scan-search';
 
@@ -29,6 +30,7 @@ import type {
   StockLocationOption,
 } from '@/lib/pharmacy/purchasing-console';
 import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
+import { configuredInvoiceCaptureAdapterName } from '@/lib/pharmacy/invoice-capture';
 import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
 import {
   defaultReceivingLocationId,
@@ -96,7 +98,11 @@ const HEADING = 'Goods in';
 const DESCRIPTION =
   'The receiving bench. Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost against a purchase order or a direct purchase, then post it into the batch ledger.';
 
-const DIRECT_SLOTS = [0, 1, 2] as const;
+/**
+ * Line slots on the direct purchase form. Revealed one at a time; DEV-679 fills
+ * as many as a distributor invoice needs, so a typical bill fits on one receipt.
+ */
+const DIRECT_SLOTS = Array.from({ length: 20 }, (_, slot) => slot);
 
 /**
  * PUR-02 receiving, PUR-04 match exceptions and PUR-05 direct purchase.
@@ -203,6 +209,7 @@ export default async function PharmacyReceivingPage({
     locations
   );
   const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
+  const invoiceCaptureEnabled = configuredInvoiceCaptureAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
   const receivable = orders.filter(
@@ -944,6 +951,19 @@ export default async function PharmacyReceivingPage({
             className="mt-4 space-y-4"
           >
             <input name="branchId" type="hidden" value={branchId} />
+            {invoiceCaptureEnabled ? (
+              <InvoiceCaptureReader
+                branchId={branchId}
+                lineSlots={DIRECT_SLOTS.length}
+                names={{
+                  supplier: 'supplierId',
+                  invoiceRef: 'directInvoiceRef',
+                  invoiceDate: 'directInvoiceDate',
+                  packPrefix: 'directPack-',
+                  linePrefix: 'd',
+                }}
+              />
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <TextField
                 label="Direct purchase reference"

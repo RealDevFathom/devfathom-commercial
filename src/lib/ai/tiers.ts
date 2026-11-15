@@ -16,6 +16,7 @@ export type AIFeature =
   | 'pharmacy.marketing-assistance'
   | 'pharmacy-rx-ocr'
   | 'pharmacy-pack-ocr'
+  | 'pharmacy-invoice-ocr'
   | 'restaurant-menu-vision';
 
 const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
@@ -27,6 +28,7 @@ const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   'ask-fathom': 'standard',
   'pharmacy-rx-ocr': 'standard',
   'pharmacy-pack-ocr': 'standard',
+  'pharmacy-invoice-ocr': 'standard',
   'restaurant-menu-vision': 'standard',
   whatsapp: 'standard',
   retention: 'standard',

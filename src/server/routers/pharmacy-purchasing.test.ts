@@ -1323,6 +1323,43 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
 
+  it('refuses a supplier bill that is already filed, in any letter case, before any write (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'POSTED',
+    });
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, supplierInvoiceRef: 'inv-8841' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: expect.any(String),
+          supplierId: 'supplier_a',
+          supplierInvoiceRef: { equals: 'inv-8841', mode: 'insensitive' },
+        },
+      })
+    );
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a duplicate direct purchase bill before the approver PIN is checked (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'DRAFT',
+    });
+    await expect(
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Cash and carry', approvedByUserId: 'approver_a', pin: '1234' },
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
   it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
     'keeps a %s DENY effective for a tenant admin without a role',
     async (capability) => {
