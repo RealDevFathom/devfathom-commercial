@@ -396,7 +396,9 @@ export function AddMemberModal({
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
   const roleQuery = trpc.organizationAdmin.roles.useQuery(undefined, { retry: false });
   const departmentOptions = (departmentQuery.data ?? []).filter((item) => item.active);
-  const roleOptions = roleQuery.data ?? [];
+  // SEC-I (DEV-827): never offer a role the invite cannot grant exactly.
+  const hiddenRoleKeys = copy.inviteHiddenRoleTemplateKeys ?? [];
+  const roleOptions = (roleQuery.data ?? []).filter((item) => !hiddenRoleKeys.includes(item.key));
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');

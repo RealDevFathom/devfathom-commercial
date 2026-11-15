@@ -188,6 +188,8 @@ function fixture(items: Item[], weights: number[], tax: TaxMode) {
       ]),
     },
     restaurantBillLine: { findMany: vi.fn(async () => []) },
+    // DEV-402: settlement subtracts already-refunded principal; these bills have none.
+    restaurantRefund: { aggregate: vi.fn(async () => ({ _sum: { amount: null } })) },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: {
       findMany: vi.fn(async () =>
@@ -228,7 +230,13 @@ function fixture(items: Item[], weights: number[], tax: TaxMode) {
     const bill = { ...byId.get(input.billId)!, status: 'OPEN' };
     const tx = {
       restaurantBill: { findUnique: vi.fn(async () => bill) },
-      restaurantTender: { findMany: vi.fn(async () => []) },
+      // Tender tax allocations must name tenders on this bill; answer with the
+      // in-memory tenders the real ownership check would read.
+      restaurantTender: {
+        findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+          tenders.filter((tender) => where.id.in.includes(tender.id))
+        ),
+      },
       $queryRaw: vi.fn(async () => {
         throw new Error(PERSISTENCE_REACHED);
       }),

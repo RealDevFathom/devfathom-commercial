@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
+  blockRate: vi.fn(),
   tenantDb: {} as unknown,
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
@@ -14,6 +15,9 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
+vi.mock('@/lib/pharmacy/marketing-send-policy', () => ({
+  evaluateMarketingBlockRate: mocks.blockRate,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn(mocks.tenantDb),
 }));
@@ -109,6 +113,20 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   expect(mocks.callback).not.toHaveBeenCalled();
 });
 
+it('re-checks the block rate after a STOP and after a replayed STOP', async () => {
+  await POST(request());
+  expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
+  mocks.blockRate.mockClear();
+  // A Meta retry of a STOP whose first check failed is handled as DUPLICATE.
+  mocks.inbound.mockResolvedValue('DUPLICATE');
+  await POST(request());
+  expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
+});
+it('skips the block-rate check when no sender message was handled', async () => {
+  mocks.parse.mockReturnValue([]);
+  await POST(request());
+  expect(mocks.blockRate).not.toHaveBeenCalled();
+});
 it('records a signed account_update fixture as an owner alert, and nothing when unsigned', async () => {
   const secret = 'app-secret-a';
   const { verifyMetaSignature } = await vi.importActual<

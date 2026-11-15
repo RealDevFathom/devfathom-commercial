@@ -553,6 +553,109 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
   });
 });
 
+/** #554: an in-memory driver whose writes resolve only when the test releases them. */
+function gatedDriver() {
+  const inner = createMemoryDriver();
+  let gated = false;
+  const pending: Array<() => void> = [];
+  const driver: TerminalStorageDriver = {
+    ...inner,
+    write: async (key, record) => {
+      if (gated) await new Promise<void>((resolve) => pending.push(resolve));
+      await inner.write(key, record);
+    },
+  };
+  return {
+    driver,
+    gate: () => {
+      gated = true;
+    },
+    pendingWrites: () => pending.length,
+    release: () => pending.splice(0).forEach((resolve) => resolve()),
+    open: () => {
+      gated = false;
+      pending.splice(0).forEach((resolve) => resolve());
+    },
+  };
+}
+
+describe('#554 — overlapping transitions never reuse a receipt or drop a sale', () => {
+  it('gives concurrent enqueues distinct receipts and sequences and persists both', async () => {
+    const storage = gatedDriver();
+    const counter = await readyCounter(storage.driver);
+    storage.gate();
+
+    const first = counter.enqueue(cashSale(1), MATRIX);
+    const second = counter.enqueue(cashSale(1), MATRIX);
+    // Each sale's write is held open in turn; the second may not even start
+    // composing until the first one's document is durable.
+    await vi.waitFor(() => expect(storage.pendingWrites()).toBe(1));
+    storage.release();
+    await vi.waitFor(() => expect(storage.pendingWrites()).toBe(1));
+    storage.release();
+    const results = await Promise.all([first, second]);
+
+    expect(results.map((r) => (r.ok ? r.command.receiptNumber : null))).toEqual([900, 901]);
+    expect(results.map((r) => (r.ok ? r.command.sequence : null))).toEqual([1, 2]);
+
+    // The durable document holds BOTH sales, not just the later write.
+    const reloaded = runtime(storage.driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    const queue = reloaded.snapshot().queue!;
+    expect(queue.commands.map((command) => command.receiptNumber)).toEqual([900, 901]);
+    expect(queue.leases[0]?.nextNumber).toBe(902);
+    expect(queue.quotas[0]?.consumedUnits).toBe(2);
+  });
+
+  it('keeps a sale whose write is still landing when a replay response arrives', async () => {
+    const storage = gatedDriver();
+    const counter = await readyCounter(storage.driver);
+    await counter.enqueue(cashSale(1), MATRIX);
+
+    let duringFlight: Promise<unknown> | null = null;
+    const replaying = counter.replay(async (request) => {
+      if (!duringFlight) {
+        // A second sale is rung up while the first one's request is out, and
+        // its document write has not landed when the server answers.
+        storage.gate();
+        duringFlight = counter.enqueue(cashSale(1), MATRIX);
+        await vi.waitFor(() => expect(storage.pendingWrites()).toBe(1));
+      }
+      const receipt = request.body.leasedReceipt as { receiptNumber: unknown };
+      return { status: 200, serverRef: `sale_${String(receipt.receiptNumber)}` };
+    }, replaySigner);
+    await vi.waitFor(() => expect(duringFlight).not.toBeNull());
+    // Give the replay every chance to apply its outcome before the sale lands.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    storage.open();
+    expect((await replaying).state).toBe('IDLE');
+    expect(await duringFlight).toMatchObject({ ok: true, command: { receiptNumber: 901 } });
+
+    const reloaded = runtime(storage.driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    const commands = reloaded.snapshot().queue!.commands;
+    expect(commands.map((command) => command.receiptNumber)).toEqual([900, 901]);
+    expect(commands.every((command) => command.status === 'ACKNOWLEDGED')).toBe(true);
+  });
+
+  it('does not wedge later transitions after a failed write', async () => {
+    const inner = createMemoryDriver();
+    let fail = true;
+    const driver: TerminalStorageDriver = {
+      ...inner,
+      write: async (key, record) => {
+        if (fail) throw new Error('disk full');
+        await inner.write(key, record);
+      },
+    };
+    const counter = runtime(driver);
+    await counter.hydrate();
+    await expect(counter.adoptLeases([])).rejects.toThrow('disk full');
+    fail = false;
+    await expect(counter.adoptQuotas([])).resolves.toBeUndefined();
+  });
+});
+
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
   it.each(['resolve', 'reject'])(
     'keeps revocation final when signing later %ss',

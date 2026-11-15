@@ -16,6 +16,7 @@ import {
   PHARMACY_SOP_EVIDENCE_FILE_PREFIX,
   pharmacySopEvidenceReadDecision,
 } from '@/lib/pharmacy/sop-evidence';
+import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
 import { canAccessProject, projectIdOfTask } from '@/lib/authz';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
@@ -35,10 +36,10 @@ const MIME: Record<string, string> = {
   mp3: 'audio/mpeg',
 };
 
-// DEV-837 (F15): blobs that are only ever read server-side or through their own
-// authorized route (menu-import sources, owner data exports) are never served
-// by this shared handler, whatever the caller holds.
-const SERVER_ONLY_BLOB = /^(?:restaurant-menu-import__|owner-data-export-)/iu;
+// DEV-837 (F15): a menu-import source file is only ever read server-side by the
+// import pipeline, so this shared handler never serves one, whatever the caller
+// holds. (Owner data exports have their own DEV-783 refusal below.)
+const MENU_IMPORT_SOURCE = /^restaurant-menu-import__/iu;
 
 // DEV-837 (F17): names only the SOP capture routes ever issue. A caller-supplied
 // SOP storage reference to any other file is an annotation; it never decides
@@ -131,7 +132,12 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Bad request', { status: 400 });
   }
   // Camera stills require their evidence reader's grant and retention checks.
-  if (/^camera-snapshot-/iu.test(name) || SERVER_ONLY_BLOB.test(name)) {
+  if (/^camera-snapshot-/iu.test(name) || MENU_IMPORT_SOURCE.test(name)) {
+    return new Response('Not found', { status: 404 });
+  }
+  // DEV-783: an owner data export is released only by its own PIN-gated,
+  // audited, expiry-checked download route, never as a generic file.
+  if (isOwnerDataExportObjectName(name)) {
     return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;

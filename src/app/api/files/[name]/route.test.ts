@@ -75,6 +75,21 @@ describe('private attachment delivery', () => {
     expect(mocks.getUpload).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'owner-data-export-job-1.zip',
+    'owner-data-export-job-1-0123456789abcdef0123456789abcdef.zip',
+    'OWNER-DATA-EXPORT-job-1.zip',
+    'Owner-Data-Export-job-1.ZIP',
+  ])('owner data export %s is never served as a generic file', async (name) => {
+    // Only the PIN-gated, audited, expiry-checked export route releases these.
+    for (const role of ['EMPLOYEE', 'ADMIN']) {
+      mocks.actor.mockResolvedValue(actor(role));
+      expect((await read(name)).status).toBe(404);
+    }
+    expect(mocks.tenantDb).not.toHaveBeenCalled();
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
   it('keeps session validation ahead of the camera refusal', async () => {
     mocks.actor.mockResolvedValue(null);
     expect((await read('camera-snapshot-fixture.png')).status).toBe(401);

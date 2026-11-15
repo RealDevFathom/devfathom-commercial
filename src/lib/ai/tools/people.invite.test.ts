@@ -36,6 +36,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { buildPeopleTools } from './people';
+import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
 import { templates } from '@/lib/email';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
@@ -53,21 +54,21 @@ const db = {
     }),
 };
 
-function peopleTools() {
+function peopleTools(vertical?: string) {
   const helpers = {
     db,
     isAdmin: true,
     isHr: false,
     isAdminOrHr: true,
-    ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin' },
+    ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin', vertical },
     can: vi.fn(async () => true),
     audit: vi.fn(),
   } as unknown as AssistantHelpers;
   return buildPeopleTools(helpers);
 }
 
-function inviteTool() {
-  return peopleTools().inviteMember as unknown as {
+function inviteTool(vertical?: string) {
+  return peopleTools(vertical).inviteMember as unknown as {
     inputSchema: { parse: (input: Record<string, unknown>) => Record<string, unknown> };
     execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
   };
@@ -136,7 +137,7 @@ describe('assistant inviteMember guards', () => {
     expect(templates.inviteMember).toHaveBeenCalledWith(expect.objectContaining({ role: name }));
     expect(mocks.roleFindFirst).toHaveBeenCalledWith({
       where: { id, organizationId: 'org_1' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, key: true },
     });
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -300,6 +301,78 @@ describe('assistant inviteMember guards', () => {
     );
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ department: 'KITCHEN' }) })
+    );
+  });
+});
+
+// SEC-I (DEV-827): the assistant grants exactly what the chosen role's label says.
+describe('assistant inviteMember pharmacy role labels', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 5 });
+  });
+
+  const template = (key: string) =>
+    mocks.roleFindFirst.mockResolvedValue({ id: `role_${key}`, name: key, key });
+
+  it.each([
+    ['owner', 'ADMIN', INVITE_ROLE_NOT_OFFERED],
+    ['owner-operator', 'EMPLOYEE', INVITE_ROLE_NOT_OFFERED],
+    ['manager', 'HR', INVITE_ROLE_MISMATCH],
+  ])('refuses %s at %s', async (key, role, message) => {
+    template(key);
+    const tool = inviteTool('PHARMACY');
+    const result = await tool.execute(
+      tool.inputSchema.parse({
+        ...base,
+        email: 'staff@pharmacy.pk',
+        role,
+        organizationRoleId: `role_${key}`,
+      })
+    );
+    expect(result.error).toBe(message);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('reads the vertical when the assistant context omits it', async () => {
+    template('owner');
+    mocks.resolveEntitlements.mockResolvedValue({
+      activeSeats: 1,
+      seatLimit: 5,
+      vertical: 'PHARMACY',
+    });
+    const tool = inviteTool();
+    const result = await tool.execute(
+      tool.inputSchema.parse({
+        ...base,
+        email: 'staff@pharmacy.pk',
+        role: 'ADMIN',
+        organizationRoleId: 'role_owner',
+      })
+    );
+    expect(result.error).toBe(INVITE_ROLE_NOT_OFFERED);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('invites a pharmacy manager at staff access', async () => {
+    template('manager');
+    const tool = inviteTool('PHARMACY');
+    const result = await tool.execute(
+      tool.inputSchema.parse({
+        ...base,
+        email: 'staff@pharmacy.pk',
+        organizationRoleId: 'role_manager',
+      })
+    );
+    expect(result.error).toBeUndefined();
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ role: 'EMPLOYEE', organizationRoleId: 'role_manager' }),
+      })
     );
   });
 });

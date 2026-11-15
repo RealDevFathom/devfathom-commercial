@@ -88,6 +88,40 @@ function net(row: Margin['rows'][number]) {
   return total([row.revenueMinor, -row.discountMinor]);
 }
 
+const pktFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Karachi',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+const pkt = (value: Date) => `${pktFormat.format(value)} PKT`;
+
+/** Leakage header: local (PKT) dates and no source or coverage jargon. */
+function LeakageMetadata({ report, branchName }: { report: Leakage; branchName: string }) {
+  return (
+    <div className="space-y-2 break-words text-sm text-text-muted">
+      <p>
+        From {pkt(report.period.from)} up to (not including) {pkt(report.period.to)}. Branch:{' '}
+        {branchName}.
+      </p>
+      <p>
+        {report.currency
+          ? `Amounts in ${report.currency}${report.currencyStatus === 'organization_setting' ? ", your organization's currency setting" : ', the currency these entries were posted in'}.`
+          : report.currencyStatus === 'mixed_posted_currencies'
+            ? 'Currency unknown: these entries were posted in more than one currency, so totals are not labelled with one.'
+            : 'Currency unknown: your organization has no currency setting.'}
+      </p>
+      <p>
+        Built only from entries posted to the books. Refunds count only once they are posted as
+        reversals. Retrieved {pkt(report.freshness.retrievedAt)}.
+      </p>
+    </div>
+  );
+}
+
 function Metadata({ report, branchName }: { report: Report; branchName: string }) {
   return (
     <div className="space-y-2 break-words text-sm text-text-muted">
@@ -306,11 +340,11 @@ export function LeakageLedger({ report, branchName }: { report: Leakage; branchN
   const labels = labelsOf(report);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} branchName={branchName} />
+      <LeakageMetadata report={report} branchName={branchName} />
       <p className="text-sm text-text-body">
-        Recorded categories only: discounts, write-offs and signed shrinkage. Stock found offsets
-        stock lost. Discounts are commercial decisions; these totals are not all realized loss.
-        Expiry exposure and reasons for changes are not inferred.
+        Counts discounts given, stock written off, and stock lost or found. Stock found offsets
+        stock lost. Discounts are business choices, so these totals are not all lost money. Expired
+        stock and the reasons for changes are not worked out here.
       </p>
       <LedgerTable
         caption="Recorded leakage by branch and product"
