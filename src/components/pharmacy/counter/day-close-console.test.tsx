@@ -134,6 +134,8 @@ describe('day-close console', () => {
   it('uses the organization currency throughout reconciliation', () => {
     render(<PharmacyDayCloseConsole />);
 
+    expect(screen.getByText('Open day')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
     expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
     expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
@@ -204,6 +206,8 @@ describe('day-close console', () => {
     mocks.close = recorded;
     render(<PharmacyDayCloseConsole />);
 
+    expect(screen.getByText('Day closed')).toBeInTheDocument();
+    expect(screen.getByText(/Day closed\. New tenders/)).toBeInTheDocument();
     expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
     expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();

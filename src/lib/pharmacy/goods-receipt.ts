@@ -42,6 +42,7 @@ import { PharmacyInventoryError } from './inventory';
 import {
   authorizeControlledRestoration,
   ControlledRestorationDenied,
+  SOLO_PHARMACIST_WITNESS_POLICY,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import {
@@ -653,8 +654,32 @@ export async function reverseGoodsReceipt(
       db,
       scope,
       input.controlledWitness,
-      'pharmacy:safety'
+      'pharmacy:safety',
+      { allowSoloSelfWitness: true }
     );
+    if (witness.soloSelfWitness) {
+      // Solo-pharmacy rule: the self-witness is lawful only with this record,
+      // written in the same transaction as the reversal it authorizes.
+      await db.auditLog.create({
+        data: {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          actorType: 'USER',
+          source: 'TRPC',
+          category: 'PHARMACY_PURCHASING',
+          operation: 'OTHER',
+          action: 'pharmacy.controlledReceiptReversalSelfWitness',
+          targetType: 'PharmacyGoodsReceipt',
+          targetId: receipt.id,
+          metadata: {
+            policy: SOLO_PHARMACIST_WITNESS_POLICY,
+            pinVerified: true,
+            branchId: scope.branchId,
+            signatureRef: witness.signatureRef,
+          },
+        },
+      });
+    }
     // Dispensing takes the branch register lock before any stock balance lock.
     // Use the same order even when a receipt has multiple movements to reverse.
     await lockRegister(db, scope.organizationId, scope.branchId);
