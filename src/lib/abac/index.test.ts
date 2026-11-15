@@ -536,7 +536,7 @@ describe('custom ABAC decisions', () => {
       'orders:void',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(49);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(50);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -616,6 +616,38 @@ describe('hospitality capability namespace', () => {
       await expect(
         can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })
       ).resolves.toBe(false);
+    }
+  });
+});
+
+describe('restaurant sign-in order-taking capability', () => {
+  it.each([
+    ['explicit grant', [{ capability: 'orders:take', effect: 'ALLOW' }], [], true],
+    ['owner wildcard', [{ capability: '*', effect: 'ALLOW' }], [], true],
+    [
+      'user deny overrides owner',
+      [{ capability: '*', effect: 'ALLOW' }],
+      [{ capability: 'orders:take', effect: 'DENY' }],
+      false,
+    ],
+    [
+      'role deny overrides user allow',
+      [{ capability: 'orders:take', effect: 'DENY' }],
+      [{ capability: 'orders:take', effect: 'ALLOW' }],
+      false,
+    ],
+    ['no grant', [], [], false],
+  ] as const)('%s', async (_name, rolePermissions, overrides, expected) => {
+    const db = authorizationDb({
+      rolePermissions: [...rolePermissions],
+      overrides: [...overrides],
+    });
+    expect(ALL_ACTIONS).toContain('orders:take');
+    expect(POLICIES['orders:take']).toEqual([]);
+    for (const role of ['ADMIN', 'EMPLOYEE']) {
+      await expect(can({ ...employee, role }, 'orders:take', undefined, { db })).resolves.toBe(
+        expected
+      );
     }
   });
 });
