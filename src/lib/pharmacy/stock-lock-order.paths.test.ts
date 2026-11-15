@@ -21,6 +21,7 @@ import { reverseRecallQuarantine } from './drap-monitoring';
 import {
   approveCount,
   dispatchTransfer,
+  quarantinePart,
   releaseQuarantinedPart,
   reserveSupplierClaim,
   writeOff,
@@ -225,6 +226,33 @@ describe('count approval and quarantine release take stock locks in the global o
     };
     await approveCount(db as never, scope, 'count', 'approve', 'Broken strip');
     expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', 'lot-b/shelf/AVAILABLE']);
+    expectLockedBeforeWrites(trace);
+  });
+
+  it.each([
+    ['QUARANTINE', false],
+    ['DAMAGED', true],
+  ])('locks AVAILABLE then %s through the helper before quarantining', async (target, damaged) => {
+    const trace = recorder();
+    const db = {
+      $queryRaw: trace.$queryRaw,
+      pharmacyInventoryLot: {
+        findFirst: vi.fn(async () => ({ id: 'lot-a', unitsPerPack: 1 })),
+      },
+      pharmacyStockBalance: {
+        findFirst: vi.fn(async () => ({ onHandUnits: 5, sealedPacks: 0, looseUnits: 5 })),
+      },
+      pharmacyStockMovement: { create: movementCreate(trace) },
+    };
+    await quarantinePart(db as never, scope, {
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf',
+      units: 1,
+      damaged,
+      reason: 'Damaged on the shelf',
+      idempotencyKeyPrefix: 'quarantine',
+    });
+    expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', `lot-a/shelf/${target}`]);
     expectLockedBeforeWrites(trace);
   });
 

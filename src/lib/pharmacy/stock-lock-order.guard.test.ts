@@ -4,6 +4,12 @@
  * stock-lock-order.ts, which sorts its keys and takes the classes in the one
  * global order. A locking clause on those rows anywhere else could take them in
  * its own order and deadlock against the rest, so it fails this test.
+ *
+ * It only sees explicit locking clauses in source. It cannot see the row locks
+ * a write takes implicitly (a movement insert locking its balance through the
+ * projection trigger, an insert's FOR KEY SHARE on the rows it references):
+ * the per-path tests in stock-lock-order.test.ts and
+ * stock-lock-order.paths.test.ts assert those paths lock first, in order.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';

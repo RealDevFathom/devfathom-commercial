@@ -639,6 +639,17 @@ export async function quarantinePart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  // DEV-825: both balances this move writes, through the shared helper in key
+  // order (AVAILABLE before DAMAGED or QUARANTINE), before reading either.
+  await lockStockBalances(
+    db,
+    scope,
+    (['AVAILABLE', input.damaged ? 'DAMAGED' : 'QUARANTINE'] as const).map((disposition) => ({
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition,
+    }))
+  );
   const a = await removalArrangement(
     db,
     scope,

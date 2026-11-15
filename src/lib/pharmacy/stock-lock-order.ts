@@ -6,9 +6,17 @@
  * orders, so every path takes them in this order and never goes back to an
  * earlier class once it holds a later one:
  *
- *   0. document rows and request-scoped advisory locks (sale, sale line,
- *      receipt, purchase order, transfer, count, order, prescription line,
- *      idempotency key) — these never span stock;
+ *   0. non-stock locks — document rows (sale, sale line, receipt, purchase
+ *      order, transfer, count, order, prescription line), PIN credential rows of
+ *      the people approving the action, and request-scoped advisory keys
+ *      (idempotency, emergency supply, recall authority, owner import). Every
+ *      one of them is taken before any register or stock lock. Where two paths
+ *      lock the same pair of these rows they agree on its order: the receipt,
+ *      purchase order, transfer, count or sale line an action is on comes before
+ *      the PIN credential approving it (goods-in, receipt reversal, return,
+ *      transfer receipt), while the credential comes before the sale row
+ *      (controlled dispensing, void) and before dispensing's own prescription
+ *      line and emergency-supply key;
  *   1. `register` — the branch controlled-register advisory lock
  *      (`lockControlledRegister`), taken BEFORE any stock row whenever the
  *      transaction will write a controlled-register row;

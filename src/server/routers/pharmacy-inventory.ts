@@ -756,6 +756,18 @@ async function receiveTransferWithVariance(
   if (open.some((line) => !answered.has(line.id)))
     throw new PharmacyInventoryError('INVALID_UNITS');
 
+  // DEV-628: a shortfall is a stock loss, so it takes the same two-person
+  // control as a write-off: a witness assigned to this branch, confirming with
+  // their own PIN (or a solo owner/pharmacist's own fresh PIN). DEV-825: the
+  // shortfall is known from the answers alone, so the witness credential (a
+  // document-class lock) is taken before any stock row (stock-lock-order.ts).
+  const short = open.some((line) => line.quantityUnits - line.receivedUnits > answered.get(line.id)!);
+  let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
+  if (short) {
+    if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    witness = await authorizeWriteOffWitness(db, scope, input.variance);
+  }
+
   // DEV-825: lock every IN_TRANSIT balance this receipt writes, in the global
   // key order (stock-lock-order.ts), before reading or writing any line.
   await lockStockBalances(
@@ -804,15 +816,6 @@ async function receiveTransferWithVariance(
     });
   }
 
-  const short = plan.some((step) => step.varianceUnits > 0);
-  // DEV-628: a shortfall is a stock loss, so it takes the same two-person
-  // control as a write-off: a witness assigned to this branch, confirming with
-  // their own PIN (or a solo owner/pharmacist's own fresh PIN).
-  let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
-  if (short) {
-    if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-    witness = await authorizeWriteOffWitness(db, scope, input.variance);
-  }
 
   const postedVariances = [];
   for (const step of plan) {

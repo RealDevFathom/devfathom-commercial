@@ -30,7 +30,7 @@ import {
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations, lockRegister } from './controlled-register';
-import { lockStockRowsFrom } from './stock-lock-order';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
@@ -1310,19 +1310,41 @@ export async function returnSaleLine(
   }> = [];
   // DEV-501: the same pure plan prices the counter's refund quote.
   const plan = planLotReturn(line, input.lotId, input.canonicalUnits);
-  // DEV-825: a controlled return writes the register, so it takes the register
-  // lock before the batch and balance rows below (stock-lock-order.ts).
+  // DEV-825: every lock this return takes, before its first write and in the
+  // global order (stock-lock-order.ts): the register when it writes one, then the
+  // batch (a restock shares the recall boundary; never restore unsafe stock as
+  // available), then every slice's balance in key order. Slices follow the
+  // allocation's FEFO order, which is not the key order when one lot was sold
+  // from two locations.
   if (witness) await lockRegister(db, scope.organizationId, scope.branchId);
+  if (disposition === 'RESTOCK' && plan.slices.length)
+    await lockStockRowsFrom(
+      db,
+      scope.organizationId,
+      Prisma.sql`SELECT l."manufacturingBatchId" AS "batchId" FROM pharmacy_inventory_lots l
+        WHERE l."organizationId"=${scope.organizationId}
+          AND l.id IN (${Prisma.join(plan.slices.map(({ allocation }) => allocation.inventoryLotId))})`,
+      { batch: 'update' }
+    );
+  await lockStockBalances(
+    db,
+    scope,
+    plan.slices.map(({ allocation }) =>
+      disposition === 'RESTOCK'
+        ? {
+            inventoryLotId: allocation.inventoryLotId,
+            stockLocationId: allocation.stockLocationId,
+            disposition: 'AVAILABLE',
+          }
+        : {
+            inventoryLotId: allocation.inventoryLotId,
+            stockLocationId: quarantineLocationId!,
+            disposition: 'QUARANTINE',
+          }
+    )
+  );
   for (const { allocation, units, money } of plan.slices) {
     if (disposition === 'RESTOCK') {
-      // Batch lock shares the recall boundary; never restore unsafe stock as available.
-      await lockStockRowsFrom(
-        db,
-        scope.organizationId,
-        Prisma.sql`SELECT l."manufacturingBatchId" AS "batchId" FROM pharmacy_inventory_lots l
-          WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId}`,
-        { batch: 'update' }
-      );
       const lot = await db.pharmacyInventoryLot.findFirst({
         where: {
           id: allocation.inventoryLotId,

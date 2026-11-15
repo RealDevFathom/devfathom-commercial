@@ -532,8 +532,87 @@ describe('sales, voids and returns take stock locks in the global order', () => 
       idempotencyKey: 'return-key',
       controlledWitness: { staffProfileId: 'staff', pin: '1234' },
     });
-    expect(trace.locks()).toEqual(['register', 'batch', 'balance']);
+    // The sorted balance lock, then the return's write to that balance.
+    expect(trace.locks()).toEqual(['register', 'batch', 'balance', 'balance']);
+    expect(trace.statements.find((statement) => statement.step === 'balance')?.text).toContain(
+      'stock_lock:balance'
+    );
     expectGlobalOrder(trace.locks());
+  });
+
+  it('locks both locations of a lot sold from two shelves, sorted, before the first restock', async () => {
+    const trace = recorder(scope);
+    const allocation = (id: string, shelf: string) => ({
+      id,
+      inventoryLotId: 'lot',
+      stockLocationId: shelf,
+      canonicalUnits: 2,
+      stockMovementId: `sale-${id}`,
+    });
+    const line = {
+      id: 'line',
+      saleId: 'sale',
+      canonicalUnits: 4,
+      sale: { status: 'COMPLETED' },
+      medicine: { controlled: false },
+      // FEFO filled this line from shelf-z first, then shelf-a: not the key order.
+      allocations: [allocation('first', 'shelf-z'), allocation('second', 'shelf-a')],
+      unidentifiedReturnHolds: [],
+      returnLines: [],
+      quantity: 4,
+      unitPriceMinor: 100,
+      discountMinor: 0,
+      grossMinor: 400,
+    };
+    const writes: string[] = [];
+    const db = {
+      $queryRaw: trace.queryRaw,
+      pharmacySaleLine: { findFirst: vi.fn(async () => line) },
+      pharmacySaleEvent: { findFirst: vi.fn(async () => null), create: vi.fn(async () => ({})) },
+      pharmacyStockLocation: { findFirst: vi.fn(async () => ({ id: 'shelf' })) },
+      pharmacyInventoryLot: {
+        findFirst: vi.fn(async () => ({
+          batch: { state: 'ACTIVE', expiresAt: new Date('2099-01-01') },
+        })),
+      },
+      pharmacySaleReturn: {
+        create: vi.fn(async () => ({ id: 'return', createdAt: new Date() })),
+      },
+      pharmacyStockMovement: {
+        create: vi.fn(async ({ data }: { data: { stockLocationId: string } }) => {
+          trace.write();
+          writes.push(data.stockLocationId);
+          return { id: `return-${data.stockLocationId}` };
+        }),
+      },
+      pharmacySaleReturnLine: { create: vi.fn(async () => ({ id: 'return-line' })) },
+      pharmacyControlledRegisterEntry: { findMany: vi.fn(async () => []) },
+    };
+    await returnSaleLine(db as never, scope, {
+      saleLineId: 'line',
+      lotId: 'lot',
+      canonicalUnits: 4,
+      disposition: 'RESTOCK',
+      reason: 'WRONG_ITEM',
+      integrityDecision: 'sealed, storage verified',
+      idempotencyKey: 'return-two-shelves',
+    });
+    expect(writes).toEqual(['shelf-z', 'shelf-a']);
+    const lockIndex = trace.statements.findIndex(({ text }) => text.includes('stock_lock:balance'));
+    expect(trace.statements[lockIndex]!.values.slice(2)).toEqual([
+      'lot',
+      'shelf-a',
+      'AVAILABLE',
+      'lot',
+      'shelf-z',
+      'AVAILABLE',
+    ]);
+    // One batch lock, before the balances; none after the first write.
+    expect(trace.statements.filter(({ step }) => step === 'batch')).toHaveLength(1);
+    expect(trace.locks()).toEqual(['batch', 'balance', 'balance', 'balance']);
+    expect(trace.queryRaw.mock.invocationCallOrder[lockIndex]).toBeLessThan(
+      db.pharmacyStockMovement.create.mock.invocationCallOrder[0]!
+    );
   });
 
   it('locks a customer-order handoff class by class before its reservations', async () => {

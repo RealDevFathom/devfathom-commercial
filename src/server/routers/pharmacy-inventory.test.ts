@@ -275,7 +275,9 @@ describe('transfer short-close accounting (DEV-131)', () => {
     db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     db.$queryRaw
       .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
-      // DEV-825: the IN_TRANSIT balances are locked before they are read.
+      // DEV-825: the witness credential (document class) is locked before any
+      // stock row, then the IN_TRANSIT balances are locked before they are read.
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
@@ -388,6 +390,14 @@ describe('DEV-825 transfer receipt lock order', () => {
       'location_src',
       'IN_TRANSIT',
     ]);
+    // The witness credential is a document-class lock: it comes before any stock row.
+    const credentialIndex = statements.findIndex((sql) =>
+      (sql.strings?.join('') ?? (sql as unknown as string[]).join?.('') ?? '').includes(
+        'restaurant_operator_credentials'
+      )
+    );
+    expect(credentialIndex).toBeGreaterThanOrEqual(0);
+    expect(credentialIndex).toBeLessThan(lockIndex);
     // Every balance read and write comes after that one lock; no per-line lock remains.
     statements.slice(lockIndex + 1).forEach((sql) => {
       expect(sql.strings?.join('') ?? '').not.toMatch(/pharmacy_stock_balances[\s\S]*FOR UPDATE/);
@@ -1223,7 +1233,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     function shortTransfer() {
       db.$queryRaw
         .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
-        // DEV-825: the IN_TRANSIT balances are locked before they are read.
+        // DEV-825: the witness credential is locked before any stock row, then the
+        // IN_TRANSIT balances are locked before they are read.
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
           { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
