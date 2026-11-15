@@ -394,6 +394,19 @@ export type ExpiryMarkdownDraft = {
   expiresAt: string;
 };
 
+/** A mark-down draft as any response carries it: never with the landed unit cost. */
+export type PublicExpiryMarkdownDraft = Omit<ExpiryMarkdownDraft, 'unitCostMinor'>;
+
+/**
+ * DEV-627: the stored draft keeps `unitCostMinor` as evidence, but it is a
+ * purchase-cost fact, so it is dropped before a draft leaves the server.
+ */
+export function publicMarkdownDraft(draft: ExpiryMarkdownDraft): PublicExpiryMarkdownDraft {
+  const copy: Partial<ExpiryMarkdownDraft> = { ...draft };
+  delete copy.unitCostMinor;
+  return copy as PublicExpiryMarkdownDraft;
+}
+
 export function parseMarkdownDraft(detail: string | null): ExpiryMarkdownDraft | null {
   if (!detail?.startsWith(MARKDOWN_DRAFT_PREFIX)) return null;
   try {
@@ -1791,7 +1804,8 @@ export const pharmacyInventoryRouter = router({
    * has already expired but is still AVAILABLE on a shelf, which is the stock
    * most in need of an action — with the drafts already raised against it.
    *
-   * DEV-627: landed unit cost never leaves the server, and the PKR value at risk
+   * DEV-627: landed unit cost never leaves the server (not on a row, not inside a
+   * mark-down draft), and the PKR value at risk
    * derived from it is released only to a caller holding `reports:financial`
    * (owner or finance). Everyone else still gets the operational board — units,
    * expiry, MRP, drafts — with `costVisible: false`, a null value at risk and no
@@ -1940,14 +1954,14 @@ export const pharmacyInventoryRouter = router({
           returnByLot.set(line.inventoryLotId, line.purchaseReturn);
       const markdownByPosition = new Map<
         string,
-        ExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
+        PublicExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
       >();
       for (const event of markdownEvents) {
         const draft = parseMarkdownDraft(event.detail);
         const key = draft ? `${draft.inventoryLotId}:${draft.stockLocationId}` : null;
         if (draft && key && !markdownByPosition.has(key))
           markdownByPosition.set(key, {
-            ...draft,
+            ...publicMarkdownDraft(draft),
             eventId: event.id,
             reason: event.reason,
             recordedAt: event.createdAt,
@@ -2153,7 +2167,12 @@ export const pharmacyInventoryRouter = router({
             latest.draft.markdownPercent === input.markdownPercent &&
             latest.draft.proposedPackPriceMinor === proposedPackPriceMinor
           ) {
-            return { created: false, signalId: signal.id, eventId: latest.id, draft: latest.draft };
+            return {
+              created: false,
+              signalId: signal.id,
+              eventId: latest.id,
+              draft: publicMarkdownDraft(latest.draft),
+            };
           }
           const event = await tx.pharmacyStockSignalEvent.create({
             data: {
@@ -2167,7 +2186,12 @@ export const pharmacyInventoryRouter = router({
             },
             select: { id: true },
           });
-          return { created: true, signalId: signal.id, eventId: event.id, draft };
+          return {
+            created: true,
+            signalId: signal.id,
+            eventId: event.id,
+            draft: publicMarkdownDraft(draft),
+          };
         });
       } catch (error) {
         expiryError(error);
