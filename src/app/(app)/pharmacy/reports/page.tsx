@@ -33,6 +33,7 @@ type SearchParams = Promise<
       | 'branch'
       | 'from'
       | 'to'
+      | 'section'
       | 'supplier'
       | 'ingredient'
       | 'batch'
@@ -141,6 +142,7 @@ export default async function PharmacyReportsPage({
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch = value(query.branch);
+  const section = value(query.section);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
   try {
@@ -508,6 +510,32 @@ export default async function PharmacyReportsPage({
             <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
             <span>Source: {result.freshness.source}</span>
           </div>
+          {section === 'sales' && metrics ? (
+            <SectionCard
+              id="sales"
+              eyebrow="Sales detail"
+              title="Sales and margin for the selected period"
+              titleLevel={2}
+            >
+              <p className="mb-4 text-sm text-text-muted">
+                Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+                {branch
+                  ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                  : 'All available branches'}
+                . — means unavailable, not zero.
+              </p>
+              <div className="grid gap-6 sm:grid-cols-2">
+                <Stat label="Sales" value={money(metrics.salesMinor)} sub="Ledger source" />
+                <Stat label="Gross margin" value={money(metrics.marginMinor)} sub="Ledger source" />
+              </div>
+              <Link
+                className="mt-4 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={scopedDrillThrough('/pharmacy/reports', branch)}
+              >
+                Back to overview
+              </Link>
+            </SectionCard>
+          ) : null}
           <SectionCard
             eyebrow="Owner command centre"
             title="Selected period at a glance"
