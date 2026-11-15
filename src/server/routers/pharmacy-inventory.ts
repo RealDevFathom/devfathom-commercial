@@ -1790,6 +1790,12 @@ export const pharmacyInventoryRouter = router({
    * Every saleable lot position expiring inside the window — and every one that
    * has already expired but is still AVAILABLE on a shelf, which is the stock
    * most in need of an action — with the drafts already raised against it.
+   *
+   * DEV-627: landed unit cost never leaves the server, and the PKR value at risk
+   * derived from it is released only to a caller holding `reports:financial`
+   * (owner or finance). Everyone else still gets the operational board — units,
+   * expiry, MRP, drafts — with `costVisible: false`, a null value at risk and no
+   * PKR risk buckets.
    */
   expiryBoardLots: auditedProtectedProcedure
     .input(
@@ -1805,6 +1811,12 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
       await assertBranch(ctx.db, scope);
+      const costVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+      );
       const at = new Date();
       const { withinDays } = input;
       // Always read through 90 days so the headline recovery ledger can show
@@ -1987,9 +1999,8 @@ export const pharmacyInventoryRouter = router({
             reservedUnits: reservedByLot.get(row.inventoryLotId) ?? 0,
             quarantinedUnits: heldByLot.get(row.inventoryLotId) ?? 0,
             unitsPerPack: lot.unitsPerPack,
-            unitCostMinor: lot.unitCostMinor,
             printedMrpMinor: lot.printedMrpMinor,
-            valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
+            valueAtRiskMinor: (row.onHandUnits * lot.unitCostMinor) as number | null,
             supplierName: lot.supplierName,
             suggestedSupplierId,
             markdownEligible,
@@ -2004,10 +2015,21 @@ export const pharmacyInventoryRouter = router({
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
-            right.valueAtRiskMinor - left.valueAtRiskMinor ||
+            // Without cost access the order must not hint at relative cost either.
+            (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
+      if (!costVisible) {
+        return {
+          generatedAt: at,
+          withinDays,
+          costVisible,
+          riskBuckets: [] as typeof riskBuckets,
+          rows: rows.map((row) => ({ ...row, valueAtRiskMinor: null })),
+          suppliers,
+        };
+      }
+      return { generatedAt: at, withinDays, costVisible, riskBuckets, rows, suppliers };
     }),
 
   /**

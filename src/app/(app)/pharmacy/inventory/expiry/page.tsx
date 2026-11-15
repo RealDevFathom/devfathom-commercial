@@ -135,6 +135,8 @@ export default async function PharmacyExpiryBoardPage({
   const board = await pharmacyInventoryRouter
     .createCaller(ctx)
     .expiryBoardLots({ branchId: branch.id, withinDays });
+  // DEV-627: value at risk arrives null unless the read released it under
+  // `reports:financial`; the landed unit cost never leaves the server.
   const rows: ExpiryBoardRow[] = board.rows.map((row) => ({
     ...row,
     expiresAt: row.expiresAt.toISOString(),
@@ -268,6 +270,7 @@ export default async function PharmacyExpiryBoardPage({
         boardHref={url({ branch: branch.id, within: withinDays })}
         branchId={branch.id}
         branchName={branch.name}
+        costVisible={board.costVisible}
         generatedAt={board.generatedAt.toISOString()}
         printHref={url({ branch: branch.id, within: withinDays, view: 'print' })}
         riskBuckets={board.riskBuckets}

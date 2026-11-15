@@ -25,7 +25,6 @@ const row: ExpiryBoardRow = {
   reservedUnits: 0,
   quarantinedUnits: 0,
   unitsPerPack: 10,
-  unitCostMinor: 2_500,
   printedMrpMinor: 5_000,
   valueAtRiskMinor: 25_000,
   supplierName: 'Branch distributor',
@@ -50,6 +49,7 @@ const props: ExpiryBoardProps = {
   branchName: 'Lahore',
   withinDays: 90,
   generatedAt: '2026-10-29T00:00:00.000Z',
+  costVisible: true,
   riskBuckets: [
     { days: 30, valueAtRiskMinor: 10_000 },
     { days: 60, valueAtRiskMinor: 20_000 },
@@ -65,14 +65,15 @@ const props: ExpiryBoardProps = {
 
 describe('ExpiryBoard recovery facts', () => {
   it('prevents row injection and neutralizes formulas after invisible prefixes in CSV', () => {
-    const csv = nearExpiryCsv([
-      { ...row, batchNumber: 'QA\r=1+1', medicineName: '\t@SUM(A1:A2)' },
-    ]);
+    const csv = nearExpiryCsv(
+      [{ ...row, batchNumber: 'QA\r=1+1', medicineName: '\t@SUM(A1:A2)' }],
+      true
+    );
 
     expect(csv.split('\n')).toHaveLength(2);
     expect(csv).not.toContain('\r');
     expect(csv).toContain('"QA =1+1"');
-    expect(csv).toContain("\"' @SUM(A1:A2)\"");
+    expect(csv).toContain('"\' @SUM(A1:A2)"');
   });
 
   it('renders cumulative 30/60/90 PKR risk and the distributor calendar', () => {
@@ -186,5 +187,42 @@ describe('ExpiryBoard recovery facts', () => {
       expect(within(table).queryByRole('note')).not.toBeInTheDocument();
       expect(csv).not.toContain('ineligible');
     }
+  });
+});
+
+describe('DEV-627: viewer without reports:financial', () => {
+  const hidden: ExpiryBoardProps = {
+    ...props,
+    costVisible: false,
+    riskBuckets: [],
+    rows: [{ ...row, valueAtRiskMinor: null }],
+  };
+
+  it('shows no PKR value at risk on the board', () => {
+    render(<ExpiryBoard {...hidden} />);
+
+    const summary = screen.getByRole('region', { name: 'Near-expiry summary' });
+    expect(within(summary).queryByText('Value at risk')).not.toBeInTheDocument();
+    expect(within(summary).queryByText(/PKR at risk/)).not.toBeInTheDocument();
+    expect(within(summary).getByText('Units at risk')).toBeInTheDocument();
+    const card = screen.getByRole('article');
+    expect(card).not.toHaveTextContent(/value at risk/i);
+    expect(card).toHaveTextContent('10 units (10 per pack) · MRP PKR 50.00 per pack');
+  });
+
+  it('drops the value column from the printable list and the CSV', () => {
+    render(<ExpiryBoard {...hidden} view="print" />);
+
+    const table = screen.getByRole('table', { name: 'Near-expiry list' });
+    expect(within(table).queryByRole('columnheader', { name: 'Value at risk' })).toBeNull();
+    const download = screen.getByRole('link', { name: 'Download CSV' });
+    const csv = decodeURIComponent(download.getAttribute('href')!.split(',')[1]!);
+    expect(csv).not.toContain('Value at risk');
+    expect(csv.split('\n')[0]!.split(',')).toHaveLength(9);
+  });
+
+  it('keeps the value column for a reports:financial viewer', () => {
+    expect(nearExpiryCsv([row], true).split('\n')[0]).toContain('Value at risk (PKR)');
+    expect(nearExpiryCsv([row], true).split('\n')[1]).toContain('250.00');
   });
 });

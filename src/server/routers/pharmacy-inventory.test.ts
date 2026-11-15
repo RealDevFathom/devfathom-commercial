@@ -317,7 +317,7 @@ describe('PH-A5 expiry recovery integration', () => {
   }
 
   it('uses the active branch relationship and returns risk/calendar facts', async () => {
-    grant([allow('pharmacy:inventory')]);
+    grant([allow('pharmacy:inventory'), allow('reports:financial')]);
     const expiresAt = new Date(Date.now() + 45 * 86_400_000);
     db.pharmacyStockBalance.findMany.mockResolvedValueOnce([position('lot_1', expiresAt)]);
     db.pharmacySupplier.findMany.mockResolvedValue([
@@ -357,6 +357,7 @@ describe('PH-A5 expiry recovery integration', () => {
   it.each([30, 60, 90, 180] as const)(
     'keeps cumulative risk independent of the %s-day list filter and excludes expired stock',
     async (withinDays) => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
       const now = Date.now();
       const day = 86_400_000;
       const positions = [
@@ -403,6 +404,62 @@ describe('PH-A5 expiry recovery integration', () => {
       );
     }
   );
+
+  describe('DEV-627: purchase cost on the expiry board', () => {
+    function seedBoard() {
+      const now = Date.now();
+      db.pharmacyStockBalance.findMany.mockResolvedValueOnce([
+        position('lot_cheap', new Date(now + 20 * 86_400_000), 1_000),
+        position('lot_dear', new Date(now + 20 * 86_400_000), 9_000),
+      ]);
+    }
+
+    it('withholds unit cost, value at risk and PKR buckets from a cashier without reports:financial', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows).toHaveLength(2);
+      for (const row of board.rows) {
+        expect(row).not.toHaveProperty('unitCostMinor');
+        expect(row.valueAtRiskMinor).toBeNull();
+        expect(row).toMatchObject({ onHandUnits: 10, printedMrpMinor: 5_000 });
+      }
+      // The order must not rank positions by their hidden cost either.
+      expect(board.rows.map((row) => row.inventoryLotId)).toEqual(['lot_cheap', 'lot_dear']);
+      expect(JSON.stringify(board)).not.toMatch(/unitCost|9000|90000/);
+    });
+
+    it('withholds cost from a tenant ADMIN whose role explicitly denies reports:financial', async () => {
+      grant([allow('pharmacy:inventory'), deny('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows.every((row) => row.valueAtRiskMinor === null)).toBe(true);
+    });
+
+    it('releases value at risk, but never the unit cost, to a reports:financial holder', async () => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(true);
+      expect(board.riskBuckets[0]).toEqual({ days: 30, valueAtRiskMinor: 100_000 });
+      expect(board.rows.map((row) => [row.inventoryLotId, row.valueAtRiskMinor])).toEqual([
+        ['lot_dear', 90_000],
+        ['lot_cheap', 10_000],
+      ]);
+      for (const row of board.rows) expect(row).not.toHaveProperty('unitCostMinor');
+    });
+  });
 
   it.each([
     ['Rx', { rx: true, restricted: false, controlled: false }],
