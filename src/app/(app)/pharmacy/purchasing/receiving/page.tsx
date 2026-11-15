@@ -8,6 +8,9 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 import { PackPhotoReader } from '../_components/pack-photo-reader';
 import { ScanSearch } from '../_components/scan-search';
 
+import Link from 'next/link';
+
+import { buttonVariants } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -1529,6 +1532,14 @@ function ReceiptDetail({
               ))}
             </ul>
           )}
+          {lots.length > 0 ? (
+            <Link
+              className={`${buttonVariants({ variant: 'secondary', size: 'touch' })} mt-3`}
+              href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branchId, receipt: receipt.id })}`}
+            >
+              Print shelf labels
+            </Link>
+          ) : null}
         </div>
       ) : null}
 

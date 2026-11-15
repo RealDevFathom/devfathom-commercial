@@ -524,6 +524,12 @@ export default async function PharmacyInventoryPage({
             >
               Imported stock references
             </Link>
+            <Link
+              href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branch.id })}`}
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Shelf labels
+            </Link>
           </>
         }
       />

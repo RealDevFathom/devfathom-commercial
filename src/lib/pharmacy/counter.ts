@@ -31,6 +31,7 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -95,6 +96,23 @@ export type CounterSearchRow = {
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
+  /**
+   * DEV-90: the exact lot a scanned shelf sticker names. Set only when the query
+   * was a shelf-label code of this branch. When it differs from
+   * `recommendedLotId`, selling it is a FEFO override like any other.
+   */
+  labelLot?: CounterLabelLot | null;
+};
+
+export type CounterLabelLot = {
+  inventoryLotId: string;
+  batchNumber: string;
+  expiresAt: string;
+  printedMrpMinor: number;
+  /** Safe canonical units of this lot alone. */
+  sellableUnits: number;
+  /** Why the lot cannot be sold; null when it can. */
+  blockedBy: BlockReason | null;
 };
 
 type LotRow = {
@@ -128,7 +146,9 @@ export function renderStrengthValue(value: unknown): string {
   return raw.includes('.') ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : raw;
 }
 
-function renderStrength(components: readonly { value: unknown; unit: string }[]): string | null {
+export function renderStrength(
+  components: readonly { value: unknown; unit: string }[]
+): string | null {
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
@@ -148,7 +168,7 @@ async function matchMedicineIds(
   scope: CounterScope,
   query: string,
   limit: number
-): Promise<Map<string, CounterMatchKind>> {
+): Promise<{ matches: Map<string, CounterMatchKind>; labelLotId: string | null }> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
   const normalized = normalizeMedicineText(trimmed);
@@ -168,6 +188,22 @@ async function matchMedicineIds(
       })
     : null;
   if (barcode) remember(barcode.presentation.medicineId, 'BARCODE');
+
+  // DEV-90: a shelf sticker names one lot of THIS branch and nothing else, so it
+  // resolves exactly or not at all. A registered barcode keeps precedence.
+  const labelNumber = barcode ? null : parseShelfLabelCode(trimmed);
+  if (labelNumber !== null) {
+    const lot = await db.pharmacyInventoryLot.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        shelfLabelNumber: labelNumber,
+      },
+      select: { id: true, batch: { select: { medicineId: true } } },
+    });
+    if (lot) matches.set(lot.batch.medicineId, 'BARCODE');
+    return { matches, labelLotId: lot?.id ?? null };
+  }
 
   if (normalized) {
     const aliases = await db.medicineAlias.findMany({
@@ -229,7 +265,7 @@ async function matchMedicineIds(
   });
   for (const presentation of byPresentation) remember(presentation.medicineId, 'PRESENTATION');
 
-  return matches;
+  return { matches, labelLotId: null };
 }
 
 function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): AllocationCandidate {
@@ -261,7 +297,7 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
+  const { matches, labelLotId } = await matchMedicineIds(db, scope, input.query, limit);
   const medicineIds = [...matches.keys()].slice(0, limit);
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
@@ -368,16 +404,30 @@ export async function searchCounterCatalog(
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
+    let labelLot: CounterLabelLot | null = null;
 
     for (const lot of medicineLots) {
+      if (lot.id === labelLotId) {
+        labelLot = {
+          inventoryLotId: lot.id,
+          batchNumber: lot.batch.batchNumber,
+          expiresAt: lot.batch.expiresAt.toISOString(),
+          printedMrpMinor: lot.printedMrpMinor,
+          sellableUnits: 0,
+          blockedBy: null,
+        };
+      }
+      let lotBlockedBy: BlockReason | null = null;
       for (const balance of balancesByLot.get(lot.id) ?? []) {
         const candidate = candidateFrom(scope, lot, balance);
         const reason = blockReasonFor(candidate, scope_);
         if (reason !== null) {
+          if (lotBlockedBy === null || lotBlockedBy === 'EMPTY') lotBlockedBy = reason;
           // EMPTY is an exhausted bucket, not a condition an operator acts on.
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
         }
+        if (labelLot?.inventoryLotId === lot.id) labelLot.sellableUnits += balance.onHandUnits;
         onHandUnits += balance.onHandUnits;
         const better =
           best === null ||
@@ -385,6 +435,9 @@ export async function searchCounterCatalog(
           (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
             lot.id.localeCompare(best.lot.id) < 0);
         if (better) best = { lot, locationId: balance.stockLocationId };
+      }
+      if (labelLot?.inventoryLotId === lot.id && labelLot.sellableUnits === 0) {
+        labelLot.blockedBy = lotBlockedBy ?? 'EMPTY';
       }
     }
 
@@ -489,6 +542,7 @@ export async function searchCounterCatalog(
         locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
+      ...(labelLotId ? { labelLot } : {}),
     });
   }
 

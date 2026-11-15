@@ -74,6 +74,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
@@ -1127,7 +1128,11 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantityText('');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
-    setLotOverride(null);
+    // DEV-90: a shelf sticker for a non-FEFO batch stages that batch as the override.
+    const label = counterLabelScanDecision(row);
+    setLotOverride(
+      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+    );
   }, []);
 
   const ensureSale = useCallback(async () => {
@@ -1333,8 +1338,22 @@ function ScopedPharmacyCounterConsole({
         if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
           return;
         const row = result.rows[0]!;
+        const label = counterLabelScanDecision(row);
+        if (label.kind === 'OVERRIDE' || label.kind === 'BLOCKED') {
+          // Never auto-add: the labelled batch needs a reason, or cannot be sold at all.
+          stageRow(row);
+          setQuantityText('1');
+          setNotice({
+            tone: label.kind === 'BLOCKED' ? 'danger' : 'warning',
+            message: label.message,
+          });
+          return;
+        }
+        // A shelf-label scan always restages, so no earlier batch override carries over.
         const restage =
-          activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
+          label.kind === 'FEFO' ||
+          activeRow?.medicineId !== row.medicineId ||
+          saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
           stageRow(row);
           // Barcode entry keeps its one-item default; manual selection starts empty.
