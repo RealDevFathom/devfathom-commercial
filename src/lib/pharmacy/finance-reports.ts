@@ -266,6 +266,137 @@ export async function grossMarginComparison(
   };
 }
 
+export type TrueProfitDimension = 'item' | 'category' | 'hour' | 'staff';
+
+/** The reporting clock for the hour dimension. Pakistan has no daylight saving. */
+export const TRUE_PROFIT_TIMEZONE = 'Asia/Karachi';
+
+/**
+ * One posted-ledger cell at the finest grain the true-profit report needs:
+ * item × category × sale hour × seller. Money is in integer minor units.
+ */
+export type TrueProfitFact = {
+  productId: string | null;
+  /** The medicine's product family; null when the leg names no catalog item. */
+  category: string | null;
+  /** 0–23, the hour the sale completed on the reporting clock. */
+  hour: number | null;
+  /** The user who rang up the sale. Returns stay with the original seller. */
+  staffUserId: string | null;
+  revenueMinor: number;
+  discountMinor: number;
+  cogsMinor: number;
+};
+
+export type TrueProfitRow = MarginRow;
+
+/**
+ * DEV-77: the posted facts behind true profit by item, category, hour and
+ * staff. It reads exactly the accounts and window `grossMarginQuery` reads, so
+ * its totals reconcile with the shipped margin report to the paisa; it only
+ * adds dimensions. Cost is the posted COGS of the allocated lots, and a lot's
+ * unit cost is its landed cost — invoice net, non-creditable tax and freight
+ * share spread over received AND bonus units — so the profit here is true
+ * profit per item rather than invoice-price margin.
+ *
+ * Hour and staff come from the sale the leg belongs to. A return leg names the
+ * original sale line, so it nets against the hour and seller of that sale.
+ */
+export function trueProfitFactsQuery(scope: JournalReportScope, input: { from: Date; to: Date }) {
+  return Prisma.sql`
+    WITH signed AS (
+      SELECT line."productId",
+             medicine."productFamily"::text AS "category",
+             EXTRACT(HOUR FROM ((COALESCE(sale."completedAt", entry."occurredAt") AT TIME ZONE 'UTC') AT TIME ZONE ${TRUE_PROFIT_TIMEZONE}::text))::int AS "hour",
+             sale."createdByUserId" AS "staffUserId",
+             line."accountCode",
+             CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
+        FROM "finance_journal_lines" line
+        JOIN "finance_journal_entries" entry
+          ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+        LEFT JOIN "pharmacy_sale_lines" sale_line
+          ON sale_line."organizationId" = line."organizationId" AND sale_line."id" = line."sourceLineId"
+        LEFT JOIN "pharmacy_sales" sale
+          ON sale."organizationId" = sale_line."organizationId"
+         AND sale."branchId" = sale_line."branchId"
+         AND sale."id" = sale_line."saleId"
+        LEFT JOIN "pharmacy_medicines" medicine
+          ON medicine."organizationId" = line."organizationId" AND medicine."id" = line."productId"
+       WHERE line."organizationId" = ${scope.organizationId}
+         AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
+         AND entry."occurredAt" >= ${input.from}
+         AND entry."occurredAt" < ${input.to}
+         ${branchFilter(scope)}
+    )
+    SELECT "productId", "category", "hour", "staffUserId",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::int AS "revenueMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::int AS "discountMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'COST_OF_GOODS_SOLD' THEN "debitMinor" ELSE 0 END), 0)::int AS "cogsMinor"
+      FROM signed
+     GROUP BY "productId", "category", "hour", "staffUserId"`;
+}
+
+function trueProfitKey(fact: TrueProfitFact, by: TrueProfitDimension): string | null {
+  switch (by) {
+    case 'item':
+      return fact.productId;
+    case 'category':
+      return fact.category;
+    case 'staff':
+      return fact.staffUserId;
+    case 'hour':
+      if (fact.hour === null) return null;
+      if (!Number.isSafeInteger(fact.hour) || fact.hour < 0 || fact.hour > 23)
+        throw new RangeError('Invalid reporting hour.');
+      return `${String(fact.hour).padStart(2, '0')}:00`;
+  }
+}
+
+/**
+ * Fold posted facts into true profit by one dimension. Profit is
+ * `revenue - discount - landed COGS`, computed in exact integers so every row
+ * reconciles, and an unattributed leg is kept under a null key rather than
+ * dropped — a report that silently loses a leg overstates or understates profit.
+ */
+export function rollUpTrueProfit(
+  facts: readonly TrueProfitFact[],
+  by: TrueProfitDimension
+): TrueProfitRow[] {
+  const groups = new Map<string | null, { revenue: bigint; discount: bigint; cogs: bigint }>();
+  for (const fact of facts) {
+    for (const value of [fact.revenueMinor, fact.discountMinor, fact.cogsMinor]) {
+      if (!Number.isSafeInteger(value)) throw new RangeError('Invalid integer-money total.');
+    }
+    const key = trueProfitKey(fact, by);
+    const group = groups.get(key) ?? { revenue: BigInt(0), discount: BigInt(0), cogs: BigInt(0) };
+    group.revenue += BigInt(fact.revenueMinor);
+    group.discount += BigInt(fact.discountMinor);
+    group.cogs += BigInt(fact.cogsMinor);
+    groups.set(key, group);
+  }
+  return [...groups.entries()]
+    .map(([key, group]) => ({
+      key,
+      revenueMinor: exactMoney(group.revenue),
+      discountMinor: exactMoney(group.discount),
+      cogsMinor: exactMoney(group.cogs),
+      grossMarginMinor: exactMoney(group.revenue - group.discount - group.cogs),
+    }))
+    .sort((a, b) =>
+      a.key === b.key ? 0 : a.key === null ? 1 : b.key === null ? -1 : a.key < b.key ? -1 : 1
+    );
+}
+
+/** DEV-77: true profit by item, category, sale hour or seller, from posted lot cost. */
+export async function trueProfit(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { from: Date; to: Date; by: TrueProfitDimension }
+): Promise<TrueProfitRow[]> {
+  const facts = await db.$queryRaw<TrueProfitFact[]>(trueProfitFactsQuery(scope, input));
+  return rollUpTrueProfit(facts, input.by);
+}
+
 export type LeakageRow = {
   branchId: string | null;
   medicineId: string | null;

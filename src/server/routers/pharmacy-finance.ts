@@ -10,6 +10,8 @@ import {
   leakageReport,
   marginComparisonPeriods,
   perpetualValuation,
+  TRUE_PROFIT_TIMEZONE,
+  trueProfit,
 } from '@/lib/pharmacy/finance-reports';
 import {
   closeAccountingPeriod,
@@ -228,6 +230,45 @@ export const pharmacyFinanceRouter = router({
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
         rows,
+      };
+    }),
+
+  trueProfit: ledgerReportProcedure
+    .input(reportPeriod.safeExtend({ by: z.enum(['item', 'category', 'hour', 'staff']) }))
+    .query(async ({ ctx, input }) => {
+      const period = { from: new Date(input.from), to: new Date(input.to) };
+      const rows = await trueProfit(ctx.db, ctx.reportScope, { ...period, by: input.by });
+      const keys = rows.flatMap((row) => (row.key === null ? [] : [row.key]));
+      const { organizationId } = ctx.reportScope;
+      const names = new Map<string, string | null>(
+        input.by === 'item'
+          ? (
+              await ctx.db.medicine.findMany({
+                where: { organizationId, id: { in: keys } },
+                select: { id: true, productName: true },
+              })
+            ).map((row) => [row.id, row.productName])
+          : input.by === 'staff'
+            ? (
+                await ctx.db.user.findMany({
+                  where: { organizationId, id: { in: keys } },
+                  select: { id: true, name: true },
+                })
+              ).map((row) => [row.id, row.name])
+            : []
+      );
+      return {
+        ...ledgerMetadata(
+          ctx.reportScope,
+          `Posted gross revenue minus discounts minus posted COGS at each lot's landed cost (invoice net, non-creditable tax and freight share over received plus bonus units). Hour is the sale completion hour in ${TRUE_PROFIT_TIMEZONE}; staff is the user who rang up the sale; returns stay with the original sale. Totals reconcile with ledger gross margin; this is not net profit or cash flow.`
+        ),
+        period: { ...period, bounds: '[from,to)' as const },
+        hourTimezone: TRUE_PROFIT_TIMEZONE,
+        by: input.by,
+        rows: rows.map((row) => ({
+          ...row,
+          label: row.key === null ? null : (names.get(row.key) ?? null),
+        })),
       };
     }),
 

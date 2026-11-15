@@ -2,7 +2,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
-import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
+import { LedgerReportsSection, LedgerReportsLoading, TrueProfitSection } from './ledger-reports';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect, unstable_rethrow } from 'next/navigation';
@@ -66,6 +66,7 @@ export default async function PharmacyFinancePage({
     ledgerTo?: string;
     ledgerAt?: string;
     ledgerBy?: string;
+    profitBy?: string;
     journalPage?: string;
   }>;
 }) {
@@ -314,6 +315,32 @@ export default async function PharmacyFinancePage({
         />
       </Suspense>
       <Suspense
+        key={[branch.id, ledgerFrom, ledgerTo, query.profitBy].join(':')}
+        fallback={
+          <SectionCard title="True profit" titleLevel={2}>
+            <p role="status" className="text-sm text-text-muted">
+              Loading true profit from posted landed cost… No financial data is being changed.
+            </p>
+          </SectionCard>
+        }
+      >
+        <TrueProfitSection
+          caller={caller}
+          branch={branch}
+          from={ledgerFrom}
+          to={ledgerTo}
+          by={query.profitBy}
+          preserved={{
+            ledgerFrom: query.ledgerFrom,
+            ledgerTo: query.ledgerTo,
+            ledgerAt: query.ledgerAt,
+            ledgerBy: query.ledgerBy,
+            marginFrom: query.marginFrom,
+            marginTo: query.marginTo,
+          }}
+        />
+      </Suspense>
+      <Suspense
         fallback={
           <SectionCard title="Gross-margin comparison" titleLevel={2}>
             <p role="status">Loading posted ledger comparison…</p>
@@ -342,7 +369,15 @@ export default async function PharmacyFinancePage({
       <SectionCard title="Working branch" eyebrow="Organization scope">
         <form method="get" className="flex flex-wrap items-end gap-3">
           {(
-            ['ledgerFrom', 'ledgerTo', 'ledgerAt', 'ledgerBy', 'marginFrom', 'marginTo'] as const
+            [
+              'ledgerFrom',
+              'ledgerTo',
+              'ledgerAt',
+              'ledgerBy',
+              'profitBy',
+              'marginFrom',
+              'marginTo',
+            ] as const
           ).map((key) =>
             query[key] ? <input key={key} type="hidden" name={key} value={query[key]} /> : null
           )}
