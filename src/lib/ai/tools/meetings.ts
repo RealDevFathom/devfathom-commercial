@@ -14,6 +14,7 @@
  * under prompt injection.
  */
 import { tool } from 'ai';
+import { isMeetingTimeRangeValid, MEETING_TIME_ORDER_ERROR } from '@/lib/meetings/time-range';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import * as authz from '@/lib/authz';
@@ -267,8 +268,8 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const end = parseDate(endTime);
         if (!end)
           return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-        if (end.getTime() <= start.getTime()) {
-          return { error: 'The end time must be after the start time.' };
+        if (!isMeetingTimeRangeValid(start, end)) {
+          return { error: MEETING_TIME_ORDER_ERROR };
         }
 
         // Resolve every attendee name up front so we can ask for clarification
@@ -415,6 +416,22 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           if (!d)
             return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
           data.endTime = d;
+        }
+
+        if (startTime != null || endTime != null) {
+          const current = await db.meeting.findUnique({
+            where: { id: meetingId },
+            select: { startTime: true, endTime: true },
+          });
+          if (!current) return { error: 'Meeting not found.' };
+          if (
+            !isMeetingTimeRangeValid(
+              startTime != null ? (data.startTime as Date) : current.startTime,
+              endTime != null ? (data.endTime as Date) : current.endTime
+            )
+          ) {
+            return { error: MEETING_TIME_ORDER_ERROR };
+          }
         }
 
         // Replace the attendee list when provided (mirrors the router: the

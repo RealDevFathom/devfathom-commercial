@@ -1,3 +1,4 @@
+import { isMeetingTimeRangeValid, MEETING_TIME_ORDER_ERROR } from '@/lib/meetings/time-range';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
@@ -31,15 +32,20 @@ export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   return NextResponse.json({ data: meetings });
 });
 
-const createSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  startTime: z.string().datetime(),
-  endTime: z.string().datetime(),
-  location: z.string().optional(),
-  recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
-  attendeeIds: z.array(z.string()).default([]),
-});
+const createSchema = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    startTime: z.string().datetime(),
+    endTime: z.string().datetime(),
+    location: z.string().optional(),
+    recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
+    attendeeIds: z.array(z.string()).default([]),
+  })
+  .refine((input) => isMeetingTimeRangeValid(new Date(input.startTime), new Date(input.endTime)), {
+    message: MEETING_TIME_ORDER_ERROR,
+    path: ['endTime'],
+  });
 
 export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const __j = await readJson(request); // REST-05
