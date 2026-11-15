@@ -249,6 +249,66 @@ describe('PH-RPT aggregate corrections', () => {
     expect(values).toEqual(['branch_1', 'branch_2']);
   });
 
+  // DEV-729: a zero must not read as "all fine" when nothing was ever calculated.
+  async function stockMetrics(branchIds: string[], evaluatedBranches: number | null) {
+    const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) => {
+      const sql = query.strings.join('?');
+      if (sql.includes('AS "evaluatedBranches"'))
+        return evaluatedBranches == null ? [] : [{ evaluatedBranches }];
+      if (sql.includes('FROM "pharmacy_stock_signals" s')) return [{ open: 0, recommended: 0 }];
+      return [];
+    });
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds, from: '2026-09-04', to: '2026-09-04' }
+    );
+    const evidence = queryRaw.mock.calls
+      .map(([query]) => query as { strings: readonly string[]; values: unknown[] })
+      .find((query) => query.strings.join('?').includes('AS "evaluatedBranches"'));
+    return { metrics: result.metrics, evidence };
+  }
+
+  it('reads signal evidence across every status for the selected branches', async () => {
+    const { evidence } = await stockMetrics(['branch_1', 'branch_2'], 2);
+    const sql = evidence!.strings.join('?');
+    expect(sql).toContain(
+      'COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (?,?)'
+    );
+    expect(sql).not.toContain('"status"');
+    expect(evidence!.values).toEqual(['branch_1', 'branch_2']);
+  });
+
+  it('reports stock signals and recommended orders as unknown when never calculated', async () => {
+    const { metrics } = await stockMetrics(['branch_1'], 0);
+    expect(metrics.openStockSignals).toBeNull();
+    expect(metrics.recommendedOrders).toBeNull();
+  });
+
+  it('reports them as unknown when the evidence read returns no row', async () => {
+    const { metrics } = await stockMetrics(['branch_1'], null);
+    expect(metrics.openStockSignals).toBeNull();
+    expect(metrics.recommendedOrders).toBeNull();
+  });
+
+  it('reports them as unknown when only some selected branches were calculated', async () => {
+    const { metrics } = await stockMetrics(['branch_1', 'branch_2'], 1);
+    expect(metrics.openStockSignals).toBeNull();
+    expect(metrics.recommendedOrders).toBeNull();
+  });
+
+  it('reports a real zero once every selected branch has been calculated', async () => {
+    const { metrics } = await stockMetrics(['branch_1', 'branch_2'], 2);
+    expect(metrics.openStockSignals).toBe(0);
+    expect(metrics.recommendedOrders).toBe(0);
+  });
+
   it.each([30, 60, 90, 180])(
     'limits the %i-day valuation to available active future-expiry stock',
     async (days) => {
