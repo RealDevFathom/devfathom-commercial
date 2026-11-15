@@ -13137,6 +13137,11 @@ model PharmacyGoodsReceiptLine {
   taxCreditable             Boolean                 @default(false)
   /// DEV-77: this line's share of the receipt freight, already inside unitCostMinor.
   allocatedFreightMinor     Int                     @default(0)
+  /// DEV-161: this line's share of its purchase order's freight and other
+  /// charges, already inside unitCostMinor. Posting settles it again from the
+  /// receipts that have posted, adjusting unitCostMinor by the difference only.
+  /// Zero when the receipt bills its own invoice freight.
+  allocatedOrderChargeMinor Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).
   unitCostMinor             Int
