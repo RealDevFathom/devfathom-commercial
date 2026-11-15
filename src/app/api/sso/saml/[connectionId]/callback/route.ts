@@ -75,7 +75,7 @@ export async function POST(request: Request, route: { params: Promise<{ connecti
     const response = NextResponse.redirect(new URL('/sso/complete', publicOrigin), 303);
     response.cookies.set(SSO_TICKET_COOKIE, ticket.token, ssoTicketCookieOptions(ticket.expiresAt));
     response.cookies.set(SSO_BROWSER_BINDING_COOKIE, '', {
-      ...ssoBrowserBindingCookieOptions(),
+      ...ssoBrowserBindingCookieOptions(request),
       maxAge: 0,
     });
     return response;

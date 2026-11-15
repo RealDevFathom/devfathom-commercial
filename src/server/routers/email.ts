@@ -106,6 +106,14 @@ export const emailRouter = router({
           message: (e as Error).message,
         });
       }
+      // Expired connect states can never be honored again; sweep them so the
+      // table does not grow without bound. RLS keeps this inside the tenant.
+      await ctx.db.mailboxOAuthState.deleteMany({
+        where: {
+          organizationId: ctx.organization?.id ?? ctx.session.user.organizationId,
+          expiresAt: { lt: new Date() },
+        },
+      });
       await ctx.db.mailboxOAuthState.create({
         data: {
           userId: ctx.session.user.id,
