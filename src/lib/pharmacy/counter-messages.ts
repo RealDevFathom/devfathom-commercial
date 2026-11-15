@@ -95,6 +95,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-623: money taken on a bill comes back through a refund, never a void.
   BILL_HAS_PAYMENTS:
     'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
+  // DEV-821: a void releases stock, so it stays with the bill's cashier.
+  NOT_BILL_OWNER:
+    'Another cashier opened this bill. Only that cashier or a manager or owner can void it.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',

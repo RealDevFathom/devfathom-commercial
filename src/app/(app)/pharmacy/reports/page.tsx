@@ -105,14 +105,14 @@ export default async function PharmacyReportsPage({
       : null;
   if (lockedDetail) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Reports"
           description="Bounded, permission-scoped command centre and report catalog."
         />
         <ReportNotice title="Reports unavailable" detail={lockedDetail} />
-      </main>
+      </div>
     );
   }
   const caller = pharmacyReportsRouter.createCaller(ctx);
@@ -144,14 +144,14 @@ export default async function PharmacyReportsPage({
       }
     }
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Reports"
           description="Bounded, permission-scoped command centre and report catalog."
         />
         <ReportNotice title="Reports unavailable" detail={detail} />
-      </main>
+      </div>
     );
   }
   // Reuse the authenticated tenant context; report rows do not prove historical currency.
@@ -395,14 +395,15 @@ export default async function PharmacyReportsPage({
         ['Cash', money(metrics.cashMinor)],
         ['Cash variance', money(metrics.cashVarianceMinor)],
         ['Refunds', money(metrics.refundsMinor)],
-        ['Open stock signals', metrics.openStockSignals],
-        ['Recommended orders', metrics.recommendedOrders],
+        // DEV-729: null means stock signals were never worked out for this scope, not zero.
+        ['Open stock signals', metrics.openStockSignals ?? 'Not calculated yet'],
+        ['Recommended orders', metrics.recommendedOrders ?? 'Not calculated yet'],
         ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
         ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
       ]
     : [];
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
@@ -1241,6 +1242,6 @@ export default async function PharmacyReportsPage({
           detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
         />
       ) : null}
-    </main>
+    </div>
   );
 }

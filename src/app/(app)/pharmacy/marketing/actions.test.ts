@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
   sandbox: vi.fn(),
   preview: vi.fn(),
+  profileHealth: vi.fn(),
+  reviewReply: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -237,4 +239,61 @@ it('reads send times as workspace wall-clock time', async () => {
   expect(mocks.createDraft).toHaveBeenCalledWith(
     expect.objectContaining({ scheduledAt: new Date('2026-10-10T07:00:00Z') })
   );
+});
+
+it('submits profile facts with configurable targets and reports the checklist (DEV-13)', async () => {
+  mocks.profileHealth.mockResolvedValue({
+    passed: 1,
+    total: 2,
+    items: [
+      { key: 'phone', label: 'Phone number listed', ok: true, advice: 'Add phone.' },
+      { key: 'photos', label: 'At least 6 photos', ok: false, advice: 'Add photos.' },
+    ],
+  });
+  const result = await marketingAction(
+    form({
+      operation: 'profile-health',
+      phoneListed: 'on',
+      hoursConfirmedDaysAgo: '',
+      photoCount: '2',
+      unansweredReviews: '1',
+      maximumHoursAgeDays: '60',
+      minimumPhotos: '6',
+      maximumUnansweredReviews: '2',
+    })
+  );
+  expect(mocks.profileHealth).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    facts: {
+      primaryCategoryIsPharmacy: false,
+      phoneListed: true,
+      websiteOrOrderLinkListed: false,
+      descriptionPresent: false,
+      holidayHoursSet: false,
+      hoursConfirmedDaysAgo: null,
+      photoCount: 2,
+      unansweredReviews: 1,
+    },
+    config: { maximumHoursAgeDays: 60, minimumPhotos: 6, maximumUnansweredReviews: 2 },
+  });
+  expect(result.message).toContain('1 of 2 done');
+  expect(result.message).toContain('To do: At least 6 photos. Add photos.');
+});
+
+it('returns a review reply draft labelled as not posted and sends no review text', async () => {
+  mocks.reviewReply.mockResolvedValue({ body: 'Thank you!', source: 'TEMPLATE', posted: false });
+  const result = await marketingAction(
+    form({ operation: 'review-reply', rating: '4', tone: 'FORMAL', reviewText: 'private' })
+  );
+  expect(mocks.reviewReply).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    rating: 4,
+    tone: 'FORMAL',
+  });
+  expect(result).toMatchObject({ error: false });
+  expect(result.message).toMatch(/not posted/);
+  expect(result.message).toContain('Thank you!');
+  expect(
+    await marketingAction(form({ operation: 'review-reply', rating: '4', tone: 'LOUD' }))
+  ).toMatchObject({ error: true });
 });

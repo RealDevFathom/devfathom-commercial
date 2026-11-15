@@ -42,6 +42,7 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   createSale: vi.fn(async () => ({ id: 'sale-new' })),
   changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  quoteSaleLineReturn: vi.fn(async () => ({ valueMinor: 250 })),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/regulatory', async (original) => ({
@@ -99,7 +100,9 @@ import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import {
   changeSaleStatus,
   createSale,
+  PharmacySaleError,
   readReturnHistory,
+  quoteSaleLineReturn,
   returnSaleLine,
 } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
@@ -404,6 +407,8 @@ describe('counter receipt authorization', () => {
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
+    // DEV-298: the workspace zone picks the profile in force on the completion's local day.
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
     vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
       ntn: 'HISTORICAL-NTN',
       strn: 'HISTORICAL-STRN',
@@ -417,13 +422,22 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'Asia/Karachi'
+    );
+    expect(readDispensingLabelSources).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      expect.objectContaining({ receiptNumber: 7 }),
+      'Asia/Karachi'
     );
   });
 
   it('supplies the completion-time regulatory identity to browser receipts', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
+    // DEV-298: the workspace zone picks the profile in force on the completion's local day.
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
     vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
       ntn: 'NTN-HISTORICAL',
       strn: 'STRN-HISTORICAL',
@@ -437,7 +451,8 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'Asia/Karachi'
     );
   });
 
@@ -500,9 +515,30 @@ describe('counter receipt authorization', () => {
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       'sale-a',
       'hold',
+      { kind: 'COUNTER', actorIsManager: false },
       undefined,
       undefined
     );
+  });
+
+  // DEV-821: the void carries the manager/owner decision so the bill-owner check runs.
+  it("passes the void authority and refuses another cashier's bill as FORBIDDEN", async () => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
+    await f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' });
+    expect(changeSaleStatus).toHaveBeenLastCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      'sale-a',
+      'void',
+      { kind: 'COUNTER', actorIsManager: true },
+      undefined,
+      undefined
+    );
+
+    vi.mocked(changeSaleStatus).mockRejectedValueOnce(new PharmacySaleError('NOT_BILL_OWNER'));
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'NOT_BILL_OWNER' });
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
@@ -697,6 +733,10 @@ describe('counter receipt authorization', () => {
     await expect(
       f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // DEV-501: the refund quote shares the receipt read boundary.
+    await expect(
+      f.caller().returnQuote({ branchId: 'branch-a', saleLineId: 'line-1', canonicalUnits: 1 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(
       f.caller().tender({
         branchId: 'branch-a',
@@ -710,8 +750,27 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(readCounterCart).not.toHaveBeenCalled();
     expect(readReturnHistory).not.toHaveBeenCalled();
+    expect(quoteSaleLineReturn).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('quotes a proposed return for an assigned counter user in the active branch (DEV-501)', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().returnQuote({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        lotId: 'lot-1',
+        canonicalUnits: 2,
+      })
+    ).resolves.toEqual({ valueMinor: 250 });
+    expect(quoteSaleLineReturn).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      { saleLineId: 'line-1', lotId: 'lot-1', canonicalUnits: 2 }
+    );
   });
 
   it.each([
@@ -740,6 +799,25 @@ describe('counter receipt authorization', () => {
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
+          managerPin: '1234',
+        }),
+      write: returnSaleLine,
+    },
+    {
+      name: 'returnAndRefund',
+      run: (caller: Caller) =>
+        caller.returnAndRefund({
+          branchId: 'branch-a',
+          saleLineId: 'line-1',
+          canonicalUnits: 1,
+          reason: 'Returned medicine',
+          integrityDecision: 'Sealed pack',
+          idempotencyKey: 'return-1',
+          refund: {
+            originalTenderId: 'tender-1',
+            deviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          },
           managerPin: '1234',
         }),
       write: returnSaleLine,

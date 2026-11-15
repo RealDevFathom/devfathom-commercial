@@ -109,6 +109,8 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  /** Due but held back: it is outside 9 am to 10 pm in the workspace timezone. */
+  skippedQuietHours: number;
   skippedConfiguration: number;
   notDue: number;
   configurationErrors: string[];
@@ -120,6 +122,7 @@ type KhataPaymentDetails = { dueDate: string; payTo: string | null };
 
 type KhataRecipientResult =
   | { kind: 'configuration'; configurationError: string }
+  | { kind: 'quiet-hours' }
   | ({ kind: 'sms'; customerId: string } & KhataPaymentDetails)
   | ({
       kind: 'recipient';
@@ -230,6 +233,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     skippedConfiguration: 0,
     notDue: 0,
     configurationErrors: baseConfigurationErrors(config),
@@ -306,7 +310,7 @@ export async function processDueWhatsAppKhataReminders(
           return null;
         // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
         const timeZone = workspaceTimezone(organization.timezone);
-        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone))) return null;
+        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone))) return { kind: 'quiet-hours' };
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -398,6 +402,10 @@ export async function processDueWhatsAppKhataReminders(
     );
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.kind === 'quiet-hours') {
+      result.skippedQuietHours += 1;
       continue;
     }
     const smsFallback = (customerId: string, details: KhataPaymentDetails) =>

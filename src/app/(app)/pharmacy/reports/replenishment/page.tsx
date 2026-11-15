@@ -45,7 +45,7 @@ export default async function ReplenishmentPage({
     // Contain read/access failures without exposing source error text.
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Replenishment"
@@ -72,6 +72,6 @@ export default async function ReplenishmentPage({
           </form>
         </SectionCard>
       )}
-    </main>
+    </div>
   );
 }

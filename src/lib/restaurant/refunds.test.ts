@@ -176,17 +176,41 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
 }
 
 /** Cash tips are stored separately from bill principal, just like card tips. The
- * current terminal cash form does not collect one, so this updates the persisted
- * tender to exercise refunds of historical/imported tipped cash tenders. */
+ * current terminal cash form does not collect one, and captured tenders are
+ * append-only under the restricted runtime role, so this seeds the tip on the
+ * tender row as it is created to exercise refunds of historical/imported tipped
+ * cash tenders. Everything else runs through the real tender path. */
 async function tippedCashTender(
   device: string,
   tipAmount: string
 ): Promise<{ billId: string; tenderId: string }> {
-  const tender = await cashTender(device);
-  await read((tx) =>
-    tx.restaurantTender.update({ where: { id: tender.tenderId }, data: { tipAmount } })
-  );
-  return tender;
+  const billId = await openBill(1);
+  const result = await read((tx) => {
+    const seeding = new Proxy(tx, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== 'restaurantTender') return value;
+        return new Proxy(value as object, {
+          get(model, method, modelReceiver) {
+            const original = Reflect.get(model, method, modelReceiver);
+            if (method !== 'create') return original;
+            return (args: { data: Record<string, unknown> }) =>
+              (original as (args: unknown) => unknown).call(model, {
+                ...args,
+                data: { ...args.data, tipAmount },
+              });
+          },
+        });
+      },
+    }) as ScopedDb;
+    return deps.tenders.applyTenderInTransaction(seeding, {
+      billId,
+      tender: { type: 'CASH', amount: '12.50', cashReceived: '12.50' },
+      actor: actor(device),
+      now: AT,
+    });
+  });
+  return { billId, tenderId: result.tenderId };
 }
 
 async function openDrawer(device: string): Promise<void> {
