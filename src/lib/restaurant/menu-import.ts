@@ -654,6 +654,26 @@ function normalizeReviewedVariants(
   });
 }
 
+/**
+ * True when `amount` in `currency` is just the extracted printed figure carried
+ * over unchanged into a different currency: a relabel, never a conversion.
+ */
+function isExtractedFigureRelabel(
+  extractedAmount: Prisma.Decimal | null,
+  extractedCurrency: string | null,
+  amount: Prisma.Decimal | null,
+  currency: string | null
+): boolean {
+  const printedCurrency = extractedCurrency?.toUpperCase() ?? null;
+  return (
+    extractedAmount !== null &&
+    amount !== null &&
+    printedCurrency !== null &&
+    printedCurrency !== (currency?.toUpperCase() ?? null) &&
+    amount.equals(extractedAmount)
+  );
+}
+
 function trimmedOrNull(value: string | null | undefined, max: number): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
@@ -739,6 +759,21 @@ export async function reviewMenuImportLine(
     if (!isFreshAmount) {
       priceAmount = null;
     }
+  }
+  // Compare against the ORIGINAL extraction too, not only the previous review.
+  // Otherwise a two-step relabel (currency first, then the printed figure in the
+  // new currency) would pass as a fresh amount because the line's previous
+  // currency is already the new one.
+  if (
+    priceAmount &&
+    isExtractedFigureRelabel(
+      line.extractedPriceAmount,
+      line.extractedCurrency,
+      priceAmount,
+      nextCurrency
+    )
+  ) {
+    priceAmount = null;
   }
 
   // Only an acceptance review confirms sizes. Accepting the line later reuses
@@ -1166,9 +1201,17 @@ export async function commitMenuImport(
       const priceCurrency = reviewedCurrency ?? extractedCurrency;
       const extractedIsForeign = extractedCurrency !== null && extractedCurrency !== tenantCurrency;
       // A foreign extracted price is acceptable only when the reviewer typed an
-      // amount in the organization currency; relabelling alone is not a conversion.
+      // amount in the organization currency; relabelling alone is not a conversion,
+      // including the extracted printed figure resubmitted unchanged.
       const hasReviewedConversion =
-        reviewedCurrency === tenantCurrency && line.reviewedPriceAmount !== null;
+        reviewedCurrency === tenantCurrency &&
+        line.reviewedPriceAmount !== null &&
+        !isExtractedFigureRelabel(
+          line.extractedPriceAmount,
+          line.extractedCurrency,
+          line.reviewedPriceAmount,
+          reviewedCurrency
+        );
       if (
         !tenantCurrency ||
         priceCurrency !== tenantCurrency ||
