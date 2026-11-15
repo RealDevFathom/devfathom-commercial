@@ -25,7 +25,11 @@ import {
   receiptLinkParameters,
   receiptMethodLabel,
 } from './hosted-receipt';
-import { hostedReceiptView, type HostedReceiptView } from './hosted-receipt-view';
+import {
+  hostedReceiptView,
+  type HostedReceiptSummary,
+  type HostedReceiptView,
+} from './hosted-receipt-view';
 import { medicineNameSet, readTenantMedicineNames } from './medicine-names';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './whatsapp/message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './whatsapp/messages';
@@ -191,9 +195,10 @@ export async function sendWhatsAppReceiptLink(input: {
     names.add(name);
   assertNeutralWhatsAppParameters(parameters, names);
 
+  // Recorded for audit; every hosted receipt hides its items behind a code.
   const rxProtected = sale.lines.some(isRxSaleLine);
-  // An Rx link the customer could never unlock is not worth sending.
-  if (rxProtected && !senderReady(config, scope.organizationId, 'receiptOtp'))
+  // A link the customer could never unlock is not worth sending.
+  if (!senderReady(config, scope.organizationId, 'receiptOtp'))
     throw new HostedReceiptError('NOT_CONFIGURED');
   const expiresAt = hostedReceiptExpiresAt(now, hostedReceiptTtlDays(input.env));
   const entry = {
@@ -297,13 +302,16 @@ async function receiptFor(db: ScopedDb, link: LiveLink): Promise<HostedReceiptVi
   return hostedReceiptView(receipt);
 }
 
-export type HostedReceiptAccess =
-  | { kind: 'receipt'; receipt: HostedReceiptView }
-  | { kind: 'otp'; branchName: string; receiptNumber: number; phoneLast4: string | null };
+export type HostedReceiptAccess = {
+  kind: 'locked';
+  summary: HostedReceiptSummary;
+  phoneLast4: string | null;
+};
 
 /**
- * The hosted page's read. A non-Rx receipt is shown to the link holder; an Rx
- * receipt reveals only its branch and number until a one-time code is verified.
+ * The hosted page's read. No receipt, prescription or over-the-counter, names
+ * an item or strength to the link holder until a one-time code sent to the
+ * customer's phone on file is verified.
  */
 export async function openHostedReceipt(
   organizationId: string,
@@ -314,32 +322,24 @@ export async function openHostedReceipt(
   return withTenantDb(organizationId, async (db) => {
     const link = await liveLink(db, token, now);
     if (!link) return null;
-    if (!link.rxProtected) {
-      const receipt = await receiptFor(db, link);
-      return receipt ? { kind: 'receipt', receipt } : null;
-    }
-    const [branch, sale, customer] = await Promise.all([
-      db.pharmacyBranch.findFirst({
-        where: { id: link.branchId, organizationId },
-        select: { name: true },
-      }),
-      db.pharmacySale.findFirst({
-        where: { id: link.saleId, organizationId, branchId: link.branchId },
-        select: { status: true, receiptNumber: true },
-      }),
+    const [receipt, customer] = await Promise.all([
+      receiptFor(db, link),
       db.pharmacyCustomer.findFirst({
         where: { id: link.customerId, organizationId },
         select: { patient: { select: { phone: true } } },
       }),
     ]);
-    if (!branch || sale?.status !== 'COMPLETED' || sale.receiptNumber === null) return null;
-    const to = normalizeWhatsAppNumber(customer?.patient.phone);
-    return {
-      kind: 'otp',
-      branchName: branch.name,
-      receiptNumber: sale.receiptNumber,
-      phoneLast4: to ? phoneLast4(to) : null,
+    if (!receipt) return null;
+    const summary: HostedReceiptSummary = {
+      branchName: receipt.branchName,
+      receiptNumber: receipt.receiptNumber,
+      completedAt: receipt.completedAt,
+      currency: receipt.currency,
+      tenders: receipt.tenders,
+      totals: receipt.totals,
     };
+    const to = normalizeWhatsAppNumber(customer?.patient.phone);
+    return { kind: 'locked', summary, phoneLast4: to ? phoneLast4(to) : null };
   });
 }
 
@@ -362,7 +362,7 @@ export async function sendHostedReceiptOtp(input: {
 
   const claim = await withTenantDb(input.organizationId, async (db) => {
     const found = await liveLink(db, input.token, now);
-    if (!found?.rxProtected) return 'UNAVAILABLE' as const;
+    if (!found) return 'UNAVAILABLE' as const;
     const link = await lockLink(db, found);
     if (!link || link.otpSendCount >= HOSTED_RECEIPT_OTP_MAX_SENDS) return 'UNAVAILABLE' as const;
     if (
@@ -430,7 +430,7 @@ export async function verifyHostedReceiptOtp(input: {
   if (!HOSTED_RECEIPT_TOKEN_PATTERN.test(input.token) || !/^\d{6}$/.test(input.otp)) return null;
   return withTenantDb(input.organizationId, async (db) => {
     const found = await liveLink(db, input.token, now);
-    if (!found?.rxProtected) return null;
+    if (!found) return null;
     const link = await lockLink(db, found);
     if (
       !link?.otpHash ||

@@ -21,6 +21,9 @@ export type HostedReceiptView = {
   totals: { grossMinor: number; discountMinor: number; netMinor: number };
 };
 
+/** What the page shows before a code: shop, number, date, totals and methods, never an item. */
+export type HostedReceiptSummary = Omit<HostedReceiptView, 'lines'>;
+
 export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | null {
   if (receipt.receiptNumber === null || !receipt.completedAt) return null;
   const strings = COUNTER_RECEIPT_STRINGS.en;

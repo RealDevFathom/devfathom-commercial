@@ -15026,8 +15026,8 @@ model PharmacyMessageLog {
 
 /// DEV-16: a tokenized hosted receipt sent by WhatsApp on the customer's request.
 /// Only the SHA-256 of the 160-bit random token is stored. Links expire (30-90
-/// days, configured) and a sale with Rx lines needs a one-time code sent to the
-/// customer's phone before its lines are shown.
+/// days, configured) and no item is shown until a one-time code sent to the
+/// customer's phone is verified. `rxProtected` records whether the sale had Rx lines.
 model PharmacyHostedReceipt {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))

@@ -454,19 +454,21 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
     expect(state.links[0]!.revokedAt).toEqual(now);
   });
 
-  it('refuses an Rx receipt when the one-time code template is not set up', async () => {
-    state.sale = saleWith({ rx: true });
-    await expect(
-      sendWhatsAppReceiptLink({
-        db: db as never,
-        scope,
-        saleId: 'sale-1',
-        actorUserId: 'cashier-1',
-        now,
-        config: { ...config, templates: { ...config.templates, receiptOtp: null } },
-        defer: () => undefined,
-      })
-    ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
+  it('refuses any receipt link when the one-time code template is not set up', async () => {
+    for (const rx of [true, false]) {
+      state.sale = saleWith({ rx });
+      await expect(
+        sendWhatsAppReceiptLink({
+          db: db as never,
+          scope,
+          saleId: 'sale-1',
+          actorUserId: 'cashier-1',
+          now,
+          config: { ...config, templates: { ...config.templates, receiptOtp: null } },
+          defer: () => undefined,
+        })
+      ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
+    }
     expect(state.claims).toHaveLength(0);
     expect(state.links).toHaveLength(0);
   });
@@ -481,19 +483,39 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
 });
 
 describe('DEV-16 hosted receipt access', () => {
-  it('shows a non-Rx receipt to the link holder until it expires', async () => {
+  it('shows an over-the-counter receipt only as shop, number, date and totals until a code is verified', async () => {
+    state.sale = saleWith({ rx: false });
     const provider = new MockWhatsAppProvider(config);
-    await send({ provider });
+    const result = await send({ provider });
+    expect(result.rxProtected).toBe(false);
     const token = tokenFrom(provider);
 
     const opened = await openHostedReceipt('org-1', token, now);
     expect(opened).toMatchObject({
-      kind: 'receipt',
-      receipt: { receiptNumber: 1042, branchName: 'Gulberg Branch', totals: { netMinor: 100_000 } },
+      kind: 'locked',
+      phoneLast4: '4567',
+      summary: {
+        receiptNumber: 1042,
+        branchName: 'Gulberg Branch',
+        completedAt: '2026-11-15T07:00:00.000Z',
+        totals: { netMinor: 100_000 },
+        tenders: [{ label: 'Cash', amountMinor: 100_000 }],
+      },
     });
-    // Staff identity and batch detail never reach the hosted page.
-    expect(JSON.stringify(opened)).not.toContain('Cashier Name');
-    expect(JSON.stringify(opened)).not.toContain('B-77');
+    expect(opened?.summary).not.toHaveProperty('lines');
+    // No item, strength, staff identity or batch reaches an unverified visitor.
+    for (const hidden of ['Augmentin', '625 mg', 'Cashier Name', 'B-77'])
+      expect(JSON.stringify(opened)).not.toContain(hidden);
+
+    const otpProvider = new MockWhatsAppProvider(config);
+    await expect(
+      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })
+    ).resolves.toBe('SENT');
+    const call = otpProvider.calls[0]!;
+    const otp = call.kind === 'template' ? call.parameters[0]! : '';
+    await expect(
+      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp, now })
+    ).resolves.toMatchObject({ lines: [{ name: 'Augmentin', strength: '625 mg' }] });
 
     await expect(
       openHostedReceipt('org-1', token, new Date('2026-12-15T07:05:00.001Z'))
@@ -518,11 +540,10 @@ describe('DEV-16 hosted receipt access', () => {
     const token = tokenFrom(linkProvider);
 
     const gated = await openHostedReceipt('org-1', token, now);
-    expect(gated).toEqual({
-      kind: 'otp',
-      branchName: 'Gulberg Branch',
-      receiptNumber: 1042,
+    expect(gated).toMatchObject({
+      kind: 'locked',
       phoneLast4: '4567',
+      summary: { branchName: 'Gulberg Branch', receiptNumber: 1042 },
     });
     expect(JSON.stringify(gated)).not.toContain('Augmentin');
 
@@ -590,16 +611,11 @@ describe('DEV-16 hosted receipt access', () => {
     ).resolves.toBe('UNAVAILABLE');
   });
 
-  it('sends no code for a non-Rx link or to a customer who opted out', async () => {
+  it('sends no code to a customer who opted out', async () => {
     const provider = new MockWhatsAppProvider(config);
     await send({ provider });
     const token = tokenFrom(provider);
     const otpProvider = new MockWhatsAppProvider(config);
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })
-    ).resolves.toBe('UNAVAILABLE');
-
-    state.links[0]!.rxProtected = true;
     state.customer = { ...state.customer!, whatsappOptIn: false };
     await expect(
       sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })

@@ -11,8 +11,8 @@ import { containsMedicineName, normalizeNameText } from './medicine-names';
  * The WhatsApp utility template carries only the branch, receipt number, total,
  * payment method and a secure link — never an item. The link token is 160 random
  * bits, only its SHA-256 is stored, it expires after a configured 30-90 days, and
- * a sale with Rx lines needs a one-time code sent to the customer's phone before
- * its lines are shown.
+ * no receipt shows an item or strength until a one-time code sent to the
+ * customer's phone is verified.
  */
 
 export class HostedReceiptError extends Error {

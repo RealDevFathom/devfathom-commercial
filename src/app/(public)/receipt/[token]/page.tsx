@@ -11,7 +11,6 @@ import {
 } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 
-import { HostedReceiptCard } from './hosted-receipt-card';
 import { ReceiptCodeForm } from './receipt-code-form';
 
 export const dynamic = 'force-dynamic';
@@ -49,24 +48,16 @@ export default async function HostedReceiptPage({
     <main className="flex min-h-dvh items-start justify-center bg-surface-page px-4 py-10 text-text-body sm:items-center">
       <SectionCard className="w-full max-w-xl rounded-xl p-6 sm:p-8">
         <p className="font-mono text-xs tracking-[0.16em] text-text-muted uppercase">Receipt</p>
-        {access?.kind === 'receipt' ? (
-          <>
-            <h1 className="mt-3 mb-6 font-display text-3xl font-semibold tracking-tight text-text-strong">
-              Receipt {access.receipt.receiptNumber}
-            </h1>
-            <HostedReceiptCard receipt={access.receipt} />
-          </>
-        ) : access?.kind === 'otp' ? (
+        {access ? (
           <>
             <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight text-text-strong">
-              Receipt {access.receiptNumber}
+              Receipt {access.summary.receiptNumber}
             </h1>
             <p className="mt-3 mb-6 leading-7 text-text-muted">
-              {access.branchName}. This receipt is protected. We will send a one-time code to the
-              WhatsApp number on file
-              {access.phoneLast4 ? ` ending ${access.phoneLast4}` : ''}.
+              Item details are protected. We will send a one-time code to the WhatsApp number on
+              file{access.phoneLast4 ? ` ending ${access.phoneLast4}` : ''}.
             </p>
-            <ReceiptCodeForm token={token} />
+            <ReceiptCodeForm token={token} summary={access.summary} />
           </>
         ) : (
           <div role="status">

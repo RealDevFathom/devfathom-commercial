@@ -1,8 +1,15 @@
 import { formatMinor, formatReceiptIssuedAt } from '@/lib/pharmacy/counter-receipt';
-import type { HostedReceiptView } from '@/lib/pharmacy/hosted-receipt-view';
+import type { HostedReceiptSummary, HostedReceiptView } from '@/lib/pharmacy/hosted-receipt-view';
 
-/** Read-only hosted receipt body; shared by the server page and the post-code reveal. */
-export function HostedReceiptCard({ receipt }: { receipt: HostedReceiptView }) {
+/**
+ * Read-only hosted receipt body. Before a code is verified it gets the summary
+ * only (no `lines`), so no item or strength is rendered.
+ */
+export function HostedReceiptCard({
+  receipt,
+}: {
+  receipt: HostedReceiptSummary & { lines?: HostedReceiptView['lines'] };
+}) {
   const money = (minor: number) => `${receipt.currency} ${formatMinor(minor)}`;
   return (
     <div className="space-y-6">
@@ -18,51 +25,53 @@ export function HostedReceiptCard({ receipt }: { receipt: HostedReceiptView }) {
           </dd>
         </div>
       </dl>
-      <div className="overflow-x-auto rounded-md border border-border-subtle">
-        <table className="w-full min-w-[20rem] text-sm">
-          <caption className="sr-only">Receipt lines</caption>
-          <thead className="bg-surface-sunken">
-            <tr>
-              <th
-                scope="col"
-                className="px-3 py-2 text-left font-mono text-xs tracking-wider text-text-muted uppercase"
-              >
-                Item
-              </th>
-              <th
-                scope="col"
-                className="px-3 py-2 text-right font-mono text-xs tracking-wider text-text-muted uppercase"
-              >
-                Qty
-              </th>
-              <th
-                scope="col"
-                className="px-3 py-2 text-right font-mono text-xs tracking-wider text-text-muted uppercase"
-              >
-                Total
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {receipt.lines.map((line) => (
-              <tr key={line.id} className="border-t border-border-subtle">
-                <td className="px-3 py-2 text-text-body">
-                  {line.name}
-                  {line.strength ? (
-                    <span className="text-text-muted"> · {line.strength}</span>
-                  ) : null}
-                </td>
-                <td className="px-3 py-2 text-right text-text-body tabular-nums">
-                  {line.quantity} {line.saleUnit}
-                </td>
-                <td className="px-3 py-2 text-right text-text-strong tabular-nums">
-                  {money(line.lineTotalMinor)}
-                </td>
+      {receipt.lines ? (
+        <div className="overflow-x-auto rounded-md border border-border-subtle">
+          <table className="w-full min-w-[20rem] text-sm">
+            <caption className="sr-only">Receipt lines</caption>
+            <thead className="bg-surface-sunken">
+              <tr>
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-left font-mono text-xs tracking-wider text-text-muted uppercase"
+                >
+                  Item
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-right font-mono text-xs tracking-wider text-text-muted uppercase"
+                >
+                  Qty
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-right font-mono text-xs tracking-wider text-text-muted uppercase"
+                >
+                  Total
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {receipt.lines.map((line) => (
+                <tr key={line.id} className="border-t border-border-subtle">
+                  <td className="px-3 py-2 text-text-body">
+                    {line.name}
+                    {line.strength ? (
+                      <span className="text-text-muted"> · {line.strength}</span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 text-right text-text-body tabular-nums">
+                    {line.quantity} {line.saleUnit}
+                  </td>
+                  <td className="px-3 py-2 text-right text-text-strong tabular-nums">
+                    {money(line.lineTotalMinor)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       <dl className="space-y-2 text-sm">
         {receipt.totals.discountMinor > 0 ? (
           <>

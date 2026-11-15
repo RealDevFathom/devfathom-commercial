@@ -41,7 +41,7 @@ const fingerprint = (value: string) =>
   createHash('sha256').update(value).digest('hex').slice(0, 32);
 
 /**
- * DEV-16: one-time code for a hosted receipt with Rx lines. The tenant comes
+ * DEV-16: one-time code that unlocks a hosted receipt's items. The tenant comes
  * from the host, the phone from the customer record; the caller supplies only
  * the link token and the code. Failures are deliberately indistinguishable.
  */

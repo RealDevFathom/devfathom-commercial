@@ -33,7 +33,7 @@ function reply(body: object, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }));
 }
 
-it('DEV-16: shows Rx lines only after a code sent to the number on file is verified', async () => {
+it('DEV-16: shows items only after a code sent to the number on file is verified', async () => {
   const fetchMock = vi
     .fn()
     .mockImplementationOnce(() =>
@@ -44,7 +44,11 @@ it('DEV-16: shows Rx lines only after a code sent to the number on file is verif
     )
     .mockImplementationOnce(() => reply({ ok: true, message: 'Code accepted.', receipt }));
   vi.stubGlobal('fetch', fetchMock);
-  render(<ReceiptCodeForm token="0123456789abcdefghjkmnpqrstvwxyz" />);
+  const { lines, ...summary } = receipt;
+  expect(lines).toHaveLength(1);
+  render(<ReceiptCodeForm token="0123456789abcdefghjkmnpqrstvwxyz" summary={summary} />);
+  // The summary shows at once; no item does.
+  expect(screen.getByText('Gulberg Branch')).toBeTruthy();
   expect(screen.queryByText('Protected item')).toBeNull();
 
   fireEvent.click(screen.getByRole('button', { name: 'Send me a code' }));
