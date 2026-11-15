@@ -237,9 +237,12 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Inviting at the baseline EMPLOYEE role with no role template grants no
-      // privilege; any other role or a role template is a role grant.
-      if (input.role !== 'EMPLOYEE' || input.organizationRoleId !== null) {
+      // Inviting a new member at the baseline EMPLOYEE role with no role template
+      // grants no privilege; any other role or a role template is a role grant.
+      // A baseline re-invite of a pending member is checked below, in the
+      // transaction, because it can still revoke that member's role.
+      const grantsRole = input.role !== 'EMPLOYEE' || input.organizationRoleId !== null;
+      if (grantsRole) {
         await assertCanSetRole(ctx.session.user, ctx.db, { type: 'User', targetRole: input.role });
       }
       const email = input.email;
@@ -287,6 +290,20 @@ export const teamRouter = router({
               code: 'CONFLICT',
               message: 'A user with this email already exists',
             });
+          }
+          // Re-inviting overwrites the pending member's role and role template.
+          if (existing && !grantsRole) {
+            const current = await tx.user.findUnique({
+              where: { id: existing.id },
+              select: { role: true, organizationRoleId: true },
+            });
+            if (current?.role !== input.role || current.organizationRoleId !== null) {
+              await assertCanSetRole(ctx.session.user, tx, {
+                type: 'User',
+                id: existing.id,
+                targetRole: input.role,
+              });
+            }
           }
           if (!existing) {
             const occupiedSeats = await tx.user.count({

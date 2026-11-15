@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   count: vi.fn(),
@@ -59,6 +60,7 @@ const db = {
     run({
       user: {
         findFirst: mocks.findFirst,
+        findUnique: mocks.findUnique,
         create: mocks.create,
         update: mocks.update,
         count: mocks.count,
@@ -243,6 +245,37 @@ describe('team.inviteMember team:setRole gate', () => {
     );
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an ADMIN role', { role: 'ADMIN', organizationRoleId: null }],
+    ['an HR role', { role: 'HR', organizationRoleId: null }],
+    ['a role template', { role: 'EMPLOYEE', organizationRoleId: 'role_gm' }],
+  ])('refuses a baseline re-invite that would revoke %s', async (_label, current) => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.findUnique.mockResolvedValue(current);
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'pending@company.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      { type: 'User', id: 'user_pending', targetRole: 'EMPLOYEE' },
+      expect.anything()
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('still re-invites a pending baseline employee', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.findUnique.mockResolvedValue({ role: 'EMPLOYEE', organizationRoleId: null });
+    mocks.update.mockResolvedValue({ id: 'user_pending', name: 'Alex Carter' });
+
+    await caller().inviteMember({ ...invite, email: 'pending@company.com' });
+
+    expect(mocks.update).toHaveBeenCalledOnce();
   });
 
   it('still invites a baseline employee with no role template', async () => {
