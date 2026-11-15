@@ -14,12 +14,18 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { hash } from 'bcryptjs';
 import { Prisma } from '@/generated/prisma/client';
-import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
+import {
+  assistantVertical,
+  matchScore,
+  type AssistantHelpers,
+  type ToolSet,
+} from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
 import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
+import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -813,11 +819,20 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const organizationRole = organizationRoleId
           ? await h.db.organizationRole.findFirst({
               where: { id: organizationRoleId, organizationId: ctx.organizationId },
-              select: { id: true, name: true },
+              select: { id: true, name: true, key: true },
             })
           : null;
         if (organizationRoleId && !organizationRole) {
           return { error: 'Invalid role template.' };
+        }
+        // SEC-I (DEV-827): grant exactly what the chosen role's label says, as the
+        // team invite form and router do. A baseline invite grants nothing to check.
+        if (finalRole !== 'EMPLOYEE' || organizationRole) {
+          const vertical =
+            assistantVertical(ctx.vertical) ??
+            (await resolveOrganizationEntitlements(ctx.organizationId, h.db))?.vertical;
+          const roleRefusal = inviteRoleRefusal(vertical, finalRole, organizationRole?.key ?? null);
+          if (roleRefusal) return { error: roleRefusal };
         }
 
         const existing = await h.db.user.findFirst({

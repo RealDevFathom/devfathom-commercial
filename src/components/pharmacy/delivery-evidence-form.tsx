@@ -10,6 +10,9 @@ type Action = z.infer<typeof deliveryCommandInput>['action'];
 
 export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; orderId: string }) {
   const command = trpc.pharmacyOrdering.deliveryCommand.useMutation();
+  // DEV-786: only managers and owners may refund or return. deliveryCommand enforces the same rule.
+  const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
+  const refundAuthorized = access.data?.authorized === true;
   const utils = trpc.useUtils();
   const [action, setAction] = useState<Action>('COLLECT');
   const [reference, setReference] = useState('');
@@ -36,7 +39,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
           event.preventDefault();
           setNotice('');
           // DEV-647: the PIN is single-use and never kept in the form after submitting.
-          const pin = action === 'PHYSICAL_RETURN' ? managerPin : '';
+          const pin = action === 'PHYSICAL_RETURN' && refundAuthorized ? managerPin : '';
           setManagerPin('');
           try {
             const result = await command.mutateAsync({
@@ -133,9 +136,15 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
             <Input value={location} onChange={(event) => setLocation(event.target.value)} />
           </Label>
         ) : null}
-        {action === 'PHYSICAL_RETURN' ? (
+        {action === 'PHYSICAL_RETURN' && !refundAuthorized ? (
+          <p role="note" className="text-sm text-text-muted sm:col-span-2">
+            Refunding paid cash or returning a completed sale needs a manager or owner. Ask one to
+            record this return with their PIN.
+          </p>
+        ) : null}
+        {action === 'PHYSICAL_RETURN' && refundAuthorized ? (
           <Label className="grid gap-1">
-            Manager or owner PIN (required when paid cash is refunded)
+            Manager or owner PIN (required to refund cash or return a completed sale)
             <Input
               type="password"
               inputMode="numeric"
