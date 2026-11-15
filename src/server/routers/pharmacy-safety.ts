@@ -8,6 +8,7 @@ import {
   listControlledPinWitnesses,
 } from '@/lib/pharmacy/controlled-register';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
+import { provinceName, rulesPendingLegalReview } from '@/lib/pharmacy/regulatory-profile-form';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
@@ -80,6 +81,37 @@ export const pharmacySafetyRouter = router({
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const organizationId = await organizationBranch(ctx, input.branchId);
+      const now = new Date();
+      const branch = await ctx.db.pharmacyBranch.findFirstOrThrow({
+        where: { id: input.branchId, organizationId, active: true },
+        select: {
+          provinceCode: true,
+          regulatoryProfiles: {
+            where: {
+              organizationId,
+              effectiveFrom: { lte: now },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            },
+            orderBy: { effectiveFrom: 'desc' },
+            take: 1,
+            select: { provinceCode: true, jurisdictionRuleSet: true },
+          },
+        },
+      });
+      // Use the exact version bound to the profile, not a newer published version.
+      // Before a profile exists, still show the province's pending rules.
+      const profile = branch.regulatoryProfiles[0];
+      const ruleSet =
+        profile?.jurisdictionRuleSet ??
+        (await ctx.db.jurisdictionRuleSet.findFirst({
+          where: {
+            code: branch.provinceCode,
+            isPlaceholder: false,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          orderBy: { effectiveFrom: 'desc' },
+        }));
       const entries = await ctx.db.pharmacyControlledRegisterEntry.findMany({
         where: { organizationId, branchId: input.branchId },
         orderBy: { serial: 'asc' },
@@ -116,6 +148,8 @@ export const pharmacySafetyRouter = router({
         staffNames.set(profile.userId, names);
       }
       return {
+        provinceName: provinceName(profile?.provinceCode ?? branch.provinceCode),
+        pendingLegalReview: ruleSet ? rulesPendingLegalReview(ruleSet) : false,
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient

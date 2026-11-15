@@ -25,6 +25,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
+import { PendingLegalReviewNotice } from './pending-legal-review-notice';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -151,6 +152,19 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const branchJurisdiction = data.jurisdictions.find(
+    (candidate) =>
+      candidate.provinceCode ===
+      data.branches.find((branch) => branch.id === branchId)?.provinceCode
+  );
+  const pendingProvince =
+    data.selectedBranchId === branchId && current
+      ? current.pendingLegalReview
+        ? current.provinceName
+        : null
+      : branchJurisdiction?.provisional
+        ? branchJurisdiction.provinceName
+        : null;
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -262,6 +276,11 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             ))}
           </select>
         </Field>
+        {pendingProvince ? (
+          <div className="mt-4">
+            <PendingLegalReviewNotice provinceName={pendingProvince} />
+          </div>
+        ) : null}
         {inForce?.premisesCompletionDue ? (
           <p
             className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
@@ -324,6 +343,11 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             {saved}
           </p>
         ) : null}
+        {jurisdiction?.provisional && jurisdiction.provinceName !== pendingProvince ? (
+          <div className="mb-4">
+            <PendingLegalReviewNotice provinceName={jurisdiction.provinceName} />
+          </div>
+        ) : null}
         <form className="space-y-6" noValidate onSubmit={submit} ref={formRef}>
           <fieldset className="grid gap-4 sm:grid-cols-2">
             <legend className="mb-2 font-display text-base font-semibold text-text-strong">
@@ -351,7 +375,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="provinceCode"
               hint={
                 jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                  ? 'These rules await legal sign-off before production use.'
                   : 'Only provinces with published rules appear here.'
               }
               label="Province"

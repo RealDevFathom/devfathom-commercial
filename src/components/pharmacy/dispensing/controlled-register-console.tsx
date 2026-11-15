@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
 import { Button } from '@/components/ui/button';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import { registerPrintTotals } from '@/lib/pharmacy/register-print';
@@ -128,6 +129,9 @@ export function ControlledRegisterConsole() {
         <p className="text-xs text-destructive" role="alert">
           {branches.error.message}
         </p>
+      ) : null}
+      {register.data?.pendingLegalReview ? (
+        <PendingLegalReviewNotice provinceName={register.data.provinceName} />
       ) : null}
       {register.isLoading ? (
         <WorkspaceState title="Loading controlled register">Reading this branch.</WorkspaceState>

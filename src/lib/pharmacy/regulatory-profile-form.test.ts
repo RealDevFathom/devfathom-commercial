@@ -7,6 +7,7 @@ import {
   provinceName,
   regulatoryProfileInput,
   ruleSetOptions,
+  rulesPendingLegalReview,
 } from './regulatory-profile-form';
 
 const valid = {
@@ -161,3 +162,17 @@ describe('branch regulatory profile input', () => {
     }
   });
 });
+
+it.each(['licenceCategories', 'permittedSchedules', 'pharmacistCoverageRule'] as const)(
+  'reports pending legal review when %s is unconfirmed',
+  (field) => {
+    const rules = {
+      licenceCategories: { provisional: false },
+      permittedSchedules: { provisional: false },
+      pharmacistCoverageRule: { provisional: false },
+    };
+    expect(rulesPendingLegalReview(rules)).toBe(false);
+    expect(rulesPendingLegalReview({ ...rules, [field]: { provisional: true } })).toBe(true);
+    expect(rulesPendingLegalReview({ ...rules, [field]: {} })).toBe(true);
+  }
+);
