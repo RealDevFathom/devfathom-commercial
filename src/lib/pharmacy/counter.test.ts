@@ -1,6 +1,44 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { compareCounterRows, counterMatchRank, renderStrengthValue } from './counter';
+import {
+  compareCounterRows,
+  counterMatchRank,
+  readCounterCart,
+  renderStrengthValue,
+} from './counter';
+
+describe('readCounterCart split tender rows (#722)', () => {
+  it('returns ordered, allowlisted tender rows from the tenant and branch scoped sale', async () => {
+    const findFirst = vi.fn().mockResolvedValue({
+      id: 'sale-a',
+      status: 'OPEN',
+      receiptNumber: null,
+      lines: [],
+      tenders: [
+        { id: 'cash-a', type: 'CASH', amountMinor: 60000, actorId: 'private-actor' },
+        { id: 'credit-a', type: 'CREDIT', amountMinor: 40000, providerRef: 'private-ref' },
+      ],
+    });
+    const cart = await readCounterCart(
+      { pharmacySale: { findFirst } } as never,
+      { organizationId: 'org-a', branchId: 'branch-a' } as never,
+      'sale-a'
+    );
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'sale-a', organizationId: 'org-a', branchId: 'branch-a' },
+        include: expect.objectContaining({
+          tenders: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+        }),
+      })
+    );
+    expect(cart.tenders).toEqual([
+      { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 },
+      { tenderId: 'credit-a', type: 'CREDIT', amountMinor: 40000 },
+    ]);
+    expect(cart.totals.tenderedMinor).toBe(100000);
+  });
+});
 
 describe('renderStrengthValue (POS-02 strength display)', () => {
   it('never trims a trailing zero that carries magnitude', () => {

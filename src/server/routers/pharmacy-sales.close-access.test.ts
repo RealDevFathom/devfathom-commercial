@@ -31,7 +31,7 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { cutPharmacyDailyClose } from '@/lib/pharmacy/settlement';
 import { router, type TRPCContext } from '../trpc';
-import { pharmacySalesRouter } from './pharmacy-sales';
+import { canClosePharmacyDay, pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
@@ -64,10 +64,16 @@ function fixture(
     },
     pharmacyBranchAssignment: {
       findFirst: vi.fn(
-        async ({ where }: { where: { branchId: string; userId: string; active: boolean } }) =>
-          where.userId === 'user-1' && where.active && assigned.includes(where.branchId)
-            ? { branchId: where.branchId }
-            : null
+        async ({ where }: { where: { branchId?: string; userId: string; active: boolean } }) => {
+          // DEV-127: the rail asks without a branch ("assigned anywhere?").
+          const branchId = where.branchId ?? assigned[0];
+          return where.userId === 'user-1' &&
+            where.active &&
+            branchId !== undefined &&
+            assigned.includes(branchId)
+            ? { branchId }
+            : null;
+        }
       ),
     },
     user: {
@@ -79,7 +85,7 @@ function fixture(
       })),
     },
   };
-  const caller = app.createCaller({
+  const ctx = {
     db,
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
     session: {
@@ -90,8 +96,9 @@ function fixture(
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext).pharmacySales;
-  return { db, caller };
+  } as unknown as TRPCContext;
+  const caller = app.createCaller(ctx).pharmacySales;
+  return { db, caller, ctx };
 }
 
 type Caller = ReturnType<typeof fixture>['caller'];
@@ -199,4 +206,36 @@ describe('day close is manager or owner only (DEV-31)', () => {
       expect(cutPharmacyDailyClose).not.toHaveBeenCalled();
     }
   );
+});
+
+// DEV-127: the rail and the day-close console ask the same decision without a
+// branch, so every member the procedures admit somewhere is offered the close.
+describe('canClosePharmacyDay answers the close gate for some branch (DEV-127)', () => {
+  it.each(admitted)('admits $name', async (who) => {
+    const f = fixture(who.role, who.overrides, who.session);
+    await expect(canClosePharmacyDay(f.ctx)).resolves.toBe(true);
+  });
+
+  it('admits a manager assigned only to another branch, whose close is still branch-checked', async () => {
+    const f = fixture([allow('pharmacy:manage')], [], 'EMPLOYEE', ['branch-2']);
+    await expect(canClosePharmacyDay(f.ctx)).resolves.toBe(true);
+    await expect(f.caller.closePreview({ branchId: BRANCH, businessDate })).rejects.toMatchObject(
+      REFUSED
+    );
+  });
+
+  it.each(refused.filter((who) => who.name !== 'a manager assigned only to another branch'))(
+    'refuses $name',
+    async (who) => {
+      const f = fixture(who.role, who.overrides, 'EMPLOYEE', who.assigned, who.member);
+      await expect(canClosePharmacyDay(f.ctx)).resolves.toBe(false);
+    }
+  );
+
+  it('refuses a request with no signed-in user', async () => {
+    const f = fixture([allow('pharmacy:close')]);
+    await expect(
+      canClosePharmacyDay({ ...f.ctx, session: null } as unknown as TRPCContext)
+    ).resolves.toBe(false);
+  });
 });

@@ -9,7 +9,7 @@ const statusPillVariants = cva(
     variants: {
       tone: {
         success: 'bg-success/10 text-success',
-        info: 'bg-primary/10 text-primary',
+        info: 'bg-muted text-foreground',
         warning: 'bg-warning/10 text-warning',
         danger: 'bg-destructive/10 text-destructive',
         neutral: 'bg-muted text-text-muted',
@@ -36,7 +36,7 @@ const STATUS_TONE: Record<string, StatusTone> = {
   collected: 'success',
   done: 'success',
   live: 'success',
-  // info / abyss (primary)
+  // info / neutral-contrast (fixed semantic tokens, not tenant primary)
   sent: 'info',
   info: 'info',
   'in-progress': 'info',

@@ -22,6 +22,7 @@ export const profitAndLossClassification = {
   ACCOUNTS_RECEIVABLE: 'balance_sheet',
   ACCOUNTS_PAYABLE: 'balance_sheet',
   OPENING_BALANCE_EQUITY: 'balance_sheet',
+  MANUAL_NONTRADE_ACCRUAL: 'balance_sheet',
 } as const satisfies Record<FinanceAccountCode, Classification>;
 
 const profitAndLossAccounts = (
