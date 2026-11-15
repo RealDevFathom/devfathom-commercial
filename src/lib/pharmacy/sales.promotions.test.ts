@@ -53,6 +53,11 @@ function counterDb(
   }
 ) {
   return {
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ branchId: string } | null>>(async () => ({
+        branchId: 'branch-a',
+      })),
+    },
     user: {
       findFirst: vi.fn(async () => creator),
       // The creating manager's `pharmacy:manage` grant is re-checked on every application.
@@ -185,6 +190,35 @@ describe('addSaleLine counter promotion hook (#727)', () => {
       organizationRole: null,
       permissionOverrides: [],
     } as never);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
+    });
+  });
+
+  it('does not apply a promotion whose creator was unassigned from the branch (QA-8)', async () => {
+    const db = counterDb({}, [promotion], {
+      id: 'manager-a',
+      organizationId: 'org-a',
+      status: 'ACTIVE',
+      role: 'EMPLOYEE',
+    });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
+    });
+  });
+
+  it('skips the promotion, never blocks the line, when the creator lookup fails (QA-8)', async () => {
+    const db = counterDb();
+    db.user.findFirst.mockRejectedValue(new Error('db down'));
 
     await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
 
