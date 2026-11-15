@@ -155,7 +155,8 @@ export function PrescriptionDirectoryCard({
             <legend className="mb-2 font-mono text-xs tracking-wide text-text-muted uppercase">
               New prescriber
             </legend>
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* Top-align: the registration hint must not stretch the name field. */}
+            <div className="grid items-start gap-4 sm:grid-cols-2">
               <Field label="Doctor name">
                 <input required name="name" maxLength={200} className={fieldClass} />
               </Field>
@@ -169,7 +170,7 @@ export function PrescriptionDirectoryCard({
                   maxLength={64}
                   aria-invalid={duplicateRegistration}
                   aria-describedby={duplicateRegistration ? 'add-prescriber-outcome' : undefined}
-                  className={fieldClass}
+                  className={`${fieldClass} aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20`}
                 />
               </Field>
             </div>
