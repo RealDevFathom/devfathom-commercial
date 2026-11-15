@@ -267,6 +267,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     [{ d30: 100, d60: 250, d90: 250, d180: 900, quarantine: 4 }],
     [{ value: 2 }],
     [{ aging: 1, rejected: 2 }],
+    [{ evaluatedBranches: 1 }], // DEV-729: stock signals have been evaluated for the branch.
   ];
   const populatedCounts = { recalls: 1, claims: 0, receiving: 5, coverage: 1 };
 
@@ -323,10 +324,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
-  it('issues branch-context Khata reads in addition to six aggregate reads', async () => {
+  it('issues branch-context Khata reads in addition to six aggregate reads and the signal-evidence read', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
-    expect(calls).toHaveLength(10);
+    expect(calls).toHaveLength(11);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
     expect(money?.sql).toContain('entry."occurredAt" >=');
@@ -351,6 +352,8 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(calls[7]?.sql).toContain("set_config('app.current_branch_id'");
     expect(calls[8]?.sql).toContain('FROM "pharmacy_khata_events" charge');
     expect(calls[9]?.sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[10]?.sql).toContain('COUNT(DISTINCT h."branchId")');
+    expect(calls[10]?.values).toEqual([BRANCH]);
   });
 
   it('bounds lost demand and margin postings by workspace midnights; business dates stay calendar dates', async () => {

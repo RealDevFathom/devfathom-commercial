@@ -9,6 +9,7 @@ import {
   isLegacyPlaceholderProfile,
   pharmacistPresentAt,
   regulatoryProfileBindingDenial,
+  regulatoryStartInstant,
   type BranchOperationAction,
   type BranchRegulatoryState,
 } from './regulatory';
@@ -542,6 +543,137 @@ describe('evaluateBranchRegulatoryStatus', () => {
       licenceExpired: false,
       qualifiedPersonCoverageExpired: false,
     });
+  });
+});
+
+describe('DEV-298 start dates begin at the workspace’s local midnight', () => {
+  const KARACHI = 'Asia/Karachi';
+  // 00:00 and 04:59:59.999 PKT on 21 Oct 2026; 05:00 PKT is the old UTC boundary.
+  const pktMidnight = new Date('2026-10-20T19:00:00.000Z');
+  const pktBeforeFive = new Date('2026-10-20T23:59:59.999Z');
+  const pktLastMinuteBefore = new Date('2026-10-20T18:59:59.999Z');
+
+  function startsOn21October(): BranchRegulatoryState {
+    const state = validState();
+    state.licenceValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    state.qualifiedPersonValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    return state;
+  }
+
+  it('maps an instant to the stored encoding of the workspace day only when that is later', () => {
+    expect(regulatoryStartInstant(pktMidnight, KARACHI)).toEqual(
+      new Date('2026-10-21T00:00:00.000Z')
+    );
+    expect(regulatoryStartInstant(pktLastMinuteBefore, KARACHI)).toEqual(pktLastMinuteBefore);
+    expect(regulatoryStartInstant(pktMidnight, 'UTC')).toEqual(pktMidnight);
+    expect(regulatoryStartInstant(pktMidnight, null)).toEqual(pktMidnight);
+    const newYork = new Date('2026-10-21T02:00:00.000Z');
+    expect(regulatoryStartInstant(newYork, 'America/New_York')).toEqual(newYork);
+  });
+
+  it.each([pktMidnight, pktBeforeFive])(
+    'permits a PKT licence on its calendar start day at %s',
+    (instant) => {
+      const state = startsOn21October();
+      expect(() =>
+        assertBranchMayOperate(state, {
+          name: 'DISPENSE',
+          at: instant,
+          schedule: 'RX',
+          requiresQualifiedPerson: true,
+          timeZone: KARACHI,
+        })
+      ).not.toThrow();
+      expect(state.auditDenied).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still refuses a PKT licence the minute before its calendar start day', () => {
+    const state = startsOn21October();
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktLastMinuteBefore,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+  });
+
+  it('starts qualified-person coverage on its PKT calendar day', () => {
+    const state = validState();
+    state.qualifiedPersonValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktMidnight,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps the licence expiry boundary at the stored instant', () => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-10-21T00:00:00.000Z');
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktBeforeFive,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: new Date('2026-10-21T00:00:00.000Z'),
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+  });
+
+  it('reports a profile starting today as in force from PKT midnight', () => {
+    const { auditDenied: _auditDenied, ...profile } = startsOn21October();
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, pktMidnight, undefined, KARACHI)
+    ).toMatchObject({ inForce: true, licenceExpired: false });
+  });
+
+  it('runtime gate selects the profile and passes the licence using the organization zone', async () => {
+    const profile = {
+      ...startsOn21October(),
+      effectiveFrom: new Date('2026-10-21T00:00:00.000Z'),
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+      branch: { active: true, provinceCode: 'PB', addressLine: '12 Mall Road', city: 'Lahore' },
+      jurisdictionRuleSet: validState().ruleSet,
+    };
+    const findFirst = vi.fn(async () => profile);
+    const db = {
+      $queryRaw: vi.fn(async () => []),
+      organization: {
+        findUnique: vi.fn(async () => ({ status: 'ACTIVE', timezone: KARACHI })),
+      },
+      branchRegulatoryProfile: { findFirst },
+    };
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.tender',
+        at: pktBeforeFive,
+      })
+    ).resolves.toBeUndefined();
+    const dayStart = new Date('2026-10-21T00:00:00.000Z');
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          effectiveFrom: { lte: dayStart },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: dayStart } }],
+        }),
+      })
+    );
   });
 });
 

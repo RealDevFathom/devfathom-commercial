@@ -101,6 +101,12 @@ function fixture(
     },
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CASH' }) },
+    // DEV-501: the recorded return's priced rows: PKR 6.00 gross less PKR 1.00 discount.
+    pharmacySaleReturnLine: {
+      findMany: vi.fn().mockResolvedValue([{ grossMinor: 600, discountMinor: 100 }]),
+    },
+    pharmacyUnidentifiedReturnHold: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue({ saleId: 'sale-a' }) },
     restaurantOperatorCredential: {
       findFirst: vi.fn().mockResolvedValue(
         credential && {
@@ -352,6 +358,181 @@ describe('DEV-621 returns need a manager or owner PIN', () => {
     });
     expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+});
+
+const returnAndRefund = {
+  ...saleReturn,
+  refund: {
+    originalTenderId: 'tender-a',
+    deviceId: 'device-a',
+    businessDate: new Date('2026-11-14T00:00:00.000Z'),
+  },
+};
+
+describe('DEV-501 one confirm records the return and refunds it', () => {
+  beforeEach(() => {
+    vi.mocked(returnSaleLine).mockResolvedValue({ returnId: 'return-1', replayed: false } as never);
+    vi.mocked(refundPharmacyTender).mockResolvedValue({
+      refundId: 'refund-1',
+      amountMinor: 500,
+    } as never);
+  });
+
+  it.each(['cashier', 'pharmacist'])(
+    'refuses a %s before any PIN, stock or money work',
+    async (role) => {
+      const f = fixture(ROLES[role]!);
+      await expect(
+        f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires the PIN field', async () => {
+    const f = fixture(ROLES.manager!);
+    await expect(f.caller.returnAndRefund(returnAndRefund as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('blocks a wrong PIN with its own refusal row and records nothing', async () => {
+    const f = fixture(ROLES.owner!);
+    await expect(
+      f.caller.returnAndRefund({ ...returnAndRefund, managerPin: '8642' })
+    ).resolves.toEqual({ blocked: RETURN_PIN_BLOCKED });
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential-a' },
+      data: expect.objectContaining({ failedAttempts: 1 }),
+    });
+    expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        action: 'pharmacySales.returnAndRefund',
+        outcome: 'FAILURE',
+        errorCode: 'REFUND_PIN_REFUSED',
+      }),
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each(['manager', 'owner', 'admin'])(
+    'lets a %s (a solo owner included) return and refund the exact value with one PIN',
+    async (role) => {
+      const f = fixture(ROLES[role]!);
+      await expect(
+        f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+      ).resolves.toEqual({
+        returnId: 'return-1',
+        returnedMinor: 500,
+        refund: { refundId: 'refund-1', amountMinor: 500 },
+        replayed: false,
+      });
+      const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+      // One transaction: the return, then the refund of that return's own value.
+      expect(f.db.$transaction).toHaveBeenCalledOnce();
+      expect(returnSaleLine).toHaveBeenCalledExactlyOnceWith(f.db, scope, saleReturn);
+      expect(f.db.pharmacySaleReturnLine.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-a', branchId: 'branch-a', returnId: 'return-1' },
+        })
+      );
+      expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
+        f.db,
+        scope,
+        {
+          ...returnAndRefund.refund,
+          amountMinor: 500,
+          reason: 'WRONG_ITEM',
+          idempotencyKey: 'return-a:refund',
+        },
+        { requireCurrentBusinessDate: true }
+      );
+      expect(vi.mocked(returnSaleLine).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(refundPharmacyTender).mock.invocationCallOrder[0]!
+      );
+      // The PIN is checked once and never passed on.
+      expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledOnce();
+      expect(JSON.stringify(vi.mocked(refundPharmacyTender).mock.calls)).not.toContain(PIN);
+      expect(f.audit.detail.metadata).toMatchObject({
+        policy: REFUND_PIN_POLICY,
+        approverId: 'user-a',
+        pinVerified: true,
+      });
+    }
+  );
+
+  it('refuses a tender from another receipt before recording the return', async () => {
+    const f = fixture(ROLES.owner!);
+    // The tender is not on the returned line's sale.
+    f.db.pharmacyTender.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Refund the return to a tender from the same receipt.',
+    });
+    expect(f.db.pharmacySaleLine.findFirst).toHaveBeenCalledWith({
+      where: { id: 'line-a', organizationId: 'org-a', branchId: 'branch-a' },
+      select: { saleId: true },
+    });
+    expect(f.db.pharmacyTender.findFirst).toHaveBeenCalledWith({
+      where: { id: 'tender-a', organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+      select: { id: true },
+    });
+    expect(returnSaleLine).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('refunds a lowered amount and refuses more than the return is worth', async () => {
+    const f = fixture(ROLES.manager!);
+    await f.caller.returnAndRefund({
+      ...returnAndRefund,
+      refund: { ...returnAndRefund.refund, amountMinor: 350, manualCashFallback: true },
+      managerPin: PIN,
+    });
+    expect(refundPharmacyTender).toHaveBeenCalledWith(
+      f.db,
+      expect.anything(),
+      expect.objectContaining({ amountMinor: 350, manualCashFallback: true }),
+      { requireCurrentBusinessDate: true }
+    );
+    vi.mocked(refundPharmacyTender).mockClear();
+    await expect(
+      f.caller.returnAndRefund({
+        ...returnAndRefund,
+        refund: { ...returnAndRefund.refund, amountMinor: 501 },
+        managerPin: PIN,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'REFUND_EXCEEDS_TENDER' });
+    // The transaction throws, so the return it recorded rolls back with it.
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('refuses a refund when the return cannot be valued', async () => {
+    const f = fixture(ROLES.manager!);
+    f.db.pharmacySaleReturnLine.findMany.mockResolvedValue([
+      { grossMinor: null, discountMinor: null },
+    ]);
+    await expect(
+      f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'INVALID_STATE' });
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('propagates a refused refund so the return rolls back with it', async () => {
+    const f = fixture(ROLES.manager!);
+    vi.mocked(refundPharmacyTender).mockRejectedValueOnce(new Error('DRAWER_NOT_OPEN'));
+    await expect(
+      f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+    ).rejects.toThrow();
+    expect(returnSaleLine).toHaveBeenCalledOnce();
   });
 });
 
