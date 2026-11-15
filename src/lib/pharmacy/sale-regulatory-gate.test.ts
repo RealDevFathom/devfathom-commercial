@@ -37,6 +37,21 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
   });
 
+  it('createSale runs a caller precondition only after the gate, and never past a refusal', async () => {
+    const db = { pharmacySale: { create: vi.fn() }, pharmacySaleEvent: { create: vi.fn() } };
+    const beforeCreate = vi.fn();
+
+    await expect(createSale(db as never, scope, false, beforeCreate)).rejects.toBe(denied);
+    expect(beforeCreate).not.toHaveBeenCalled();
+
+    vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValueOnce(undefined);
+    const closed = new Error('DRAWER_NOT_OPEN');
+    beforeCreate.mockRejectedValueOnce(closed);
+    await expect(createSale(db as never, scope, false, beforeCreate)).rejects.toBe(closed);
+    expect(db.pharmacySale.create).not.toHaveBeenCalled();
+    expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+  });
+
   it('createSale refuses a quotation too', async () => {
     const db = { pharmacySale: { create: vi.fn() } };
 
@@ -52,7 +67,11 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
         return 1;
       }),
       pharmacyMoneyIdempotencyKey: {
-        findUnique: vi.fn(async () => ({ commandType: 'tender', payloadHash, resultPayload: null })),
+        findUnique: vi.fn(async () => ({
+          commandType: 'tender',
+          payloadHash,
+          resultPayload: null,
+        })),
       },
       $queryRaw: vi.fn(async () => []),
       pharmacySale: { findFirst: vi.fn() },

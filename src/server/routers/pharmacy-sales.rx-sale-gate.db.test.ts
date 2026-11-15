@@ -37,6 +37,8 @@ const ids = {
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const businessDate = new Date('2026-10-22T00:00:00.000Z');
 const deviceFor = (userId: string) => `device-${userId}`;
+/** DEV-725: bills start on a counter device with an OPEN drawer; the pharmacist opens this one. */
+const counterDevice = () => deviceFor(ids.pharmacist);
 const key = () => randomBytes(8).toString('hex');
 const DENIED = {
   code: 'FORBIDDEN',
@@ -48,7 +50,7 @@ const FORBIDDEN = { code: 'FORBIDDEN' };
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Cart = { status: string; totals: { netMinor: number; tenderedMinor: number } };
 type SalesCaller = {
-  create: (input: { branchId: string }) => Promise<{ id: string }>;
+  create: (input: { branchId: string; deviceId: string }) => Promise<{ id: string }>;
   addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string } }>;
   linkCustomer: (input: Record<string, unknown>) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<Cart>;
@@ -115,7 +117,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
 /** A sale holding one Rx line the pharmacist added, optionally linked to the loyalty customer. */
 function pharmacistSale({ customer = false, quantity = 1 } = {}) {
   return act(ids.pharmacist, async (api) => {
-    const sale = await api.create({ branchId: ids.branch });
+    const sale = await api.create({ branchId: ids.branch, deviceId: counterDevice() });
     await api.addLine(rxLine(sale.id, quantity));
     if (customer)
       await api.linkCustomer({
@@ -170,7 +172,11 @@ async function expectRefusedEverywhere(
   tenderRefusal: { code: string; message?: string } = DENIED
 ) {
   await expect(
-    act(userId, async (api) => api.addLine(rxLine((await api.create({ branchId: ids.branch })).id)))
+    act(userId, async (api) =>
+      api.addLine(
+        rxLine((await api.create({ branchId: ids.branch, deviceId: counterDevice() })).id)
+      )
+    )
   ).rejects.toMatchObject(DENIED);
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
