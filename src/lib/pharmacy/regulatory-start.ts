@@ -13,3 +13,17 @@ export function regulatoryStartInstant(at: Date, timeZone?: string | null): Date
   const workspaceDay = new Date(`${workspaceToday(timeZone, at)}T00:00:00.000Z`);
   return workspaceDay > at ? workspaceDay : at;
 }
+
+/**
+ * The Prisma filter for the branch regulatory profile version in force at `at`
+ * on the workspace's calendar day ({@link regulatoryStartInstant}). Every
+ * "current profile" lookup uses it so the guard, the receipt, the dispensing
+ * label and the reminders never disagree about which version applies.
+ */
+export function regulatoryProfileInForceWhere(at: Date, timeZone?: string | null) {
+  const startedAt = regulatoryStartInstant(at, timeZone);
+  return {
+    effectiveFrom: { lte: startedAt },
+    OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+  };
+}

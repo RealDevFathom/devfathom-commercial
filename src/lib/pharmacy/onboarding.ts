@@ -25,7 +25,7 @@ import {
 } from '@/lib/vertical-catalog';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
-import { regulatoryStartInstant } from './regulatory-start';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
 import { readSupplierCompliancePolicy } from './supplier-compliance-policy';
 
 export type PharmacyOnboardingGate =
@@ -261,7 +261,6 @@ export async function evaluatePharmacyReadiness(
   });
   // DEV-298: a profile dated today is in force from the workspace's local midnight.
   const timeZone = organization?.timezone;
-  const startedAt = regulatoryStartInstant(at, timeZone);
 
   const [claims, branch, seededRoleKeys, catalogReady, receivedLotCount, supplierCount] =
     await Promise.all([
@@ -276,8 +275,7 @@ export async function evaluatePharmacyReadiness(
         where: {
           organizationId,
           branch: { active: true },
-          effectiveFrom: { lte: startedAt },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+          ...regulatoryProfileInForceWhere(at, timeZone),
         },
         select: { branchId: true },
         orderBy: { effectiveFrom: 'desc' },

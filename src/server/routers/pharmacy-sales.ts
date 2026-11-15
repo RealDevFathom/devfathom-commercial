@@ -106,6 +106,7 @@ import {
   assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { regulatoryProfileInForceWhere } from '@/lib/pharmacy/regulatory-start';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -1901,8 +1902,8 @@ export const pharmacySalesRouter = router({
               where: {
                 organizationId: scope.organizationId,
                 branchId: scope.branchId,
-                effectiveFrom: { lte: now },
-                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+                // DEV-298: the profile dated today applies from the workspace's local midnight.
+                ...regulatoryProfileInForceWhere(now, ctx.organization?.timezone),
               },
               select: {
                 provinceCode: true,
@@ -2931,9 +2932,14 @@ export const pharmacySalesRouter = router({
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         const [dispensingLabelSources, taxIdentity] = await Promise.all([
-          readDispensingLabelSources(ctx.db, scope, receipt),
+          readDispensingLabelSources(ctx.db, scope, receipt, ctx.organization?.timezone),
           receipt.completedAt
-            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+            ? readPharmacyReceiptTaxIdentity(
+                ctx.db,
+                scope,
+                new Date(receipt.completedAt),
+                ctx.organization?.timezone
+              )
             : Promise.resolve({ ntn: null, strn: null }),
         ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
@@ -2975,7 +2981,12 @@ export const pharmacySalesRouter = router({
           }
           const [format, taxIdentity] = await Promise.all([
             readPharmacyReceiptFormat(tx, scope),
-            readPharmacyReceiptTaxIdentity(tx, scope, new Date(receipt.completedAt)),
+            readPharmacyReceiptTaxIdentity(
+              tx,
+              scope,
+              new Date(receipt.completedAt),
+              ctx.organization?.timezone
+            ),
           ]);
           // Validate both variants before writing. ScopedDb may reuse an outer
           // transaction, where returning FALLBACK would commit an allocation.

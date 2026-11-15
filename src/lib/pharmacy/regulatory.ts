@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 import { normalizeRegulatoryProvince } from './regulatory-profile-form';
-import { regulatoryStartInstant } from './regulatory-start';
+import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
 export type BranchOperationDenialReason =
   | 'ORGANIZATION_NOT_ACTIVE'
@@ -245,13 +245,11 @@ export async function assertStoredBranchMayOperate(
   action: BranchOperationAction
 ): Promise<void> {
   const at = action.at ?? new Date();
-  const startedAt = regulatoryStartInstant(at, action.timeZone);
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: startedAt },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+      ...regulatoryProfileInForceWhere(at, action.timeZone),
     },
     include: { jurisdictionRuleSet: true, branch: true },
     orderBy: { effectiveFrom: 'desc' },

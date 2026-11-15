@@ -44,7 +44,7 @@ import {
   isLegacyPlaceholderProfile,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
-import { regulatoryStartInstant } from '@/lib/pharmacy/regulatory-start';
+import { regulatoryProfileInForceWhere } from '@/lib/pharmacy/regulatory-start';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { DEFAULT_EMERGENCY_SUPPLY_POLICY } from '@/lib/pharmacy/controlled-register';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
@@ -473,14 +473,12 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
 
   if (organization.vertical === 'PHARMACY') {
     const now = new Date();
-    // DEV-298: a profile dated today is in force from the workspace's local midnight.
-    const startedAt = regulatoryStartInstant(now, organization.timezone);
     const profile = await db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
         branch: { active: true },
-        effectiveFrom: { lte: startedAt },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+        // DEV-298: a profile dated today is in force from the workspace's local midnight.
+        ...regulatoryProfileInForceWhere(now, organization.timezone),
       },
       select: { branchId: true },
       orderBy: { effectiveFrom: 'desc' },

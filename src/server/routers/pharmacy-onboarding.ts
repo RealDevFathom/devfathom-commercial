@@ -48,7 +48,10 @@ import {
   normalizeRegulatoryPremises,
   normalizeRegulatoryProvince,
 } from '@/lib/pharmacy/regulatory';
-import { regulatoryStartInstant } from '@/lib/pharmacy/regulatory-start';
+import {
+  regulatoryProfileInForceWhere,
+  regulatoryStartInstant,
+} from '@/lib/pharmacy/regulatory-start';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -202,15 +205,13 @@ async function readOverview(ctx: TRPCContext) {
     where: { id: organizationId },
     select: { displayName: true, status: true, vertical: true, packageId: true, timezone: true },
   });
-  // DEV-298: a profile dated today is current from the workspace's local midnight.
-  const startedAt = regulatoryStartInstant(now, organization?.timezone);
   const [evaluated, currentProfile] = await Promise.all([
     evaluatePharmacyReadiness(ctx.db, organizationId, now),
     ctx.db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: startedAt },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+        // DEV-298: a profile dated today is current from the workspace's local midnight.
+        ...regulatoryProfileInForceWhere(now, organization?.timezone),
       },
       select: { licenceValidTo: true },
       orderBy: { effectiveFrom: 'desc' },
@@ -370,7 +371,10 @@ export const pharmacyOnboardingRouter = router({
    * checklist. Owner/admin only, like the rest of this router.
    */
   licenceRenewals: fbrTier1Procedure.query(({ ctx }) =>
-    readLicenceRenewalReminders(ctx.db, { organizationId: ctx.entitlements.organizationId })
+    readLicenceRenewalReminders(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      timeZone: ctx.organization?.timezone,
+    })
   ),
 
   /**
