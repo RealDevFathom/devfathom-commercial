@@ -87,7 +87,7 @@ export function CounterUnitToggle({
             const chord = chordFor?.(option.kind) ?? null;
             return (
               <button
-                key={option.packLevelId}
+                key={option.kind}
                 type="button"
                 role="radio"
                 aria-checked={active}

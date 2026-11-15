@@ -101,7 +101,9 @@ export function saleUnitOptions(input: {
   assertPositiveInteger(input.unitsPerPack);
   const chain = chainFrom(input.packLevels, input.rootPackLevelId);
   // The receiving setup also supports a standalone pack counted directly in
-  // canonical units. It offers only that sealed pack, with no invented strip.
+  // canonical units. It offers that sealed pack and, when it holds more than
+  // one canonical unit, a loose single unit (DEV-705), but no invented strip:
+  // the strip size of a standalone pack is unknown.
   // A leaf received within an existing hierarchy is already one canonical
   // unit; its unitsPerParent describes its parent, not the received pack.
   if (chain.length === 1) {
@@ -111,7 +113,7 @@ export function saleUnitOptions(input: {
     if (canonicalUnits !== input.unitsPerPack) {
       throw new PharmacyMedicineError('INVALID_CONVERSION');
     }
-    return [
+    const options: SaleUnitOption[] = [
       {
         kind: 'PACK',
         packLevelId: pack.id,
@@ -119,6 +121,15 @@ export function saleUnitOptions(input: {
         canonicalUnitsPerSaleUnit: canonicalUnits,
       },
     ];
+    if (canonicalUnits > 1) {
+      options.push({
+        kind: 'UNIT',
+        packLevelId: pack.id,
+        levelLabel: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+      });
+    }
+    return options;
   }
 
   // Cumulative canonical units, computed from the base unit upwards.

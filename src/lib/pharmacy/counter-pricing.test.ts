@@ -29,10 +29,41 @@ describe('saleUnitOptions (POS-03 toggle)', () => {
       saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 10 })
     ).toEqual([
       { kind: 'PACK', packLevelId: 'flat', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+      { kind: 'UNIT', packLevelId: 'flat', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
     ]);
     expect(() =>
       saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 20 })
     ).toThrowError(PharmacyMedicineError);
+  });
+  it('offers a loose single tablet from a standalone multi-unit pack (DEV-705)', () => {
+    const box = { id: 'box-100', level: 'BOX', parentPackLevelId: null, unitsPerParent: 100 };
+    const options = saleUnitOptions({
+      packLevels: [box],
+      rootPackLevelId: 'box-100',
+      unitsPerPack: 100,
+    });
+    expect(options.map((option) => option.kind)).toEqual(['PACK', 'UNIT']);
+    const loose = options.find((option) => option.kind === 'UNIT')!;
+    expect(loose.canonicalUnitsPerSaleUnit).toBe(1);
+    const preview = previewSaleLine({
+      option: loose,
+      quantity: 3,
+      printedMrpMinor: 25_000,
+      unitsPerPack: 100,
+      availableUnits: 100,
+    });
+    expect(preview.canonicalUnits).toBe(3);
+    expect(preview.unitPriceMinor).toBe(250);
+    expect(preview.grossMinor).toBe(750);
+    expect(preview.sufficient).toBe(true);
+  });
+  it('offers no loose unit from a standalone pack that is already one unit', () => {
+    const bottle = { id: 'bottle', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 };
+    expect(
+      saleUnitOptions({ packLevels: [bottle], rootPackLevelId: 'bottle', unitsPerPack: 1 }).map(
+        (option) => option.kind
+      )
+    ).toEqual(['PACK']);
   });
   it('sells a receipt at the hierarchy leaf as one canonical unit', () => {
     const options = saleUnitOptions({
