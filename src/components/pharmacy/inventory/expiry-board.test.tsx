@@ -9,6 +9,7 @@ import {
   type ExpiryBoardProps,
   type ExpiryBoardRow,
 } from './expiry-board';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 
 afterEach(cleanup);
 
@@ -235,6 +236,38 @@ describe('DEV-728 distributor grouping and return claims', () => {
     );
     const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
     expect(new FormData(form).getAll('position')).toEqual(['lot_1|location_1']);
+  });
+
+  it('leaves expired lots off the claim because their return window has closed', () => {
+    render(
+      <ExpiryBoard {...props} rows={[{ ...row, expired: true, daysLeft: -1 }, sameDistributor]} />
+    );
+    const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
+    expect(new FormData(form).getAll('position')).toEqual(['lot_3|location_1']);
+  });
+
+  it('offers no group claim when every lot has expired', () => {
+    render(<ExpiryBoard {...props} rows={[{ ...row, expired: true, daysLeft: -1 }]} />);
+    expect(screen.queryByRole('button', { name: 'Draft return claim' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Branch distributor' })).toHaveTextContent(
+      'expired lots are past the supplier return window'
+    );
+  });
+
+  it('caps one claim at the server limit, soonest expiry first', () => {
+    const many = Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 5 }, (_, index) => ({
+      ...row,
+      key: `lot_${index}:location_1`,
+      inventoryLotId: `lot_${index}`,
+    }));
+    render(<ExpiryBoard {...props} rows={many} />);
+    const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
+    const positions = new FormData(form).getAll('position');
+    expect(positions).toHaveLength(EXPIRY_CLAIM_MAX_POSITIONS);
+    expect(positions[0]).toBe('lot_0|location_1');
+    expect(screen.getByRole('region', { name: 'Branch distributor' })).toHaveTextContent(
+      'draft again for the other 5'
+    );
   });
 
   it('offers no group claim once every lot is already on a return, and links to it', () => {

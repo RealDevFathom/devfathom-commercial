@@ -59,6 +59,7 @@ import {
   maySuggestExpiryMarkdown,
   supplierReturnDates,
 } from '@/lib/pharmacy/expiry-growth';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -2205,6 +2206,8 @@ export const pharmacyInventoryRouter = router({
    * near-expiry position it can still take. Each position is checked exactly as
    * `draftExpiryReturn` checks one: branch-locked lot, inside the action horizon,
    * no open return already on the lot, and only units not reserved for a claim.
+   * Expired lots are skipped too: a line's return window ends at the lot's expiry,
+   * and submitting refuses the whole return if any line's window has closed.
    * Positions that fail those checks are skipped, never forced onto the claim.
    * Like any draft it reserves nothing until it is submitted in Purchasing.
    */
@@ -2224,7 +2227,7 @@ export const pharmacyInventoryRouter = router({
                 .strict()
             )
             .min(1)
-            .max(100)
+            .max(EXPIRY_CLAIM_MAX_POSITIONS)
             .refine(
               (positions) =>
                 new Set(positions.map((p) => `${p.inventoryLotId}:${p.stockLocationId}`)).size ===
@@ -2260,9 +2263,14 @@ export const pharmacyInventoryRouter = router({
           );
           const lines: Array<Parameters<typeof createPurchaseReturn>[2]['lines'][number]> = [];
           const alreadyOpen: Array<{ id: string; reference: string; status: string }> = [];
+          let windowClosed = 0;
           for (const position of positions) {
             const lot = await lockExpiringLot(tx, scope, position.inventoryLotId);
             assertOnBoard(lot.batch.expiresAt, at);
+            if (lot.batch.expiresAt.getTime() <= at.getTime()) {
+              windowClosed += 1;
+              continue;
+            }
             const open = await tx.pharmacyPurchaseReturnLine.findFirst({
               where: {
                 organizationId: scope.organizationId,
@@ -2304,6 +2312,7 @@ export const pharmacyInventoryRouter = router({
             if (alreadyOpen[0]) {
               return { created: false, purchaseReturn: alreadyOpen[0], lineCount: 0, skipped: 0 };
             }
+            if (windowClosed > 0) throw new PharmacySupplierReturnError('RETURN_WINDOW_CLOSED');
             throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
           }
           const stamp = at.toISOString().slice(0, 10).replaceAll('-', '');

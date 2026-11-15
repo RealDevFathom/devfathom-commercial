@@ -42,6 +42,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 
 import { admittedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -362,6 +363,55 @@ describe('DEV-728 distributor expiry claim draft', () => {
       select: { id: true, name: true },
     });
     expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('leaves expired lots off the claim, since their return window has closed', async () => {
+    const { createMany } = prepare();
+    const lots = db.pharmacyInventoryLot.findFirst.getMockImplementation()!;
+    db.pharmacyInventoryLot.findFirst.mockImplementation(
+      async (args: { where: { id: string } }) => {
+        const lot = await lots(args);
+        return args.where.id === 'lot_1'
+          ? { ...lot, batch: { ...lot.batch, expiresAt: new Date(Date.now() - 86_400_000) } }
+          : lot;
+      }
+    );
+
+    await expect(claim(['lot_1', 'lot_2'])).resolves.toMatchObject({
+      created: true,
+      lineCount: 1,
+      skipped: 1,
+    });
+    expect(createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ inventoryLotId: 'lot_2' })],
+    });
+  });
+
+  it('refuses a claim whose every lot has expired', async () => {
+    prepare();
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      batch: {
+        batchNumber: 'B',
+        expiresAt: new Date(Date.now() - 86_400_000),
+        state: 'ACTIVE',
+        medicine: {},
+      },
+    });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'RETURN_WINDOW_CLOSED',
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses more positions than one claim may carry', async () => {
+    prepare();
+    await expect(
+      claim(Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 1 }, (_, i) => `lot_${i}`))
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
   });
 

@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { csvCell } from '@/lib/csv';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 import {
   Table,
   TableBody,
@@ -531,7 +532,13 @@ function DistributorSection({
   headingId: string;
   props: ExpiryBoardProps;
 }) {
-  const claimable = group.rows.filter((row) => !row.returnDraft && returnableUnits(row) > 0);
+  // Expired lots stay off the claim: their return window has closed, and one
+  // closed line would stop the whole claim from being submitted.
+  const claimable = group.rows.filter(
+    (row) => !row.expired && !row.returnDraft && returnableUnits(row) > 0
+  );
+  // Rows arrive soonest-expiry first, so a capped claim takes the most urgent lots.
+  const batch = claimable.slice(0, EXPIRY_CLAIM_MAX_POSITIONS);
   const value = group.rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
   const open = group.rows.find((row) => row.returnDraft)?.returnDraft ?? null;
   return (
@@ -556,7 +563,7 @@ function DistributorSection({
             <input name="within" type="hidden" value={props.withinDays} />
             <input name="supplierId" type="hidden" value={group.supplierId} />
             <input name="reason" type="hidden" value="Near-expiry return claim" />
-            {claimable.map((row) => (
+            {batch.map((row) => (
               <input
                 key={row.key}
                 name="position"
@@ -577,7 +584,8 @@ function DistributorSection({
         </p>
       ) : claimable.length === 0 ? (
         <p className="text-xs text-text-muted" role="note">
-          Every lot here is already on a return or reserved for a claim.
+          No lot here can go on a claim: expired lots are past the supplier return window, and the
+          rest are already on a return or reserved.
           {open ? (
             <>
               {' '}
@@ -592,8 +600,13 @@ function DistributorSection({
         </p>
       ) : (
         <p className="text-xs text-text-muted">
-          Draft return claim puts {claimable.length} lot{claimable.length === 1 ? '' : 's'} on one
-          expiry claim draft. It reserves nothing until it is submitted.
+          Draft return claim puts {batch.length} lot{batch.length === 1 ? '' : 's'} on one expiry
+          claim draft
+          {claimable.length > batch.length
+            ? ` (the ${batch.length} expiring soonest; draft again for the other ${claimable.length - batch.length})`
+            : ''}
+          . Expired lots are left off because their return window has closed. A draft reserves
+          nothing until it is submitted.
         </p>
       )}
       <div className="space-y-3">
