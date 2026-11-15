@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { cancelMyCustomerOrder, isCustomerOrderableMedicine } from './customer-ordering';
+import {
+  cancelMyCustomerOrder,
+  isCustomerOrderableMedicine,
+  transitionCustomerOrder,
+} from './customer-ordering';
 
 const otc = {
   saleable: true,
@@ -98,5 +102,44 @@ describe('MKT-03/MKT-05 reservation lifecycle', () => {
         ],
       ])
     );
+  });
+});
+
+describe('DEV-63 dispatch distance', () => {
+  function orderDb() {
+    const updates: unknown[] = [];
+    const db = {
+      $queryRaw: async () => [],
+      pharmacyCustomerOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          status: 'PACKING',
+          fulfillment: 'DELIVER',
+          counterSaleId: null,
+          reservationExpiresAt: new Date(Date.now() + 60_000),
+        }),
+        update: async (input: unknown) => {
+          updates.push(input);
+          return input;
+        },
+      },
+    };
+    return { db: db as never, updates };
+  }
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'staff-1' };
+
+  it('records a distance only on dispatch and only within the stored range', async () => {
+    for (const input of [
+      { action: 'pack' as const, deliveryDistanceMeters: 1200 },
+      { action: 'dispatch' as const, runnerUserId: 'runner-1', deliveryDistanceMeters: -1 },
+      { action: 'dispatch' as const, runnerUserId: 'runner-1', deliveryDistanceMeters: 200_001 },
+      { action: 'dispatch' as const, runnerUserId: 'runner-1', deliveryDistanceMeters: 1.5 },
+    ]) {
+      const { db, updates } = orderDb();
+      await expect(
+        transitionCustomerOrder(db, scope, { orderId: 'order-1', ...input })
+      ).rejects.toMatchObject({ reason: 'INVALID_DELIVERY_DISTANCE' });
+      expect(updates).toEqual([]);
+    }
   });
 });
