@@ -18,6 +18,9 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+// The seasonal calendar panel has its own tests and tRPC hooks.
+vi.mock('./seasonal-calendar-panel', () => ({ SeasonalCalendarPanel: () => null }));
+
 import { ScenarioConsole } from './scenario-console';
 
 const props = {
