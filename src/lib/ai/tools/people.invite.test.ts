@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  roleFindFirst: vi.fn(),
+  roleFindMany: vi.fn(),
   resolveEntitlements: vi.fn(),
 }));
 
@@ -34,6 +36,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { buildPeopleTools } from './people';
+import { templates } from '@/lib/email';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
 const db = {
@@ -41,6 +44,7 @@ const db = {
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
+  organizationRole: { findFirst: mocks.roleFindFirst, findMany: mocks.roleFindMany },
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
@@ -49,7 +53,7 @@ const db = {
     }),
 };
 
-function inviteTool() {
+function peopleTools() {
   const helpers = {
     db,
     isAdmin: true,
@@ -59,8 +63,12 @@ function inviteTool() {
     can: vi.fn(async () => true),
     audit: vi.fn(),
   } as unknown as AssistantHelpers;
-  const tools = buildPeopleTools(helpers);
-  return tools.inviteMember as unknown as {
+  return buildPeopleTools(helpers);
+}
+
+function inviteTool() {
+  return peopleTools().inviteMember as unknown as {
+    inputSchema: { parse: (input: Record<string, unknown>) => Record<string, unknown> };
     execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
   };
 }
@@ -105,6 +113,96 @@ describe('assistant inviteMember guards', () => {
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ email: 'new.person@company.com' }),
+      })
+    );
+  });
+
+  it.each([
+    ['general-manager', 'General Manager'],
+    ['branch-manager', 'Branch Manager'],
+    ['bar-barista', 'Bar / Barista'],
+    ['accountant', 'Accountant'],
+  ])('assigns the tenant %s role through the tool schema', async (key, name) => {
+    mocks.findFirst.mockResolvedValue(null);
+    const id = `role_${key}`;
+    mocks.roleFindFirst.mockResolvedValue({ id, name });
+    const tool = inviteTool();
+
+    const result = await tool.execute(
+      tool.inputSchema.parse({ ...base, email: 'staff@company.com', organizationRoleId: id })
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(templates.inviteMember).toHaveBeenCalledWith(expect.objectContaining({ role: name }));
+    expect(mocks.roleFindFirst).toHaveBeenCalledWith({
+      where: { id, organizationId: 'org_1' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationRoleId: id }),
+      })
+    );
+  });
+
+  it('lists tenant role IDs for the invite tool', async () => {
+    const roles = [{ id: 'role_gm', key: 'general-manager', name: 'General Manager' }];
+    mocks.roleFindMany.mockResolvedValue(roles);
+    const tool = peopleTools().listStaffRoles as unknown as {
+      execute: (input: object) => Promise<unknown>;
+    };
+
+    expect(await tool.execute({})).toEqual(roles);
+    expect(mocks.roleFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1' },
+      orderBy: { name: 'asc' },
+      select: { id: true, key: true, name: true },
+    });
+  });
+
+  it('rejects a role outside the tenant catalog before writing', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.roleFindFirst.mockResolvedValue(null);
+
+    const result = await inviteTool().execute({
+      ...base,
+      email: 'staff@company.com',
+      organizationRoleId: 'another_tenant_role',
+    });
+
+    expect(result.error).toBe('Invalid role template.');
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null])(
+    'preserves a pending role when no template is selected (%s)',
+    async (organizationRoleId) => {
+      mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+      mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+
+      await inviteTool().execute({ ...base, email: 'staff@company.com', organizationRoleId });
+
+      expect(mocks.update.mock.calls[0]![0].data).not.toHaveProperty('organizationRoleId');
+      expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('replaces a pending role when a valid template is selected', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+    mocks.roleFindFirst.mockResolvedValue({ id: 'role_branch', name: 'Branch Manager' });
+
+    await inviteTool().execute({
+      ...base,
+      email: 'staff@company.com',
+      organizationRoleId: 'role_branch',
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationRoleId: 'role_branch' }),
       })
     );
   });
@@ -173,6 +271,14 @@ describe('assistant inviteMember guards', () => {
         execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
       }
     ).execute({ ...base, email: 'new.person@company.com' });
+
+    const roleTool = tools.listStaffRoles as unknown as {
+      execute: (input: object) => Promise<{ error?: string }>;
+    };
+    expect(await roleTool.execute({})).toEqual({
+      error: 'Only admins can list staff role templates.',
+    });
+    expect(mocks.roleFindMany).not.toHaveBeenCalled();
 
     expect(result.error).toBe('Only admins can invite members.');
     expect(mocks.create).not.toHaveBeenCalled();

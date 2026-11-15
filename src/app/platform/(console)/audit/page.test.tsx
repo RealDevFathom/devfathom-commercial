@@ -79,7 +79,13 @@ describe('PlatformAuditPage', () => {
         error: null,
       }))
     );
-    mocks.withPlatformDb.mockImplementation((run) => run({ platformAuditLog: { findMany } }));
+    mocks.withPlatformDb.mockImplementation((run) =>
+      run({
+        platformAuditLog: { findMany },
+        platformUser: { findMany: vi.fn().mockResolvedValue([]) },
+        user: { findMany: vi.fn().mockResolvedValue([]) },
+      })
+    );
     const cursor = Buffer.from(JSON.stringify({ createdAt, id: 'audit-999' })).toString(
       'base64url'
     );
@@ -132,6 +138,82 @@ describe('PlatformAuditPage', () => {
     expect(csv).toContain(`'` + '=HYPERLINK(""https://example.invalid"")');
     expect(csv).toContain('audit-002');
     expect(csv).not.toContain('audit-001');
+  });
+
+  it('searches actor name and email by resolving matching platform and tenant actors', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const platformUserFindMany = vi.fn().mockResolvedValue([{ id: 'platform-actor-1' }]);
+    const userFindMany = vi.fn().mockResolvedValue([{ id: 'tenant-actor-1' }]);
+    mocks.withPlatformDb.mockImplementation((run) =>
+      run({
+        platformAuditLog: { findMany },
+        platformUser: { findMany: platformUserFindMany },
+        user: { findMany: userFindMany },
+      })
+    );
+    render(await PlatformAuditPage({ searchParams: Promise.resolve({ q: 'admin@devfathom' }) }));
+    const actorMatch = {
+      OR: [
+        { name: { contains: 'admin@devfathom', mode: 'insensitive' } },
+        { email: { contains: 'admin@devfathom', mode: 'insensitive' } },
+      ],
+    };
+    expect(platformUserFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: actorMatch, select: { id: true } })
+    );
+    expect(userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: actorMatch, select: { id: true } })
+    );
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { action: { contains: 'admin@devfathom', mode: 'insensitive' } },
+            { actorPlatformUserId: { in: ['platform-actor-1'] } },
+            { actorTenantUserId: { in: ['tenant-actor-1'] } },
+          ]),
+        }),
+      })
+    );
+    expect(
+      screen.getByPlaceholderText('Search actor name or email, action, target, or reason')
+    ).toHaveAccessibleName('Search');
+  });
+
+  it('scopes tenant actor search to the selected organization and reports actor overflow', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const tenantMatches = Array.from({ length: 1001 }, (_, i) => ({
+      id: `tenant-${String(i).padStart(4, '0')}`,
+    }));
+    const userFindMany = vi.fn().mockResolvedValue(tenantMatches);
+    mocks.withPlatformDb.mockImplementation((run) =>
+      run({
+        platformAuditLog: { findMany },
+        platformUser: { findMany: vi.fn().mockResolvedValue([]) },
+        user: { findMany: userFindMany },
+      })
+    );
+    render(
+      await PlatformAuditPage({ searchParams: Promise.resolve({ q: 'pharma', org: 'org-1' }) })
+    );
+    expect(userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-1' }),
+        take: 1001,
+      })
+    );
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { actorTenantUserId: { in: tenantMatches.slice(0, 1000).map(({ id }) => id) } },
+          ]),
+        }),
+      })
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This search matched more than 1000 actor accounts'
+    );
   });
 
   it.each([

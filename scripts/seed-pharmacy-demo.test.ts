@@ -330,7 +330,7 @@ test('valid evidence yields deterministic zero-write coverage without mutating i
   });
 });
 
-for (const environment of ['lan', 'azure-staging'] as const) {
+for (const environment of ['lan', 'staging'] as const) {
   test(`${environment} accepts only matching offline evidence, never live verification`, () => {
     const e = fixture();
     e.target.environment = e.observed.environment = environment;

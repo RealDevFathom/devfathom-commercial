@@ -1,16 +1,13 @@
 name: Deploy staging
 
-# Disabled automatic deploys (release/wp05-07, 22 Oct 2026): this workflow
-# deployed to the retired Azure staging on every push to main. Staging now runs
-# on AWS (ap-southeast-1) per docs AWS runbook, so merging the WP05-07 release
-# into main must not trigger an Azure deploy. Manual dispatch only until the
-# workflow is retired or pointed at AWS.
+# Release gates only: this workflow has no deploy job. Staging runs on AWS
+# (ap-southeast-1) and is deployed per docs/deploy/aws.md, so a manual dispatch
+# here runs the gates and deploys nothing.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: staging
@@ -57,7 +54,7 @@ jobs:
       AUTH_SECRET: ci-only-secret-value-not-used-anywhere-else
       # The end-to-end step serves the production build, and Auth.js refuses an
       # untrusted host in production mode. Staging sets both of these on the
-      # Container App for the same reason.
+      # web service for the same reason.
       AUTH_URL: http://localhost:4319
       NEXT_PUBLIC_APP_URL: http://localhost:4319
       AUTH_TRUST_HOST: 'true'
@@ -184,47 +181,3 @@ jobs:
             playwright-artifacts
             test-results
           retention-days: 7
-
-  deploy:
-    needs: gates
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build and push immutable image
-        id: image
-        shell: bash
-        run: |
-          set -euo pipefail
-          az acr login --name "${{ vars.AZURE_ACR_NAME }}"
-          tag="${{ vars.AZURE_ACR_NAME }}.azurecr.io/devfathom-commercial:${GITHUB_SHA}"
-          docker build --platform linux/amd64 --tag "$tag" .
-          docker push "$tag"
-          digest=$(az acr repository show --name "${{ vars.AZURE_ACR_NAME }}" --image "devfathom-commercial:${GITHUB_SHA}" --query digest --output tsv)
-          echo "uri=${{ vars.AZURE_ACR_NAME }}.azurecr.io/devfathom-commercial@$digest" >> "$GITHUB_OUTPUT"
-      - name: Migrate and seed staging
-        shell: bash
-        run: |
-          set -euo pipefail
-          az containerapp job update --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --image "${{ steps.image.outputs.uri }}" --output none
-          execution=$(az containerapp job start --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --query name --output tsv)
-          for attempt in {1..90}; do
-            status=$(az containerapp job execution show --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_MIGRATION_JOB_NAME }}" --job-execution-name "$execution" --query properties.status --output tsv)
-            case "$status" in
-              Succeeded) break ;;
-              Failed|Stopped|Degraded) echo "Migration execution failed: $status" >&2; exit 1 ;;
-            esac
-            if [ "$attempt" -eq 90 ]; then echo 'Migration execution timed out.' >&2; exit 1; fi
-            sleep 10
-          done
-      - name: Deploy and smoke staging
-        shell: bash
-        run: |
-          set -euo pipefail
-          az containerapp update --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" --image "${{ steps.image.outputs.uri }}" --output none
-          fqdn=$(az containerapp show --resource-group "${{ vars.AZURE_STAGING_RESOURCE_GROUP }}" --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" --query properties.configuration.ingress.fqdn --output tsv)
-          curl --fail --show-error --silent --retry 12 --retry-delay 10 "https://$fqdn/api/health"

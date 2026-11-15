@@ -85,4 +85,24 @@ describe('resolveScan stock-in', () => {
       label: 'Amoxil 500',
     });
   });
+
+  it('prefers an exact product name chosen from the live list over a longer match', async () => {
+    const findFirst = vi.fn(async ({ where }: { where: { productName: { equals?: string } } }) =>
+      where.productName.equals === 'Panadol'
+        ? { id: 'med_panadol', productName: 'Panadol' }
+        : { id: 'med_co', productName: 'Co-Panadol' }
+    );
+    const db = {
+      medicineBarcode: { findFirst: vi.fn().mockResolvedValue(null) },
+      medicine: { findFirst },
+    } as unknown as ScopedDb;
+    await expect(resolveScan(db, scope, 'Panadol')).resolves.toMatchObject({
+      kind: 'medicine',
+      medicineId: 'med_panadol',
+    });
+    expect(findFirst.mock.calls[0]?.[0].where.productName).toEqual({
+      equals: 'Panadol',
+      mode: 'insensitive',
+    });
+  });
 });

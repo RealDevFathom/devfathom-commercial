@@ -287,6 +287,90 @@ describe('pharmacy administrator report bootstrap (#434)', () => {
   });
 });
 
+describe('pharmacyReports.branches role scope (DEV-20)', () => {
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+  });
+
+  it('gives an operational-report holder every active branch of the organization', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    await expect(caller().branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_1', name: 'Main' }],
+    });
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['cashier', 'pharmacist', 'procurement manager'])(
+    'gives a %s only the active branches they are assigned to, never an error',
+    async () => {
+      mocks.can.mockResolvedValue(false);
+      mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+      await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+        organizationId: 'org_1',
+        branches: [{ id: 'branch_1', name: 'Main' }],
+      });
+      expect(mocks.assignmentFindMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', userId: 'user_admin', active: true },
+        select: { branchId: true },
+      });
+      expect(mocks.branchFindMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', active: true, id: { in: ['branch_1'] } },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      });
+    }
+  );
+
+  it('returns an empty list for an unassigned member without reading branches', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.assignmentFindMany.mockResolvedValue([]);
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [],
+    });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('gives a session from another organization nothing, even with the operational grant', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.session!.user.organizationId = 'org_foreign';
+    await expect(pharmacyReportsRouter.createCaller(ctx).branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [],
+    });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a cashier saving the command-centre layout on the server', async () => {
+    mocks.can.mockImplementation(async (_subject, action) =>
+      ['pharmacy:counter', 'pharmacy:orders'].includes(action)
+    );
+    const { pharmacyDashboardDefault } = await import('@/lib/pharmacy/dashboard');
+    await expect(
+      caller('EMPLOYEE').updatePreferences(pharmacyDashboardDefault('EMPLOYEE'))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('still refuses a workspace without Pharmacy Reports before any read', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    mocks.can.mockResolvedValue(true);
+    await expect(caller().branches()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('Reports supplier filter names', () => {
   beforeEach(() => {
     mocks.can.mockResolvedValue(true);

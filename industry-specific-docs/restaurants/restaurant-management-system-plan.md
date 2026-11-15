@@ -33,7 +33,7 @@ The shared DevFathom platform will continue to own:
 - authentication, sessions, seats, roles, and permissions;
 - modules, packages, contracts, limits, and organization overrides;
 - audit infrastructure, notifications, files, APIs, and webhooks;
-- shared and dedicated Azure deployment modes.
+- shared and dedicated AWS deployment modes.
 
 Restaurant-specific domains will own POS, restaurant orders, menu management, recipes, stock, procurement, shifts, SOP compliance, restaurant customers, loyalty, and restaurant analytics.
 
@@ -764,7 +764,7 @@ A cashier interaction must not require a network round trip for every item tap. 
 
 A revoked device must be rejected server-side even when it submits previously queued commands or holds a cached catalog. Client event time is untrusted metadata; authoritative creation, acceptance, transition, and completion times come from the server, while offline-origin time is retained separately for reconciliation.
 
-Phase 0 must benchmark the intended launch locations against the selected Azure region and define measurable p50/p95 targets for tap-to-feedback, order submission, payment initiation, kitchen acknowledgement, item-availability (86) propagation to cached POS/KDS clients, and recovery. Region assumptions and approximate round-trip figures are not acceptance evidence.
+Phase 0 must benchmark the intended launch locations against the selected AWS region and define measurable p50/p95 targets for tap-to-feedback, order submission, payment initiation, kitchen acknowledgement, item-availability (86) propagation to cached POS/KDS clients, and recovery. Region assumptions and approximate round-trip figures are not acceptance evidence.
 
 ### 12.4 Offline promise
 
@@ -844,7 +844,7 @@ Packages and limits are commercial entitlements, not a promise of self-service b
 - custom role and permission design;
 - SSO and SCIM where contracted;
 - APIs and webhooks;
-- dedicated Azure deployment where contracted;
+- dedicated AWS deployment where contracted;
 - custom integrations and reporting only where contracted and scoped through an approved statement of work;
 - contracted support, retention, and residency terms.
 
