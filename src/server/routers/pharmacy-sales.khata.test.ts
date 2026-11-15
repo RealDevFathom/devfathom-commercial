@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 // DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
 vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
@@ -141,6 +141,15 @@ function fixture(
     caller: () => app.createCaller(context as unknown as TRPCContext).pharmacySales,
   };
 }
+// DEV-630: counter money writes book on the current business day, so the clock is
+// pinned to the fixture's day (the fixture organization has no zone, so UTC).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(readPharmacyTenderOutcome).mockResolvedValue({
@@ -252,7 +261,9 @@ describe('Khata read and write permissions (#831)', () => {
       expect(applyPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
-        { ...input, type: 'CREDIT' }
+        { ...input, type: 'CREDIT' },
+        undefined,
+        { requireCurrentBusinessDate: true }
       );
       expect(f.db.pharmacyKhataEvent.create).toHaveBeenCalledExactlyOnceWith({
         data: expect.objectContaining({ kind: 'CHARGE', amountMinor: 100 }),
@@ -274,7 +285,8 @@ describe('Khata read and write permissions (#831)', () => {
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
-        settlement
+        settlement,
+        { requireCurrentBusinessDate: true }
       );
       expect(f.db.pharmacyKhataEvent.create).toHaveBeenLastCalledWith({
         data: expect.objectContaining({ kind: 'PAYMENT', amountMinor: 50 }),
@@ -688,7 +700,9 @@ describe('Khata router trust and recovery boundary', () => {
     expect(applyPharmacyTender).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
-      { ...input, type: 'CREDIT' }
+      { ...input, type: 'CREDIT' },
+      undefined,
+      { requireCurrentBusinessDate: true }
     );
     expect(f.db.pharmacyKhataEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({

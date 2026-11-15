@@ -71,28 +71,62 @@ function helpers() {
 
 describe('DashboardPage vertical dispatch', () => {
   it.each([
-    ['owner', 'ADMIN', '/restaurant'],
-    ['waiter', 'EMPLOYEE', '/pos'],
+    ['owner', 'ADMIN', ['admin:access', 'orders:take'], true, '/restaurant'],
+    ['delegated manager', 'EMPLOYEE', ['admin:access'], true, '/restaurant'],
+    ['waiter', 'EMPLOYEE', ['orders:take'], true, '/pos'],
+    ['cashier', 'EMPLOYEE', ['orders:take'], true, '/pos'],
+    ['restricted administrator', 'ADMIN', ['orders:take'], true, '/pos'],
+    ['kitchen', 'EMPLOYEE', ['kitchen:operate'], true, null],
+    ['inventory', 'EMPLOYEE', ['inventory:read'], true, null],
+    ['finance', 'EMPLOYEE', ['money:read'], true, null],
+    ['no grants', 'EMPLOYEE', [], true, null],
+    ['administrator with denied grants', 'ADMIN', [], true, null],
+    ['waiter without POS module', 'EMPLOYEE', ['orders:take'], false, null],
   ])(
-    'redirects a Restaurant %s (%s) to %s before loading dashboard data',
-    async (_persona, role, target) => {
+    'selects the effective landing for %s (%s)',
+    async (_persona, role, capabilities, posEnabled, target) => {
       const agencyHelpers = helpers();
+      const user = { id: 'restaurant-user', role, status: 'ACTIVE' };
+      mocks.can.mockImplementation(async (_subject, action) => capabilities.includes(action));
+      const enabledModules = ['restaurant-core', ...(posEnabled ? ['restaurant-pos'] : [])];
       mocks.createSSRHelpers.mockResolvedValue({
         helpers: agencyHelpers,
-        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
-        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+        organization: { id: 'restaurant-org' },
+        session: { user },
+        entitlements: { vertical: 'RESTAURANT', enabledModules },
       });
 
-      await expect(
-        DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
-      ).rejects.toThrow('redirect');
-
-      expect(mocks.redirect).toHaveBeenCalledWith(target);
+      const render = DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+      if (target) {
+        await expect(render).rejects.toThrow('redirect');
+        expect(mocks.redirect).toHaveBeenCalledWith(target);
+      } else {
+        const page = await render;
+        expect(mocks.redirect).not.toHaveBeenCalled();
+        expect(page.props.children.type).toBe(RestaurantDashboardContent);
+        expect(page.props.children.props.enabledModules).toEqual(enabledModules);
+      }
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
-      expect(mocks.withTenantDb).not.toHaveBeenCalled();
+      expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-org', expect.any(Function));
+      for (const call of mocks.can.mock.calls) {
+        expect(call[0]).toEqual(user);
+        expect(call[3]).toEqual({ db: mocks.db });
+      }
     }
   );
+
+  it('does not choose a restaurant sign-in destination without a tenant', async () => {
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: 'u', role: 'EMPLOYEE' } },
+      entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-pos'] },
+    });
+    const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(RestaurantDashboardContent);
+  });
 
   it.each(['ADMIN', 'EMPLOYEE'])(
     'retains the Restaurant dashboard on explicit navigation for %s',

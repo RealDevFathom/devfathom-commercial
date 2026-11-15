@@ -2,7 +2,18 @@
 
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  CalendarClock,
+  Eye,
+  EyeOff,
+  Megaphone,
+  Pencil,
+  RotateCcw,
+  Save,
+  ShoppingCart,
+} from 'lucide-react';
 
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -17,6 +28,7 @@ import {
   pharmacyDashboardDefault,
   type PharmacyDashboardPreference,
 } from '@/lib/pharmacy/dashboard';
+import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -84,7 +96,7 @@ function WidgetState({
         <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
         <p className="text-sm text-text-body">
           {denied
-            ? `${item.permission} is required. No protected values are shown.`
+            ? `${plainReportPermission(item.permission)} access is required. No protected values are shown.`
             : 'This widget could not load. Other dashboard tools remain available.'}
         </p>
         {!denied ? (
@@ -100,7 +112,7 @@ function WidgetState({
       <div role="status" className="space-y-3">
         <StatusPill status="Restricted" tone="warning" />
         <p className="text-sm text-text-body">
-          reports:financial is required. No protected values are shown.
+          Financial reports access is required. No protected values are shown.
         </p>
       </div>
     );
@@ -124,14 +136,80 @@ function WidgetState({
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
-          sub={
-            value == null
-              ? 'Not available in this release'
-              : `Source: ${contract?.source ?? 'Not asserted'}`
-          }
+          sub={value == null ? 'Not available in this release' : sourceLine(contract?.source)}
         />
       ))}
     </div>
+  );
+}
+
+// DEV-594: say where a figure comes from in the owner's words, never as the
+// internal table names the metric contract keeps for audit.
+const sourceLine = (source: string | null | undefined) => {
+  const plain = plainReportSource(source);
+  return plain ? `Based on ${plain}` : 'Source not recorded';
+};
+
+/**
+ * DEV-594: one discoverable entry point to the advisory tools that otherwise sit
+ * deep in Reports and Marketing. Each link is offered only to someone the target
+ * page admits; the pages themselves still enforce access on the server.
+ */
+function AiAdviceCard({
+  owner,
+  financial,
+  growth,
+}: {
+  owner: boolean;
+  financial: boolean;
+  growth: boolean;
+}) {
+  const entries = [
+    {
+      href: '/pharmacy/reports/replenishment',
+      label: 'Reorder advice',
+      detail: 'Compare recorded use with stock on hand before you raise a purchase order.',
+      icon: ShoppingCart,
+      shown: true,
+    },
+    {
+      href: '/pharmacy/reports#expiry-advisor',
+      label: 'Expiry advice',
+      detail: 'Stock likely to expire before it sells, ranked by value at risk.',
+      icon: CalendarClock,
+      shown: owner && financial,
+    },
+    {
+      href: '/pharmacy/marketing',
+      label: 'Growth',
+      detail: 'Customer campaigns and win-back drafts for you to review.',
+      icon: Megaphone,
+      shown: growth,
+    },
+  ].filter((entry) => entry.shown);
+  return (
+    <SectionCard eyebrow="Advisory only" title="AI advice" titleLevel={2}>
+      <p className="mb-4 max-w-2xl text-sm text-text-muted">
+        Suggestions built from your own pharmacy records. Nothing is ordered, moved or sent until a
+        person reviews it.
+      </p>
+      <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.map(({ href, label, detail, icon: Icon }) => (
+          <li key={href} className="min-w-0">
+            <Link
+              href={href}
+              className="flex h-full min-h-11 gap-3 rounded-md border border-border-subtle p-4 transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-text-muted" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-text-strong">{label}</span>
+                <span className="mt-1 block text-sm text-text-muted">{detail}</span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
   );
 }
 
@@ -224,6 +302,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
 }
 
 function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
+  const { enabledModules } = useEntitlements();
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
@@ -330,6 +409,13 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                   : 'Loading today’s figures…'}
         </p>
       </SectionCard>
+      {catalog.data && !branchesDenied ? (
+        <AiAdviceCard
+          owner={catalog.data.permissions.owner}
+          financial={catalog.data.permissions.financial}
+          growth={role === 'ADMIN' && isModuleGranted('pharmacy-crm', enabledModules)}
+        />
+      ) : null}
       {editing && canEdit ? (
         <SectionCard
           eyebrow="Edit mode"
@@ -411,8 +497,8 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           <div role="status" className="space-y-3">
             <StatusPill status="Restricted" tone="warning" />
             <p className="text-sm text-text-body">
-              reports:operational is required. No protected values are shown, and the pharmacy tools
-              in your menu remain available.
+              Operational reports access is required. No protected values are shown, and the
+              pharmacy tools in your menu remain available.
             </p>
           </div>
         </SectionCard>
@@ -455,7 +541,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                   className={cn('min-w-0', preference.span === 'wide' && 'lg:col-span-2')}
                 >
                   <SectionCard
-                    eyebrow={item.permission}
+                    eyebrow={plainReportPermission(item.permission)}
                     title={item.label}
                     titleLevel={2}
                     actions={

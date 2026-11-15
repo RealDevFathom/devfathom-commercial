@@ -56,6 +56,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+  // DEV-630: the server books money on today in the workspace zone only.
+  BUSINESS_DATE_NOT_CURRENT:
+    'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
@@ -76,7 +79,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
   UNCERTIFIED_PROVIDER:
-    'This card terminal is not certified for live payments. Take another tender.',
+    'This tender needs a connected provider. Take another tender.',
+  INVALID_MANUAL_CAPTURE:
+    'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',

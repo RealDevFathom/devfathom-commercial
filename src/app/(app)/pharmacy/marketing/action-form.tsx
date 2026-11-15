@@ -12,6 +12,7 @@ export function MarketingActionForm({
   label,
   children,
   disabled = false,
+  timeZone,
 }: {
   branchId: string;
   operation: string;
@@ -19,6 +20,8 @@ export function MarketingActionForm({
   label: string;
   children?: ReactNode;
   disabled?: boolean;
+  /** Workspace zone the form's calendar days and local times are entered in. */
+  timeZone?: string;
 }) {
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<Awaited<ReturnType<typeof marketingAction>> | null>(null);
@@ -34,21 +37,26 @@ export function MarketingActionForm({
         setResult(null);
         const data = new FormData(event.currentTarget);
         startTransition(async () => {
+          let next: Awaited<ReturnType<typeof marketingAction>>;
           try {
-            setResult(await marketingAction(data));
+            next = await marketingAction(data);
           } catch {
-            setResult({
+            next = {
               error: true,
               message:
                 'Connection lost. Reload history before retrying. Your form values are preserved.',
-            });
+            };
           }
+          // Updates after an await leave the transition unless re-wrapped; keep the feedback and
+          // the re-enabled form in one commit so a message never shows beside a disabled form.
+          startTransition(() => setResult(next));
         });
       }}
     >
       <input type="hidden" name="branchId" value={branchId} />
       <input type="hidden" name="operation" value={operation} />
       {campaignId && <input type="hidden" name="campaignId" value={campaignId} />}
+      {timeZone && <input type="hidden" name="timeZone" value={timeZone} />}
       <fieldset disabled={pending || disabled} className="min-w-0 space-y-4">
         {children}
         <Button

@@ -61,6 +61,20 @@ describe('Z report', () => {
     expect(html).toContain('RAAST: ۱۰٫۰۰ · واپسی: ۱٫۰۰ · خالص: ۹٫۰۰');
     expect(html).not.toContain('10.00');
   });
+  it('DEV-713 prints who confirmed manual tenders under each tender type', () => {
+    const tenderTotals = [
+      { type: 'CARD', amountMinor: 1300, refundMinor: 0, netMinor: 1300, confirmers: [
+        { id: 'u1', name: 'Ayesha', count: 1, amountMinor: 250 },
+        { id: 'u2', name: '<b>Bilal</b>', count: 2, amountMinor: 1050 },
+      ] },
+      { type: 'CASH', amountMinor: 500, refundMinor: 0, netMinor: 500 },
+    ];
+    const html = buildCounterBrowserZReport({ ...report, tenderTotals }, 'en');
+    expect(html).toContain('CARD: 13.00 · Refunds: 0.00 · Net: 13.00\n  Confirmed by Ayesha · 1 · 2.50\n  Confirmed by &lt;b&gt;Bilal&lt;/b&gt; · 2 · 10.50\nCASH: 5.00');
+    expect(html).not.toContain('<b>');
+    const ur = buildCounterBrowserZReport({ ...report, tenderTotals }, 'ur');
+    expect(ur).toContain('تصدیق کنندہ Ayesha · ۱ · ۲٫۵۰');
+  });
   it('refuses invalid amounts', () => {
     expect(() => buildCounterBrowserZReport({ ...report, cashCountedMinor: NaN }, 'en')).toThrow();
   });

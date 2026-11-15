@@ -60,6 +60,10 @@ export class PharmacyReceivingError extends Error {
       | 'PURCHASE_ORDER_LINE_ITEM_MISMATCH'
       | 'EXPIRED_PACK'
       | 'SERIALIZED_PACK_QUANTITY'
+      /** Reversal refused: received units have since been sold, moved or written off. */
+      | 'REVERSAL_STOCK_MOVED'
+      /** Reversal refused: the units are still here, but sealed packs were opened. */
+      | 'REVERSAL_PACKS_OPENED'
   ) {
     super(reason);
   }
@@ -361,7 +365,13 @@ export function receiptLandedCosts(input: {
 // ---------------------------------------------------------------------------
 
 export type ReceivingExceptionKind =
-  'SHORTAGE' | 'OVERAGE' | 'DAMAGE' | 'PRICE_CONFLICT' | 'PACK_CONFLICT';
+  | 'SHORTAGE'
+  | 'OVERAGE'
+  | 'DAMAGE'
+  | 'PRICE_CONFLICT'
+  | 'PACK_CONFLICT'
+  | 'BONUS_SHORTAGE'
+  | 'SCHEME_EXPIRED';
 
 export type MatchException = {
   kind: ReceivingExceptionKind;
@@ -381,6 +391,13 @@ export type OrderedTerms = {
   listPricePerPackMinor: number;
   /** Canonical units already booked against this order line by earlier receipts. */
   previouslyReceivedUnits: number;
+  /**
+   * DEV-690: scheme (free) units already booked against this order line by
+   * earlier receipts. Present only when the bonus leg is being checked.
+   */
+  previouslyReceivedBonusUnits?: number;
+  /** DEV-690: last day the distributor's scheme on this order line is honoured. */
+  schemeValidUntil?: Date | null;
 };
 
 /** The goods-and-invoice side of the match. */
@@ -390,6 +407,10 @@ export type ReceivedTerms = {
   rejectedCanonicalUnits: number;
   rejectionReason: string | null;
   invoicedPricePerPackMinor: number;
+  /** DEV-690: the free units within `arrivedCanonicalUnits`. */
+  bonusCanonicalUnits?: number;
+  /** DEV-690: when the goods arrived, judged against the scheme's validity. */
+  receivedAt?: Date;
 };
 
 /**
@@ -439,6 +460,47 @@ export function matchReceiptLine(input: {
         detail: `Ordered ${expected} canonical units; ${observed} received so far, over by ${observed - expected}.`,
         expectedUnits: expected,
         observedUnits: observed,
+        expectedMinor: null,
+        observedMinor: null,
+      });
+    }
+  }
+
+  // DEV-690: the scheme leg. The total above already counts free units, so a
+  // supplier shipping extra paid packs in place of the bonus would match on
+  // quantity alone; the free units are checked on their own.
+  if (ordered && ordered.bonusCanonicalUnits > 0) {
+    if (received.bonusCanonicalUnits !== undefined) {
+      assertUnits(received.bonusCanonicalUnits);
+      const previousBonus = ordered.previouslyReceivedBonusUnits ?? 0;
+      assertUnits(previousBonus);
+      const bonusObserved = previousBonus + received.bonusCanonicalUnits;
+      if (bonusObserved < ordered.bonusCanonicalUnits) {
+        exceptions.push({
+          kind: 'BONUS_SHORTAGE',
+          detail:
+            `Scheme promised ${ordered.bonusCanonicalUnits} free canonical units; ` +
+            `${bonusObserved} received so far, short by ${ordered.bonusCanonicalUnits - bonusObserved}.`,
+          expectedUnits: ordered.bonusCanonicalUnits,
+          observedUnits: bonusObserved,
+          expectedMinor: null,
+          observedMinor: null,
+        });
+      }
+    }
+    if (
+      ordered.schemeValidUntil &&
+      received.receivedAt &&
+      received.receivedAt.getTime() > ordered.schemeValidUntil.getTime()
+    ) {
+      exceptions.push({
+        kind: 'SCHEME_EXPIRED',
+        detail:
+          `Scheme of ${ordered.bonusCanonicalUnits} free canonical units was valid until ` +
+          `${ordered.schemeValidUntil.toISOString().slice(0, 10)}; goods arrived ` +
+          `${received.receivedAt.toISOString().slice(0, 10)}. Confirm the distributor still honours it.`,
+        expectedUnits: null,
+        observedUnits: null,
         expectedMinor: null,
         observedMinor: null,
       });

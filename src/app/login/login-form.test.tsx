@@ -67,6 +67,10 @@ it.each([
   ['credentials', 'Invalid email or password. Please try again.'],
   ['sso_required', 'Password sign-in is disabled. Use your organization identity provider.'],
   ['suspended', 'Your account has been suspended. Please contact your workspace administrator.'],
+  [
+    'rate_limited',
+    'Too many sign-in attempts. Your password was not checked — wait a few minutes and try again.',
+  ],
 ])('associates a %s error with both credentials until either is edited', async (code, message) => {
   m.signIn.mockResolvedValue({ error: 'CredentialsSignin', code });
   render(<LoginForm callbackUrl="/dashboard" ssoEnforced={false} connections={[]} />);
