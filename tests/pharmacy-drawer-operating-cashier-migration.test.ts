@@ -17,10 +17,10 @@ describe('DEV-821 drawer operating-cashier storage contract', () => {
     expect(migration).toContain('DROP POLICY IF EXISTS tenant_isolation');
   });
 
-  it('backfills existing drawers to their opener', () => {
-    expect(migration).toContain(
-      'SET "operatingCashierId" = "openedByActorId" WHERE "operatingCashierId" IS NULL'
-    );
+  it('leaves existing drawers empty, read as their opener, instead of a backfill RLS would hide', () => {
+    expect(migration).not.toMatch(/UPDATE\s+"pharmacy_drawer_sessions"/);
+    expect(migration).toContain('an empty value');
+    expect(migration).toContain('reads as the drawer\'s opener');
   });
 
   it('forces tenant row-level security on the handover table', () => {

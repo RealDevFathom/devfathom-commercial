@@ -10,6 +10,7 @@ import {
   fefoOverrideApprovalPolicy,
   isSoleActiveApprover,
   listCounterApprovers,
+  mayApproveCounterLine,
   type CounterApproval,
   type CounterApprovalKind,
   type CounterApprovalPin,
@@ -48,6 +49,7 @@ import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/coun
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
+  actorManagesBranchDrawers,
   counterCapabilityDecision,
   RECEIPT_READ_CAPABILITIES,
 } from '@/lib/pharmacy/counter-capability';
@@ -114,6 +116,7 @@ import {
   assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { regulatoryProfileInForceWhere } from '@/lib/pharmacy/regulatory-start';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -147,10 +150,13 @@ import {
   optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  linkRestockRecoveries,
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
   readReturnHistory,
+  quoteSaleLineReturn,
+  saleReturnValueMinor,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -180,6 +186,7 @@ import {
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
+import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
   LOST_SALE_OUTCOMES,
   LostSalesError,
@@ -472,6 +479,82 @@ async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
   );
+}
+
+type TenderRefund = Parameters<typeof refundPharmacyTender>[2];
+
+/**
+ * refundTender's work inside its transaction: the stored tender selects the permission
+ * boundary (Khata credit vs. receipt access), then the settlement caps and posts the refund.
+ * DEV-501: returnAndRefund runs the same step right after recording the return.
+ */
+async function refundTenderInTransaction(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  scope: LedgerScope,
+  refund: TenderRefund,
+  receiptAccess: boolean
+) {
+  const tender = await db.pharmacyTender.findFirst({
+    where: {
+      id: refund.originalTenderId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+    select: { type: true },
+  });
+  if (tender?.type !== 'CREDIT') {
+    if (!receiptAccess)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    // Both callers (refundTender, returnAndRefund) have already required a manager or
+    // owner with a fresh PIN (DEV-647), so any open till of the branch may pay the
+    // refund out (DEV-821).
+    return refundPharmacyTender(db, scope, refund, {
+      requireCurrentBusinessDate: true,
+      drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+    });
+  }
+  await khataScope(ctx, scope.branchId, 'write');
+  await bindKhataBranch(db, scope);
+  const charge = await db.pharmacyKhataEvent.findFirst({
+    where: {
+      id: `khata:${refund.originalTenderId}`,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+  });
+  if (charge) {
+    await db.$queryRaw(
+      Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+    );
+  }
+  const result = await refundPharmacyTender(db, scope, refund, {
+    requireCurrentBusinessDate: true,
+  });
+  if (charge && 'refundId' in result && typeof result.refundId === 'string') {
+    const id = `khata-refund:${result.refundId}`;
+    const prior = await db.pharmacyKhataEvent.findFirst({
+      where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
+    });
+    if (!prior)
+      await db.pharmacyKhataEvent.create({
+        data: {
+          id,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          familyAccountId: charge.familyAccountId,
+          kind: 'PAYMENT',
+          amountMinor: refund.amountMinor,
+          settlesChargeId: charge.id,
+          actorId: scope.actorId,
+          note: `Refund ${result.refundId}`,
+        },
+      });
+  }
+  return result;
 }
 
 const SOLE_APPROVER_PASSWORD_REAUTH = 'SOLE_APPROVER_PASSWORD_REAUTH';
@@ -923,22 +1006,47 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
 }
 
 /**
+ * DEV-505: the branches `requireCloseAccess` would let this actor close, so the
+ * day-close screen offers only those (DEV-127's `canClosePharmacyDay` answers
+ * the rail and the console gate from the same rule). An administrator or a
+ * `pharmacy:close` holder reaches every active branch; a Manager
+ * (`pharmacy:manage`) only the active branches they are assigned to, unless
+ * `pharmacy:close` is explicitly denied. Everyone else gets none. Each close
+ * still re-runs `requireCloseAccess` on its branch.
+ */
+export async function dayCloseBranchIds(ctx: TRPCContext): Promise<'ALL' | string[]> {
+  const user = ctx.session?.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !user ||
+    !organizationId ||
+    user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    return [];
+  if (user.role === 'ADMIN') return 'ALL';
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (await can(subjectFromSession(user), 'pharmacy:close', undefined, options)) return 'ALL';
+  return managerBranchIds(ctx, 'pharmacy:close');
+}
+
+/**
  * DEV-290: the password route is the signed-in operator approving their own over-limit
  * charge, so the second-person rule applies: it is allowed only for an owner or manager
- * (or tenant ADMIN) who is genuinely the sole active owner/manager. Everyone else needs a
- * different manager's or owner's PIN at the till.
+ * (`pharmacy:manage`) who is genuinely the sole active owner/manager. Everyone else needs a
+ * different manager's or owner's PIN at the till. DEV-806: the tenant ADMIN role alone does
+ * not approve, on this route or the PIN route.
  */
 async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
-  const user = ctx.session!.user;
-  const subject = subjectFromSession(user);
-  const options = { db: ctx.db, source: 'TRPC' as const };
-  const approver =
-    (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options))) ||
-    (await can(subject, 'pharmacy:manage', undefined, options));
-  return (
-    approver &&
-    (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'))
+  const db = ctx.db as unknown as ScopedDb;
+  // DEV-806: the same approver check the till's PIN route applies to the PIN holder.
+  const approver = await mayApproveCounterLine(
+    db,
+    subjectFromSession(ctx.session!.user),
+    'KHATA_OVER_LIMIT',
+    { source: 'TRPC' }
   );
+  return approver && (await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'));
 }
 
 export const pharmacySalesRouter = router({
@@ -1113,7 +1221,14 @@ export const pharmacySalesRouter = router({
           return recordKhataRepayment(db, scope, input, {
             kind: 'COUNTER',
             actorIsManager:
-              input.tender === 'CASH' && (await actorMayRefund(db, ctx.session!.user)),
+              input.tender === 'CASH' &&
+              (await actorManagesBranchDrawers(
+                db,
+                ctx.session!.user,
+                scope.organizationId,
+                scope.branchId,
+                { source: 'TRPC' }
+              )),
           });
         });
       } catch (error) {
@@ -1524,7 +1639,14 @@ export const pharmacySalesRouter = router({
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         // DEV-821: cash goes only into a till this user runs, unless a manager or owner.
         const actorIsManager =
-          input.type === 'CASH' && (await actorMayRefund(ctx.db, ctx.session!.user));
+          input.type === 'CASH' &&
+          (await actorManagesBranchDrawers(
+            ctx.db,
+            ctx.session!.user,
+            scope.organizationId,
+            scope.branchId,
+            { source: 'TRPC' }
+          ));
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
         // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
@@ -1683,68 +1805,9 @@ export const pharmacySalesRouter = router({
           },
         });
         if ('blocked' in pin) return pin;
-        return await ctx.db.$transaction(async (tx) => {
-          const db = txDb(tx);
-          const tender = await db.pharmacyTender.findFirst({
-            where: {
-              id: input.originalTenderId,
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-            },
-            select: { type: true },
-          });
-          if (tender?.type !== 'CREDIT') {
-            if (!receiptAccess)
-              throw new TRPCError({
-                code: 'FORBIDDEN',
-                message: 'You do not have permission for this action.',
-              });
-            // DEV-647 above: only a manager or owner reaches a refund, so any open
-            // drawer of the branch may pay it out (DEV-821).
-            return refundPharmacyTender(db, scope, refund, {
-              requireCurrentBusinessDate: true,
-              drawerOperator: { kind: 'COUNTER', actorIsManager: true },
-            });
-          }
-          await khataScope(ctx, input.branchId, 'write');
-          await bindKhataBranch(db, scope);
-          const charge = await db.pharmacyKhataEvent.findFirst({
-            where: {
-              id: `khata:${input.originalTenderId}`,
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-            },
-          });
-          if (charge) {
-            await db.$queryRaw(
-              Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
-            );
-          }
-          const result = await refundPharmacyTender(db, scope, refund, {
-            requireCurrentBusinessDate: true,
-          });
-          if (charge && 'refundId' in result && typeof result.refundId === 'string') {
-            const id = `khata-refund:${result.refundId}`;
-            const prior = await db.pharmacyKhataEvent.findFirst({
-              where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
-            });
-            if (!prior)
-              await db.pharmacyKhataEvent.create({
-                data: {
-                  id,
-                  organizationId: scope.organizationId,
-                  branchId: scope.branchId,
-                  familyAccountId: charge.familyAccountId,
-                  kind: 'PAYMENT',
-                  amountMinor: input.amountMinor,
-                  settlesChargeId: charge.id,
-                  actorId: scope.actorId,
-                  note: `Refund ${result.refundId}`,
-                },
-              });
-          }
-          return result;
-        });
+        return await ctx.db.$transaction((tx) =>
+          refundTenderInTransaction(ctx, txDb(tx), scope, refund, receiptAccess)
+        );
       } catch (error) {
         fail(error);
       }
@@ -2025,8 +2088,8 @@ export const pharmacySalesRouter = router({
               where: {
                 organizationId: scope.organizationId,
                 branchId: scope.branchId,
-                effectiveFrom: { lte: now },
-                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+                // DEV-298: the profile dated today applies from the workspace's local midnight.
+                ...regulatoryProfileInForceWhere(now, ctx.organization?.timezone),
               },
               select: {
                 provinceCode: true,
@@ -2367,6 +2430,28 @@ export const pharmacySalesRouter = router({
       });
       return withLabels([...active, ...others]);
     }),
+  /** DEV-501: the exact refund a proposed return is worth, so the counter can prefill it. */
+  returnQuote: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleLineId: z.string().min(1),
+          lotId: z.string().min(1).optional(),
+          canonicalUnits: z.number().int().positive(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const { branchId: _branch, ...quote } = input;
+        void _branch;
+        return await quoteSaleLineReturn(ctx.db, scope, quote);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -2433,6 +2518,133 @@ export const pharmacySalesRouter = router({
               return { blocked: error.message };
             throw error;
           }
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-501: record one returned line and refund it to an original tender with a single
+   * manager/owner PIN and a single confirm. Both run in one transaction, so a refused refund
+   * (closed day, no open drawer, tender or returned-value cap) also leaves no return behind.
+   * The same gates apply as for returnLine and refundTender: counter receipt access, a manager
+   * or owner (a solo owner included) re-entering their own PIN, the controlled-medicine witness,
+   * and the active branch scope. The refund is bounded by this return's own value.
+   */
+  returnAndRefund: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleLineId: z.string().min(1),
+          controlledWitness: z
+            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
+            .strict()
+            .optional(),
+          lotId: z.string().min(1).optional(),
+          canonicalUnits: z.number().int().positive(),
+          quarantineLocationId: z.string().min(1).optional(),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
+          reason: z.string().trim().min(1),
+          integrityDecision: z.string().trim().min(1),
+          idempotencyKey: z.string().trim().min(1).max(120),
+          refund: z
+            .object({
+              originalTenderId: z.string().min(1),
+              deviceId: z.string().min(1),
+              businessDate: z.date(),
+              // Omitted: refund this return's full value. Otherwise at most that value.
+              amountMinor: z.number().int().positive().optional(),
+              manualCashFallback: z.boolean().optional(),
+            })
+            .strict(),
+          managerPin: z.string().regex(/^\d{4,8}$/),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
+        // The PIN never reaches either idempotency payload.
+        const { managerPin, refund, ...line } = input;
+        // An independent transaction, so a refused PIN commits its lockout strike.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.returnAndRefund',
+        });
+        annotateAudit(ctx, {
+          metadata: {
+            policy: REFUND_PIN_POLICY,
+            approverId: scope.actorId,
+            pinVerified: 'verified' in pin,
+          },
+        });
+        if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // The refund settles this return's own receipt, never another sale's liability.
+          const soldLine = await db.pharmacySaleLine.findFirst({
+            where: {
+              id: line.saleLineId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { saleId: true },
+          });
+          if (!soldLine) throw new PharmacySaleError('NOT_FOUND');
+          const sameSaleTender = await db.pharmacyTender.findFirst({
+            where: {
+              id: refund.originalTenderId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: soldLine.saleId,
+            },
+            select: { id: true },
+          });
+          if (!sameSaleTender)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Refund the return to a tender from the same receipt.',
+            });
+          let returned: Awaited<ReturnType<typeof returnSaleLine>>;
+          try {
+            returned = await returnSaleLine(db, scope, line);
+          } catch (error) {
+            if (error instanceof ControlledRestorationDenied && !error.forbidden)
+              return { blocked: error.message };
+            throw error;
+          }
+          const valueMinor = await saleReturnValueMinor(db, scope, returned.returnId);
+          const amountMinor = refund.amountMinor ?? valueMinor;
+          if (amountMinor <= 0 || amountMinor > valueMinor)
+            throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+          const refunded = await refundTenderInTransaction(
+            ctx,
+            db,
+            scope,
+            {
+              originalTenderId: refund.originalTenderId,
+              deviceId: refund.deviceId,
+              businessDate: refund.businessDate,
+              amountMinor,
+              reason: line.reason,
+              idempotencyKey: `${line.idempotencyKey}:refund`,
+              ...(refund.manualCashFallback === undefined
+                ? {}
+                : { manualCashFallback: refund.manualCashFallback }),
+            },
+            true
+          );
+          return {
+            returnId: returned.returnId,
+            returnedMinor: valueMinor,
+            refund: refunded,
+            replayed: returned.replayed,
+          };
         });
       } catch (error) {
         fail(error);
@@ -2916,6 +3128,18 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /** DEV-79: link notified requests to the sale that recovered them (also run by the job). */
+  linkRestockRecoveries: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          linkRestockRecoveries(txDb(tx), await scopeFor(ctx, input.branchId))
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   restockRecoveryReport: protectedProcedure
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
@@ -2970,6 +3194,43 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+    };
+  }),
+
+  /**
+   * DEV-505: the branches the day-close screen offers, from the same decision as
+   * `requireCloseAccess`. A Manager sees only their assigned branches; a member
+   * with no day-close reach is refused, so the screen never offers a branch the
+   * close itself would refuse.
+   */
+  dayCloseBranches: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const allowed = await dayCloseBranchIds(ctx);
+    if (allowed !== 'ALL' && !allowed.length)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Day-close permission is required to reconcile and close a day.',
+      });
+    const [branches, organization] = await Promise.all([
+      ctx.db.pharmacyBranch.findMany({
+        where: {
+          organizationId,
+          active: true,
+          ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
+        },
+        select: { id: true, code: true, name: true, city: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+      ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { currency: true, timezone: true },
+      }),
+    ]);
+    return {
+      branches,
+      currency: organization?.currency ?? 'PKR',
+      timezone: workspaceTimezone(organization?.timezone),
     };
   }),
 
@@ -3096,9 +3357,14 @@ export const pharmacySalesRouter = router({
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         const [dispensingLabelSources, taxIdentity] = await Promise.all([
-          readDispensingLabelSources(ctx.db, scope, receipt),
+          readDispensingLabelSources(ctx.db, scope, receipt, ctx.organization?.timezone),
           receipt.completedAt
-            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+            ? readPharmacyReceiptTaxIdentity(
+                ctx.db,
+                scope,
+                new Date(receipt.completedAt),
+                ctx.organization?.timezone
+              )
             : Promise.resolve({ ntn: null, strn: null }),
         ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
@@ -3140,7 +3406,12 @@ export const pharmacySalesRouter = router({
           }
           const [format, taxIdentity] = await Promise.all([
             readPharmacyReceiptFormat(tx, scope),
-            readPharmacyReceiptTaxIdentity(tx, scope, new Date(receipt.completedAt)),
+            readPharmacyReceiptTaxIdentity(
+              tx,
+              scope,
+              new Date(receipt.completedAt),
+              ctx.organization?.timezone
+            ),
           ]);
           // Validate both variants before writing. ScopedDb may reuse an outer
           // transaction, where returning FALLBACK would commit an allocation.

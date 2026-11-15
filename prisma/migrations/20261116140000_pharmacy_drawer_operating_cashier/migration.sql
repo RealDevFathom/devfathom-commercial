@@ -4,8 +4,9 @@
 BEGIN;
 
 ALTER TABLE "pharmacy_drawer_sessions" ADD COLUMN IF NOT EXISTS "operatingCashierId" TEXT;
--- Drawers opened before this change are run by whoever opened them.
-UPDATE "pharmacy_drawer_sessions" SET "operatingCashierId" = "openedByActorId" WHERE "operatingCashierId" IS NULL;
+-- No backfill: pharmacy_drawer_sessions has forced tenant RLS with no platform-admin
+-- clause, so an UPDATE here would touch no rows. Not needed either: an empty value
+-- reads as the drawer's opener (drawerOperatingCashierId in settlement.ts).
 
 CREATE TABLE IF NOT EXISTS "pharmacy_drawer_handovers" (
   "id" TEXT NOT NULL,

@@ -7,7 +7,7 @@ import { platformAuthentication } from './platform-control-plane';
  * admitted only with PHARMACY_E2E=1 and a disposable loopback database/origins.
  * Synthetic jurisdiction/evidence and the MFA fixture are never staging attestations.
  */
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import AxeBuilder from '@axe-core/playwright';
@@ -262,7 +262,8 @@ export async function freshPharmacyFirstSale(
   const colleaguePassword = `Wha1203!${randomUUID()}`;
   const branchName = `Test branch ${suffix}`;
   const medicineName = `Synthetic OTC ${suffix}`;
-  const barcode = `TEST${suffix}`;
+  // Digits only: the counter treats a code of six or more digits as a scan (scan-to-add).
+  const barcode = `8964${randomInt(100_000_000, 1_000_000_000)}`;
   const expiry = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
   const orderReference = `PO-${suffix}`;
   const click = async (target: Locator) => {
@@ -714,18 +715,10 @@ export async function freshPharmacyFirstSale(
     await page.getByLabel('Opening cash', { exact: true }).fill('0');
     await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
     await expect(page.getByLabel('Scan or search', { exact: true })).toBeVisible();
-    // Barcode Enter already adds a pack. Stage by name before the explicit
-    // sale-unit selection and F6 add below.
-    await page.getByLabel('Scan or search', { exact: true }).fill(medicineName);
+    // Scan the reviewed barcode: Enter on a barcode with a single match adds one pack
+    // (scan-to-add), exactly as a cashier's scanner would.
+    await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
     await page.getByLabel('Scan or search', { exact: true }).press('Enter');
-    await click(
-      page
-        .getByRole('list', { name: 'Search results' })
-        .getByRole('button')
-        .filter({ hasText: medicineName })
-    );
-    await page.keyboard.press('F3');
-    await page.keyboard.press('F6');
     await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(medicineName);
     await page.keyboard.press('F9');
     const amount = page.getByLabel('Amount', { exact: true });
@@ -733,9 +726,9 @@ export async function freshPharmacyFirstSale(
     const due = await amount.getAttribute('placeholder');
     expect(due).toMatch(/^\d+\.\d{2}$/);
     expect(Number(due)).toBeGreaterThan(0);
-    await amount.fill(due!);
-    await page.getByLabel('Cash received', { exact: true }).fill(due!);
-    await click(page.getByRole('button', { name: 'Take payment', exact: true }));
+    // DEV-499: Cash received is prefilled with the balance due; Enter takes it.
+    await expect(page.getByLabel('Cash received', { exact: true })).toHaveValue(due!);
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
     await noRawIdEntry(page);
     expect(fourXx).toEqual([]);

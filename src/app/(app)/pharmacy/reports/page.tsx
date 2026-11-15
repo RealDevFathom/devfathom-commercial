@@ -23,6 +23,7 @@ import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
+import { LostSalesRecovery } from './lost-sales-recovery';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
@@ -191,6 +192,7 @@ export default async function PharmacyReportsPage({
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
+  let lostSales: Awaited<ReturnType<typeof caller.lostSalesRecovery>> | null = null;
   let demand: Awaited<
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
@@ -211,6 +213,7 @@ export default async function PharmacyReportsPage({
       expiryResult,
       authenticationResult,
       marketingResult,
+      lostSalesResult,
     ] = await Promise.allSettled([
       caller.commandCentre(reportFilters),
       caller.digestOverview(),
@@ -220,8 +223,14 @@ export default async function PharmacyReportsPage({
       Promise.resolve().then(() =>
         caller.marketing({ ...(branch ? { branchId: branch } : {}), from, to })
       ),
+      Promise.resolve().then(() =>
+        catalog.permissions.financial
+          ? caller.lostSalesRecovery({ ...(branch ? { branchId: branch } : {}), from, to })
+          : null
+      ),
     ]);
     if (marketingResult.status === 'fulfilled') marketing = marketingResult.value;
+    if (lostSalesResult.status === 'fulfilled') lostSales = lostSalesResult.value;
     if (reportResult.status === 'fulfilled') result = reportResult.value;
     else reportError = true;
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
@@ -395,8 +404,9 @@ export default async function PharmacyReportsPage({
         ['Cash', money(metrics.cashMinor)],
         ['Cash variance', money(metrics.cashVarianceMinor)],
         ['Refunds', money(metrics.refundsMinor)],
-        ['Open stock signals', metrics.openStockSignals],
-        ['Recommended orders', metrics.recommendedOrders],
+        // DEV-729: null means stock signals were never worked out for this scope, not zero.
+        ['Open stock signals', metrics.openStockSignals ?? 'Not calculated yet'],
+        ['Recommended orders', metrics.recommendedOrders ?? 'Not calculated yet'],
         ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
         ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
       ]
@@ -528,6 +538,11 @@ export default async function PharmacyReportsPage({
         report={marketing}
         money={money}
         branch={branch}
+        financial={catalog.permissions.financial}
+      />
+      <LostSalesRecovery
+        report={lostSales}
+        money={money}
         financial={catalog.permissions.financial}
       />
       <ObservedDemand

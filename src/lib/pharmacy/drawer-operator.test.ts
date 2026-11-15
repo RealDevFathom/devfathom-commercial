@@ -14,6 +14,15 @@ vi.mock('./counter-evidence', async () => ({
   ...(await vi.importActual<typeof import('./counter-evidence')>('./counter-evidence')),
   requestCounterEvidence: vi.fn(),
 }));
+// The counter's operator gate (counterOperatorDenial, shared with the enrolled offline
+// counter) stands here for "this person may work the counter of this branch".
+const counterGate = vi.hoisted(() => ({
+  counterOperatorDenial: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock('./counter-capability', async () => ({
+  ...(await vi.importActual<typeof import('./counter-capability')>('./counter-capability')),
+  counterOperatorDenial: counterGate.counterOperatorDenial,
+}));
 vi.mock('./regulatory', async () => ({
   ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
   assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
@@ -409,11 +418,17 @@ describe('opening a till for a named cashier (DEV-821)', () => {
   const input = { deviceId: 'device-new', businessDate, openingFloatMinor: 500 };
   const managerScope = { ...scope, actorId: 'manager-1' };
   function fixture(assigned: boolean) {
+    counterGate.counterOperatorDenial.mockResolvedValue(assigned ? null : 'branch_forbidden');
     return {
       $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
-      pharmacyBranchAssignment: {
-        findFirst: vi.fn().mockResolvedValue(assigned ? { id: 'assignment-1' } : null),
+      user: {
+        findFirst: vi.fn(async ({ where }: { where: { id: string } }) => ({
+          id: where.id,
+          role: 'EMPLOYEE',
+          department: null,
+          status: 'ACTIVE',
+        })),
       },
       pharmacyDrawerSession: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -432,25 +447,28 @@ describe('opening a till for a named cashier (DEV-821)', () => {
         operatingCashierId: 'manager-1',
       }),
     });
-    expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(counterGate.counterOperatorDenial).not.toHaveBeenCalled();
   });
 
-  it('lets the opener name a cashier actively assigned to the branch', async () => {
+  it('lets the opener name a cashier who passes the counter gate of this branch', async () => {
     const db = fixture(true);
     await openPharmacyDrawer(db as never, managerScope, {
       ...input,
       operatingCashierId: 'cashier-1',
     });
-    expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
-      where: {
-        organizationId: 'org-1',
-        branchId: 'branch-1',
-        userId: 'cashier-1',
-        active: true,
-        user: { organizationId: 'org-1', status: 'ACTIVE' },
-      },
-      select: { id: true },
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'cashier-1', organizationId: 'org-1' },
+      select: { id: true, role: true, department: true, status: true },
     });
+    // The counter grant, an active membership with a deny-wins counter ALLOW, and an
+    // active assignment to this branch: the same gate the counter itself applies.
+    expect(counterGate.counterOperatorDenial).toHaveBeenCalledWith(
+      db,
+      { id: 'cashier-1', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+      'org-1',
+      'branch-1',
+      { source: 'TRPC' }
+    );
     expect(db.pharmacyDrawerSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         openedByActorId: 'manager-1',
@@ -459,13 +477,27 @@ describe('opening a till for a named cashier (DEV-821)', () => {
     });
   });
 
-  it('refuses a cashier who is not on the branch before opening anything', async () => {
+  it.each([
+    ['not on the branch', 'branch_forbidden'],
+    ['without the counter capability', 'forbidden'],
+  ])('refuses a cashier %s before opening anything', async (_case, denial) => {
     const db = fixture(false);
+    counterGate.counterOperatorDenial.mockResolvedValue(denial);
     await expect(
       openPharmacyDrawer(db as never, managerScope, { ...input, operatingCashierId: 'stranger' })
     ).rejects.toMatchObject({ reason: 'CASHIER_NOT_ASSIGNED' });
     expect(db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
     expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses someone who is not a member of this organization', async () => {
+    const db = fixture(true);
+    db.user.findFirst.mockResolvedValue(null as never);
+    await expect(
+      openPharmacyDrawer(db as never, managerScope, { ...input, operatingCashierId: 'outsider' })
+    ).rejects.toMatchObject({ reason: 'CASHIER_NOT_ASSIGNED' });
+    expect(counterGate.counterOperatorDenial).not.toHaveBeenCalled();
+    expect(db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
   });
 });
 
@@ -473,13 +505,19 @@ describe('handing an open till to another cashier (DEV-821)', () => {
   const managerScope = { ...scope, actorId: 'manager-1' };
   function fixture(options: { assigned?: boolean; open?: boolean } = {}) {
     const till = { ...tills[0]! };
+    counterGate.counterOperatorDenial.mockResolvedValue(
+      options.assigned === false ? 'branch_forbidden' : null
+    );
     return {
       $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
-      pharmacyBranchAssignment: {
-        findFirst: vi
-          .fn()
-          .mockResolvedValue(options.assigned === false ? null : { id: 'assignment-2' }),
+      user: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'cashier-2',
+          role: 'EMPLOYEE',
+          department: null,
+          status: 'ACTIVE',
+        }),
       },
       pharmacyDrawerSession: {
         findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
@@ -618,4 +656,5 @@ describe('close reports flag cash moved by anyone but the till cashier (DEV-821)
 
 beforeEach(() => {
   vi.clearAllMocks();
+  counterGate.counterOperatorDenial.mockResolvedValue(null);
 });

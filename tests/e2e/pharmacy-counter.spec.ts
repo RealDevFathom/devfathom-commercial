@@ -84,12 +84,85 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
 }) => {
   await signIn(page);
   const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
-  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
+  // DEV-497: pharmacy destinations sit in task menus, opened from the keyboard.
+  // Capability-gated entries follow the rail's server read; Purchasing, alone
+  // in its menu, is the bar's own sign that the answer has arrived.
+  await expect(navigation.getByRole('link', { name: 'Purchasing' })).toBeVisible({
+    timeout: 30_000,
+  });
+  await pressControl(navigation.getByRole('button', { name: 'Sell', exact: true }));
   await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
+  await pressControl(navigation.getByRole('button', { name: 'Settings', exact: true }));
+  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeHidden();
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeHidden();
   await expect(navigation.getByRole('link', { name: 'Point of sale' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Restaurant staff' })).toHaveCount(0);
+});
+
+/**
+ * DEV-497: every role lands on a page it can work from after sign-in, and the
+ * `/pharmacy` front door sends a member who cannot run onboarding to their own
+ * work instead of a dead end.
+ */
+const LANDINGS = [
+  {
+    role: 'owner',
+    email: () => process.env.PHARMACY_E2E_ADMIN_EMAIL!,
+    signIn: /\/dashboard/,
+    signInHeading: 'Owner command centre',
+    pharmacy: /\/pharmacy$/,
+    pharmacyHeading: 'Onboarding',
+  },
+  {
+    role: 'pharmacist',
+    email: () => PHARMACY_E2E.pharmacistEmail,
+    signIn: /\/pharmacy\/pharmacist-queue$/,
+    signInHeading: 'Pharmacist queue',
+    pharmacy: /\/pharmacy\/pharmacist-queue$/,
+    pharmacyHeading: 'Pharmacist queue',
+  },
+  {
+    role: 'cashier',
+    email: () => PHARMACY_E2E.cashierEmail,
+    signIn: /\/dashboard/,
+    signInHeading: 'Your work today',
+    pharmacy: /\/pharmacy\/counter$/,
+    pharmacyHeading: 'Counter',
+  },
+] as const;
+
+for (const landing of LANDINGS) {
+  test(`the ${landing.role} lands on a usable page, never a dead end (DEV-497)`, async ({
+    page,
+  }) => {
+    await signIn(page, landing.email());
+    await expect(page).toHaveURL(landing.signIn);
+    await expect(
+      page.getByRole('heading', { name: landing.signInHeading, level: 1 })
+    ).toBeVisible();
+
+    await page.goto('/pharmacy');
+    await expect(page).toHaveURL(landing.pharmacy);
+    await expect(
+      page.getByRole('heading', { name: landing.pharmacyHeading, level: 1 })
+    ).toBeVisible();
+    await expect(page.getByText('Onboarding is not available to you')).toHaveCount(0);
+  });
+}
+
+test('the cashier is offered only destinations a cashier can open (DEV-497)', async ({ page }) => {
+  await signIn(page, PHARMACY_E2E.cashierEmail);
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
+  // Counter is gated on the rail's server read, so it marks the answer's arrival.
+  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible({ timeout: 30_000 });
+  for (const name of ['Day close', 'Purchasing', 'Inventory', 'Finance', 'Onboarding'])
+    await expect(navigation.getByRole('link', { name })).toHaveCount(0);
+  // No numeric prefixes anywhere in the bar.
+  await expect(navigation).not.toContainText(/\d/);
 });
 
 /**
@@ -144,15 +217,15 @@ async function setQuantity(page: Page, quantity: number) {
   await field.press('Tab');
 }
 
+/**
+ * DEV-499: exact cash is two steps. F9 opens payment with Cash received already
+ * set to the balance due and focus on the panel; Enter takes the payment.
+ */
 async function tenderCash(page: Page, amount: string) {
   await page.keyboard.press('F9');
-  const amountField = page.getByLabel('Amount');
-  await amountField.focus();
-  await amountField.fill(amount);
-  const received = page.getByLabel('Cash received');
-  await received.focus();
-  await received.fill(amount);
-  await pressControl(page.getByRole('button', { name: 'Take payment' }));
+  await expect(page.getByLabel('Cash received')).toHaveValue(amount);
+  await expect(page.getByText('Change', { exact: true }).locator('..')).toContainText('0.00');
+  await page.keyboard.press('Enter');
 }
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
@@ -741,46 +814,45 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   // New browser context has its own device sequence; choose its receipt explicitly.
   if (device) await pressControl(matches.filter({ hasText: device }));
   else await pressControl(matches.first());
-  await dialog.getByLabel('Sold line').selectOption({ index: 1 });
+  // DEV-501: a one-line return and refund is one form and one confirm. The only line and
+  // the only (cash) tender are preselected; quantity is in the unit sold (strips) plus loose
+  // units, and the refund is prefilled from the returned quantity.
+  const half = (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2);
+  await expect(dialog.getByLabel('Sold line')).not.toHaveValue('');
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
-  await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await dialog.getByLabel('Return quantity (strips)').fill('0');
+  await dialog.getByLabel('Plus loose units').fill('5');
   await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
   await dialog
-    .getByLabel('Inspection and integrity decision')
+    .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
-  const confirm = dialog.getByLabel('I confirm the quantity, inspection and stock disposition.');
-  await confirm.focus();
-  await confirm.press('Space');
-  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
-  await dialog.getByLabel('Original tender').selectOption({ index: 1 });
-  await dialog
-    .getByLabel('Refund amount (PKR)')
-    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
-  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
+  await expect(dialog.getByLabel('Refund to')).not.toHaveValue('');
+  await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(half);
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
+  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText(
+    `Return recorded and refunded: PKR ${half}`
+  );
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'CASH refund:'
   );
   // The remaining physical units have no verifiable lot. Keep separate quarantine custody.
   await dialog.getByLabel('Returned lot / batch').selectOption('');
-  await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await dialog.getByLabel('Return quantity (strips)').fill('0');
+  await dialog.getByLabel('Plus loose units').fill('5');
   await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
   await dialog
-    .getByLabel('Inspection and integrity decision')
+    .getByLabel('Inspection and integrity decision (optional)')
     .fill('Batch marking unreadable; pharmacist verification required');
-  await confirm.focus();
-  await confirm.press('Space');
-  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
+  await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(
+    (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) - Number(half)).toFixed(2)
+  );
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
+  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Return recorded and refunded');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'pharmacist verification pending'
   );
-  await dialog
-    .getByLabel('Refund amount (PKR)')
-    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
-  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   const popupPromise = page.waitForEvent('popup');
   await pressControl(dialog.getByRole('button', { name: 'Reprint receipt with refunds' }));
   const popup = await popupPromise;

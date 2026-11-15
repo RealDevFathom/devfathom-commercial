@@ -31,6 +31,7 @@ import {
   manualCardCaptureSchema,
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
+import { counterOperatorDenial } from './counter-capability';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
@@ -856,22 +857,23 @@ export function foldExpectedCash(movements: readonly DrawerMovement[]) {
 }
 
 /**
- * DEV-821: a drawer's operating cashier must be an active member actively assigned
- * to the drawer's branch. The caller decides who may name someone other than
- * themselves (a manager or owner).
+ * DEV-821: a drawer's operating cashier must pass the counter's own operator gate:
+ * the `pharmacy:counter` grant, an active membership of this organization with a
+ * deny-wins counter ALLOW, and an active assignment to the drawer's branch. The
+ * caller decides who may name someone other than themselves (a manager or owner).
  */
 async function assertBranchCashier(db: ScopedDb, scope: LedgerScope, cashierId: string) {
-  const assignment = await db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      userId: cashierId,
-      active: true,
-      user: { organizationId: scope.organizationId, status: 'ACTIVE' },
-    },
-    select: { id: true },
+  const cashier = await db.user.findFirst({
+    where: { id: cashierId, organizationId: scope.organizationId },
+    select: { id: true, role: true, department: true, status: true },
   });
-  if (!assignment) throw new PharmacySettlementError('CASHIER_NOT_ASSIGNED');
+  if (
+    !cashier ||
+    (await counterOperatorDenial(db, cashier, scope.organizationId, scope.branchId, {
+      source: 'TRPC',
+    }))
+  )
+    throw new PharmacySettlementError('CASHIER_NOT_ASSIGNED');
 }
 
 export async function openPharmacyDrawer(

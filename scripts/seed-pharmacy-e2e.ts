@@ -260,6 +260,38 @@ async function seedWorkspace(email: string, passwordHash: string) {
   });
 }
 
+/** DEV-621/DEV-501: returns and refunds need the signed-in manager's or owner's own PIN. */
+async function seedAdminPin() {
+  await asTenant(async (tx) => {
+    await tx.restaurantStaffProfile.upsert({
+      where: { id: PHARMACY_E2E.adminStaffProfileId },
+      update: { status: 'ACTIVE', updatedAt: FIXED_AT },
+      create: {
+        id: PHARMACY_E2E.adminStaffProfileId,
+        organizationId: PHARMACY_E2E.organizationId,
+        userId: PHARMACY_E2E.adminId,
+        displayName: 'Pharmacy Administrator',
+        status: 'ACTIVE',
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    await tx.restaurantOperatorCredential.upsert({
+      where: { id: PHARMACY_E2E.adminPinCredentialId },
+      update: { failedAttempts: 0, lockedUntil: null, revokedAt: null },
+      create: {
+        id: PHARMACY_E2E.adminPinCredentialId,
+        organizationId: PHARMACY_E2E.organizationId,
+        staffProfileId: PHARMACY_E2E.adminStaffProfileId,
+        type: 'PIN',
+        credentialHash: hashSync(PHARMACY_E2E.adminPin, 10),
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+}
+
 async function seedBranch() {
   await asTenant(async (tx) => {
     const branch = {
@@ -340,12 +372,15 @@ async function seedStagingDemoSensitiveGrants() {
   );
 }
 
-/** Staging demo only: a Pharmacist (dispense + catalogue review, explicit grants; never `*`). */
+/**
+ * A Pharmacist (dispense + catalogue review, explicit grants; never `*`). Seeded for the
+ * staging demo and, since DEV-497, for the browser lane that proves each role's landing.
+ */
 const STAGING_DEMO_PHARMACIST = {
-  roleId: 'role_pharmacy_counter_e2e_pharmacist',
-  userId: 'user_pharmacy_counter_e2e_pharmacist',
-  email: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
-  assignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
+  roleId: PHARMACY_E2E.pharmacistRoleId,
+  userId: PHARMACY_E2E.pharmacistId,
+  email: PHARMACY_E2E.pharmacistEmail,
+  assignmentId: PHARMACY_E2E.pharmacistAssignmentId,
   capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
 };
 
@@ -984,15 +1019,15 @@ async function main() {
 
     await seedCatalog();
     await seedWorkspace(email, passwordHash);
+    await seedAdminPin();
     await seedBranch();
     await seedCashier(passwordHash);
+    // DEV-497: the browser lane signs in as cashier, pharmacist and owner.
+    await seedStagingDemoPharmacist(passwordHash);
     await seedMedicines();
     await seedStock();
     await seedPrescription();
-    if (stagingDemo) {
-      await seedStagingDemoSensitiveGrants();
-      await seedStagingDemoPharmacist(passwordHash);
-    }
+    if (stagingDemo) await seedStagingDemoSensitiveGrants();
 
     console.log('Pharmacy counter E2E seed complete.');
   } finally {

@@ -118,6 +118,9 @@ function setup(role = 'ADMIN') {
               : [{ id: 'cream' }, { id: 'soap' }]
       ),
     },
+    // Catalogue names read by the WhatsApp compliance linter at template approval.
+    medicineAlias: { findMany: vi.fn(async () => []) },
+    ingredient: { findMany: vi.fn(async () => []) },
     restaurantStaffProfile: { findMany: vi.fn(async () => [{ id: 'staff-owner' }]) },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => credential),
