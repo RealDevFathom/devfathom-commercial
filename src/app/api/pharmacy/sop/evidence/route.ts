@@ -246,6 +246,8 @@ export async function POST(request: Request) {
         sizeBytes: bytes.length,
         storageRef: `/api/files/${storedFilename}`,
         uploaderStaffProfileId: target.uploaderStaffProfileId,
+        // This route stored and hashed the bytes itself.
+        serverCaptured: true,
       });
       stage = 'receipt';
       if (!attached.created) {

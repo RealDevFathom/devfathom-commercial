@@ -1079,6 +1079,46 @@ describe('authenticated SOP identity boundary', () => {
     );
   });
 
+  it('DEV-837: stores procedure-supplied proof metadata as not server-captured', async () => {
+    occurrence();
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      id: 'claim',
+      contentHash: 'a'.repeat(64),
+      createdAt: new Date(),
+      serverCaptured: false,
+    });
+    await caller().attachEvidence({
+      occurrenceId: OCC_ID,
+      contentHashHex: 'a'.repeat(64),
+      mimeType: 'image/jpeg; evidence=signature',
+      sizeBytes: 0,
+      storageRef: '/api/files/company-logo.png',
+    });
+    expect(db.restaurantSopEvidence.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          serverCaptured: false,
+          storageRef: '/api/files/company-logo.png',
+        }),
+      })
+    );
+  });
+
+  it('DEV-837: refuses a caller claim that its proof was server-captured', async () => {
+    occurrence();
+    await expect(
+      caller().attachEvidence({
+        occurrenceId: OCC_ID,
+        contentHashHex: 'a'.repeat(64),
+        mimeType: 'image/jpeg; evidence=photo',
+        sizeBytes: 10,
+        storageRef: '/api/files/sop-forged.jpg',
+        serverCaptured: true,
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantSopEvidence.createMany).not.toHaveBeenCalled();
+  });
+
   it.each([{ profiles: [] }, { profiles: [{ id: 'a' }, { id: 'b' }] }])(
     'fails closed without a unique active session staff profile',
     async ({ profiles }) => {

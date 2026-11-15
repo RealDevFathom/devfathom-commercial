@@ -19,6 +19,7 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
+import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -153,6 +154,12 @@ export const organizationAdminRouter = router({
       // The router caches the opt-in for up to 30 seconds per server.
       return { organizationId: saved.id, aiDeepStrategyEnabled: saved.aiDeepStrategyEnabled };
     }),
+
+  // DEV-837: read-only count of files the download route now refuses
+  // (tombstoned bindings, references to unregistered objects), by record type.
+  uploadRegistryReport: adminProcedure
+    .input(z.void())
+    .query(({ ctx }) => readUploadRegistryReport(ctx.db)),
 
   departments: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);

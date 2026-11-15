@@ -566,6 +566,8 @@ export const restaurantSopExecutionRouter = router({
               storageRef: true,
               uploaderStaffProfileId: true,
               capturedAt: true,
+              // DEV-837: reviewers tell captured proof from caller-supplied metadata.
+              serverCaptured: true,
             },
           },
           verifications: {
