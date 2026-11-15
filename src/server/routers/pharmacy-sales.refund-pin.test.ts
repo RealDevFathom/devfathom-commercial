@@ -2,7 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-647: refunds need a manager or owner who re-enters their own PIN. Cashiers cannot start one.
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+const tenant = vi.hoisted(() => ({ db: null as unknown }));
+// The PIN check runs in its own tenant transaction; here it sees the fixture's database.
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => unknown) =>
+    run(tenant.db)
+  ),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -23,6 +30,7 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 import { refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import { REFUND_PIN_BLOCKED, REFUND_PIN_POLICY } from '@/lib/pharmacy/refund-authorization';
 import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -100,6 +108,7 @@ function fixture(
       callback(db)
     ),
   };
+  tenant.db = db;
   const audit = { detail: {} as { metadata?: Record<string, unknown> } };
   const context = {
     db,
@@ -206,6 +215,16 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
       policy: REFUND_PIN_POLICY,
       pinVerified: false,
     });
+  });
+
+  it('checks the PIN in its own tenant transaction so a batch rollback keeps the strike', async () => {
+    const f = fixture(ROLES.manager!);
+    await f.caller.refundTender({ ...settlement, managerPin: '8642' });
+    expect(withTenantDb).toHaveBeenCalledExactlyOnceWith('org-a', expect.any(Function), {
+      skipDrain: true,
+    });
+    // The request transaction is never opened for a refused PIN.
+    expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
   it('blocks a locked-out PIN even when it is correct', async () => {

@@ -437,7 +437,15 @@ export function ReturnForm({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {attempt?.kind === 'refund' && managerPinField}
+      {attempt?.kind === 'refund' &&
+        (refundAuthorized ? (
+          managerPinField
+        ) : (
+          <p role="note" className="text-sm text-text-muted">
+            This saved refund is kept for reconciliation. A manager or owner must retry it with
+            their PIN.
+          </p>
+        ))}
       {attempt && (
         <Button
           className="h-11"
@@ -450,7 +458,7 @@ export function ReturnForm({
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
             (attempt.kind === 'return' && (!data || !witnessReady)) ||
-            (attempt.kind === 'refund' && !managerPinReady)
+            (attempt.kind === 'refund' && (!refundAuthorized || !managerPinReady))
           }
         >
           Retry saved {attempt.kind}

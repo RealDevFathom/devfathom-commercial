@@ -4,7 +4,7 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
   actorMayRefund: async () => true,
-  verifyRefundPin: async () => ({ verified: true }),
+  authenticateRefundPin: async () => ({ verified: true }),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));

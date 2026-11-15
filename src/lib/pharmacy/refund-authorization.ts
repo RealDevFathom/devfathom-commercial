@@ -5,7 +5,7 @@ import {
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * DEV-647: only a manager or owner may refund, and only after re-entering their
@@ -72,4 +72,19 @@ export async function verifyRefundPin(
     data: clearLockout(),
   });
   return { verified: true };
+}
+
+/**
+ * verifyRefundPin in its own tenant transaction. The request transaction rolls
+ * back when any procedure in a tRPC batch fails, which would also discard a
+ * lockout strike; this one commits before any refund work starts.
+ */
+export function authenticateRefundPin(input: {
+  organizationId: string;
+  actorId: string;
+  pin: string;
+}): Promise<{ verified: true } | { blocked: string }> {
+  return withTenantDb(input.organizationId, (db) => verifyRefundPin(db, input), {
+    skipDrain: true,
+  });
 }

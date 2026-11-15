@@ -505,6 +505,24 @@ describe('DEV-647 refund access', () => {
     expect(saved).not.toContain('9753');
     expect(screen.getByLabelText('Your manager or owner PIN')).toHaveValue('');
   });
+  it('keeps a saved refund for a manager when the user has no refund access', async () => {
+    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    enterManagerPin();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByRole('button', { name: 'Retry saved refund' });
+    const saved = localStorage.getItem('pharmacy-return:o:a:b');
+    view.unmount();
+    render(<ReturnForm {...base} />);
+    expect(screen.getByRole('button', { name: 'Retry saved refund' })).toBeDisabled();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/A manager or owner must retry it/)).toBeVisible();
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBe(saved);
+    expect(mocks.refund).toHaveBeenCalledOnce();
+  });
   it('reports a refused PIN without keeping a fresh attempt', async () => {
     mocks.refund.mockResolvedValueOnce({
       blocked: 'Refund not recorded. Enter your manager or owner PIN.',

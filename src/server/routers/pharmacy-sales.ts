@@ -129,9 +129,9 @@ import {
 } from '@/lib/pharmacy/settlement';
 import {
   actorMayRefund,
+  authenticateRefundPin,
   REFUND_FORBIDDEN,
   REFUND_PIN_POLICY,
-  verifyRefundPin,
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
@@ -1067,14 +1067,12 @@ export const pharmacySalesRouter = router({
           throw new TRPCError({ code: 'FORBIDDEN', message: REFUND_FORBIDDEN });
         // The PIN never reaches the refund's idempotency payload hash.
         const { managerPin, ...refund } = input;
-        // Its own transaction, so a refused PIN still commits the lockout strike.
-        const pin = await ctx.db.$transaction((tx) =>
-          verifyRefundPin(txDb(tx), {
-            organizationId: scope.organizationId,
-            actorId: scope.actorId,
-            pin: managerPin,
-          })
-        );
+        // An independent transaction, so a refused PIN commits its lockout strike.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+        });
         annotateAudit(ctx, {
           metadata: {
             policy: REFUND_PIN_POLICY,
@@ -1955,12 +1953,12 @@ export const pharmacySalesRouter = router({
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
-  /** The branches this counter may open a bill against, with the money format. */
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
 
+  /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
