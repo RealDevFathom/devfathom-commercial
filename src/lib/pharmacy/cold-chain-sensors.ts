@@ -448,6 +448,18 @@ export async function receiveSensorPush(
       actorId: sensor.enrolledByActorId,
     };
 
+    // Serialize every push into this zone, not just this sensor: two sensors
+    // in one zone whose readings only form an excursion together would
+    // otherwise each miss the other's uncommitted rows, and the EXCURSION
+    // transition (which raises the alert) would never be observed.
+    const zoneLock = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM pharmacy_stock_locations
+      WHERE id = ${sensor.stockLocationId}
+        AND "organizationId" = ${sensor.organizationId}
+        AND "branchId" = ${sensor.branchId}
+      FOR UPDATE`);
+    if (zoneLock.length === 0) return { ok: false, error: 'zone_unavailable' };
+
     const existing = await db.pharmacyTemperatureLog.findMany({
       where: {
         organizationId: sensor.organizationId,
@@ -523,7 +535,11 @@ export async function receiveSensorPush(
         },
       })) > 0;
     const alertsRefreshed = entering || recovered;
-    if (alertsRefreshed) await refreshStockSignals(db, scope, evaluatedAt);
+    if (alertsRefreshed) {
+      await refreshStockSignals(db, scope, evaluatedAt, undefined, {
+        closeColdChainOnlyAt: sensor.stockLocationId,
+      });
+    }
 
     return {
       ok: true,

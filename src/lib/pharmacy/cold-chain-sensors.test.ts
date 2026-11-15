@@ -342,8 +342,30 @@ describe('receiveSensorPush', () => {
     expect(mocks.refresh).toHaveBeenCalledWith(
       mocks.tenantDb,
       { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_admin' },
-      NOW
+      NOW,
+      undefined,
+      { closeColdChainOnlyAt: 'fridge_1' }
     );
+  });
+
+  it('serializes pushes per zone by locking the zone row before evaluating it', async () => {
+    await receiveSensorPush(SECRET, push(1), NOW);
+    const lock = mocks.tenantDb.$queryRaw.mock.calls[1]![0] as { sql: string; values: unknown[] };
+    expect(lock.sql).toMatch(/FROM pharmacy_stock_locations[\s\S]*FOR UPDATE/);
+    expect(lock.values).toEqual(['fridge_1', 'org_a', 'branch_a']);
+    expect(mocks.tenantDb.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.statuses.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('refuses a push whose zone row is gone, before reading or writing readings', async () => {
+    mocks.tenantDb.$queryRaw.mockResolvedValueOnce([SENSOR]).mockResolvedValueOnce([]);
+    await expect(receiveSensorPush(SECRET, push(1), NOW)).resolves.toEqual({
+      ok: false,
+      error: 'zone_unavailable',
+    });
+    expect(mocks.tenantDb.pharmacyTemperatureLog.findMany).not.toHaveBeenCalled();
+    expect(mocks.ingest).not.toHaveBeenCalled();
   });
 
   it('closes a live COLD_CHAIN alert once the zone is back in range', async () => {
