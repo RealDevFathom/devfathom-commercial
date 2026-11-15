@@ -915,12 +915,19 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
     // explicit pharmacy capability model (#375).
+    // DEV-505: a Manager runs their assigned branches. Every grant here is
+    // branch-scoped on the server: purchasing and inventory to their active
+    // branch assignments, and `pharmacy:manage` gives day close and the
+    // operational reports for those branches only. `pharmacy:close` and
+    // `reports:operational` are deliberately NOT granted: both reach every
+    // branch of the tenant.
     capabilities: [
       'pharmacy:manage',
       'pharmacy:orders',
       'pharmacy:procurement',
       // PUR-02: managers approve and send purchase orders others raised.
       'pharmacy:procurement-approve',
+      'pharmacy:inventory',
     ],
   },
   {

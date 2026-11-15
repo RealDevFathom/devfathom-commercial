@@ -1,7 +1,8 @@
 import { can, subjectFromSession } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
 import { protectedProcedure, router } from '../trpc';
-import { canAccessPharmacyCounter } from './pharmacy-sales';
+import { pharmacyReportAccess } from './pharmacy-reports';
+import { canAccessDayClose, canAccessPharmacyCounter } from './pharmacy-sales';
 
 /**
  * The capabilities the pharmacy rail asks about, each exactly as the page
@@ -10,8 +11,11 @@ import { canAccessPharmacyCounter } from './pharmacy-sales';
  * - `pharmacy:procurement` — purchasing consoles and Goods-in.
  * - `pharmacy:prescriptions` — the prescription workspace.
  * - `pharmacy:dispense` — the pharmacist queue and substitution evidence.
- * - `reports:operational` — the pharmacy reports command centre.
+ * - `reports:operational` — the pharmacy reports command centre: the grant
+ *   itself, or a Manager's reports for their assigned branches (DEV-505).
  * - `pharmacy:counter` — the counter's capability family and active branch scope.
+ * - `pharmacy:close` — day close: an administrator, a `pharmacy:close` holder, or
+ *   a Manager with an active branch assignment (DEV-505).
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
@@ -19,6 +23,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:dispense',
   'reports:operational',
   'pharmacy:counter',
+  'pharmacy:close',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];
@@ -36,10 +41,13 @@ export const pharmacyAccessRouter = router({
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     const decisions = await Promise.all(
       PHARMACY_NAVIGATION_CAPABILITIES.map(async (capability) => {
-        const allowed =
-          capability === 'pharmacy:counter'
-            ? await canAccessPharmacyCounter(ctx)
-            : await can(subject, capability, undefined, options);
+        let allowed: boolean;
+        if (capability === 'pharmacy:counter') allowed = await canAccessPharmacyCounter(ctx);
+        else if (capability === 'pharmacy:close') allowed = await canAccessDayClose(ctx);
+        else if (capability === 'reports:operational') {
+          const reportBranches = await pharmacyReportAccess(ctx);
+          allowed = reportBranches === 'ALL' || reportBranches.length > 0;
+        } else allowed = await can(subject, capability, undefined, options);
         return allowed ? capability : null;
       })
     );

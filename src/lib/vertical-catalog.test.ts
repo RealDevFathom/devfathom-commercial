@@ -538,6 +538,7 @@ describe('optional pharmacy Owner / Operator', () => {
           'pharmacy:orders',
           'pharmacy:procurement',
           'pharmacy:procurement-approve',
+          'pharmacy:inventory',
         ],
       },
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
@@ -629,6 +630,47 @@ describe('package compatibility (§2.3 / D10)', () => {
     expect(() => assertPackageCompatibleWithVertical('AGENCY', 'RESTAURANT')).toThrow(
       /not compatible/
     );
+  });
+});
+
+describe('pharmacy Manager template (DEV-505)', () => {
+  const manager = () => PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
+  const grants = (action: string) =>
+    manager().capabilities.some((grant) => capabilityMatches(grant, action, 'ALLOW'));
+
+  it('is the one Manager template: no duplicate branch-manager template is added', () => {
+    expect(PHARMACY_ROLE_TEMPLATES.filter((role) => /manager/i.test(role.key))).toHaveLength(1);
+    expect(PHARMACY_ROLE_TEMPLATES.filter((role) => /manager/i.test(role.name))).toHaveLength(1);
+    expect(manager()).toMatchObject({ name: 'Manager', isSystem: true });
+  });
+
+  it('grants the branch-scoped duties: day close (manage), purchasing, inventory', () => {
+    for (const action of [
+      'pharmacy:manage',
+      'pharmacy:procurement',
+      'pharmacy:procurement-approve',
+      'pharmacy:inventory',
+    ]) {
+      expect(grants(action)).toBe(true);
+    }
+  });
+
+  it('withholds the tenant-wide and clinical grants', () => {
+    // pharmacy:close and reports:operational reach every branch of the tenant; a
+    // Manager's day close and reports come from pharmacy:manage on assigned branches.
+    for (const action of [
+      'pharmacy:close',
+      'reports:operational',
+      'reports:financial',
+      'pharmacy:dispense',
+      'pharmacy:prescriptions',
+      'pharmacy:catalogue-review',
+      'pharmacy:safety',
+    ]) {
+      expect(grants(action)).toBe(false);
+    }
+    expect(manager().capabilities).not.toContain('*');
+    expect(manager().capabilities).not.toContain('pharmacy:*');
   });
 });
 

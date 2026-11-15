@@ -248,6 +248,8 @@ describe('pharmacy navigation', () => {
       ['/pharmacy/prescriptions', 'pharmacy:prescriptions'],
       ['/pharmacy/pharmacist-queue', 'pharmacy:dispense'],
       ['/pharmacy/substitution', 'pharmacy:dispense'],
+      // DEV-505: day close follows the server's day-close decision.
+      ['/pharmacy/counter/close', 'pharmacy:close'],
     ] as const;
 
     it('offers a cashier the counter but none of the surfaces their role cannot open', () => {
@@ -275,8 +277,10 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
-    it('keeps the administrator-only day close for administrators', () => {
-      expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    // DEV-505: an administrator always passes the day-close server decision, which
+    // is what the rail now asks instead of the literal ADMIN role.
+    it('shows day close to an administrator the day-close decision admits', () => {
+      expect(hrefs('ADMIN', ['pharmacy:close'])).toContain('/pharmacy/counter/close');
     });
 
     it('shows Team to administrators, and to members only with the HR directory', () => {

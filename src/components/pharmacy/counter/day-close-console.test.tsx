@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   sessionRevoked: false,
   organizationId: 'org',
   branches: [{ id: 'b', name: 'Main' }],
+  /** The server's day-close refusal, if any (DEV-505). */
+  branchesError: null as { message: string; data?: { code: string } } | null,
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -48,11 +50,14 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
-      counterBranches: {
-        useQuery: () => ({
-          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
-          isSuccess: true,
-        }),
+      dayCloseBranches: {
+        useQuery: () =>
+          mocks.branchesError
+            ? { error: mocks.branchesError, isSuccess: false, refetch: vi.fn() }
+            : {
+                data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
+                isSuccess: true,
+              },
       },
       closePreview: {
         useQuery: (input: unknown) => {
@@ -120,6 +125,7 @@ beforeEach(() => {
   mocks.sessionRevoked = false;
   mocks.organizationId = 'org';
   mocks.branches = [{ id: 'b', name: 'Main' }];
+  mocks.branchesError = null;
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -280,15 +286,36 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
+  it('shows permission denial when the server refuses day close', () => {
     mocks.role = 'MEMBER';
+    mocks.branchesError = {
+      message: 'Day-close permission is required to reconcile and close a day.',
+      data: { code: 'FORBIDDEN' },
+    };
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.'
+      'This day-close screen requires day-close permission for a branch. Ask your workspace administrator to review your day-close permission or branch assignment.'
     );
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
     expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  // DEV-505: a Manager (not ADMIN) closes the day for the branches the server
+  // scopes them to, and is offered no other branch.
+  it('opens for a Manager on only the branches the server allows', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.branches = [{ id: 'assigned', name: 'Assigned branch' }];
+    render(<PharmacyDayCloseConsole />);
+    const branch = screen.getByRole('combobox');
+    expect(branch).toHaveValue('assigned');
+    expect(Array.from((branch as HTMLSelectElement).options).map((o) => o.value)).toEqual([
+      'assigned',
+    ]);
+    expect(mocks.previewInput).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'assigned' })
+    );
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('names the missing counter module for an administrator', () => {
     mocks.enabledModules = [];

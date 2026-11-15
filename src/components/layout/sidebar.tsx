@@ -317,15 +317,16 @@ export const navigation: NavItem[] = [
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
-  // #979: the day-close console only opens for a pharmacy administrator, so a
-  // cashier is not offered an entry that ends in "Day close unavailable".
+  // #979: a cashier is not offered an entry that ends in "Day close unavailable".
+  // DEV-505: shown to whoever the server lets close a day (an administrator, a
+  // day-close holder, or a Manager on their assigned branches).
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',
     icon: Monitor,
-    adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
+    pharmacyCapabilities: ['pharmacy:close'],
   },
   {
     label: 'Counter',

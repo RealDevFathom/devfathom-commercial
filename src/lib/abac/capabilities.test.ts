@@ -29,6 +29,8 @@ export const intendedPharmacyGrants = {
     'pharmacy:orders',
     'pharmacy:procurement',
     'pharmacy:procurement-approve',
+    // DEV-505: branch-scoped stock work for the branches a Manager runs.
+    'pharmacy:inventory',
   ],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
