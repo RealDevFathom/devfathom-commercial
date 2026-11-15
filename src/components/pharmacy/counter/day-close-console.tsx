@@ -104,9 +104,16 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
       detail = 'Could not check day-close access. Reload the page to try again.';
     }
     return (
-      <SectionCard title="Day close unavailable">
-        <p role="status">{detail}</p>
-      </SectionCard>
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Day close"
+          description="Reconcile each drawer, record any variance, then lock the business day."
+        />
+        <SectionCard title="Day close unavailable" titleLevel={2}>
+          <p role="status">{detail}</p>
+        </SectionCard>
+      </div>
     );
   }
   return (
@@ -313,7 +320,7 @@ function DayCloseForm({
             {open.length === 1 ? 'drawer' : 'drawers'} counted.
           </p>
         )}
-        <div className="mt-4 space-y-2" aria-label="Tender totals">
+        <div className="mt-4 space-y-2" role="group" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <div key={row.type} className="space-y-1">
               <p className="text-sm text-text-body">

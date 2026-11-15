@@ -89,6 +89,8 @@ export type CounterTenderPanelProps = {
   state: CounterTenderBillState;
   blocked: boolean;
   pending?: boolean;
+  /** The payment request is held until the connection returns; it has not been sent. */
+  queued?: boolean;
   disabled?: boolean;
   error?: string | null;
   initialDraft?: TenderDraft & {
@@ -149,6 +151,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       state,
       blocked,
       pending = false,
+      queued = false,
       disabled = false,
       error,
       onRetry,
@@ -526,7 +529,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           className="text-sm leading-relaxed text-text-body focus-visible:outline-ring"
         >
           {takingPayment
-            ? 'Taking payment… Keep this bill open.'
+            ? queued
+              ? 'Offline — this payment will be sent when the connection returns. Keep this bill open and do not take the money again.'
+              : 'Taking payment… Keep this bill open.'
             : checkingOutcome
               ? 'Checking payment outcome… No payment is being sent.'
               : (displayedOutcome?.message ??

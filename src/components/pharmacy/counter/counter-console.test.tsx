@@ -24,6 +24,7 @@ type Query = {
 const mocks = vi.hoisted(() => ({
   queries: {} as Record<string, Query>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
+  pausedMutations: new Set<string>(),
   refetch: vi.fn(),
   searchFetch: vi.fn(),
   cancel: vi.fn(),
@@ -105,6 +106,7 @@ vi.mock('@/lib/trpc', async () => {
               mutateAsync: mocks.mutations[name],
               mutate: name === 'counterSaveKeymap' ? mutateKeymap : mocks.mutations[name],
               ...state,
+              isPaused: mocks.pausedMutations.has(name),
             };
           },
         },
@@ -139,6 +141,7 @@ vi.mock('@/lib/trpc', async () => {
       pharmacySales: router([
         'manualPaymentSettings',
         'counterBranches',
+        'counterReceiptFormat',
         'counterKeymap',
         'counterSaveKeymap',
         'counterSearch',
@@ -168,6 +171,7 @@ vi.mock('@/lib/trpc', async () => {
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
+      pharmacyAccess: router(['navigation']),
     },
   };
 });
@@ -451,6 +455,7 @@ beforeEach(() => {
   for (const name of [
     'manualPaymentSettings',
     'counterBranches',
+    'counterReceiptFormat',
     'counterKeymap',
     'counterSearch',
     'counterCart',
@@ -463,6 +468,7 @@ beforeEach(() => {
     'counterPatientPanel',
     'controlledPharmacists',
     'refundAccess',
+    'navigation',
   ])
     mocks.queries[name] = query();
   // A counter taking cash has an open drawer; tests about a closed drawer say so.
@@ -585,6 +591,32 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     );
   });
 
+  it('opens receipts on the branch saved paper and keeps a cashier change for the session', () => {
+    mocks.queries.counterReceiptFormat = query({
+      layout: { version: 1, paperWidth: 80, browserPaper: 'A4' },
+      revision: 3,
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'counterReceiptFormat',
+      expect.objectContaining({ enabled: true })
+    );
+    const last = () =>
+      mocks.receiptProps.mock.lastCall![0] as {
+        format: string;
+        onFormatChange: (format: string) => void;
+      };
+    expect(last().format).toBe('A4');
+    act(() => last().onFormatChange('THERMAL_58'));
+    expect(last().format).toBe('THERMAL_58');
+  });
+
+  it('falls back to the 80 mm thermal paper when no branch format is readable', () => {
+    mocks.queries.counterReceiptFormat = { ...query(), isError: true, isSuccess: false };
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect((mocks.receiptProps.mock.lastCall![0] as { format: string }).format).toBe('THERMAL');
+  });
+
   it('does not settle an idle counter', () => {
     renderPayment(<PharmacyCounterConsole />);
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
@@ -663,6 +695,87 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
     ]);
     // The settled receipt drawer hides the panel from assistive tech; the rows remain.
     await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
+  });
+});
+
+describe('PharmacyCounterConsole offline indicator (DEV-641)', () => {
+  function goOffline(onLine: { mockReturnValue: (value: boolean) => unknown }, offline = true) {
+    onLine.mockReturnValue(!offline);
+    act(() => {
+      window.dispatchEvent(new Event(offline ? 'offline' : 'online'));
+    });
+  }
+
+  it('shows an offline banner and the queued payment until the connection returns', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    try {
+      let resolve!: (value: ReturnType<typeof accepted>) => void;
+      mocks.mutations.tender!.mockImplementation(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          })
+      );
+      renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.queryByText(/^Offline —/)).not.toBeInTheDocument();
+
+      goOffline(onLine);
+      expect(
+        screen.getByText('Offline — this counter cannot reach the server.')
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('Search, bill changes and payments wait until the connection returns.')
+      ).toBeInTheDocument();
+
+      // React Query holds the mutation while offline instead of sending it.
+      mocks.pausedMutations.add('tender');
+      enterPayment();
+      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByText('Offline — the payment will be sent when the connection returns.')
+      ).toBeInTheDocument();
+      expect(screen.getByText('1 payment waiting')).toBeInTheDocument();
+      expect(screen.getByText(/^Offline — this payment will be sent/)).toBeInTheDocument();
+      expect(screen.queryByText('Taking payment… Keep this bill open.')).not.toBeInTheDocument();
+
+      mocks.pausedMutations.delete('tender');
+      goOffline(onLine, false);
+      expect(screen.queryByText(/^Offline —/)).not.toBeInTheDocument();
+      expect(screen.queryByText('1 payment waiting')).not.toBeInTheDocument();
+      expect(screen.getByText('Taking payment… Keep this bill open.')).toBeInTheDocument();
+      await act(async () => resolve(accepted()));
+      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.pausedMutations.clear();
+      onLine.mockRestore();
+    }
+  });
+
+  it('never calls a dispatched payment queued when the connection drops', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    try {
+      let resolve!: (value: ReturnType<typeof accepted>) => void;
+      mocks.mutations.tender!.mockImplementation(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          })
+      );
+      renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      enterPayment();
+      goOffline(onLine);
+      expect(
+        screen.getByText('Offline — this payment is waiting for the server to confirm it.')
+      ).toBeInTheDocument();
+      expect(screen.queryByText('1 payment waiting')).not.toBeInTheDocument();
+      expect(screen.queryByText(/payment will be sent/)).not.toBeInTheDocument();
+      expect(screen.getByText('Taking payment… Keep this bill open.')).toBeInTheDocument();
+      goOffline(onLine, false);
+      await act(async () => resolve(accepted()));
+      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+    } finally {
+      onLine.mockRestore();
+    }
   });
 });
 
@@ -2738,6 +2851,63 @@ describe('PharmacyCounterConsole browser print audit', () => {
     expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(2);
   });
 });
+describe('PharmacyCounterConsole search latency (DEV-575)', () => {
+  function lastSearchOptions() {
+    return mocks.queryOptions.mock.calls.filter(([name]) => name === 'counterSearch').at(-1)?.[1];
+  }
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('submits a typed search 150 ms after the last keystroke and aborts superseded ones', () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'pa' } });
+    fireEvent.change(search, { target: { value: 'para' } });
+
+    act(() => vi.advanceTimersByTime(149));
+    expect(lastSearchOptions()).toMatchObject({ enabled: false });
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(lastSearchOptions()).toMatchObject({
+      enabled: true,
+      trpc: { abortOnUnmount: true },
+    });
+  });
+
+  it('never searches the digits of a scanner burst before its Enter', async () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const code = '8964000123456';
+    for (let length = 1; length <= code.length; length += 1) {
+      fireEvent.change(search, { target: { value: code.slice(0, length) } });
+      act(() => vi.advanceTimersByTime(10));
+    }
+    // A scanner that pauses before its Enter still has not searched a partial code.
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(
+      mocks.queryOptions.mock.calls.filter(
+        ([name, options]) => name === 'counterSearch' && (options as { enabled: boolean }).enabled
+      )
+    ).toEqual([]);
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.searchQuery).toHaveBeenCalledExactlyOnceWith(
+      { branchId: 'branch-a', query: code },
+      { staleTime: 10_000 }
+    );
+  });
+});
+
 describe('DEV-618 counter composition', () => {
   it('shows the auto-print copy only beside the auto-print checkbox, reworded', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

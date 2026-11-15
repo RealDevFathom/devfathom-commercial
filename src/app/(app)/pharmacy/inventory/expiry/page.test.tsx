@@ -56,6 +56,7 @@ it('passes serialized return calendars and cumulative risk from the server page 
   const riskBuckets = [30, 60, 90].map((days) => ({ days, valueAtRiskMinor: days * 100 }));
   mocks.lots.mockResolvedValue({
     generatedAt,
+    costVisible: true,
     riskBuckets,
     rows: [
       { expiresAt, returnWindowOpensAt: opensAt, returnDeadlineAt: expiresAt, markdown: null },
@@ -72,6 +73,7 @@ it('passes serialized return calendars and cumulative risk from the server page 
       branchId: 'branch_a',
       withinDays: 30,
       generatedAt: generatedAt.toISOString(),
+      costVisible: true,
       riskBuckets,
       rows: [
         expect.objectContaining({
@@ -196,6 +198,7 @@ it('DEV-728: drafts one distributor return claim through the server procedure', 
   mocks.context.mockResolvedValue(context);
   mocks.lots.mockResolvedValue({
     generatedAt: new Date('2026-11-15T00:00:00.000Z'),
+    costVisible: true,
     riskBuckets: [],
     rows: [],
     suppliers: [],
@@ -233,4 +236,43 @@ it('DEV-728: drafts one distributor return claim through the server procedure', 
   expect(destination.searchParams.get('within')).toBe('60');
   expect(destination.searchParams.get('notice')).toContain('Expiry claim draft EXPC-1');
   expect(destination.searchParams.get('notice')).toContain('2 lots (1 skipped');
+});
+
+it('DEV-627: tells the board when the read withheld purchase cost', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Main', city: 'Karachi' }]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  const expiresAt = new Date('2026-12-31T00:00:00.000Z');
+  mocks.lots.mockResolvedValue({
+    generatedAt: new Date('2026-11-15T00:00:00.000Z'),
+    costVisible: false,
+    riskBuckets: [],
+    rows: [
+      {
+        expiresAt,
+        returnWindowOpensAt: null,
+        returnDeadlineAt: null,
+        markdown: null,
+        valueAtRiskMinor: null,
+      },
+    ],
+    suppliers: [],
+  });
+
+  render(await Page({ searchParams: Promise.resolve({ branch: 'branch_a' }) }));
+
+  const props = mocks.board.mock.calls[0]![0] as ExpiryBoardProps;
+  expect(props.costVisible).toBe(false);
+  expect(props.riskBuckets).toEqual([]);
+  expect(props.rows[0]?.valueAtRiskMinor).toBeNull();
+  expect(props.rows[0]).not.toHaveProperty('unitCostMinor');
 });

@@ -21,6 +21,7 @@ import {
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
+import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -149,6 +150,8 @@ export class PharmacySaleError extends Error {
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
+      | 'VOUCHER_CATEGORY_REFUSED'
+      | 'VOUCHER_INVALID'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
@@ -263,6 +266,8 @@ type AddSaleLineInput = {
   canonicalUnitsPerSaleUnit: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
+  /** DEV-27: a stored voucher to redeem; it sets the discount and its approval. */
+  voucherId?: string;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -284,6 +289,55 @@ export async function addReservedSaleLine(
   reservation: ReservedSaleAllocation
 ) {
   return addSaleLineWithAllocation(db, scope, input, reservation);
+}
+
+/**
+ * DEV-27: loads the stored voucher for a line and enforces its allowlist. The
+ * caller cannot set the amount, kind or approver of a voucher discount.
+ */
+async function voucherForRedemption(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  medicine: {
+    rx: boolean;
+    otc: boolean;
+    restricted: boolean;
+    controlled: boolean;
+    productFamily: string;
+  }
+) {
+  if (
+    input.discountKind !== undefined ||
+    input.discountMinor !== undefined ||
+    input.approvedByUserId !== undefined ||
+    input.approvalPolicy !== undefined
+  )
+    throw new PharmacySaleError('VOUCHER_INVALID');
+  const voucher = await db.pharmacyVoucher.findFirst({
+    where: {
+      id: input.voucherId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+    },
+    select: {
+      id: true,
+      discountMinor: true,
+      eligibleCategories: true,
+      issuedByUserId: true,
+      validUntil: true,
+    },
+  });
+  if (!voucher || (voucher.validUntil && voucher.validUntil.getTime() <= Date.now()))
+    throw new PharmacySaleError('VOUCHER_INVALID');
+  try {
+    assertVoucherEligibleLine(medicine, voucher.eligibleCategories);
+  } catch (error) {
+    if (error instanceof VoucherScopeError) throw new PharmacySaleError('VOUCHER_CATEGORY_REFUSED');
+    throw error;
+  }
+  return voucher;
 }
 
 async function addSaleLineWithAllocation(
@@ -328,6 +382,10 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
+  // enforced here, before any stock is allocated, so a voucher never applies to
+  // an Rx, OTC drug, supplement or medical-device line.
+  const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
@@ -385,14 +443,19 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
-  const discountMinor = input.discountMinor ?? 0;
+  const discountMinor = voucher
+    ? Math.min(voucher.discountMinor, grossMinor)
+    : (input.discountMinor ?? 0);
+  const discountKind = voucher ? ('VOUCHER' as const) : input.discountKind;
+  const approvedByUserId = voucher ? voucher.issuedByUserId : input.approvedByUserId;
+  const approvalPolicy = voucher ? `voucher:${voucher.id}` : input.approvalPolicy;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
     discountMinor,
     grossMinor,
     costMinor,
-    approvedByUserId: input.approvedByUserId,
-    approvalPolicy: input.approvalPolicy,
+    approvedByUserId,
+    approvalPolicy,
   });
   const line = await db.pharmacySaleLine.create({
     data: {
@@ -410,10 +473,11 @@ async function addSaleLineWithAllocation(
       grossMinor,
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
-      discountKind: input.discountKind,
+      discountKind,
       discountMinor,
-      approvalPolicy: input.approvalPolicy,
-      approvedByUserId: input.approvedByUserId,
+      voucherId: voucher?.id ?? null,
+      approvalPolicy,
+      approvedByUserId,
       idempotencyKey: input.idempotencyKey,
     },
   });

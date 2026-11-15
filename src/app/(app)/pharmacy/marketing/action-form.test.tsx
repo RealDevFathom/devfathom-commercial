@@ -69,3 +69,15 @@ it('does not invoke disabled actions even through form submission', () => {
   fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form')!);
   expect(mocks.action).not.toHaveBeenCalled();
 });
+it('submits the growth form with empty required dates so the server can explain', async () => {
+  mocks.action.mockResolvedValue({ error: true, message: 'Choose both a first day.' });
+  render(
+    <MarketingActionForm branchId="branch-a" operation="growth-generate" label="Generate">
+      <input name="from" type="date" required aria-label="First day" />
+    </MarketingActionForm>
+  );
+  const form = screen.getByRole('button', { name: 'Generate' }).closest('form')!;
+  expect(form).toHaveProperty('noValidate', true);
+  fireEvent.submit(form);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Choose both a first day.');
+});
