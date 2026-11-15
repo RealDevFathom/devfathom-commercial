@@ -473,7 +473,7 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: results[0].saleId }, include: { tenders: true } });
       expect(sale).toMatchObject({ status: 'COMPLETED', receiptNumber: f.lease.blockStart });
       expect(sale.tenders).toHaveLength(1);
-      expect(sale.tenders[0]).toMatchObject({ type, amountMinor: 100, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', referenceSkipped: false, drawerSessionId: null });
+      expect(sale.tenders[0]).toMatchObject({ type, amountMinor: 100, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', referenceSkipped: false, drawerSessionId: null, confirmedById: ACTOR });
       expect(await db.pharmacyDrawerMovement.count({ where: { drawerSession: { deviceId: f.fixture.deviceId }, kind: 'CASH_SALE' } })).toBe(0);
     });
     expect(await f.counts()).toMatchObject({ commands: 1, sales: 1, consumed: 1, nextNumber: f.lease.blockStart + 1 });
@@ -493,7 +493,9 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       counts: preview.drawers.filter((row) => row.status === 'OPEN').map((row) => ({ drawerSessionId: row.id, countedCashMinor: 0 })),
     }));
     expect(report.cashExpectedMinor).toBe(0);
-    expect(report.tenderTotals).toEqual([{ type: 'RAAST', amountMinor: 100, refundMinor: 0, netMinor: 100 }]);
+    // DEV-713: the close lists who confirmed each manual tender, by type.
+    expect(report.tenderTotals).toEqual([{ type: 'RAAST', amountMinor: 100, refundMinor: 0, netMinor: 100,
+      confirmers: [{ id: ACTOR, name: 'Recovery manager', count: 1, amountMinor: 100 }] }]);
     const batch = await inOrg(ORG_A, async (db) => {
       const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId } });
       return bookkeeping.createSettlementBatch(db, scope, { reference: tag('RAAST'), provider: 'Raast', tenderType: 'RAAST', businessDate, tenderIds: [tender.id] });

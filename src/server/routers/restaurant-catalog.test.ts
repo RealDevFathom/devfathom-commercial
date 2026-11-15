@@ -81,6 +81,7 @@ function model(): Delegate {
 function makeDb() {
   const db: Record<string, Delegate | unknown> = {
     $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
+    $executeRaw: vi.fn().mockResolvedValue(1),
     restaurantBrand: model(),
     restaurantCategory: model(),
     restaurantProduct: model(),

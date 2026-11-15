@@ -31,7 +31,7 @@ Hotel features are **not** covered by these docs. They are not part of the curre
 
 ## Older documents
 
-Some older files in this folder (for example `azure-deployment.md`) describe a previous Azure setup. **DEPRECATED: never deploy to Azure.** Azure has been shut down; deployments go to AWS. These files are kept for reference only until a decision is made about them. Do not follow them for new work.
+Some older files in this folder describe earlier setups. Deployments go to AWS; see [AWS deployment](deploy/aws.md). Older files are kept for reference only. Do not follow them for new work.
 
 ## Rules for people writing these docs
 
@@ -54,4 +54,4 @@ These documents already existed before this guide set and are still useful:
 - [Product and commercial pack](product-pack.md), [pitch-deck source](pitch-deck.md) and the [living status ledger](status-ledger.md)
 - Module PRDs: [POS & terminal](product/modules/pos-terminal.md), [Kitchen Display System](product/modules/kds.md)
 - [Documentation QA](qa.md)
-- [Azure deployment](azure-deployment.md): **DEPRECATED – never deploy to Azure.**
+- [AWS deployment](deploy/aws.md)

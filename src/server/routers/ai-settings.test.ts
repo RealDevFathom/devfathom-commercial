@@ -324,10 +324,16 @@ describe('AI settings read', () => {
     expect(view.providers[0]).toMatchObject({ spentUsd: null, capStatus: 'unknown' });
   });
 
-  it('never lists Azure and reports a legacy AI_PROVIDER as bypassing routing', async () => {
-    vi.stubEnv('AI_PROVIDER', 'azure');
+  it('reports a legacy AI_PROVIDER as bypassing routing', async () => {
+    vi.stubEnv('AI_PROVIDER', 'groq');
     const view = await caller().get();
     expect(view.routing).toBe('bypassed');
+  });
+
+  it('never lists Azure and reports the removed Azure selector as invalid', async () => {
+    vi.stubEnv('AI_PROVIDER', 'azure');
+    const view = await caller().get();
+    expect(view.routing).toBe('invalid');
     expect(view.providers.map((entry) => entry.provider)).not.toContain('azure');
     expect(JSON.stringify(view)).not.toMatch(/azure/i);
   });

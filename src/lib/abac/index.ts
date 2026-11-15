@@ -12,7 +12,7 @@
  */
 import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
-import { POLICIES, type Action } from './policies';
+import { POLICIES, RESOURCE_CONSTRAINTS, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
 
 export type { Action } from './policies';
@@ -77,7 +77,7 @@ const ROLE_BOUNDED_ADMIN_ACTIONS: ReadonlySet<Action> = new Set([
   'pharmacy:procurement-approve',
 ]);
 
-/** True iff some policy registered for `action` allows the subject + resource. */
+/** Grants require action eligibility and all mandatory resource constraints. */
 export async function can(
   subject: Subject,
   action: Action,
@@ -92,6 +92,13 @@ export async function can(
   const db = opts.db;
   if (!db) {
     console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
+    return false;
+  }
+  try {
+    const constraint = RESOURCE_CONSTRAINTS[action];
+    if (constraint && !(await constraint({ subject, resource, env, db }))) return false;
+  } catch (err) {
+    console.error('[abac] resource constraint for "%s" threw:', action, err);
     return false;
   }
   try {
