@@ -12,8 +12,12 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
-import { pharmacySopEvidenceReadDecision } from '@/lib/pharmacy/sop-evidence';
+import {
+  PHARMACY_SOP_EVIDENCE_FILE_PREFIX,
+  pharmacySopEvidenceReadDecision,
+} from '@/lib/pharmacy/sop-evidence';
 import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
+import { canReadUpload } from '@/lib/uploads/registry';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -31,6 +35,23 @@ const MIME: Record<string, string> = {
   mp4: 'audio/mp4',
   mp3: 'audio/mpeg',
 };
+
+// DEV-837 (F15): a menu-import source file is only ever read server-side by the
+// import pipeline, so this shared handler never serves one, whatever the caller
+// holds. (Owner data exports have their own DEV-783 refusal below.)
+const MENU_IMPORT_SOURCE = /^restaurant-menu-import__/iu;
+
+// DEV-837 (F17): names only the SOP capture routes ever issue. A caller-supplied
+// SOP storage reference to any other file is an annotation; it never decides
+// who may read that file.
+const RESTAURANT_SOP_CAPTURE_NAME =
+  /^sop-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/u;
+
+function isSopCaptureName(name: string): boolean {
+  return (
+    RESTAURANT_SOP_CAPTURE_NAME.test(name) || name.startsWith(PHARMACY_SOP_EVIDENCE_FILE_PREFIX)
+  );
+}
 
 export async function GET(request: Request, ctx: { params: Promise<{ name: string }> }) {
   let actor;
@@ -52,7 +73,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Bad request', { status: 400 });
   }
   // Camera stills require their evidence reader's grant and retention checks.
-  if (/^camera-snapshot-/iu.test(name)) {
+  if (/^camera-snapshot-/iu.test(name) || MENU_IMPORT_SOURCE.test(name)) {
     return new Response('Not found', { status: 404 });
   }
   // DEV-783: an owner data export is released only by its own PIN-gated,
@@ -76,10 +97,15 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Not found', { status: 404 });
   }
 
-  const sopEvidence = await withTenantDb(organization.id, (db) =>
+  const sopCaptureName = isSopCaptureName(name);
+  const sopEvidenceRow = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
       where: { storageRef: fileRef },
+      // The capture route's own row (or, for proof captured before
+      // `serverCaptured` existed, the first row naming the blob) governs.
+      orderBy: [{ serverCaptured: 'desc' }, { createdAt: 'asc' }],
       select: {
+        serverCaptured: true,
         uploaderStaffProfileId: true,
         occurrence: {
           select: {
@@ -92,6 +118,14 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       },
     })
   );
+  // DEV-837 (F17): only a server capture binds a file to an SOP occurrence. A
+  // caller-attached reference to an unrelated file (a logo, a project file) is
+  // ignored here, and a capture-named blob with no evidence row is unbound.
+  const sopEvidence =
+    sopEvidenceRow && (sopEvidenceRow.serverCaptured === true || sopCaptureName)
+      ? sopEvidenceRow
+      : null;
+  if (sopCaptureName && !sopEvidence) return new Response('Not found', { status: 404 });
   // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
   // assignment and SOP capability, not by restaurant branch membership.
   const pharmacyDecision =
@@ -120,11 +154,34 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     if (!branchAccess) return new Response('Not found', { status: 404 });
   }
 
+  // DEV-837 (F15): every object other than SOP proof must be one that
+  // /api/upload registered. An object bound to a project file, task attachment
+  // or contract follows that record's CURRENT read policy (or, for a file
+  // several records shared before the registry, any one of those records'), and
+  // a deleted owner leaves a tombstone binding that denies. Client-supplied references never
+  // bind or re-bind an object. An object the registry does not know (a legacy
+  // file nothing references any more) is unresolved and is never served.
+  if (!sopEvidence) {
+    const upload = await withTenantDb(organization.id, (db) =>
+      db.uploadedFile.findFirst({
+        where: { name },
+        select: { ownerType: true, ownerId: true },
+      })
+    );
+    if (!upload) return new Response('Not found', { status: 404 });
+    const ownerType = upload.ownerType;
+    if (ownerType !== null) {
+      const allowed = await withTenantDb(organization.id, (db) =>
+        canReadUpload(db, session.user, { name, ownerType, ownerId: upload.ownerId })
+      );
+      if (!allowed) return new Response('Not found', { status: 404 });
+    }
+  }
+
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
-  // leaks a private-channel/DM file to any signed-in user. Non-chat uploads
-  // (project files, avatars, client logos) keep the session-only gate; they have
-  // their own visibility model and aren't in this ticket's scope.
+  // leaks a private-channel/DM file to any signed-in user. Uploads no record has
+  // bound (client logos, licence evidence) keep their existing rules.
   const attachment = await withTenantDb(organization.id, (db) =>
     db.messageAttachment.findFirst({
       where: { url: fileRef },

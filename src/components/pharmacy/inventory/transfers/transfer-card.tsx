@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { formatLotExpiry } from '@/lib/pharmacy/product-class';
 
 import { PackingSlipPrintButton } from './packing-slip-print-button';
 import { TransferActionForm, type TransferStepAction } from './transfer-action-form';
@@ -93,7 +94,7 @@ export function TransferCard({
                   <span className="font-medium text-text-strong">{line.medicineName}</span>
                   <span className="block text-xs text-text-muted">Batch {line.batchNumber}</span>
                 </TableCell>
-                <TableCell>{when(line.expiresAt)}</TableCell>
+                <TableCell>{formatLotExpiry(line.expiresAt, when)}</TableCell>
                 <TableCell className="text-sm">
                   {line.sourceLocation?.name ?? 'Unknown'} →{' '}
                   {line.destinationLocation?.name ?? 'Unknown'}

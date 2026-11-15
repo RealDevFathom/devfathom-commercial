@@ -7,7 +7,7 @@ import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
-import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
 export type CounterSearchResultsProps = {
@@ -208,7 +208,7 @@ export function CounterSearchResults({
                 {row.presentation}
                 {row.dosageForm ? ` · ${row.dosageForm}` : ''}
                 {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
-                {row.nearestSafeExpiry ? ` · Exp ${formatReceiptDate(row.nearestSafeExpiry)}` : ''}
+                {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
                 {` · ${formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}`}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}
                 {` · ${MATCH_LABEL[row.matchedOn]}`}

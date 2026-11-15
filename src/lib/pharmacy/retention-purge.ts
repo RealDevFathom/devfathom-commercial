@@ -125,6 +125,9 @@ export function expiredRecordsSql(
      LIMIT ${limit}`;
 }
 
+/** Where a class's scan stopped: the (anchor, id) of the last record it examined. */
+export type RetentionPurgeCursor = { anchor: Date; id: string };
+
 export type RetentionPurgeResult = {
   purged: Record<PurgeableRecordClass, number>;
   retained: Array<{
@@ -133,7 +136,48 @@ export type RetentionPurgeResult = {
     id: string;
     reason: string;
   }>;
+  /**
+   * Where the next run resumes each class. Null means the scan reached the end
+   * of that class's expired records, so the next run starts again from the
+   * oldest. Stored on the job row (an ISO date and a record id; never contents).
+   */
+  resumeAfter: Record<PurgeableRecordClass, { anchor: string; id: string } | null>;
 };
+
+/**
+ * QA-3 — read the resume point a previous run stored in its job result. Junk
+ * is ignored (that class starts from the oldest record), never trusted.
+ */
+export function parseRetentionPurgeResume(
+  value: unknown
+): Partial<Record<PurgeableRecordClass, RetentionPurgeCursor>> {
+  const resume =
+    value && typeof value === 'object' ? (value as { resumeAfter?: unknown }).resumeAfter : null;
+  if (!resume || typeof resume !== 'object') return {};
+  const parsed: Partial<Record<PurgeableRecordClass, RetentionPurgeCursor>> = {};
+  for (const recordClass of PURGE_ORDER) {
+    const entry = (resume as Record<string, unknown>)[recordClass];
+    if (!entry || typeof entry !== 'object') continue;
+    const { anchor, id } = entry as { anchor?: unknown; id?: unknown };
+    if (typeof anchor !== 'string' || typeof id !== 'string' || !id || id.length > 128) continue;
+    const date = new Date(anchor);
+    if (Number.isNaN(date.getTime())) continue;
+    parsed[recordClass] = { anchor: date, id };
+  }
+  return parsed;
+}
+
+/** The resume point stored by the most recent successful retention purge run. */
+export async function previousRetentionPurgeResume(
+  db: RetentionPurgeDb
+): Promise<Partial<Record<PurgeableRecordClass, RetentionPurgeCursor>>> {
+  const rows = (await db.$queryRaw(Prisma.sql`
+    SELECT j."result" FROM "platform_jobs" j
+     WHERE j."type" = 'pharmacy.record.retention.v1' AND j."status" = 'SUCCEEDED'
+     ORDER BY j."finishedAt" DESC NULLS LAST, j."id" DESC
+     LIMIT 1`)) as Array<{ result: unknown }> | undefined;
+  return parseRetentionPurgeResume(rows?.[0]?.result);
+}
 
 /**
  * DEV-96 — delete pharmacy records whose retention window has elapsed. Runs in
@@ -145,10 +189,19 @@ export type RetentionPurgeResult = {
  * back to its savepoint and reported, never forced; each purged record gets an
  * audit row in the same savepoint, so a refused one leaves none. At most
  * `maxPurgesPerClass` records of each class are removed per run.
+ *
+ * QA-3: a run resumes each class after the last record the previous run
+ * examined (`resumeAfter`) and wraps to the oldest once the scan reaches the
+ * end. Without that, more than `maxScanned` records the database keeps
+ * refusing would fill every run's scan and stall the purge behind them.
  */
 export async function purgeExpiredPharmacyRecords(
   db: RetentionPurgeDb,
-  options: { maxPurgesPerClass?: number; maxScanned?: number } = {}
+  options: {
+    maxPurgesPerClass?: number;
+    maxScanned?: number;
+    resumeAfter?: Partial<Record<PurgeableRecordClass, RetentionPurgeCursor>>;
+  } = {}
 ): Promise<RetentionPurgeResult> {
   // Each class has its own budget, so a backlog in one class never starves the
   // others.
@@ -157,20 +210,27 @@ export async function purgeExpiredPharmacyRecords(
   const result: RetentionPurgeResult = {
     purged: { CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 0 },
     retained: [],
+    resumeAfter: { CONTROLLED_REGISTER: null, PRESCRIPTION: null, FISCAL: null },
   };
   for (const recordClass of PURGE_ORDER) {
     let purgedTotal = 0;
     const source = SOURCES[recordClass];
     let scanned = 0;
-    let cursor: { anchor: Date; id: string } | null = null;
+    let cursor: RetentionPurgeCursor | null = options.resumeAfter?.[recordClass] ?? null;
+    let reachedEnd = false;
     while (purgedTotal < maxPurges && scanned < maxScanned) {
+      const limit = Math.min(SCAN_BATCH, maxScanned - scanned);
       const batch = (await db.$queryRaw(
-        expiredRecordsSql(recordClass, cursor, Math.min(SCAN_BATCH, maxScanned - scanned))
+        expiredRecordsSql(recordClass, cursor, limit)
       )) as Candidate[];
+      let stoppedEarly = false;
       for (const record of batch) {
-        if (purgedTotal >= maxPurges) break;
+        if (purgedTotal >= maxPurges) {
+          stoppedEarly = true;
+          break;
+        }
         scanned += 1;
-        cursor = { anchor: record.anchor, id: record.id };
+        cursor = { anchor: new Date(record.anchor), id: record.id };
         await db.$executeRawUnsafe(`SAVEPOINT ${SAVEPOINT}`);
         try {
           await db.$queryRaw(
@@ -212,8 +272,13 @@ export async function purgeExpiredPharmacyRecords(
           });
         }
       }
-      if (batch.length < SCAN_BATCH) break;
+      if (batch.length < limit) {
+        reachedEnd = !stoppedEarly;
+        break;
+      }
     }
+    result.resumeAfter[recordClass] =
+      reachedEnd || !cursor ? null : { anchor: cursor.anchor.toISOString(), id: cursor.id };
   }
   return result;
 }

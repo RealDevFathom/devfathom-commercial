@@ -5,7 +5,7 @@ import { buildReceiptPreview } from '@/lib/receipts/preview';
 import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
-  formatReceiptDate,
+  formatReceiptExpiry,
   formatReceiptIssuedAt,
   localizeReceiptNumber,
   receiptTitle,
@@ -115,7 +115,7 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
     allocations: (line.allocations ?? []).map((allocation) => {
       const batch = issued ? allocation.batchNumber : null;
       const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptExpiry(expiry, locale) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
     }),
   };
 }
