@@ -24,6 +24,7 @@ import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { FinanceSourceKind } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   retirePharmacyRegulatoryRules,
@@ -1155,6 +1156,134 @@ describeIfDatabase('FIN-01 — POS settlement and MIG-03 opening events', () => 
     expectBalanced(entry);
     expect(entry).toMatchObject({ sourceKind: 'PHARMACY_OPENING_LEDGER', sourceId: opening.id });
     expect(totalFor(entry, 'ACCOUNTS_PAYABLE', 'CREDIT')).toBe(45_000);
+  });
+});
+
+// DEV-131: the operations journal themselves, in their own transaction, with no
+// separate adapter call from the caller.
+describeIfDatabase('FIN-01 — stock operations post their own journal entries', () => {
+  const entriesFor = (db: ScopedDb, sourceKind: FinanceSourceKind, sourceId: string) =>
+    db.financeJournalEntry.findMany({
+      where: { organizationId: ORG_A, sourceKind, sourceId },
+      include: { lines: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  const net = (entries: Entry[], accountCode: string) =>
+    entries
+      .flatMap((entry) => entry.lines)
+      .filter((leg) => leg.accountCode === accountCode)
+      .reduce((sum, leg) => sum + (leg.side === 'DEBIT' ? leg.amountMinor : -leg.amountMinor), 0);
+
+  it('journals a posted goods receipt and negates it when the receipt is reversed', async () => {
+    const f = await fixture(ORG_A, branch('grn-wired'), 'grn-wired');
+    const result = await inOrg(ORG_A, async (db) => {
+      const received = await postedReceipt(db, f, 'grn-wired', { receivedPacks: 10 });
+      const posted = await entriesFor(db, 'PHARMACY_GOODS_RECEIPT', received.draft.id);
+      await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: received.draft.id,
+        reason: 'Delivery returned to the supplier',
+        at: LATER,
+      });
+      return {
+        posted,
+        trail: await entriesFor(db, 'PHARMACY_GOODS_RECEIPT', received.draft.id),
+      };
+    });
+
+    expect(result.posted).toHaveLength(1);
+    expectBalanced(result.posted[0]!);
+    expect(totalFor(result.posted[0]!, 'INVENTORY', 'DEBIT')).toBe(100_000);
+    expect(result.trail).toHaveLength(2);
+    expect(result.trail[1]!.reversesEntryId).toBe(result.posted[0]!.id);
+    expect(net(result.trail, 'INVENTORY')).toBe(0);
+    expect(net(result.trail, 'GOODS_RECEIVED_ACCRUAL')).toBe(0);
+  });
+
+  it('journals a dispatched transfer into transit and its receipt out of transit', async () => {
+    const f = await fixture(ORG_A, branch('transfer-wired'), 'transfer-wired');
+    const DESTINATION_BRANCH = branch('transfer-wired-dest');
+    const entries = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, DESTINATION_BRANCH);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: DESTINATION_BRANCH,
+          code: `MAIN-${tag('transfer-wired-dest')}`,
+          name: 'Receiving store',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, f, {
+        label: 'transfer-wired',
+        units: 40,
+        unitCostMinor: 600,
+        expiresAt: EXPIRY_LATER,
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(f), {
+        toBranchId: DESTINATION_BRANCH,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: f.storeId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 20,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(db, { ...scopeOf(f), actorId: WITNESS }, transfer.id);
+      await deps.operations.dispatchTransfer(db, scopeOf(f), transfer.id, tag('wired-dispatch'));
+      await deps.operations.receiveTransferLine(db, scopeOf(f, DESTINATION_BRANCH), {
+        transferId: transfer.id,
+        lineId: transfer.lines[0]!.id,
+        receivedUnits: 20,
+        idempotencyKeyPrefix: tag('wired-receive'),
+      });
+      return entriesFor(db, 'PHARMACY_INTERBRANCH_TRANSFER_LINE', transfer.lines[0]!.id);
+    });
+
+    expect(entries).toHaveLength(2);
+    entries.forEach((entry) => expectBalanced(entry));
+    // Everything that left arrived, so nothing is left in transit, and the
+    // value moved from one branch's inventory to the other's.
+    expect(net(entries, 'INVENTORY_IN_TRANSIT')).toBe(0);
+    const inventory = entries
+      .flatMap((entry) => entry.lines)
+      .filter((leg) => leg.accountCode === 'INVENTORY');
+    const byBranch = (branchId: string) =>
+      inventory
+        .filter((leg) => leg.branchId === branchId)
+        .reduce((sum, leg) => sum + (leg.side === 'DEBIT' ? leg.amountMinor : -leg.amountMinor), 0);
+    expect(byBranch(f.branchId)).toBe(-12_000);
+    expect(byBranch(DESTINATION_BRANCH)).toBe(12_000);
+  });
+
+  it('journals an approved count variance without a separate adapter call', async () => {
+    const f = await fixture(ORG_A, branch('count-wired'), 'count-wired');
+    const entries = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, f, {
+        label: 'count-wired',
+        units: 30,
+        unitCostMinor: 700,
+        expiresAt: EXPIRY_LATER,
+      });
+      const count = await deps.operations.createCount(db, scopeOf(f), {
+        varianceThreshold: 100,
+        readings: [
+          {
+            inventoryLotId: lot.id,
+            stockLocationId: f.storeId,
+            countedSealedPacks: 2,
+            countedLooseUnits: 5,
+          },
+        ],
+      });
+      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('wired')}`);
+      return entriesFor(db, 'PHARMACY_INVENTORY_COUNT_LINE', count.lines[0]!.id);
+    });
+
+    expect(entries).toHaveLength(1);
+    expectBalanced(entries[0]!);
+    expect(totalFor(entries[0]!, 'INVENTORY_SHRINKAGE', 'DEBIT')).toBe(3_500);
   });
 });
 
