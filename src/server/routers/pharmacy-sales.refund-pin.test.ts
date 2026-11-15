@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-647: refunds need a manager or owner who re-enters their own PIN. Cashiers cannot start one.
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(), withTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -236,6 +236,10 @@ describe('DEV-647 refund entry visibility', () => {
     ['owner', true],
     ['admin', true],
   ] as const)('reports refund access for a %s as %s', async (role, authorized) => {
+    await expect(fixture(ROLES[role]!).caller.refundAccess()).resolves.toEqual({ authorized });
+  });
+});
+reports refund access for a %s as %s', async (role, authorized) => {
     await expect(fixture(ROLES[role]!).caller.refundAccess()).resolves.toEqual({ authorized });
   });
 });

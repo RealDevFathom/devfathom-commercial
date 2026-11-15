@@ -32,13 +32,23 @@ export function actorMayRefund(
 
 /**
  * Re-authenticates the signed-in manager or owner with their own staff PIN.
- * Returns (never throws) a refusal so the caller's transaction commits the
- * lockout strike.
+ * Runs in its own tenant transaction, so a refused PIN commits the lockout
+ * strike even when the request's transaction later rolls back. Returns (never
+ * throws) a refusal.
  */
-export async function verifyRefundPin(
-  db: ScopedDb,
+export function verifyRefundPin(
   input: { organizationId: string; actorId: string; pin: string },
   now = new Date()
+): Promise<{ verified: true } | { blocked: string }> {
+  return withTenantDb(input.organizationId, (db) => checkRefundPin(db, input, now), {
+    skipDrain: true,
+  });
+}
+
+async function checkRefundPin(
+  db: ScopedDb,
+  input: { organizationId: string; actorId: string; pin: string },
+  now: Date
 ): Promise<{ verified: true } | { blocked: string }> {
   const { organizationId, actorId, pin } = input;
   if (!/^\d{4,8}$/.test(pin)) return { blocked: REFUND_PIN_BLOCKED };

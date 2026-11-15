@@ -1056,25 +1056,28 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-647: a manager or owner may refund without a receipt grant; an explicit
+        // receipt DENY still wins.
+        const mayRefund = await actorMayRefund(ctx.db, ctx.session!.user);
         let receiptAccess = false;
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, false, (rules) => {
-          receiptAccess = counterCapabilityDecision(rules) === 'ALLOW';
+          const receiptDecision = counterCapabilityDecision(rules);
+          receiptAccess =
+            receiptDecision === 'ALLOW' || (mayRefund && receiptDecision !== 'DENY');
           // The stored tender selects the permission boundary after member/branch checks.
           return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
         });
         // DEV-647: cashiers cannot start refunds; a manager or owner re-enters their PIN.
-        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+        if (!mayRefund)
           throw new TRPCError({ code: 'FORBIDDEN', message: REFUND_FORBIDDEN });
         // The PIN never reaches the refund's idempotency payload hash.
         const { managerPin, ...refund } = input;
-        // Its own transaction, so a refused PIN still commits the lockout strike.
-        const pin = await ctx.db.$transaction((tx) =>
-          verifyRefundPin(txDb(tx), {
-            organizationId: scope.organizationId,
-            actorId: scope.actorId,
-            pin: managerPin,
-          })
-        );
+        // Verified in its own tenant transaction, so a refused PIN still commits the lockout strike.
+        const pin = await verifyRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+        });
         annotateAudit(ctx, {
           metadata: {
             policy: REFUND_PIN_POLICY,
