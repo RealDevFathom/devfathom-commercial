@@ -4,6 +4,14 @@ import { TRPCError } from '@trpc/server';
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { appUrl, sendEmail, templates } from '@/lib/email';
+import { emailSchema } from '@/lib/email-address';
+import {
+  EmptyDepartmentCatalogError,
+  resolveProvisionedDepartmentKey,
+} from '@/lib/department-provisioning';
+import { createMemberInvitation } from '@/lib/member-invitation';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
@@ -143,6 +151,60 @@ async function resolveStaffUserEmail(
     throw new StaffProfileError('The selected organization user is unavailable.', 'USER_NOT_FOUND');
   }
   return user.id;
+}
+
+type InviteActor = Parameters<typeof subjectFromSession>[0];
+
+/**
+ * DEV-253 — the organization role templates this actor may hand a person they
+ * invite from the restaurant staff console. A tenant administrator may assign
+ * any of the tenant's roles (as `team.inviteMember` already allows). Anyone else
+ * holding `staff:manage` — a branch or general manager — may assign only a role
+ * whose every grant they hold themselves, so an invite can never mint more
+ * access than its sender has. Wildcard grants (the Owner template) stay
+ * administrator-only.
+ */
+async function assignableInviteRoles(db: ScopedDb, actor: InviteActor, organizationId: string) {
+  const roles = await db.organizationRole.findMany({
+    where: { organizationId },
+    select: {
+      id: true,
+      key: true,
+      name: true,
+      permissions: { select: { capability: true, effect: true } },
+    },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  const strip = ({ id, key, name }: (typeof roles)[number]) => ({ id, key, name });
+  if (actor.role === 'ADMIN') return roles.map(strip);
+
+  const subject = subjectFromSession(actor);
+  const held = new Map<string, Promise<boolean>>();
+  const holds = (capability: string) => {
+    let decision = held.get(capability);
+    if (!decision) {
+      decision = can(subject, capability as Action, undefined, { db, source: 'TRPC' });
+      held.set(capability, decision);
+    }
+    return decision;
+  };
+  const assignable = [];
+  for (const role of roles) {
+    let allowed = true;
+    for (const permission of role.permissions) {
+      if (permission.effect === 'DENY') continue;
+      if (permission.capability === '*' || permission.capability.endsWith(':*')) {
+        allowed = false;
+        break;
+      }
+      if (!(await holds(permission.capability))) {
+        allowed = false;
+        break;
+      }
+    }
+    if (allowed) assignable.push(strip(role));
+  }
+  return assignable;
 }
 
 function workspaceOrganizationId(ctx: {
@@ -415,6 +477,143 @@ export const restaurantStaffRouter = router({
         });
         return staff;
       } catch (err) {
+        mapStaffError(err);
+      }
+    }),
+
+  // DEV-253 — role choices for a new invitee, limited to what the actor may grant.
+  listInviteRoles: staffProcedure.query(async ({ ctx }) => {
+    await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
+    return assignableInviteRoles(ctx.db, ctx.session!.user, workspaceOrganizationId(ctx));
+  }),
+
+  /**
+   * DEV-253 — invite a brand-new waiter, manager, or other staff member: create
+   * their INVITED account (seat-checked, no password) with the chosen role
+   * template, link a new staff profile to it, and email the single-use link to
+   * set their password. Same branch rules as `create`.
+   */
+  invite: staffProcedure
+    .input(
+      z.object({
+        displayName: z.string().trim().min(1).max(200),
+        email: emailSchema,
+        organizationRoleId: z.string().trim().min(1).max(128),
+        primaryBranchId: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
+        if (!authorization.organizationWide) {
+          assertAuthorizedBranch(authorization, input.primaryBranchId);
+        } else if (input.primaryBranchId) {
+          assertAuthorizedBranch(authorization, input.primaryBranchId);
+        }
+        const organizationId = workspaceOrganizationId(ctx);
+        const role = (await assignableInviteRoles(ctx.db, ctx.session!.user, organizationId)).find(
+          (candidate) => candidate.id === input.organizationRoleId
+        );
+        if (!role) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You cannot invite someone with this role.',
+          });
+        }
+        const linked = await ctx.db.user.findFirst({
+          where: { organizationId, email: input.email, restaurantStaffProfiles: { some: {} } },
+          select: { id: true },
+        });
+        if (linked) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This email already belongs to a restaurant staff member.',
+          });
+        }
+        const department = await resolveProvisionedDepartmentKey(
+          ctx.db,
+          organizationId,
+          'EMPLOYEE'
+        );
+
+        const { user, token, staff } = await ctx.db.$transaction(async (tx) => {
+          const invitation = await createMemberInvitation(tx, {
+            organizationId,
+            email: input.email,
+            seatLimit: ctx.entitlements.seatLimit,
+            invitedById: ctx.session!.user.id,
+            profile: {
+              name: input.displayName,
+              role: 'EMPLOYEE',
+              organizationRoleId: role.id,
+              department,
+              title: role.name,
+              phone: null,
+              bio: null,
+              skills: [],
+            },
+          });
+          const profile = await createStaffProfileWithinCommercialLimit(
+            ctx.db,
+            ctx.entitlements.limits,
+            {
+              displayName: input.displayName,
+              email: input.email,
+              userId: invitation.user.id,
+              primaryBranchId: input.primaryBranchId ?? null,
+            },
+            { allowInvitedUser: true }
+          );
+          return { ...invitation, staff: profile };
+        });
+
+        annotateAudit(ctx, {
+          targetType: 'RestaurantStaffProfile',
+          targetId: staff.id,
+          targetLabel: staff.displayName,
+          description: `Invited "${staff.displayName}" as ${role.name}`,
+          metadata: {
+            invitedUserId: user.id,
+            organizationRoleId: role.id,
+            primaryBranchId: staff.primaryBranchId,
+          },
+        });
+
+        const inviteUrl = `${appUrl()}/invite/${token}`;
+        // Best-effort send, as `team.inviteMember`: the inviter still gets the
+        // link to share by hand when delivery fails.
+        const mail = templates.inviteMember({
+          name: user.name,
+          inviterName: ctx.session!.user.name ?? undefined,
+          role: role.name,
+          workspace: 'DevFathom',
+          acceptUrl: inviteUrl,
+          expiresLabel: 'in 7 days',
+        });
+        try {
+          await sendEmail({
+            to: { email: input.email, name: user.name },
+            subject: mail.subject,
+            html: mail.html,
+            text: mail.text,
+          });
+        } catch (err) {
+          console.error('[restaurantStaff.invite] invite email failed for', input.email, err);
+        }
+
+        return { staffProfileId: staff.id, userId: user.id, inviteUrl };
+      } catch (err) {
+        if (err instanceof EmptyDepartmentCatalogError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+        }
         mapStaffError(err);
       }
     }),

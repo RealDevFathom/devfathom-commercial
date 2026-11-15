@@ -82,16 +82,20 @@ async function assertBranchInScope(db: ScopedDb, branchId: string): Promise<void
   }
 }
 
-/** A linked `User` must exist in the caller's organization (RLS scopes the lookup). */
+/**
+ * A linked `User` must exist in the caller's organization (RLS scopes the lookup).
+ * Only the server's own invite path (DEV-253) may link a still-INVITED account.
+ */
 async function assertUserInScope(
   db: ScopedDb,
   userId: string,
-  currentProfileId?: string
+  currentProfileId?: string,
+  allowInvitedUser = false
 ): Promise<void> {
   const user = await db.user.findFirst({
     where: {
       id: userId,
-      status: 'ACTIVE',
+      status: allowInvitedUser ? { in: ['ACTIVE', 'INVITED'] } : 'ACTIVE',
       restaurantStaffProfiles: currentProfileId
         ? { every: { id: currentProfileId } }
         : { none: {} },
@@ -111,7 +115,16 @@ export type CreateStaffProfileInput = {
   status?: RestaurantStaffStatus;
 };
 
-export async function createStaffProfile(db: ScopedDb, input: CreateStaffProfileInput) {
+export type CreateStaffProfileOptions = {
+  /** Server-internal: the account was just invited by this same request. */
+  allowInvitedUser?: boolean;
+};
+
+export async function createStaffProfile(
+  db: ScopedDb,
+  input: CreateStaffProfileInput,
+  options: CreateStaffProfileOptions = {}
+) {
   const displayName = input.displayName.trim();
   if (displayName.length === 0) {
     throw new StaffProfileError('A staff profile requires a display name.', 'INVALID');
@@ -119,7 +132,9 @@ export async function createStaffProfile(db: ScopedDb, input: CreateStaffProfile
   const email = normalizeStaffEmail(input.email);
   await assertEmailAvailable(db, email, null);
   if (input.primaryBranchId) await assertBranchInScope(db, input.primaryBranchId);
-  if (input.userId) await assertUserInScope(db, input.userId);
+  if (input.userId) {
+    await assertUserInScope(db, input.userId, undefined, options.allowInvitedUser);
+  }
 
   return db.restaurantStaffProfile.create({
     data: {
