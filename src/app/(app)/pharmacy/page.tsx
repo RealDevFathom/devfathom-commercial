@@ -9,6 +9,9 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
 import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
+import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
+import { pharmacyLoyaltyRouter } from './loyalty/loyalty-router';
+import { OnboardingLoyaltyStep } from './loyalty/onboarding-loyalty-step';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -49,10 +52,20 @@ export default async function PharmacyOnboardingPage() {
   // #709 — the Tier-1 self-check prompt is additive: if it cannot be read,
   // the rest of the page still renders.
   // #720 — renewal reminders are additive in the same way.
-  const [fbrTier1, renewals] = await Promise.all([
+  // DEV-814 — the optional loyalty question, also additive. It reads the rate through the
+  // loyalty router, so only a user who may set the rate is asked; a pharmacy already active
+  // or with a rate set keeps the loyalty page's own notice instead.
+  const [fbrTier1, renewals, earnRate] = await Promise.all([
     caller.fbrTier1Status().catch(() => null),
     caller.licenceRenewals().catch(() => []),
+    overview.organization.status === 'ACTIVE'
+      ? null
+      : pharmacyLoyaltyRouter
+          .createCaller(ctx)
+          .earnRate()
+          .catch(() => null),
   ]);
+  const askLoyalty = !!earnRate && !earnRate.current;
   // DEV-93 — the owner's "no lock-in" export, offered only to the live owner.
   const userId = ctx.session?.user?.id;
   const organizationId = ctx.organization?.id;
@@ -81,6 +94,11 @@ export default async function PharmacyOnboardingPage() {
       />
       <LicenceRenewalBanner reminders={renewals} />
       <PharmacyOnboardingConsole initial={overview} />
+      {askLoyalty ? (
+        <OnboardingLoyaltyStep
+          presets={LOYALTY_EARN_PRESETS.map((preset) => ({ id: preset.id, label: preset.label }))}
+        />
+      ) : null}
       {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
     </main>
   );
