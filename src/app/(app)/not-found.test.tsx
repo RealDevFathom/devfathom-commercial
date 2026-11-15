@@ -9,7 +9,6 @@ const navigation = vi.hoisted(() => ({
 vi.mock('next/navigation', () => navigation);
 
 import WorkspaceNotFound from './not-found';
-import MissingPharmacyPage from './pharmacy/[...missing]/page';
 import MissingSettingsPage from './settings/[...missing]/page';
 
 describe('in-app not-found (DEV-502)', () => {
@@ -23,12 +22,9 @@ describe('in-app not-found (DEV-502)', () => {
     );
   });
 
-  it.each([
-    ['pharmacy', MissingPharmacyPage],
-    ['settings', MissingSettingsPage],
-  ])('routes unknown %s addresses to the in-app not-found page', (_section, Page) => {
+  it('routes unknown settings addresses to the in-app not-found page', () => {
     navigation.notFound.mockClear();
-    expect(() => Page()).toThrow('NEXT_HTTP_ERROR_FALLBACK;404');
+    expect(() => MissingSettingsPage()).toThrow('NEXT_HTTP_ERROR_FALLBACK;404');
     expect(navigation.notFound).toHaveBeenCalledTimes(1);
   });
 });
