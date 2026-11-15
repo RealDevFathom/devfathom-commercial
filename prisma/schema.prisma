@@ -12137,6 +12137,7 @@ model PharmacySupplier {
   debitNotes      PharmacyDebitNote[]
   credits         PharmacySupplierCredit[]
   relationships   PharmacySupplierRelationship[]
+  priceLists      PharmacySupplierPriceList[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
@@ -15781,6 +15782,63 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
+}
+
+/// DEV-681 — one distributor price list as it was uploaded. The file's rows
+/// are kept, never edited; every comparison is computed by SQL from them.
+model PharmacySupplierPriceList {
+  id             String                          @id @default(cuid())
+  organizationId String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  supplierId     String
+  fileName       String
+  sourceHash     String
+  rowCount       Int
+  importedById   String
+  createdAt      DateTime                        @default(now())
+  supplier       PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  lines          PharmacySupplierPriceListLine[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, supplierId, sourceHash])
+  @@index([organizationId, createdAt])
+  @@map("pharmacy_supplier_price_lists")
+}
+
+/// DEV-681 — one row of a supplier price list, the records it was compared
+/// with at import, and the shelf-price draft a person approves or rejects.
+/// `draftStatus`: NONE (nothing to change), DRAFT, APPROVED or REJECTED.
+model PharmacySupplierPriceListLine {
+  id                       String                    @id @default(cuid())
+  organizationId           String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  priceListId              String
+  rowNumber                Int
+  productText              String
+  packText                 String?
+  barcode                  String?
+  matchStatus              String
+  medicineId               String?
+  packLevelId              String?
+  listTradePriceMinor      Int?
+  listMrpMinor             Int?
+  /// Snapshot at import: this supplier's last posted invoice price for the pack.
+  previousTradePriceMinor  Int?
+  /// Snapshot at import: the organization price policy the draft would replace.
+  currentPackPriceId       String?
+  currentMrpMinor          Int?
+  currentSellingPriceMinor Int?
+  draftStatus              String                    @default("NONE")
+  draftMrpMinor            Int?
+  draftSellingPriceMinor   Int?
+  decidedById              String?
+  decidedAt                DateTime?
+  packPriceId              String?
+  createdAt                DateTime                  @default(now())
+  priceList                PharmacySupplierPriceList @relation(fields: [organizationId, priceListId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, priceListId, rowNumber])
+  @@index([organizationId, draftStatus])
+  @@map("pharmacy_supplier_price_list_lines")
 }
 
 /// Cross-instance fixed-window counters. Not tenant data and not under RLS:

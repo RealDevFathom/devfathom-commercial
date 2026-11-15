@@ -97,7 +97,7 @@ export async function resolveNoticePack(
 
 // All policy writers share this transaction lock; unique effective dates also
 // reject conflicting writes rather than silently choosing an arbitrary winner.
-async function lockPrices(db: ScopedDb, scope: PriceScope) {
+export async function lockPrices(db: ScopedDb, scope: PriceScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${scope.organizationId}), hashtext('pharmacy-pack-prices'))`
   );

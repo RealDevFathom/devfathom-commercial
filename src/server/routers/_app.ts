@@ -73,6 +73,7 @@ import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
+import { pharmacySupplierPriceListsRouter } from './pharmacy-supplier-price-lists';
 import { pharmacyAccessRouter } from './pharmacy-access';
 import { aiSettingsRouter } from './ai-settings';
 
@@ -152,6 +153,7 @@ export const appRouter = router({
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
+  pharmacySupplierPriceLists: pharmacySupplierPriceListsRouter,
   pharmacyAccess: pharmacyAccessRouter,
 });
 
