@@ -137,6 +137,7 @@ vi.mock('@/lib/trpc', async () => {
       pharmacySales: router([
         'manualPaymentSettings',
         'counterBranches',
+        'counterReceiptFormat',
         'counterKeymap',
         'counterSaveKeymap',
         'counterSearch',
@@ -448,6 +449,7 @@ beforeEach(() => {
   for (const name of [
     'manualPaymentSettings',
     'counterBranches',
+    'counterReceiptFormat',
     'counterKeymap',
     'counterSearch',
     'counterCart',
@@ -580,6 +582,32 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(mocks.receiptProps).toHaveBeenLastCalledWith(
       expect.objectContaining({ receipt: null, state: 'idle' })
     );
+  });
+
+  it('opens receipts on the branch saved paper and keeps a cashier change for the session', () => {
+    mocks.queries.counterReceiptFormat = query({
+      layout: { version: 1, paperWidth: 80, browserPaper: 'A4' },
+      revision: 3,
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'counterReceiptFormat',
+      expect.objectContaining({ enabled: true })
+    );
+    const last = () =>
+      mocks.receiptProps.mock.lastCall![0] as {
+        format: string;
+        onFormatChange: (format: string) => void;
+      };
+    expect(last().format).toBe('A4');
+    act(() => last().onFormatChange('THERMAL_58'));
+    expect(last().format).toBe('THERMAL_58');
+  });
+
+  it('falls back to the 80 mm thermal paper when no branch format is readable', () => {
+    mocks.queries.counterReceiptFormat = { ...query(), isError: true, isSuccess: false };
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect((mocks.receiptProps.mock.lastCall![0] as { format: string }).format).toBe('THERMAL');
   });
 
   it('does not settle an idle counter', () => {
