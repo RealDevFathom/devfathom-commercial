@@ -125,9 +125,7 @@ function WidgetState({
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
           sub={
-            value == null
-              ? 'Not available in this release'
-              : `Source: ${contract?.source ?? 'Not asserted'}`
+            value == null ? 'No data recorded yet' : `Source: ${contract?.source ?? 'not recorded'}`
           }
         />
       ))}

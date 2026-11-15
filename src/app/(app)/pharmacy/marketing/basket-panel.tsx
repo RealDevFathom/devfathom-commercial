@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { bundleProposalWhatsAppText } from '@/lib/pharmacy/basket-analysis';
 import type { listBasketInsights } from '@/lib/pharmacy/basket-workflow';
 import { MarketingActionForm } from './action-form';
@@ -103,8 +104,9 @@ export function BasketPanel({
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
             <p className="break-words text-sm text-text-muted">
-              {insight.snapshot.from} to {insight.snapshot.cutoff} (exclusive). Saved{' '}
-              {insight.createdAt.toISOString()}.
+              {formatUtcInstant(insight.snapshot.from)} to{' '}
+              {formatUtcInstant(insight.snapshot.cutoff)} (exclusive). Saved{' '}
+              {formatUtcInstant(insight.createdAt)}.
             </p>
             {!insight.output.recommendations.length && (
               <p className="text-sm">
@@ -166,11 +168,11 @@ export function BasketPanel({
                         <input type="hidden" name="recommendation" value={index} />
                         <input type="hidden" name="decision" value="APPROVE" />
                         <label className="block text-sm">
-                          Bundle campaign schedule (UTC ISO)
+                          Bundle campaign schedule (UTC)
                           <Input
                             name="scheduledAt"
+                            type="datetime-local"
                             required
-                            placeholder="2026-11-01T12:00:00Z"
                             className="mt-1 min-h-11"
                           />
                         </label>

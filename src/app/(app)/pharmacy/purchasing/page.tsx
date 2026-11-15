@@ -227,7 +227,7 @@ export default async function PharmacyPurchasingPage({
       label: 'A supplier that can be ordered from',
       why: checksOff
         ? 'Supplier checks are off, so suppliers are not checked before an order or a receipt.'
-        : 'PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.',
+        : 'Orders and receipts are refused unless the supplier is authorized and holds an unexpired verified licence.',
       href: `${PURCHASING_ROUTE}/suppliers`,
       action: 'Open the supplier register',
     },
@@ -247,8 +247,8 @@ export default async function PharmacyPurchasingPage({
           titleLevel={2}
         >
           <p className="text-sm text-text-muted">
-            Each one is a gate the domain enforces, not a suggestion. Everything already in place is
-            listed below it, so you can see how far along this workspace is.
+            Each one is a required check, not a suggestion. Everything already in place is listed
+            below it, so you can see how far along this workspace is.
           </p>
           <ul className="mt-4 space-y-3">
             {gates.map((gate) => (
@@ -282,7 +282,7 @@ export default async function PharmacyPurchasingPage({
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
-          label="Orderable suppliers"
+          label="Suppliers ready to order from"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
           sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
@@ -342,26 +342,26 @@ export default async function PharmacyPurchasingPage({
           {[
             {
               href: `${PURCHASING_ROUTE}/suppliers`,
-              title: 'Suppliers (PUR-01)',
+              title: 'Suppliers',
               detail: checksOff
                 ? 'Terms, credit and any licence evidence on file. Supplier checks are off, so suppliers are not checked before ordering.'
-                : 'Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.',
+                : 'Licence evidence, terms, credit and the standing decision to trade. A supplier can be ordered from only while both the authorization and an unexpired verified licence hold.',
             },
             {
               href: `${PURCHASING_ROUTE}/orders`,
-              title: 'Requisitions & orders (PUR-02/03)',
+              title: 'Requisitions & orders',
               detail:
                 'State the demand, record what each distributor quoted, read the ranked and explained comparison, then approve and send the order. Approval is refused to whoever raised it.',
             },
             {
               href: `${PURCHASING_ROUTE}/receiving`,
-              title: 'Goods in (PUR-02/04/05)',
+              title: 'Goods in',
               detail:
                 'Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost; post into the batch ledger; work the match-exception queue; or take a direct purchase with a recorded bypass.',
             },
             {
               href: `${PURCHASING_ROUTE}/returns`,
-              title: 'Returns & claims (PUR-06)',
+              title: 'Returns & claims',
               detail:
                 'Purchase returns and expiry claims with the supplier window each is racing, the debit notes they raise, and expected against received credit side by side.',
             },
@@ -382,7 +382,7 @@ export default async function PharmacyPurchasingPage({
         <SectionCard title="Nothing has been ordered yet" titleLevel={2}>
           <EmptyState
             title="No purchase orders"
-            detail="Once the gates above are met, draft a requisition, compare the quotes you were given, and raise the order from the one you award."
+            detail="Once the checks above are met, draft a requisition, compare the quotes you were given, and raise the order from the one you award."
             steps={[
               { label: 'Draft a requisition', href: `${PURCHASING_ROUTE}/orders` },
               { label: 'Add a supplier', href: `${PURCHASING_ROUTE}/suppliers` },

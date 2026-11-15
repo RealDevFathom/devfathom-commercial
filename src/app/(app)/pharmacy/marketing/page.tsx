@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
@@ -193,7 +194,7 @@ export default async function PharmacyMarketingPage({
             />
             <p className="whitespace-pre-wrap break-words text-sm">{review.template.body}</p>
             <p className="text-sm text-text-muted">
-              Scheduled: {review.campaign.scheduledAt.toISOString()}. Rules:{' '}
+              Scheduled: {formatUtcInstant(review.campaign.scheduledAt)}. Rules:{' '}
               {review.rules.all
                 .map(
                   (rule) =>
@@ -374,8 +375,8 @@ export default async function PharmacyMarketingPage({
                         label={campaign.status === 'CAPTURED' ? 'Prepared' : campaign.status}
                       />
                     </td>
-                    <td className="whitespace-nowrap p-3 font-mono text-xs">
-                      {campaign.scheduledAt.toISOString()}
+                    <td className="whitespace-nowrap p-3 text-xs">
+                      {formatUtcInstant(campaign.scheduledAt)}
                     </td>
                     <td className="p-3">
                       <Link
@@ -499,14 +500,8 @@ export default async function PharmacyMarketingPage({
               </label>
             </div>
             <label className="block text-sm">
-              Scheduled time (ISO UTC)
-              <Input
-                name="scheduledAt"
-                className="mt-1 min-h-11"
-                required
-                placeholder="2026-10-07T07:00:00Z"
-                pattern=".*Z"
-              />
+              Scheduled time (UTC)
+              <Input name="scheduledAt" className="mt-1 min-h-11" type="datetime-local" required />
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm">

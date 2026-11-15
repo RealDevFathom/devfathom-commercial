@@ -26,7 +26,7 @@ export function SubstitutionConsole() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-04"
+        eyebrow="Pharmacy · Substitutions"
         heading="Substitution"
         description="Make prescribed-versus-supplied differences visible and record the patient conversation."
       />

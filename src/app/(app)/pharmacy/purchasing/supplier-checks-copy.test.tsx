@@ -231,9 +231,9 @@ describe('orders page supplier-check copy', () => {
 });
 
 const OVERVIEW_ON = {
-  why: 'PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.',
+  why: 'Orders and receipts are refused unless the supplier is authorized and holds an unexpired verified licence.',
   stat: 'Authorized and licensed',
-  card: 'Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.',
+  card: 'Licence evidence, terms, credit and the standing decision to trade. A supplier can be ordered from only while both the authorization and an unexpired verified licence hold.',
 };
 const OVERVIEW_OFF = {
   why: 'Supplier checks are off, so suppliers are not checked before an order or a receipt.',
@@ -319,7 +319,7 @@ describe('with no supplier listed yet, the stored setting decides the wording', 
 
 describe('receiving page supplier hint, by the stored setting', () => {
   const RECEIVING_EMPTY_ON =
-    'No orderable supplier. Authorize one and file a verified licence first.';
+    'No supplier is ready to order from. Authorize one and file a verified licence first.';
   const RECEIVING_EMPTY_OFF = 'No supplier yet. Add one in the supplier register first.';
 
   /** Enough of a receiving bench for the direct-purchase form to render, with no supplier yet. */

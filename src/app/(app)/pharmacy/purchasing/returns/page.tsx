@@ -416,7 +416,7 @@ export default async function PharmacyReturnsPage({
       />
 
       {/* ── the near-expiry board's return windows ─────────────────────────── */}
-      <SectionCard eyebrow="PUR-06" title="Return windows" titleLevel={2}>
+      <SectionCard eyebrow="Returns" title="Return windows" titleLevel={2}>
         {closingSoon.length === 0 ? (
           <EmptyState
             title="No return window is closing"
@@ -457,7 +457,11 @@ export default async function PharmacyReturnsPage({
       </SectionCard>
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-06" title={`Returns & claims (${returns.length})`} titleLevel={2}>
+        <SectionCard
+          eyebrow="Returns"
+          title={`Returns & claims (${returns.length})`}
+          titleLevel={2}
+        >
           {returns.length === 0 ? (
             <EmptyState
               title="Nothing is going back to a supplier"
@@ -513,7 +517,7 @@ export default async function PharmacyReturnsPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-06" title="Raise a return or expiry claim" titleLevel={2}>
+          <SectionCard eyebrow="Returns" title="Raise a return or expiry claim" titleLevel={2}>
             {lots.length === 0 ? (
               <EmptyState
                 title="No available stock to return"
@@ -615,7 +619,7 @@ export default async function PharmacyReturnsPage({
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
+          <SectionCard eyebrow="Returns" title="Supplier credit" titleLevel={2}>
             <PurchasingActionForm
               operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
               action={recordCredit}
@@ -804,7 +808,7 @@ function ReturnDetail({
 
   return (
     <SectionCard
-      eyebrow="PUR-06"
+      eyebrow="Supplier return"
       title={purchaseReturn.reference}
       titleLevel={2}
       actions={<StatusPill status={purchaseReturn.status} />}

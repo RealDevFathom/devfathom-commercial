@@ -2618,7 +2618,11 @@ function ScopedPharmacyCounterConsole({
             </section>
           </SectionCard>
           {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard
+              compact
+              eyebrow="Same medicine, other brands"
+              title="Exact substitute suggestions"
+            >
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={

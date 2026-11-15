@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Input } from '@/components/ui/input';
+import { toUtcMinuteInput } from '@/lib/utc-instant';
 import { GROWTH_METRICS, presentGrowthRecommendation } from '@/lib/ai/growth-recommendations';
 import type { listGrowthInsights } from '@/lib/pharmacy/growth-insights';
 import { MarketingActionForm } from './action-form';
@@ -258,11 +259,13 @@ export function GrowthPanel({
                               </select>
                             </label>
                             <label className="text-sm">
-                              Scheduled at (UTC ISO)
+                              Scheduled at (UTC)
                               <Input
                                 name="scheduledAt"
-                                placeholder="2026-10-10T12:00:00Z"
-                                defaultValue={edit?.scheduledAt}
+                                type="datetime-local"
+                                defaultValue={
+                                  edit?.scheduledAt ? toUtcMinuteInput(edit.scheduledAt) : undefined
+                                }
                                 className="mt-1 min-h-11"
                               />
                             </label>

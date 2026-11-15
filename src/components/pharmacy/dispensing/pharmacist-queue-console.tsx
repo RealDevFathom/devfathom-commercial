@@ -69,7 +69,7 @@ export function PharmacistQueueConsole() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-03"
+        eyebrow="Pharmacy · Pharmacist review"
         heading="Pharmacist queue"
         description="Triage in request order, leave an explicit clinical decision, then sign to release."
       />

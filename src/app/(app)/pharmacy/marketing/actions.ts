@@ -5,6 +5,7 @@ import { TRPCError } from '@trpc/server';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { previewWhatsAppCost } from '@/lib/pharmacy/whatsapp/rate-card';
+import { utcInstantFromInput } from '@/lib/utc-instant';
 
 function exclusionsText(exclusions: Record<string, number>) {
   return (
@@ -54,7 +55,10 @@ export async function marketingAction(
           recommendation: Number(text('recommendation')),
           decision,
           ...(decision === 'APPROVE'
-            ? { pinCredential: text('pin'), scheduledAt: new Date(text('scheduledAt')) }
+            ? {
+                pinCredential: text('pin'),
+                scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
+              }
             : {}),
         });
         if ('blocked' in result && typeof result.blocked === 'string')
@@ -94,7 +98,7 @@ export async function marketingAction(
                 edit: {
                   name: text('name'),
                   templateId: text('templateId'),
-                  scheduledAt: new Date(text('scheduledAt')),
+                  scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
                 },
               }),
         });
@@ -125,7 +129,7 @@ export async function marketingAction(
           branchId,
           name: text('name'),
           templateId: text('templateId'),
-          scheduledAt: new Date(text('scheduledAt')),
+          scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
           definition: {
             version: 1,
             all: [{ field, operator: 'gte', value: Number(text('threshold')) }],

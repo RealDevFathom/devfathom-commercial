@@ -372,7 +372,7 @@ export default async function PharmacyReportsPage({
           </nav>
         }
       />
-      <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
+      <SectionCard eyebrow="Reports" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             Branch
@@ -556,7 +556,7 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           {expiryAdvice ? (
             <SectionCard
-              eyebrow="AI-02 · Advisory only"
+              eyebrow="Advisory only"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -652,7 +652,7 @@ export default async function PharmacyReportsPage({
             </SectionCard>
           ) : (
             <SectionCard
-              eyebrow="AI-02 · Owner only"
+              eyebrow="Owner only"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -663,7 +663,7 @@ export default async function PharmacyReportsPage({
           )}
           {anomalies ? (
             <SectionCard
-              eyebrow="AI-04 / RPT-03 · Review only"
+              eyebrow="Review only"
               title="Anomaly review signals"
               titleLevel={2}
               actions={
@@ -854,11 +854,7 @@ export default async function PharmacyReportsPage({
               )}
             </SectionCard>
           ) : (
-            <SectionCard
-              eyebrow="AI-04 / RPT-03 · Owner only"
-              title="Anomaly review signals"
-              titleLevel={2}
-            >
+            <SectionCard eyebrow="Owner only" title="Anomaly review signals" titleLevel={2}>
               <p className="text-sm text-text-muted">
                 Financial report and owner permissions are required to view anomaly evidence.
               </p>
@@ -1009,11 +1005,7 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           {digest ? (
             <>
-              <SectionCard
-                eyebrow="RPT-03 · Scheduled delivery"
-                title="Daily owner digest"
-                titleLevel={2}
-              >
+              <SectionCard eyebrow="Scheduled delivery" title="Daily owner digest" titleLevel={2}>
                 <p className="text-sm text-text-muted">
                   Opt in per branch. Times use your workspace timezone. Capture history is always
                   stored; WhatsApp remains disabled until a provider integration is implemented.
@@ -1108,7 +1100,7 @@ export default async function PharmacyReportsPage({
               </SectionCard>
             </>
           ) : (
-            <SectionCard eyebrow="RPT-03 · Owner only" title="Daily owner digest" titleLevel={2}>
+            <SectionCard eyebrow="Owner only" title="Daily owner digest" titleLevel={2}>
               <p className="text-sm text-text-muted">
                 Digest settings and history require owner permission. Reports remain available on
                 demand.
