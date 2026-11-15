@@ -12097,6 +12097,10 @@ enum PharmacyReceivingExceptionKind {
   DAMAGE
   PRICE_CONFLICT
   PACK_CONFLICT
+  /// DEV-690 — the distributor scheme's free units did not all arrive.
+  BONUS_SHORTAGE
+  /// DEV-690 — goods arrived after the scheme on the order line had lapsed.
+  SCHEME_EXPIRED
 }
 
 enum PharmacyReceivingExceptionStatus {

@@ -388,11 +388,19 @@ export async function postGoodsReceipt(
         (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
         0
       );
+    const earlierBonusOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce((total, other) => total + other.bonusCanonicalUnits, 0);
     const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
     const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
       ordered: terms
-        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        ? {
+            ...terms,
+            previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt,
+            previouslyReceivedBonusUnits:
+              (terms.previouslyReceivedBonusUnits ?? 0) + earlierBonusOnReceipt,
+          }
         : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
@@ -400,10 +408,16 @@ export async function postGoodsReceipt(
         rejectedCanonicalUnits: line.rejectedCanonicalUnits,
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+        bonusCanonicalUnits: line.bonusCanonicalUnits,
+        receivedAt: receipt.receivedAt,
       },
     }).filter(
       (exception) =>
-        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+        lastLotOfOrderLine ||
+        (exception.kind !== 'SHORTAGE' &&
+          exception.kind !== 'OVERAGE' &&
+          exception.kind !== 'BONUS_SHORTAGE' &&
+          exception.kind !== 'SCHEME_EXPIRED')
     )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
@@ -548,6 +562,7 @@ async function orderedTermsFor(
   if (!purchaseOrderLineId) return null;
   const orderLine = await db.pharmacyPurchaseOrderLine.findFirst({
     where: { id: purchaseOrderLineId, organizationId: scope.organizationId },
+    include: { purchaseOrder: { select: { quote: { select: { validUntil: true } } } } },
   });
   if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
 
@@ -570,6 +585,12 @@ async function orderedTermsFor(
       (total, line) => total + line.receivedCanonicalUnits + line.bonusCanonicalUnits,
       0
     ),
+    previouslyReceivedBonusUnits: earlier.reduce(
+      (total, line) => total + line.bonusCanonicalUnits,
+      0
+    ),
+    // The scheme comes from the distributor quote the order was raised from.
+    schemeValidUntil: orderLine.purchaseOrder?.quote?.validUntil ?? null,
   };
 }
 
