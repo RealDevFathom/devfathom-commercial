@@ -48,6 +48,7 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import { issueVoucher, listVouchers, voucherIssueInput } from '@/lib/pharmacy/vouchers';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -261,6 +262,15 @@ export const pharmacyMarketingRouter = router({
     .input(marketingTemplateInput)
     .mutation(({ ctx, input }) =>
       execute(ctx, input.branchId, (db, scope) => approveMarketingTemplate(db, scope, input))
+    ),
+  // DEV-27: owner-issued vouchers, scoped to non-drug categories.
+  vouchers: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) => execute(ctx, input.branchId, listVouchers)),
+  issueVoucher: protectedProcedure
+    .input(voucherIssueInput)
+    .mutation(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, scope) => issueVoucher(db, scope, input))
     ),
   createDraft: protectedProcedure
     .input(marketingDraftInput)

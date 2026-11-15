@@ -21,6 +21,7 @@ import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import superjson from 'superjson';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 
 // Same stubs `anonymous-fallback.test.ts` uses: `@/server/trpc` is imported for
 // its REAL tRPC instance, so only its unrelated server-side dependencies are
@@ -45,6 +46,18 @@ const internalSchema = z.object({ internalOnlyField: z.string() });
 const INTERNALS =
   'duplicate key value violates unique constraint "users_email_key" on table "users"';
 const GENERIC = 'Something went wrong on our side. Please try again.';
+
+/** What Prisma says when an update targets a row another user just deleted. */
+const STALE_UPDATE =
+  '\nInvalid `prisma.client.update()` invocation:\n\n\nAn operation failed because it depends on one or more records that were required but not found. No record was found for an update.';
+
+function prismaKnown(code: string) {
+  return new Prisma.PrismaClientKnownRequestError(STALE_UPDATE, {
+    code,
+    clientVersion: 'test',
+    meta: { modelName: 'Client' },
+  });
+}
 
 const testRouter = router({
   // Input validation: tRPC rejects before the resolver runs.
@@ -83,6 +96,21 @@ const testRouter = router({
   }),
   notFound: publicProcedure.query(() => {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'That version no longer exists.' });
+  }),
+  // Prisma errors escaping a resolver, as a stale-record write produces them.
+  dbRequest: publicProcedure.input(z.object({ code: z.string() })).query(({ input }) => {
+    throw prismaKnown(input.code);
+  }),
+  dbValidation: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientValidationError(STALE_UPDATE, { clientVersion: 'test' });
+  }),
+  // A deliberate TRPCError keeps its words even when a Prisma error is its cause.
+  deliberateDb: publicProcedure.query(() => {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'That room is already booked.',
+      cause: prismaKnown('P2002'),
+    });
   }),
 });
 
@@ -199,4 +227,59 @@ describe('trpc errorFormatter outside production', () => {
       expect((await call('thrownValue')).message).toBe(`raw: ${INTERNALS}`);
     }
   );
+});
+
+describe('trpc Prisma errors (#318)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const LEAK = /prisma|invocation|\bClient\b|P20\d\d/i;
+
+  describe.each(['production', 'development', 'test'])('NODE_ENV=%s', (environment) => {
+    beforeEach(() => vi.stubEnv('NODE_ENV', environment));
+
+    it.each([
+      [
+        'P2025',
+        'NOT_FOUND',
+        404,
+        'This record no longer exists. It may have been deleted. Refresh and try again.',
+      ],
+      ['P2002', 'CONFLICT', 409, 'A record with these details already exists.'],
+      [
+        'P2003',
+        'BAD_REQUEST',
+        400,
+        'This change refers to a related record that is missing or still in use.',
+      ],
+    ])('maps %s to %s with a friendly message', async (code, trpcCode, httpStatus, message) => {
+      const error = await call('dbRequest', { code });
+
+      expect(error.data).toMatchObject({ code: trpcCode, httpStatus });
+      expect(error.message).toBe(message);
+      expect(JSON.stringify(error)).not.toMatch(LEAK);
+    });
+
+    it('withholds an unmapped Prisma request error', async () => {
+      const error = await call('dbRequest', { code: 'P2000' });
+
+      expect(error.data).toMatchObject({ code: 'INTERNAL_SERVER_ERROR', httpStatus: 500 });
+      expect(error.message).toBe(GENERIC);
+      expect(JSON.stringify(error)).not.toMatch(LEAK);
+    });
+
+    it('withholds a Prisma validation error', async () => {
+      const error = await call('dbValidation');
+
+      expect(error.data.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(error.message).toBe(GENERIC);
+      expect(JSON.stringify(error)).not.toMatch(LEAK);
+    });
+
+    it('keeps a deliberate TRPCError whose cause is a Prisma error', async () => {
+      expect(await call('deliberateDb')).toMatchObject({
+        message: 'That room is already booked.',
+        data: { code: 'CONFLICT', httpStatus: 409 },
+      });
+    });
+  });
 });

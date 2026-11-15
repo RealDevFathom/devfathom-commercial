@@ -5,7 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
-import { financeSourceLabel } from '@/lib/finance/source-labels';
+import { financeEntryDescription, financeSourceLabel } from '@/lib/finance/source-labels';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
@@ -229,7 +229,7 @@ export async function FinancialStatements({
           <p className="my-2 break-all text-xs text-text-muted">
             Entry {e.id} · source {e.sourceId} · {e.sourceKind} · user {e.actorId}
             {' · '}
-            {e.description}
+            {financeEntryDescription(e.description)}
           </p>
           <ul>
             {e.lines.map((l) => (

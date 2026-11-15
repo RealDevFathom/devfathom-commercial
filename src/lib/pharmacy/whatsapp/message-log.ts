@@ -3,11 +3,13 @@ import 'server-only';
 import { lockCustomerConsent } from '@/lib/pharmacy/consent-writer';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { SmsProviderError } from '../sms/provider';
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 
 export type MessageLogKind =
   | 'REFILL_REMINDER'
   | 'KHATA_REMINDER'
+  | 'ORDER_READY'
   | 'ORDER_REQUEST'
   | 'ORDER_CONFIRMATION'
   | 'ORDER_FALLBACK'
@@ -17,6 +19,8 @@ export type MessageLogKind =
 
 export type MessageLogEntry = {
   organizationId: string;
+  /** Defaults to WHATSAPP; SMS is the DEV-87 utility fallback channel. */
+  channel?: 'WHATSAPP' | 'SMS';
   kind: MessageLogKind;
   dedupeKey: string;
   customerDayKey?: string;
@@ -88,8 +92,46 @@ export async function sendClaimedMessage(
   logId: string,
   send: () => Promise<WhatsAppSendResult>
 ): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+  // SMS utility sends recheck the customer's SMS reminder consent under the
+  // same patient-then-customer lock STOP takes, so a STOP that commits after
+  // the claim still wins. STOP acknowledgements must still send.
+  if (entry.channel === 'SMS' && entry.kind !== 'CONSENT_ACK') {
+    return withTenantDb(entry.organizationId, async (db) => {
+      let eligible = false;
+      if (entry.customerId) {
+        await lockCustomerConsent(db, entry.organizationId, entry.customerId);
+        const customer = await db.pharmacyCustomer.findFirst({
+          where: { organizationId: entry.organizationId, id: entry.customerId },
+          select: { active: true, patientId: true },
+        });
+        const consent = customer
+          ? await db.patientConsent.findFirst({
+              where: {
+                organizationId: entry.organizationId,
+                patientId: customer.patientId,
+                purpose: 'REMINDERS',
+                channel: 'SMS',
+              },
+              orderBy: [{ version: 'desc' }, { id: 'asc' }],
+              select: { granted: true, revokedAt: true },
+            })
+          : null;
+        eligible = Boolean(customer?.active && consent?.granted && !consent.revokedAt);
+      }
+      if (!eligible) {
+        await db.pharmacyMessageLog.update({
+          where: { id: logId },
+          data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
+        });
+        return 'PREPARED';
+      }
+      return sendAndRecord(db, logId, send);
+    });
+  }
+
   // STOP acknowledgements must still send after the opt-out commits.
   if (
+    entry.channel !== 'SMS' &&
     entry.kind !== 'CONSENT_ACK' &&
     (entry.customerId || entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER')
   ) {
@@ -131,7 +173,9 @@ async function sendAndRecord(
   try {
     result = await send();
   } catch (error) {
-    const definitive = error instanceof WhatsAppProviderError && error.definitive;
+    const definitive =
+      (error instanceof WhatsAppProviderError || error instanceof SmsProviderError) &&
+      error.definitive;
     await update({
       status: definitive ? 'FAILED' : 'PENDING',
       // Never persist arbitrary transport errors: they can contain message/recipient data.

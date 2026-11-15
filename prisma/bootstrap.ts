@@ -2,7 +2,9 @@
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
-import 'dotenv/config';
+import { loadLocalEnv } from './load-env.js';
+
+loadLocalEnv();
 
 import {
   bootstrapProduction,
