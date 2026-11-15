@@ -30,14 +30,14 @@ const EMPTY: OwnerDataExportRows = {
 const SEEDED: OwnerDataExportRows = {
   ...EMPTY,
   medicines: [
-    { code: 'pk1', product: 'Panadol 500mg', pack: 'strip · tablet', barcode: '8961234567890' },
-    { code: 'pk2', product: 'Brufen 400mg', pack: 'box · tablet', barcode: '' },
+    { code: 'pk1', product: 'Panadol 500mg', pack: '10 units', barcode: '8961234567890' },
+    { code: 'pk2', product: 'Brufen 400mg', pack: '100 units', barcode: '' },
   ],
   stockLots: [
     {
       code: 'lot1',
       product: 'Panadol 500mg',
-      pack: 'strip · tablet',
+      pack: '10 units',
       batch: 'B-101',
       expiry: '2027-03-31',
       mrp: formatMinor(4550),
@@ -72,7 +72,7 @@ describe('owner data export format', () => {
   it('re-imports through the migration wizard profiler with matching row counts', () => {
     const medicines = reimport('medicines');
     expect(medicines.rows).toHaveLength(SEEDED.medicines.length);
-    expect(medicines.columnMap).toMatchObject({ sourceKey: 0, product: 1, pack: 2, barcode: 3 });
+    expect(medicines.columnMap).toMatchObject({ sourceKey: 0, product: 1, pack: 2, barcode: 4 });
 
     const lots = reimport('stockLots');
     expect(lots.rows).toHaveLength(SEEDED.stockLots.length);
@@ -94,6 +94,11 @@ describe('owner data export format', () => {
     expect(customers.rows).toHaveLength(SEEDED.customers.length);
     expect(customers.columnMap).toMatchObject({ sourceKey: 0, customer: 1, balance: 2 });
 
+    // The importer reads every exported pack as a countable unit, so nothing is ambiguous.
+    for (const result of [medicines, lots]) {
+      expect(result.exceptions.filter((item) => item.bucket === 'UNIT_AMBIGUOUS')).toEqual([]);
+    }
+
     const suppliers = reimport('suppliers');
     expect(suppliers.rows).toHaveLength(SEEDED.suppliers.length);
     expect(suppliers.columnMap).toMatchObject({ sourceKey: 0, supplier: 1 });
@@ -109,6 +114,13 @@ describe('owner data export format', () => {
     const cell = (header: string) => row[table.headers.indexOf(header)];
     expect(readMoneyMinor(cell('mrp'))).toBe(BigInt(4550));
     expect(readMoneyMinor(cell('cost'))).toBe(BigInt(312));
+    const customers = parseDelimitedText(
+      exportCsv(OWNER_DATA_EXPORT_FILES.customers, SEEDED.customers)
+    );
+    // A credit (negative) balance survives the round trip as a number, not text.
+    expect(readMoneyMinor(customers.rows[2]![customers.headers.indexOf('balance')])).toBe(
+      BigInt(-2500)
+    );
     expect(readExpiryDate(cell('expiry'))?.toISOString().slice(0, 10)).toBe('2027-03-31');
   });
 

@@ -7,6 +7,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn() }));
 
 import { parseDelimitedText } from './migration/source-values';
 import {
+  basePackUnits,
   loadOwnerDataExportRows,
   parseSalesRange,
   runPharmacyOwnerDataExportJob,
@@ -277,6 +278,32 @@ describe('parseSalesRange', () => {
   });
 });
 
+describe('basePackUnits', () => {
+  it('counts base units down the current pack chain and leaves an unresolvable level blank', () => {
+    const level = (
+      id: string,
+      parentPackLevelId: string | null,
+      unitsPerParent: number,
+      effectiveTo: Date | null = null
+    ) => ({ id, parentPackLevelId, unitsPerParent, effectiveTo });
+    const units = basePackUnits([
+      level('box', null, 1),
+      level('strip', 'box', 10),
+      level('tablet', 'strip', 10),
+      level('old-strip', 'box', 6, new Date('2026-01-01T00:00:00Z')),
+      level('bottle', null, 120),
+      level('kit', null, 1),
+      level('kit-a', 'kit', 2),
+      level('kit-b', 'kit', 3),
+    ]);
+    expect(units.get('box')).toBe(100);
+    expect(units.get('strip')).toBe(10);
+    expect(units.get('tablet')).toBe(1);
+    expect(units.get('bottle')).toBe(120);
+    expect(units.get('kit')).toBeNull();
+  });
+});
+
 describe('loadOwnerDataExportRows', () => {
   it('scopes every read to the organization and filters sales by the inclusive date range', async () => {
     const db = fakeDb();
@@ -324,7 +351,8 @@ describe('loadOwnerDataExportRows', () => {
       code: 'pk-1',
       product: 'Tramadol 50mg',
       barcode: '8961000000017',
-      pack: 'strip · capsule',
+      pack: '10 units',
+      pack_level: 'strip · capsule',
     });
     // Only the posted, unreversed receipt counts toward goods received.
     expect(rows.suppliers[0]).toMatchObject({

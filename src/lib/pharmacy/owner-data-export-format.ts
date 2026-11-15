@@ -34,7 +34,11 @@ export const OWNER_DATA_EXPORT_FILES = {
     columns: [
       { header: 'code', description: 'Pack level id (stable DevFathom identifier).' },
       { header: 'product', description: 'Medicine product name.' },
-      { header: 'pack', description: 'Pack level and presentation, e.g. "strip · 10 tablets".' },
+      {
+        header: 'pack',
+        description: 'Base units in one of this pack, e.g. "10 units" (what the importer counts).',
+      },
+      { header: 'pack_level', description: 'Pack level and presentation, e.g. "strip · tablet".' },
       { header: 'barcode', description: 'Barcodes for this pack, separated by spaces.' },
       { header: 'medicine_id', description: 'Medicine id shared by every pack of the medicine.' },
       { header: 'brand', description: 'Brand name.' },
@@ -55,14 +59,18 @@ export const OWNER_DATA_EXPORT_FILES = {
     columns: [
       { header: 'code', description: 'Stock lot id.' },
       { header: 'product', description: 'Medicine product name.' },
-      { header: 'pack', description: 'Pack level the lot was received in.' },
+      {
+        header: 'pack',
+        description:
+          'Base units in one pack of this lot, e.g. "10 units" (what the importer counts).',
+      },
+      { header: 'pack_level', description: 'Pack level and presentation the lot was received in.' },
       { header: 'batch', description: 'Manufacturer batch number.' },
       { header: 'expiry', description: 'Expiry date (YYYY-MM-DD).' },
       { header: 'mrp', description: `Printed MRP per pack. ${MONEY}` },
       { header: 'cost', description: `Landed cost per base unit. ${MONEY}` },
       { header: 'quantity', description: 'Units on hand at this location (base units).' },
       { header: 'supplier', description: 'Supplier the lot was received from.' },
-      { header: 'units_per_pack', description: 'Base units in one pack of this lot.' },
       { header: 'branch', description: 'Branch code.' },
       { header: 'location', description: 'Stock location code.' },
       { header: 'disposition', description: 'AVAILABLE, QUARANTINE, DAMAGED and so on.' },
@@ -285,11 +293,23 @@ function cellText(value: ExportCell): string {
   return String(value);
 }
 
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+
+/**
+ * A plain number (including a negative one) cannot be a formula, so it is
+ * written as-is; every other value gets `csvCell`'s formula neutralisation.
+ * Prefixing `-25.00` with an apostrophe would lose a credit balance on re-import.
+ */
+function exportCell(value: ExportCell): string {
+  const text = cellText(value);
+  return PLAIN_NUMBER.test(text) ? `"${text}"` : csvCell(text);
+}
+
 /** One CSV document: BOM, header row, then every row in the spec's column order. */
 export function exportCsv(spec: ExportFileSpec, rows: readonly ExportRow[]): string {
   const lines = [spec.columns.map((column) => csvCell(column.header)).join(',')];
   for (const row of rows) {
-    lines.push(spec.columns.map((column) => csvCell(cellText(row[column.header]))).join(','));
+    lines.push(spec.columns.map((column) => exportCell(row[column.header])).join(','));
   }
   return `﻿${lines.join('\r\n')}\r\n`;
 }

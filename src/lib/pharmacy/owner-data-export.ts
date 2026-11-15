@@ -152,6 +152,51 @@ export async function listOwnerDataExports(
   return jobs.map((job) => ownerDataExportView(job, now));
 }
 
+/** `10 units`: a counted label the migration importer's `readPackFactor` reads. */
+const unitsLabel = (units: number | null | undefined) =>
+  units && units > 0 ? `${units} units` : null;
+
+type PackNode = {
+  id: string;
+  parentPackLevelId: string | null;
+  unitsPerParent: number;
+  effectiveTo: Date | null;
+};
+
+/**
+ * Base units in one pack at each level, by the same rule as the counter's pack
+ * setup: a lone top level counts its own `unitsPerParent`; otherwise a leaf is
+ * one base unit and each level holds its current child's `unitsPerParent` of it.
+ * A level whose chain cannot be resolved is left blank, never guessed.
+ */
+export function basePackUnits(levels: readonly PackNode[]): Map<string, number | null> {
+  const children = new Map<string, PackNode[]>();
+  for (const level of levels) {
+    if (!level.parentPackLevelId) continue;
+    children.set(level.parentPackLevelId, [
+      ...(children.get(level.parentPackLevelId) ?? []),
+      level,
+    ]);
+  }
+  const memo = new Map<string, number | null>();
+  const units = (level: PackNode, depth: number): number | null => {
+    if (memo.has(level.id)) return memo.get(level.id)!;
+    if (depth > 16) return null;
+    const current = (children.get(level.id) ?? []).filter((child) => child.effectiveTo === null);
+    let result: number | null;
+    if (current.length === 0) result = level.parentPackLevelId ? 1 : level.unitsPerParent;
+    else if (current.length > 1) result = null;
+    else {
+      const child = units(current[0]!, depth + 1);
+      result = child === null ? null : current[0]!.unitsPerParent * child;
+    }
+    if (result !== null && (!Number.isSafeInteger(result) || result <= 0)) result = null;
+    memo.set(level.id, result);
+    return result;
+  };
+  return new Map(levels.map((level) => [level.id, units(level, 0)]));
+}
+
 const sumBy = <T>(items: readonly T[], value: (item: T) => number) =>
   items.reduce((total, item) => total + value(item), 0);
 
@@ -252,6 +297,7 @@ export async function loadOwnerDataExportRows(
   const packLabel = new Map(
     packLevels.map((pack) => [pack.id, `${pack.level} · ${pack.presentation.presentation}`])
   );
+  const packBaseUnits = basePackUnits(packLevels);
 
   const barcodesByPack = new Map<string, string[]>();
   const barcodesByPresentationOnly = new Map<string, string[]>();
@@ -267,7 +313,8 @@ export async function loadOwnerDataExportRows(
     return {
       code: pack.id,
       product: medicine.productName,
-      pack: packLabel.get(pack.id),
+      pack: unitsLabel(packBaseUnits.get(pack.id)),
+      pack_level: packLabel.get(pack.id),
       barcode: [
         ...(barcodesByPack.get(pack.id) ?? []),
         ...(pack.parentPackLevelId
@@ -291,14 +338,14 @@ export async function loadOwnerDataExportRows(
     lot.balances.map((balance) => ({
       code: lot.id,
       product: lot.batch.medicine.productName,
-      pack: packLabel.get(lot.packLevelId) ?? lot.packLevel.level,
+      pack: unitsLabel(lot.unitsPerPack),
+      pack_level: packLabel.get(lot.packLevelId) ?? lot.packLevel.level,
       batch: lot.batch.batchNumber,
       expiry: formatDateOnly(lot.batch.expiresAt),
       mrp: formatMinor(lot.printedMrpMinor),
       cost: formatMinor(lot.unitCostMinor),
       quantity: balance.onHandUnits,
       supplier: lot.supplierName,
-      units_per_pack: lot.unitsPerPack,
       branch: branchCode.get(lot.branchId) ?? lot.branchId,
       location: locationCode.get(balance.stockLocationId) ?? balance.stockLocationId,
       disposition: balance.disposition,
