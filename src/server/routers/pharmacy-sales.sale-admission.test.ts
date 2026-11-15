@@ -24,6 +24,12 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   createSale: vi.fn(),
 }));
 
+vi.mock('@/lib/pharmacy/customer-loyalty', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/customer-loyalty')>()),
+  linkCustomerToSale: vi.fn(),
+}));
+
+import { linkCustomerToSale } from '@/lib/pharmacy/customer-loyalty';
 import { addSaleLine, createSale } from '@/lib/pharmacy/sales';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -57,11 +63,13 @@ function fixture(options: {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {
-      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
-        where.id.in.map((id) => ({ id }))
+      // `assertInOrganization` asks by id; `counterBranches` lists (DEV-830).
+      findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        where.id ? where.id.in.map((id) => ({ id })) : []
       ),
       findFirst: vi.fn(async () => ({ id: BRANCH })),
     },
+    organization: { findUnique: vi.fn(async () => ({ currency: 'PKR', timezone: null })) },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => options.assignedBranches.map((branchId) => ({ branchId }))),
     },
@@ -100,6 +108,7 @@ function fixture(options: {
 beforeEach(() => {
   vi.mocked(createSale).mockReset();
   vi.mocked(addSaleLine).mockReset();
+  vi.mocked(linkCustomerToSale).mockReset();
 });
 
 describe('counter sale admission (DEV-607)', () => {
@@ -184,5 +193,61 @@ describe('counter sale admission (DEV-607)', () => {
       id: 'sale-1',
     });
     expect(createSale).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-830 counter branch scope (security scan F04)', () => {
+  const link = { branchId: BRANCH, saleId: 'sale-1', patientId: 'patient-1', displayName: 'A' };
+
+  it('refuses to link a customer on a branch the cashier is not assigned to', async () => {
+    const { caller } = fixture({
+      capabilities: ['pharmacy:counter'],
+      assignedBranches: ['branch-other'],
+    });
+    await expect(caller.linkCustomer(link)).rejects.toMatchObject(OUTSIDE);
+    expect(linkCustomerToSale).not.toHaveBeenCalled();
+  });
+
+  it('refuses to link a customer for a member without a counter capability', async () => {
+    const { caller } = fixture({
+      capabilities: ['pharmacy:inventory'],
+      assignedBranches: [BRANCH],
+    });
+    await expect(caller.linkCustomer(link)).rejects.toMatchObject(NO_CAPABILITY);
+    expect(linkCustomerToSale).not.toHaveBeenCalled();
+  });
+
+  it('links a customer for a cashier assigned to the branch', async () => {
+    const { caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [BRANCH] });
+    vi.mocked(linkCustomerToSale).mockResolvedValue({ linked: true } as never);
+    await expect(caller.linkCustomer(link)).resolves.toEqual({ linked: true });
+    expect(vi.mocked(linkCustomerToSale).mock.calls[0]![1]).toEqual({
+      organizationId: 'org-1',
+      branchId: BRANCH,
+      actorId: 'cashier-1',
+    });
+  });
+
+  it('lists only the branches a member is actively assigned to', async () => {
+    const { db, caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [] });
+    await caller.counterBranches();
+    expect(db.pharmacyBranch.findMany.mock.calls.at(-1)![0].where).toEqual({
+      organizationId: 'org-1',
+      active: true,
+      branchAssignments: { some: { organizationId: 'org-1', userId: 'cashier-1', active: true } },
+    });
+  });
+
+  it('lists every active branch for the organization administrator', async () => {
+    const { db, caller } = fixture({
+      capabilities: ['pharmacy:counter'],
+      assignedBranches: [],
+      role: 'ADMIN',
+    });
+    await caller.counterBranches();
+    expect(db.pharmacyBranch.findMany.mock.calls.at(-1)![0].where).toEqual({
+      organizationId: 'org-1',
+      active: true,
+    });
   });
 });

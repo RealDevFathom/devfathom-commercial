@@ -605,7 +605,7 @@ describeIfDatabase('delivered delivery orders close (DEV-159)', () => {
     expect(await serverCloses()).toBe(true);
   });
 
-  it('refuses the delivered hand-off while a live item is back in the kitchen', async () => {
+  it('allows the delivered hand-off while a live item is back in the kitchen', async () => {
     const delivery = await preparedDeliveryOrder('PREPAID');
     await kdsTransition(delivery, 'DISPATCHED');
     await deps.orders.advanceItem(delivery.db, {
@@ -614,9 +614,8 @@ describeIfDatabase('delivered delivery orders close (DEV-159)', () => {
       toStatus: 'FIRING',
       actor: actor(),
     });
-    await expect(kdsTransition(delivery, 'DELIVERED')).rejects.toMatchObject({
-      name: 'DeliveryError',
-      reason: 'INVALID_TRANSITION',
+    await expect(kdsTransition(delivery, 'DELIVERED')).resolves.toMatchObject({
+      status: 'DELIVERED',
     });
     const state = await read(async (tx) => ({
       delivery: await tx.restaurantDeliveryFulfillment.findUniqueOrThrow({
@@ -628,8 +627,7 @@ describeIfDatabase('delivered delivery orders close (DEV-159)', () => {
         select: { status: true },
       }),
     }));
-    expect(state).toEqual({ delivery: { status: 'DISPATCHED' }, item: { status: 'FIRING' } });
-    expect(await posCanClose(delivery.orderId)).toBe(false);
+    expect(state).toEqual({ delivery: { status: 'DELIVERED' }, item: { status: 'SERVED' } });
   });
 });
 

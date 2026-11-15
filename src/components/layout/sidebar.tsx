@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
@@ -14,6 +14,7 @@ import {
   MessageSquare,
   UserCog,
   Settings,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Briefcase,
@@ -104,6 +105,17 @@ interface NavItem {
    * would be a dead end (#979). Other products are unchanged.
    */
   memberModule?: string;
+  /**
+   * DEV-497: highlight this entry only on its own route, never on the routes
+   * nested under it (the `/pharmacy` front door is a prefix of every page).
+   */
+  exact?: boolean;
+  /**
+   * DEV-497: routes with no entry of their own that belong to this one (the
+   * ledgers the Finance page links to, the order desk the Counter opens), so
+   * every page in the workspace marks exactly one entry current.
+   */
+  activePrefixes?: readonly string[];
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -315,6 +327,9 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
+    exact: true,
+    // The owner's data export is offered from the onboarding page.
+    activePrefixes: ['/pharmacy/settings/data-export'],
   },
   {
     label: 'Medicine catalog',
@@ -329,6 +344,8 @@ export const navigation: NavItem[] = [
   // #979: a cashier is not offered an entry that ends in "Day close unavailable".
   // DEV-127: the console opens for an administrator or a member granted
   // `pharmacy:close` (the Pharmacist template), exactly as its procedures do.
+  // DEV-505: the rail's `pharmacy:close` answer also admits a Manager actively
+  // assigned to a branch, and the console then lists only those branches.
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',
@@ -345,6 +362,8 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-counter',
     pharmacyCapabilities: ['pharmacy:counter'],
+    // The customer order desk is opened from the counter.
+    activePrefixes: ['/pharmacy/orders'],
   },
   // DEV-240: stock control belongs to inventory staff and managers; a cashier or
   // pharmacist without either grant is not offered it.
@@ -369,6 +388,8 @@ export const navigation: NavItem[] = [
     icon: DollarSign,
     adminOnly: true,
     group: 'Pharmacy',
+    // The ledgers and statements the Finance page links to.
+    activePrefixes: ['/pharmacy/accounts'],
   },
   {
     label: 'Reports & Insights',
@@ -376,6 +397,8 @@ export const navigation: NavItem[] = [
     icon: BarChart3,
     group: 'Pharmacy',
     pharmacyCapabilities: ['reports:operational'],
+    // A reports reader without Finance opens the same statements from here.
+    activePrefixes: ['/pharmacy/accounts'],
   },
   {
     label: 'Cameras',
@@ -384,6 +407,7 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     adminOnly: true,
     module: 'pharmacy-core',
+    activePrefixes: ['/pharmacy/settings/cameras'],
   },
   {
     label: 'Khata',
@@ -580,6 +604,118 @@ export const navigation: NavItem[] = [
 
 const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
 
+type VisibleNavItem = (typeof navigation)[number];
+
+/** How specifically `item` claims `pathname`: the longest matching route, or -1. */
+function matchLength(item: VisibleNavItem, pathname: string) {
+  const covers = (route: string) => pathname === route || pathname.startsWith(route + '/');
+  let length = pathname === item.href || (!item.exact && covers(item.href)) ? item.href.length : -1;
+  for (const route of item.activePrefixes ?? [])
+    if (covers(route)) length = Math.max(length, route.length);
+  return length;
+}
+
+/**
+ * DEV-497: the one entry current at `pathname` — the longest route any visible
+ * entry claims, the first entry winning a tie — or '' when none claims it.
+ */
+export function activeNavigationHref(items: readonly VisibleNavItem[], pathname: string) {
+  let best = '';
+  let bestLength = -1;
+  for (const item of items) {
+    const length = matchLength(item, pathname);
+    if (length > bestLength) {
+      best = item.href;
+      bestLength = length;
+    }
+  }
+  return best;
+}
+
+export interface NavSection {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  items: VisibleNavItem[];
+}
+
+/**
+ * DEV-497: a pharmacy workspace's destinations, in a handful of task menus
+ * instead of one numbered row that overflows. Each menu lists entries by href;
+ * an entry the member cannot open is already filtered out, so a menu holds only
+ * pages the member can use, and a menu left with none is not shown.
+ */
+const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly string[] })[] = [
+  {
+    label: 'Sell',
+    icon: Monitor,
+    hrefs: [
+      '/pharmacy/counter',
+      '/pharmacy/counter/close',
+      '/pharmacy/khata',
+      '/pharmacy/loyalty',
+      '/pharmacy/marketing',
+    ],
+  },
+  {
+    label: 'Dispense',
+    icon: ClipboardCheck,
+    hrefs: [
+      '/pharmacy/pharmacist-queue',
+      '/pharmacy/prescriptions',
+      '/pharmacy/substitution',
+      '/pharmacy/controlled-register',
+      '/pharmacy/sop',
+    ],
+  },
+  { label: 'Stock', icon: PackageSearch, hrefs: ['/pharmacy/inventory', '/pharmacy/medicines'] },
+  { label: 'Buy', icon: ShoppingCart, hrefs: ['/pharmacy/purchasing'] },
+  {
+    label: 'Reports',
+    icon: BarChart3,
+    hrefs: ['/pharmacy/reports', '/pharmacy/cameras', '/team/stats', '/audit-logs'],
+  },
+  { label: 'Accounts', icon: Landmark, hrefs: ['/pharmacy/finance'] },
+  {
+    label: 'Settings',
+    icon: Settings,
+    hrefs: [
+      '/pharmacy',
+      '/pharmacy/regulatory',
+      '/pharmacy/settings/branches',
+      '/pharmacy/settings/printers',
+      '/organization',
+      '/settings',
+    ],
+  },
+];
+
+/**
+ * Dashboard first, then the pharmacy menus in task order, then everything else
+ * the member can open under More. A section with one entry is shown as that
+ * entry, so nobody opens a menu to reach a single page.
+ */
+export function groupPharmacyNavigation(items: readonly VisibleNavItem[]): NavSection[] {
+  const byHref = new Map(items.map((item) => [item.href, item]));
+  const placed = new Set<string>();
+  const take = (href: string) => {
+    const item = byHref.get(href);
+    if (!item || placed.has(href)) return [];
+    placed.add(href);
+    return [item];
+  };
+  const sections: NavSection[] = [];
+  const dashboard = take('/dashboard');
+  if (dashboard.length)
+    sections.push({ label: 'Dashboard', icon: LayoutDashboard, items: dashboard });
+  for (const { hrefs, ...menu } of PHARMACY_MENUS) {
+    const menuItems = hrefs.flatMap(take);
+    if (menuItems.length) sections.push({ ...menu, items: menuItems });
+  }
+  const rest = items.filter((item) => !placed.has(item.href));
+  if (rest.length) sections.push({ label: 'More', icon: LayoutGrid, items: rest });
+  return sections;
+}
+
 /** Every capability a hospitality entry names, asked about in one rail query. */
 const HOTEL_RAIL_CAPABILITIES: HotelCapability[] = [
   ...new Set(navigation.flatMap((item) => item.hotelCapabilities ?? [])),
@@ -711,15 +847,12 @@ export function useVisibleNavigation() {
   );
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
-  const matchingHrefs = filteredNav
-    .map((item) => item.href)
-    .filter((href) => pathname === href || pathname.startsWith(href + '/'));
-  const bestMatch = matchingHrefs.reduce(
-    (best, href) => (href.length > best.length ? href : best),
-    ''
-  );
+  const bestMatch = activeNavigationHref(filteredNav, pathname);
+  // DEV-497: a pharmacy workspace is navigated by task menus and plain
+  // labels with icons, never by numeric prefixes.
+  const pharmacy = entitlements.vertical === 'PHARMACY';
 
-  return { bestMatch, filteredNav, indexByHref };
+  return { bestMatch, filteredNav, indexByHref, pharmacy };
 }
 
 interface SidebarProps {
@@ -744,8 +877,23 @@ export function Sidebar({
   const collapsed = controlledCollapsed ?? localCollapsed;
   const { data: session } = useSession();
   const { icons } = usePreferences();
-  const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
-  const numbered = icons !== 'architectural';
+  const { bestMatch, filteredNav, indexByHref, pharmacy } = useVisibleNavigation();
+  const numbered = icons !== 'architectural' && !pharmacy;
+  // DEV-497: a pharmacy drawer uses the same task menus as the desktop bar.
+  const sections = pharmacy
+    ? groupPharmacyNavigation(filteredNav).map((section) => ({
+        key: section.label,
+        heading:
+          section.items.length > 1 || section.items[0]?.label !== section.label
+            ? section.label
+            : null,
+        items: section.items,
+      }))
+    : GROUP_ORDER.map((group) => ({
+        key: group,
+        heading: `Runbook / ${group}`,
+        items: filteredNav.filter((item) => item.group === group),
+      }));
 
   const getInitials = (name: string) =>
     name
@@ -816,14 +964,18 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
-        {GROUP_ORDER.map((group) => {
-          const items = filteredNav.filter((i) => i.group === group);
+        {sections.map(({ key, heading, items }) => {
           if (items.length === 0) return null;
           return (
-            <div key={group} className="space-y-1">
-              {!collapsed && (
-                <p className="px-2 pb-2 font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/45">
-                  Runbook / {group}
+            <div key={key} className="space-y-1">
+              {!collapsed && heading && (
+                <p
+                  className={cn(
+                    'px-2 pb-2 font-mono font-semibold uppercase text-sidebar-foreground/45',
+                    pharmacy ? 'text-[11px] tracking-[0.16em]' : 'text-[9px] tracking-[0.2em]'
+                  )}
+                >
+                  {heading}
                 </p>
               )}
               {items.map((item) => {
@@ -955,6 +1107,170 @@ export function Sidebar({
 }
 
 export function TopNavigation() {
+  const { vertical } = useEntitlements();
+  return vertical === 'PHARMACY' ? <GroupedTopNavigation /> : <FlatTopNavigation />;
+}
+
+const topNavigationPill =
+  'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-sm font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+function ActivePill() {
+  return (
+    <m.span
+      layoutId="topnav-active"
+      className="absolute inset-0 -z-10 rounded-full bg-primary"
+      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+    />
+  );
+}
+
+/**
+ * DEV-497: the pharmacy workspace's primary navigation. Destinations sit in a
+ * handful of task menus (disclosure buttons, so links keep their own keyboard
+ * and `aria-current` semantics); the bar wraps rather than scrolls, so no entry
+ * is ever cut off. The menu holding the current page wears the active pill and
+ * the page itself is the one link marked `aria-current`.
+ */
+function GroupedTopNavigation() {
+  const pathname = usePathname();
+  const { bestMatch, filteredNav } = useVisibleNavigation();
+  const sections = groupPharmacyNavigation(filteredNav);
+  const navRef = useRef<HTMLElement>(null);
+  const baseId = useId();
+  // Remembered with the route it was opened on, so navigating closes it.
+  const [opened, setOpened] = useState<{ label: string; pathname: string } | null>(null);
+  const openLabel = opened?.pathname === pathname ? opened.label : null;
+
+  useEffect(() => {
+    if (!openLabel) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!navRef.current?.contains(event.target as Node)) setOpened(null);
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    return () => document.removeEventListener('pointerdown', closeOutside);
+  }, [openLabel]);
+
+  const triggerId = (label: string) => `${baseId}-${label}-trigger`;
+  const panelId = (label: string) => `${baseId}-${label}-menu`;
+
+  return (
+    <div className="studio-navigation hidden border-b border-border-subtle bg-card lg:block">
+      <nav
+        ref={navRef}
+        aria-label="Primary navigation"
+        className="mx-auto flex min-h-14 w-full max-w-[1540px] flex-wrap items-center gap-1 px-8 py-2.5"
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || !openLabel) return;
+          event.preventDefault();
+          setOpened(null);
+          document.getElementById(triggerId(openLabel))?.focus();
+        }}
+        onBlur={(event) => {
+          if (openLabel && !navRef.current?.contains(event.relatedTarget as Node | null))
+            setOpened(null);
+        }}
+      >
+        {sections.map((section, index) => {
+          const active = section.items.some((item) => item.href === bestMatch);
+          if (section.items.length === 1) {
+            const [item] = section.items;
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  topNavigationPill,
+                  active && 'text-primary-foreground hover:text-primary-foreground'
+                )}
+              >
+                <Icon
+                  className={cn(
+                    'h-4 w-4 text-text-faint group-hover:text-text-muted',
+                    active && 'text-accent-brand group-hover:text-accent-brand'
+                  )}
+                />
+                <span>{item.label}</span>
+                {active && <ActivePill />}
+              </Link>
+            );
+          }
+          const open = openLabel === section.label;
+          const Icon = section.icon;
+          return (
+            <div key={section.label} className="relative">
+              <button
+                type="button"
+                id={triggerId(section.label)}
+                aria-expanded={open}
+                aria-controls={panelId(section.label)}
+                data-active={active || undefined}
+                onClick={() => setOpened(open ? null : { label: section.label, pathname })}
+                className={cn(
+                  topNavigationPill,
+                  active && 'text-primary-foreground hover:text-primary-foreground'
+                )}
+              >
+                <Icon
+                  className={cn(
+                    'h-4 w-4 text-text-faint group-hover:text-text-muted',
+                    active && 'text-accent-brand group-hover:text-accent-brand'
+                  )}
+                />
+                <span>{section.label}</span>
+                <ChevronDown
+                  aria-hidden
+                  className={cn('h-4 w-4 transition-transform', open && 'rotate-180')}
+                />
+                {active && <ActivePill />}
+              </button>
+              <ul
+                id={panelId(section.label)}
+                aria-labelledby={triggerId(section.label)}
+                className={cn(
+                  'absolute top-full z-50 mt-2 min-w-60 space-y-0.5 rounded-2xl border border-border-subtle bg-popover p-1.5 text-popover-foreground shadow-md',
+                  // The shell clips overflow, so a menu in the bar's trailing half
+                  // opens toward the shell rather than past its edge.
+                  index < sections.length / 2 ? 'start-0' : 'end-0',
+                  !open && 'hidden'
+                )}
+              >
+                {section.items.map((item) => {
+                  const current = item.href === bestMatch;
+                  const ItemIcon = item.icon;
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        aria-current={current ? 'page' : undefined}
+                        onClick={() => setOpened(null)}
+                        className={cn(
+                          'flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-body transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          current && 'bg-muted font-semibold text-text-strong'
+                        )}
+                      >
+                        <ItemIcon
+                          className={cn(
+                            'h-4 w-4 shrink-0 text-text-muted',
+                            current && 'text-accent-brand'
+                          )}
+                        />
+                        <span>{item.label}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+function FlatTopNavigation() {
   const { icons } = usePreferences();
   const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
   const numbered = icons !== 'architectural';

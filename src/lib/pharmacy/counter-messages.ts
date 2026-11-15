@@ -74,6 +74,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   COAUTH_REQUIRED: 'This action needs a second authorised pharmacist to countersign.',
   INVALID_UNITS: 'That quantity is not a whole number of units.',
   INVALID_QUANTITY: 'Enter a whole quantity of at least one.',
+  // DEV-830: the chosen pack, strip or loose unit does not match the stored pack setup.
+  INVALID_SALE_UNIT:
+    'That unit does not match how this item is packed. Search for it again and choose the unit from the list.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
