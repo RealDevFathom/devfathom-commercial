@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   receiptProps: vi.fn(),
   printReceipt: vi.fn(),
   queryOptions: vi.fn(),
+  queryInputs: vi.fn(),
   outcomeQuery: vi.fn(),
   searchQuery: vi.fn(),
   searchSetData: vi.fn(),
@@ -73,8 +74,9 @@ vi.mock('@/lib/trpc', async () => {
       names.map((name) => [
         name,
         {
-          useQuery: (_input: unknown, options?: unknown) => {
+          useQuery: (input: unknown, options?: unknown) => {
             mocks.queryOptions(name, options);
+            mocks.queryInputs(name, input, options);
             return mocks.queries[name];
           },
           useMutation: (options: unknown) => {
@@ -3260,3 +3262,55 @@ it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('PharmacyCounterConsole fast typing (DEV-42)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function enabledSearches() {
+    return mocks.queryInputs.mock.calls
+      .filter(
+        ([name, , options]) =>
+          name === 'counterSearch' && (options as { enabled?: boolean })?.enabled
+      )
+      .map(([, input]) => (input as { query: string }).query);
+  }
+
+  it('keeps every typed character while results refresh and debounces the search', () => {
+    vi.useFakeTimers();
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText<HTMLInputElement>('Scan or search');
+    const typed = 'panadol';
+
+    // The cashier pauses after "pa": the debounced search fires once.
+    fireEvent.change(search, { target: { value: 'p' } });
+    fireEvent.change(search, { target: { value: 'pa' } });
+    act(() => vi.advanceTimersByTime(300));
+    expect(enabledSearches().at(-1)).toBe('pa');
+    const searchesBeforeBurst = enabledSearches().length;
+
+    // Then types the rest quickly while the "pa" results refetch and land.
+    for (let index = 3; index <= typed.length; index += 1) {
+      const value = typed.slice(0, index);
+      fireEvent.change(search, { target: { value } });
+      mocks.queries.counterSearch = {
+        ...query({ rows: [], truncated: false }),
+        isFetching: index % 2 === 1,
+      };
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() => vi.advanceTimersByTime(40));
+      expect(search.value).toBe(value);
+    }
+
+    // No search runs for the partial words typed inside the debounce window.
+    expect(enabledSearches().slice(searchesBeforeBurst)).toEqual([]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(search.value).toBe(typed);
+    const burst = enabledSearches().slice(searchesBeforeBurst);
+    expect(burst.length).toBeGreaterThan(0);
+    expect(new Set(burst)).toEqual(new Set([typed]));
+  });
+});
