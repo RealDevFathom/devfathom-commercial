@@ -25,6 +25,7 @@ import {
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
 import { multiplyMoney, roundMoney } from '@/lib/finance/money';
+import { paymentLedgerDeleteError, paymentLedgerUpdateError } from '@/lib/finance/payment-ledger';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -755,9 +756,23 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       const existing = await db.transaction.findUnique({
         where: { id },
-        select: { id: true, description: true },
+        select: {
+          id: true,
+          description: true,
+          paymentId: true,
+          type: true,
+          amount: true,
+          date: true,
+        },
       });
       if (!existing) return { error: 'That transaction was not found.' };
+      // DEV-166: a payment-posted INCOME row only changes through its payment.
+      const lockedError = paymentLedgerUpdateError(existing, {
+        type,
+        amount,
+        date: date != null ? new Date(date) : undefined,
+      });
+      if (lockedError) return { error: lockedError };
 
       const data: Prisma.TransactionUpdateInput = {};
       if (type != null) data.type = type;
@@ -824,9 +839,18 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
       const existing = await db.transaction.findUnique({
         where: { id },
-        select: { id: true, type: true, amount: true, currency: true, description: true },
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          currency: true,
+          description: true,
+          paymentId: true,
+        },
       });
       if (!existing) return { error: 'That transaction was not found.' };
+      const lockedError = paymentLedgerDeleteError(existing);
+      if (lockedError) return { error: lockedError };
 
       await db.transaction.delete({ where: { id } });
 

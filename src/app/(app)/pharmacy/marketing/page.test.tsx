@@ -175,7 +175,9 @@ it('shows explicit unavailable model status without inventing recommendations', 
   });
   render(await Page({ searchParams: Promise.resolve({}) }));
   expect(screen.getByText('Suggestions unavailable', { exact: true })).toBeInTheDocument();
-  expect(screen.getByText("AI suggestions aren't set up yet. Contact support.")).toBeInTheDocument();
+  expect(
+    screen.getByText("AI suggestions aren't set up yet. Contact support.")
+  ).toBeInTheDocument();
   expect(screen.queryByText(/CONFIGURATION/)).not.toBeInTheDocument();
   expect(screen.getByText('e1: 25')).toBeInTheDocument();
   expect(screen.getByText(/Coverage: partial; cohort: 12/)).toHaveTextContent(
@@ -368,4 +370,22 @@ it('shows loyalty and inventory-cost insights as review-only with workspace link
   expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
   expect(screen.queryByText(/Approve insight and create draft/)).not.toBeInTheDocument();
   expect(screen.getByText('Rejected. No campaign created.')).toBeInTheDocument();
+});
+it('asks for local send times and never for replay keys or UTC timestamps', async () => {
+  mocks.history.mockResolvedValue({
+    campaigns: [{ ...campaign, status: 'CAPTURED' }],
+    templates: [{ id: 'template-a', name: 'Store welcome' }],
+    timezone: 'Asia/Karachi',
+  });
+  const page = await Page({ searchParams: Promise.resolve({}) });
+  const { container } = render(page);
+  expect(screen.queryByLabelText(/request key/i)).not.toBeInTheDocument();
+  const batch = screen.getByRole('button', { name: 'Run bounded sandbox batch' }).closest('form')!;
+  expect(batch.querySelector('input[type="hidden"][name="requestKey"]')).not.toHaveValue('');
+  expect(screen.getByLabelText('Send date and time (Pakistan time (PKT))')).toHaveAttribute(
+    'type',
+    'datetime-local'
+  );
+  expect(screen.getByText('7 Oct 2026, 12:00')).toBeInTheDocument();
+  expect(container).not.toHaveTextContent(/ISO UTC|UTC ISO|\(UTC|explicit UTC|2026-10-07T07/);
 });

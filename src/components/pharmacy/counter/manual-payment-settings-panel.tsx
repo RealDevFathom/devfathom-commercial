@@ -28,7 +28,7 @@ export function ManualPaymentSettingsPanel({ branchId }: { branchId: string }) {
   }
   return (
     <SectionCard title="Raast / wallet merchant details" eyebrow="Branch payment policy">
-      <p className="mb-4 text-sm text-text-muted">Upload the shop’s static merchant QR or enter its IBAN or till number. Cashiers confirm payment manually; no bank or wallet API verifies it.</p>
+      <p className="mb-4 text-sm text-text-muted">Enable each wallet the shop accepts. A static merchant QR and an IBAN or till number are optional; the counter shows them only when entered. Cashiers confirm payment manually; no bank or wallet API verifies it.</p>
       {query.isLoading ? <p role="status">Loading merchant details…</p> : null}
       {query.isError ? <div role="alert" className="space-y-2"><p>Merchant details are unavailable. An authorized pharmacy administrator can manage this branch.</p><Button variant="outline" onClick={() => void query.refetch()}>Retry</Button></div> : null}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -42,9 +42,9 @@ export function ManualPaymentSettingsPanel({ branchId }: { branchId: string }) {
               }} /> Enable {type}
             </Label>
             {settings[type] ? <>
-              <Label htmlFor={`merchant-destination-${type}`}>IBAN or till number</Label>
+              <Label htmlFor={`merchant-destination-${type}`}>IBAN or till number (optional)</Label>
               <Input id={`merchant-destination-${type}`} className="min-h-11" maxLength={120} value={settings[type]?.destination ?? ''} onChange={(event) => update(type, { destination: event.target.value })} />
-              <Label htmlFor={`merchant-qr-${type}`}>Merchant QR (PNG, JPEG or WebP; up to 250 KB)</Label>
+              <Label htmlFor={`merchant-qr-${type}`}>Merchant QR (optional; PNG, JPEG or WebP; up to 250 KB)</Label>
               <Input id={`merchant-qr-${type}`} className="min-h-11" type="file" accept="image/png,image/jpeg,image/webp" onChange={async (event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
@@ -69,7 +69,7 @@ export function ManualPaymentSettingsPanel({ branchId }: { branchId: string }) {
                   const next = { ...settings[type]! }; delete next.qrImageDataUrl;
                   changeDraft({ ...settings, [type]: next });
                 }}>Remove QR</Button>
-              </> : <p className="text-sm text-text-muted">No QR uploaded. An IBAN or till number can be used instead.</p>}
+              </> : <p className="text-sm text-text-muted">No QR uploaded.</p>}
               <Label className="flex min-h-11 items-center gap-2">
                 <input type="checkbox" checked={settings[type]?.allowReferenceSkip ?? false} onChange={(event) => update(type, { allowReferenceSkip: event.target.checked })} /> Allow cashiers to skip the transaction reference
               </Label>

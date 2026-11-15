@@ -159,6 +159,13 @@ describe('matchCounterAction', () => {
     expect(matchCounterAction(legacy.bindings, { key: 'Enter' })).toBeNull();
   });
 
+  it('sells loose on F5 in every preset', () => {
+    for (const preset of ['devfathom', 'legacySpeed'] as const) {
+      const keymap = resolveCounterKeymap({ preset });
+      expect(matchCounterAction(keymap.bindings, { key: 'F5' })).toBe('selectLooseUnit');
+    }
+  });
+
   it('returns null for an unbound key', () => {
     expect(matchCounterAction(bindings, { key: 'a' })).toBeNull();
     expect(matchCounterAction(bindings, { key: 'Escape' })).toBeNull();

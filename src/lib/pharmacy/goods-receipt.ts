@@ -42,6 +42,7 @@ import { PharmacyInventoryError } from './inventory';
 import {
   authorizeControlledRestoration,
   ControlledRestorationDenied,
+  SOLO_PHARMACIST_WITNESS_POLICY,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import {
@@ -345,7 +346,10 @@ export async function postGoodsReceipt(
       receivedExpiryPrecision: line.expiryPrecision,
       quantityUnits: line.acceptedCanonicalUnits,
       idempotencyKey: acceptedKey(line.id),
-      receivedAt: receipt.receivedAt,
+      // The receipt keeps the calendar date keyed on it (UTC midnight). Stock being posted is
+      // on hand now, so the lot is never received later than the posting instant: a GRN keyed
+      // at 01:30 PKT for today's Karachi date must be sellable at once, not from 05:00 PKT.
+      receivedAt: receipt.receivedAt > input.at ? input.at : receipt.receivedAt,
       quarantine:
         line.rejectedCanonicalUnits > 0 && line.quarantineLocationId
           ? {
@@ -387,11 +391,19 @@ export async function postGoodsReceipt(
         (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
         0
       );
+    const earlierBonusOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce((total, other) => total + other.bonusCanonicalUnits, 0);
     const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
     const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
       ordered: terms
-        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        ? {
+            ...terms,
+            previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt,
+            previouslyReceivedBonusUnits:
+              (terms.previouslyReceivedBonusUnits ?? 0) + earlierBonusOnReceipt,
+          }
         : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
@@ -399,10 +411,16 @@ export async function postGoodsReceipt(
         rejectedCanonicalUnits: line.rejectedCanonicalUnits,
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+        bonusCanonicalUnits: line.bonusCanonicalUnits,
+        receivedAt: receipt.receivedAt,
       },
     }).filter(
       (exception) =>
-        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+        lastLotOfOrderLine ||
+        (exception.kind !== 'SHORTAGE' &&
+          exception.kind !== 'OVERAGE' &&
+          exception.kind !== 'BONUS_SHORTAGE' &&
+          exception.kind !== 'SCHEME_EXPIRED')
     )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
@@ -547,6 +565,7 @@ async function orderedTermsFor(
   if (!purchaseOrderLineId) return null;
   const orderLine = await db.pharmacyPurchaseOrderLine.findFirst({
     where: { id: purchaseOrderLineId, organizationId: scope.organizationId },
+    include: { purchaseOrder: { select: { quote: { select: { validUntil: true } } } } },
   });
   if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
 
@@ -569,6 +588,12 @@ async function orderedTermsFor(
       (total, line) => total + line.receivedCanonicalUnits + line.bonusCanonicalUnits,
       0
     ),
+    previouslyReceivedBonusUnits: earlier.reduce(
+      (total, line) => total + line.bonusCanonicalUnits,
+      0
+    ),
+    // The scheme comes from the distributor quote the order was raised from.
+    schemeValidUntil: orderLine.purchaseOrder?.quote?.validUntil ?? null,
   };
 }
 
@@ -585,9 +610,10 @@ export type ReverseGoodsReceiptResult = {
  * Nothing about the original receipt is rewritten. Its lines, its lot and its
  * movements stay exactly as posted; what changes is that a negating ADJUSTMENT
  * now names each of them, and the receipt itself moves to REVERSED with an
- * actor and a reason. If the stock has already moved on, the ledger's
- * non-negative balance refuses the reversal rather than inventing a negative
- * shelf (§8A invariant 6) — the operator has to write off or return instead.
+ * actor and a reason. If the stock has already moved on, the reversal is
+ * refused with REVERSAL_STOCK_MOVED or REVERSAL_PACKS_OPENED rather than
+ * inventing a negative shelf (§8A invariant 6) — the operator has to write off
+ * or return instead.
  *
  * Open exceptions are deliberately left open: a shortage that was really
  * reported is still a fact about the delivery after the paperwork is undone,
@@ -628,7 +654,15 @@ export async function reverseGoodsReceipt(
       idempotencyKey: { in: keys },
     },
     orderBy: { idempotencyKey: 'asc' },
-    select: { id: true },
+    select: {
+      id: true,
+      inventoryLotId: true,
+      stockLocationId: true,
+      disposition: true,
+      quantityUnits: true,
+      sealedPackDelta: true,
+      looseUnitDelta: true,
+    },
   });
   if (posted.length === 0) throw new PharmacyInventoryError('NOT_FOUND');
 
@@ -653,12 +687,38 @@ export async function reverseGoodsReceipt(
       db,
       scope,
       input.controlledWitness,
-      'pharmacy:safety'
+      'pharmacy:safety',
+      { allowSoloSelfWitness: true }
     );
+    if (witness.soloSelfWitness) {
+      // Solo-pharmacy rule: the self-witness is lawful only with this record,
+      // written in the same transaction as the reversal it authorizes.
+      await db.auditLog.create({
+        data: {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          actorType: 'USER',
+          source: 'TRPC',
+          category: 'PHARMACY_PURCHASING',
+          operation: 'OTHER',
+          action: 'pharmacy.controlledReceiptReversalSelfWitness',
+          targetType: 'PharmacyGoodsReceipt',
+          targetId: receipt.id,
+          metadata: {
+            policy: SOLO_PHARMACIST_WITNESS_POLICY,
+            pinVerified: true,
+            branchId: scope.branchId,
+            signatureRef: witness.signatureRef,
+          },
+        },
+      });
+    }
     // Dispensing takes the branch register lock before any stock balance lock.
     // Use the same order even when a receipt has multiple movements to reverse.
     await lockRegister(db, scope.organizationId, scope.branchId);
   }
+
+  await assertReceiptStockStillOnHand(db, scope, posted);
 
   // Reverse one movement, then write its register row, before the next one.
   // The register trigger checks each row's running balance against sellable
@@ -722,6 +782,95 @@ export async function reverseGoodsReceipt(
     reversedAt: input.at,
     reversalMovementIds: reversals.map((movement) => movement.id),
   };
+}
+
+type PostedReceiptMovement = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  disposition: string;
+  quantityUnits: number;
+  sealedPackDelta: number;
+  looseUnitDelta: number;
+};
+
+/**
+ * PUR-04 / §8A invariant 6. A reversal is the exact negation of each receipt
+ * movement at the same lot, location and disposition, so it is only possible
+ * while that bucket still holds what the receipt put there. Check that first,
+ * under the balance row locks, and refuse with a reason the operator can act
+ * on instead of letting the non-negative CHECK surface as a server error.
+ * The CHECK stays the backstop behind this.
+ */
+async function assertReceiptStockStillOnHand(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  movements: readonly PostedReceiptMovement[]
+) {
+  const needed = new Map<string, PostedReceiptMovement>();
+  for (const movement of movements) {
+    const key = `${movement.inventoryLotId}:${movement.stockLocationId}:${movement.disposition}`;
+    const total = needed.get(key);
+    needed.set(
+      key,
+      total
+        ? {
+            ...total,
+            quantityUnits: total.quantityUnits + movement.quantityUnits,
+            sealedPackDelta: total.sealedPackDelta + movement.sealedPackDelta,
+            looseUnitDelta: total.looseUnitDelta + movement.looseUnitDelta,
+          }
+        : { ...movement }
+    );
+  }
+  const buckets = [...needed.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([, bucket]) => bucket);
+
+  // Lock in a deterministic order, then read in a separate statement so the
+  // read sees anything that committed while the lock was waited on.
+  for (const bucket of buckets) {
+    await db.$queryRaw`
+      SELECT "inventoryLotId" FROM "pharmacy_stock_balances"
+      WHERE "organizationId" = ${scope.organizationId}
+        AND "inventoryLotId" = ${bucket.inventoryLotId}
+        AND "stockLocationId" = ${bucket.stockLocationId}
+        AND "disposition"::text = ${bucket.disposition}
+      FOR UPDATE`;
+  }
+  const balances = await db.pharmacyStockBalance.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: { in: [...new Set(buckets.map((bucket) => bucket.inventoryLotId))] },
+    },
+    select: {
+      inventoryLotId: true,
+      stockLocationId: true,
+      disposition: true,
+      onHandUnits: true,
+      sealedPacks: true,
+      looseUnits: true,
+    },
+  });
+
+  for (const bucket of buckets) {
+    const balance = balances.find(
+      (row) =>
+        row.inventoryLotId === bucket.inventoryLotId &&
+        row.stockLocationId === bucket.stockLocationId &&
+        row.disposition === bucket.disposition
+    );
+    const onHand = balance?.onHandUnits ?? 0;
+    if (onHand < bucket.quantityUnits) {
+      throw new PharmacyReceivingError('REVERSAL_STOCK_MOVED');
+    }
+    if (
+      (balance?.sealedPacks ?? 0) < bucket.sealedPackDelta ||
+      (balance?.looseUnits ?? 0) < bucket.looseUnitDelta
+    ) {
+      throw new PharmacyReceivingError('REVERSAL_PACKS_OPENED');
+    }
+  }
 }
 
 /**

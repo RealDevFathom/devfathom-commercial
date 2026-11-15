@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => {
         id: 'target-column',
         name: 'In Progress',
         board: { project: { id: 'destination-project', name: 'Destination' } },
-        defaultAssignees: [{ userId: 'stale-default' }, { userId: 'destination-member' }],
+        defaultAssignees: [{ userId: 'stale-default' }, { userId: 'destination-member' }, { userId: 'admin' }],
       })),
     },
     taskAssignee,
@@ -32,7 +32,9 @@ const mocks = vi.hoisted(() => {
       count: vi.fn(
         async ({ where }: { where: { userId: { in: string[] } } }) => where.userId.in.length
       ),
-      findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
+    },
+    columnDefaultAssignee: {
+      findMany: vi.fn(async () => [{ userId: 'destination-member' }, { userId: 'admin' }]),
     },
   };
   return { db, taskAssignee };
@@ -85,19 +87,28 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
     });
-    expect(mocks.db.projectMember.findMany).toHaveBeenCalledWith({
+    expect(mocks.db.columnDefaultAssignee.findMany).toHaveBeenCalledWith({
       where: {
-        projectId: 'destination-project',
-        userId: { in: ['stale-default', 'destination-member'] },
+        columnId: 'target-column',
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
-      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+      data: [
+        { taskId: 'task-1', userId: 'destination-member' },
+        { taskId: 'task-1', userId: 'admin' },
+      ],
       skipDuplicates: true,
     });
   });

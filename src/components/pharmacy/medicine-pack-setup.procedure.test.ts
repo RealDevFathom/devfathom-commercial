@@ -18,9 +18,14 @@ import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
 import { router, type TRPCContext } from '@/server/trpc';
 import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
-function caller(db: object) {
+// The catalogue administrator's capability lookup (no role overrides).
+const adminActor = {
+  findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+};
+
+function caller(db: { user?: object; [delegate: string]: unknown }) {
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
-    db,
+    db: { ...db, user: { ...adminActor, ...db.user } },
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
     session: { expires: 'later', user: { id: 'admin-a', role: 'ADMIN', status: 'ACTIVE' } },
     requestMeta: { ip: null, userAgent: null },

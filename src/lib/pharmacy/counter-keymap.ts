@@ -101,9 +101,10 @@ const DEVFATHOM_BINDINGS: Record<CounterAction, CounterBinding> = {
  */
 const LEGACY_SPEED_BINDINGS: Record<CounterAction, CounterBinding> = {
   focusSearch: { key: 'F4' },
-  selectPackUnit: { key: 'F5' },
+  // F5 sells loose in every preset, so a cashier switching presets keeps it.
+  selectPackUnit: { key: 'F7' },
   selectStripUnit: { key: 'F6' },
-  selectLooseUnit: { key: 'F7' },
+  selectLooseUnit: { key: 'F5' },
   addToCart: { key: 'Enter', ctrl: true },
   holdSale: { key: 'F3' },
   resumeSale: { key: 'F8' },

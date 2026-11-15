@@ -137,6 +137,21 @@ async function requireUnit(db: ScopedDb, id: string) {
   return unit;
 }
 
+/**
+ * Serialize edge additions for the entire tenant graph, including edges with
+ * disjoint endpoints that can jointly close a longer cycle. The transaction
+ * holds the lock through both traversal and insertion (and the outer request's
+ * commit when using withTenantDb). Deletions cannot introduce a cycle.
+ */
+async function lockRecipeGraph(
+  db: ScopedDb,
+  organizationId: string,
+  graph: 'conversions' | 'recipes'
+) {
+  const key = `restaurant:graph:${graph}:${organizationId}`;
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
 // ── Unit conversions (cycle guard) ───────────────────────────────────────────
 
 /**
@@ -153,16 +168,20 @@ export async function upsertConversion(
 ) {
   const organizationId = await catalogOrganizationId(db);
   const parsedFactor = decimalInDomain(factor, 'Unit conversion factor', 'positive', 18, 6);
-  await requireUnit(db, fromUnitId);
-  await requireUnit(db, toUnitId);
-  if (fromUnitId === toUnitId) {
-    throw new RecipeError('A unit cannot convert to itself.', 'CONVERSION_CYCLE');
-  }
-  await assertNoConversionCycle(db, fromUnitId, toUnitId);
-  return db.restaurantUnitConversion.upsert({
-    where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
-    create: { organizationId, fromUnitId, toUnitId, factor: parsedFactor },
-    update: { factor: parsedFactor },
+  return db.$transaction(async (tx) => {
+    const scopedTx = tx as ScopedDb;
+    await lockRecipeGraph(scopedTx, organizationId, 'conversions');
+    await requireUnit(scopedTx, fromUnitId);
+    await requireUnit(scopedTx, toUnitId);
+    if (fromUnitId === toUnitId) {
+      throw new RecipeError('A unit cannot convert to itself.', 'CONVERSION_CYCLE');
+    }
+    await assertNoConversionCycle(scopedTx, fromUnitId, toUnitId);
+    return tx.restaurantUnitConversion.upsert({
+      where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
+      create: { organizationId, fromUnitId, toUnitId, factor: parsedFactor },
+      update: { factor: parsedFactor },
+    });
   });
 }
 
@@ -544,6 +563,8 @@ export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInpu
   }
   return db.$transaction(async (tx) => {
     const scopedTx = tx as ScopedDb;
+    // Acquire the graph lock before version row locks for a consistent order.
+    if (input.subRecipeId) await lockRecipeGraph(scopedTx, organizationId, 'recipes');
     const version = await lockMutableRecipeVersion(scopedTx, organizationId, input.recipeVersionId);
     await requireUnit(scopedTx, input.unitId);
 

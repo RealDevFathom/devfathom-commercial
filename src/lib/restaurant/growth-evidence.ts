@@ -41,11 +41,11 @@ export function restaurantMajorToMinor(value: string): string {
 const definitions = {
   grossSales: 'Settled bill subtotals before comps and discounts, on bill business date.',
   netSales:
-    'Settled gross minus comps, discounts and processing-date refunds. Refunds already deducted. Not profit or cash.',
+    'Settled gross minus comps, discounts and the sales part of processing-date refunds (refunded tax, service charge and delivery fees excluded). Refunds already deducted. Not profit or cash.',
   compTotal: 'Comps on settled bills, on bill business date.',
   discountTotal: 'Discounts on settled bills, on bill business date.',
   refundTotal:
-    'Refund principal on processing business date, possibly for earlier sales; includes unallocated components. Already deducted from net sales.',
+    'Refund principal on processing business date, possibly for earlier sales; includes refunded tax and service charge. Its sales part is already deducted from net sales.',
 } as const;
 const keys = ['grossSales', 'netSales', 'compTotal', 'discountTotal', 'refundTotal'] as const;
 const driver = z.object({ current: major.nullable(), previous: major.nullable() });
@@ -187,15 +187,20 @@ export async function readRestaurantGrowthEvidence(h: AssistantHelpers, raw: unk
           return [key, readable && value !== null ? restaurantMajorToMinor(value) : null];
         })
       ) as Record<(typeof keys)[number], string | null>;
-      if (
-        readable &&
-        BigInt(values.netSales!) !==
-          BigInt(values.grossSales!) -
-            BigInt(values.compTotal!) -
-            BigInt(values.discountTotal!) -
-            BigInt(values.refundTotal!)
-      )
-        throw new Error('Inconsistent source equation');
+      if (readable) {
+        // Net sales deduct only the SALES part of refunds; refundTotal still carries
+        // refunded tax and service charge. So net must lie between sales before
+        // refunds minus the whole refundTotal and sales before refunds.
+        const salesBeforeRefunds =
+          BigInt(values.grossSales!) - BigInt(values.compTotal!) - BigInt(values.discountTotal!);
+        const net = BigInt(values.netSales!);
+        if (
+          BigInt(values.refundTotal!) < BigInt(0) ||
+          net > salesBeforeRefunds ||
+          net < salesBeforeRefunds - BigInt(values.refundTotal!)
+        )
+          throw new Error('Inconsistent source equation');
+      }
       const recordedZero = readable && keys.every((key) => values[key] === '0');
       const state =
         freshness.status === 'STALE'

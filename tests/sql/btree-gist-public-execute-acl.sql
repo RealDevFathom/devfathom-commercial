@@ -98,7 +98,7 @@ SELECT count(*) AS public_execute_before_failed_preparation
 
 \if :preinstall_vulnerable
   -- Managed PostgreSQL owns extension functions with an internal superuser no
-  -- customer role may assume (Azure Database for PostgreSQL uses "azuresu").
+  -- customer role may assume.
   -- Preparation must skip the revoke it cannot perform, record that skip, and
   -- leave the ACLs exactly as it found them.
   SET SESSION AUTHORIZATION wha911_nonowner;
