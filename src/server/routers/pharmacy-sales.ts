@@ -150,6 +150,7 @@ import {
   optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  linkRestockRecoveries,
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
@@ -183,6 +184,7 @@ import {
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
+import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
   LOST_SALE_OUTCOMES,
   LostSalesError,
@@ -997,6 +999,31 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+}
+
+/**
+ * DEV-505: the branches `requireCloseAccess` would let this actor close, so the
+ * day-close screen offers only those (DEV-127's `canClosePharmacyDay` answers
+ * the rail and the console gate from the same rule). An administrator or a
+ * `pharmacy:close` holder reaches every active branch; a Manager
+ * (`pharmacy:manage`) only the active branches they are assigned to, unless
+ * `pharmacy:close` is explicitly denied. Everyone else gets none. Each close
+ * still re-runs `requireCloseAccess` on its branch.
+ */
+export async function dayCloseBranchIds(ctx: TRPCContext): Promise<'ALL' | string[]> {
+  const user = ctx.session?.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !user ||
+    !organizationId ||
+    user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    return [];
+  if (user.role === 'ADMIN') return 'ALL';
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (await can(subjectFromSession(user), 'pharmacy:close', undefined, options)) return 'ALL';
+  return managerBranchIds(ctx, 'pharmacy:close');
 }
 
 /**
@@ -3001,6 +3028,18 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /** DEV-79: link notified requests to the sale that recovered them (also run by the job). */
+  linkRestockRecoveries: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          linkRestockRecoveries(txDb(tx), await scopeFor(ctx, input.branchId))
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   restockRecoveryReport: protectedProcedure
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
@@ -3055,6 +3094,43 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+    };
+  }),
+
+  /**
+   * DEV-505: the branches the day-close screen offers, from the same decision as
+   * `requireCloseAccess`. A Manager sees only their assigned branches; a member
+   * with no day-close reach is refused, so the screen never offers a branch the
+   * close itself would refuse.
+   */
+  dayCloseBranches: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const allowed = await dayCloseBranchIds(ctx);
+    if (allowed !== 'ALL' && !allowed.length)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Day-close permission is required to reconcile and close a day.',
+      });
+    const [branches, organization] = await Promise.all([
+      ctx.db.pharmacyBranch.findMany({
+        where: {
+          organizationId,
+          active: true,
+          ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
+        },
+        select: { id: true, code: true, name: true, city: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+      ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { currency: true, timezone: true },
+      }),
+    ]);
+    return {
+      branches,
+      currency: organization?.currency ?? 'PKR',
+      timezone: workspaceTimezone(organization?.timezone),
     };
   }),
 
