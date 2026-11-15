@@ -115,4 +115,18 @@ describe('pharmacy OTC and cosmetics category growth report', () => {
     expect(report).toHaveLength(100);
     expect(db.$queryRaw).toHaveBeenCalledOnce();
   });
+
+  it('sums stored line gross so lines split across batches are not undercounted', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readPharmacyCategoryGrowthReport({ $queryRaw: queryRaw } as never, 'org', {
+      branchIds: ['b1'],
+      from: '2026-10-01',
+      to: '2026-10-08',
+      configuration: [],
+    });
+    const sql = (queryRaw.mock.calls[0][0] as { strings: string[] }).strings.join('?');
+    expect(sql).toContain('"grossMinor"::bigint - "discountMinor"');
+    expect(sql).toContain('l."grossMinor"::bigint - l."discountMinor"');
+    expect(sql).not.toContain('"unitPriceMinor"');
+  });
 });

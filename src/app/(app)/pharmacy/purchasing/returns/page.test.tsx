@@ -145,3 +145,9 @@ it('retains the descriptive route loading state', () => {
   render(<Loading />);
   expect(screen.getByRole('status', { name: 'Loading Returns & claims' })).toBeVisible();
 });
+it('does not read zero returns as an all-clear return-window board (DEV-522)', async () => {
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByText('No returns or claims to check')).toBeVisible();
+  expect(screen.queryByText('No return window is closing')).toBeNull();
+  expect(screen.queryByText(/Every open return and claim/)).toBeNull();
+});

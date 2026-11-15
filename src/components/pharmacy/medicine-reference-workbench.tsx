@@ -13,6 +13,10 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
   chunkReferenceRows,
+  DRAP_REGISTRY_CONNECTOR_ID,
+  DRAP_REGISTRY_LABEL,
+  DrapRegistryFileConnector,
+  drapRegistryMapping,
   formulaSafeCell,
   ManualFileConnector,
   MEDICINE_REFERENCE_FIELDS,
@@ -33,9 +37,12 @@ type ConnectorHealth = {
   detail: string;
 };
 
+type ReferenceSource = 'manual-file' | typeof DRAP_REGISTRY_CONNECTOR_ID;
+
 type ParsedFile = { name: string; headers: string[]; rows: Array<Record<string, unknown>> };
 
 type ChunkedUpload = {
+  source: ReferenceSource;
   fileName: string;
   chunks: ReferenceUploadChunk[];
   nextIndex: number;
@@ -191,6 +198,13 @@ function assertionEnvelope(assertedValue: unknown) {
   };
 }
 
+function referenceProposalSourceLabel(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || !('source' in payload)) return null;
+  const source = payload.source;
+  if (!source || typeof source !== 'object' || !('label' in source)) return null;
+  return typeof source.label === 'string' ? source.label : null;
+}
+
 function referenceProposalValues(payload: unknown): Record<string, string> {
   if (!payload || typeof payload !== 'object' || !('values' in payload)) return {};
   const values = payload.values;
@@ -226,6 +240,7 @@ const CATALOGUE_REVIEW_DENIED =
   'Confirming connector proposals needs the pharmacy:catalogue-review permission granted to your role by name. Wildcard grants such as * or pharmacy:* do not include it.';
 
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
+  const [source, setSource] = useState<ReferenceSource>('manual-file');
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
   const [batchId, setBatchId] = useState('');
@@ -282,7 +297,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       const next = await parseFile(file);
       if (!next.headers.length || !next.rows.length) throw new Error('The file has no data rows.');
       setParsed(next);
-      setMapping(guessedMapping(next.headers));
+      setMapping(
+        source === DRAP_REGISTRY_CONNECTOR_ID
+          ? drapRegistryMapping(next.headers)
+          : guessedMapping(next.headers)
+      );
       setBatchId(browserUuid());
       setPreview([]);
       setUpload(null);
@@ -295,7 +314,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
 
   async function normalizePreview() {
     if (!parsed) return;
-    const connector = new ManualFileConnector();
+    const connector =
+      source === DRAP_REGISTRY_CONNECTOR_ID
+        ? new DrapRegistryFileConnector()
+        : new ManualFileConnector();
     const result = await connector.fetch({
       batchId,
       fileName: parsed.name,
@@ -316,7 +338,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         let result: Awaited<ReturnType<typeof importBatch.mutateAsync>> | undefined;
         for (let call = 0; call < MAX_CALLS_PER_PART; call += 1) {
           result = await importBatch.mutateAsync({
-            connectorId: 'manual-file',
+            connectorId: state.source,
             batchId: chunk.batchId,
             fileName: state.fileName,
             rows: chunk.rows,
@@ -372,7 +394,13 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         return;
       }
     }
-    const state: ChunkedUpload = { fileName: parsed.name, chunks, nextIndex: 0, failure: null };
+    const state: ChunkedUpload = {
+      source,
+      fileName: parsed.name,
+      chunks,
+      nextIndex: 0,
+      failure: null,
+    };
     setUpload(state);
     void sendChunks(state);
   }
@@ -399,6 +427,50 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         title="Upload reference rows"
         titleLevel={2}
       >
+        <fieldset className="mb-4 min-w-0">
+          <legend className="text-sm font-medium text-text-body">Reference source</legend>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(
+              [
+                ['manual-file', 'Manual CSV / Excel'],
+                [DRAP_REGISTRY_CONNECTOR_ID, `Official ${DRAP_REGISTRY_LABEL}`],
+              ] as const
+            ).map(([value, label]) => (
+              <label
+                key={value}
+                className="flex min-h-11 cursor-pointer items-center gap-2 rounded-sm border border-border-default bg-surface-raised px-3 text-sm focus-within:ring-2 focus-within:ring-ring"
+              >
+                <input
+                  type="radio"
+                  name="reference-source"
+                  value={value}
+                  checked={source === value}
+                  disabled={uploadingPart !== null}
+                  onChange={() => {
+                    setSource(value);
+                    if (parsed)
+                      setMapping(
+                        value === DRAP_REGISTRY_CONNECTOR_ID
+                          ? drapRegistryMapping(parsed.headers)
+                          : guessedMapping(parsed.headers)
+                      );
+                    setPreview([]);
+                    setUpload(null);
+                  }}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          {source === DRAP_REGISTRY_CONNECTOR_ID ? (
+            <p className="mt-2 text-xs text-text-muted">
+              Upload the DRAP registered-products export. Columns are matched automatically and rows
+              pre-fill names, strength, form and Rx or controlled flags as official regulator data.
+              Rows matching a registration number already in the catalogue become update proposals.
+              Nothing is saved until a pharmacist confirms it, and prices are never changed.
+            </p>
+          ) : null}
+        </fieldset>
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
           <label className="block min-w-0 text-sm font-medium text-text-body">
             CSV or Excel workbook
@@ -611,13 +683,22 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const name =
               values.productName ?? proposal.targetMedicine?.productName ?? 'Reference update';
             const isConfirming = confirming.has(proposal.id);
+            const sourceLabel = referenceProposalSourceLabel(proposal.payload);
             return (
               <article
                 key={proposal.id}
                 className="min-w-0 space-y-4 rounded-md border border-border-subtle p-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <h3 className="font-semibold text-text-strong">{name}</h3>
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-text-strong">{name}</h3>
+                    {sourceLabel ? (
+                      <p className="mt-1 text-xs text-text-muted">
+                        Source: {sourceLabel}
+                        {proposal.targetMedicine ? ' · updates an existing medicine' : ''}
+                      </p>
+                    ) : null}
+                  </div>
                   <StatusPill status="Pending confirmation" tone="warning" />
                 </div>
                 <dl className="grid min-w-0 gap-3 sm:grid-cols-2">

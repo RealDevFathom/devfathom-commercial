@@ -1,0 +1,134 @@
+'use client';
+
+import { useEffect, useId, useRef, useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { LOST_SALES_DEFAULTS, type LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
+
+export const LOST_SALE_CHIPS: readonly { outcome: LostSaleOutcome; label: string }[] = [
+  { outcome: 'SUBSTITUTE_TAKEN', label: 'Substitute taken' },
+  { outcome: 'WILL_RETURN', label: 'Will return' },
+  { outcome: 'WENT_ELSEWHERE', label: 'Went elsewhere' },
+  { outcome: 'ORDERED_FOR_CUSTOMER', label: 'Ordered for customer' },
+  { outcome: 'UNKNOWN', label: 'Unknown' },
+];
+
+export type LostSaleChoice = {
+  outcome: LostSaleOutcome;
+  notifyOptIn?: boolean;
+  notifyPhone?: string;
+};
+
+/**
+ * DEV-81: an optional, non-modal bottom panel after a short line is recorded.
+ * One tap records the outcome. It never traps focus and never gates tender:
+ * if nobody taps within five seconds it closes and the line stays UNKNOWN,
+ * which the server already stored. Turning on notify-when-back pauses the
+ * timer while the phone number is typed.
+ */
+export function CounterLostSaleChips({
+  requested,
+  onChoose,
+  onDismiss,
+  autoDismissMs = LOST_SALES_DEFAULTS.chipAutoDismissMs,
+}: {
+  requested: string;
+  onChoose: (choice: LostSaleChoice) => void;
+  onDismiss: () => void;
+  autoDismissMs?: number;
+}) {
+  const [notify, setNotify] = useState(false);
+  const [phone, setPhone] = useState('');
+  const phoneId = useId();
+  const dismissRef = useRef(onDismiss);
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    if (notify) return;
+    const timer = window.setTimeout(() => dismissRef.current(), autoDismissMs);
+    return () => window.clearTimeout(timer);
+  }, [notify, autoDismissMs]);
+
+  const phoneDigits = phone.replace(/[\s-]/g, '');
+  const phoneValid = /^\+?\d{10,15}$/.test(phoneDigits);
+  const phoneInvalid = notify && phone.length > 0 && !phoneValid;
+
+  const choose = (outcome: LostSaleOutcome) =>
+    onChoose(
+      notify && phoneValid ? { outcome, notifyOptIn: true, notifyPhone: phoneDigits } : { outcome }
+    );
+
+  return (
+    <section
+      aria-label="What happened to the short line"
+      className="mt-3 rounded-[var(--radius-md)] border border-border-subtle bg-surface-raised p-3 shadow-[var(--shadow-sm)]"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-medium text-text-strong">
+          Short: <span className="text-text-body">{requested}</span>
+        </p>
+        <p className="font-mono text-[11px] uppercase tracking-wide text-text-muted">
+          Optional · {notify ? 'paused' : 'closes as Unknown in 5s'}
+        </p>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Outcome">
+        {LOST_SALE_CHIPS.map((chip) => (
+          <Button
+            key={chip.outcome}
+            type="button"
+            variant="outline"
+            size="touch"
+            className="rounded-full px-4"
+            onClick={() => choose(chip.outcome)}
+          >
+            {chip.label}
+          </Button>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Switch
+            id={`${phoneId}-notify`}
+            checked={notify}
+            onCheckedChange={(checked) => setNotify(Boolean(checked))}
+          />
+          <Label htmlFor={`${phoneId}-notify`} className="text-sm text-text-body">
+            Notify when back (customer agrees)
+          </Label>
+        </div>
+        {notify ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            <Label htmlFor={phoneId} className="sr-only">
+              Customer phone
+            </Label>
+            <Input
+              id={phoneId}
+              type="tel"
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="Customer phone"
+              className="h-11 w-48"
+              value={phone}
+              aria-invalid={phoneInvalid || undefined}
+              aria-describedby={phoneInvalid ? `${phoneId}-error` : undefined}
+              onChange={(event) => setPhone(event.target.value)}
+            />
+            {phoneInvalid ? (
+              <p id={`${phoneId}-error`} className="text-xs text-destructive">
+                Enter 10 to 15 digits, then tap an outcome.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <Button type="button" variant="ghost" className="ml-auto h-11" onClick={onDismiss}>
+          Skip
+        </Button>
+      </div>
+    </section>
+  );
+}

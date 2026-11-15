@@ -122,6 +122,59 @@ describe('composed platform worker boundaries', () => {
     expect(m.archiveCreate).not.toHaveBeenCalled();
   });
 
+  const purgeScans = () =>
+    m.query.mock.calls.filter(([sql]) =>
+      String(sql?.text ?? '').includes('pharmacy_retention_days(')
+    );
+
+  it('enqueues exactly one platform-wide pharmacy record retention purge per UTC hour', async () => {
+    await processPlatformJobs();
+    await processPlatformJobs();
+    const keys = m.createMany.mock.calls.flatMap(([{ data }]) =>
+      data
+        .filter((row: { type: string }) => row.type === 'PHARMACY_RECORD_RETENTION_V1')
+        .map((row: { idempotencyKey: string; organizationId: unknown }) => [
+          row.idempotencyKey,
+          row.organizationId,
+        ])
+    );
+    expect(keys).toEqual([
+      ['pharmacy.record.retention.v1:2026-10-12T01', null],
+      ['pharmacy.record.retention.v1:2026-10-12T01', null],
+    ]);
+    expect(m.createMany.mock.calls.every(([args]) => args.skipDuplicates === true)).toBe(true);
+    // Enqueueing never runs the purge inline.
+    expect(purgeScans()).toHaveLength(0);
+  });
+
+  it('runs the retention purge as its own job with the long timeout', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+    // One scan per purgeable class: register, prescription, fiscal. Never audit_logs.
+    expect(purgeScans()).toHaveLength(3);
+    expect(purgeScans().some(([sql]) => String(sql?.text ?? '').includes('"audit_logs" r'))).toBe(
+      false
+    );
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
+  });
+
+  it('retries a failed retention purge without affecting other work', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    const query = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql: { text?: string }) => {
+      if (String(sql?.text ?? '').includes('pharmacy_retention_days(')) {
+        throw new Error('retention purge timed out');
+      }
+      return query(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({
+      recovered: 2,
+      claimed: 1,
+      retried: 1,
+      failed: 0,
+    });
+  });
+
   it('propagates enqueue failure before stale recovery or any claim', async () => {
     const error = new Error('camera enqueue unavailable');
     m.createMany.mockRejectedValue(error);
@@ -201,6 +254,11 @@ describe('composed platform worker boundaries', () => {
         organizationId: 'tenant-b',
         type: 'CAMERA_EVIDENCE_RETENTION_V1',
         idempotencyKey: 'camera.evidence.retention.v1:tenant-b:2026-10-12T01',
+      },
+      {
+        organizationId: null,
+        type: 'PHARMACY_RECORD_RETENTION_V1',
+        idempotencyKey: 'pharmacy.record.retention.v1:2026-10-12T01',
       },
     ]);
   });

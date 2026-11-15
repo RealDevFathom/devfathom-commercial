@@ -15,33 +15,53 @@ const linkClass =
 const selectClass =
   'min-h-11 rounded-sm border border-border bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-2 focus-visible:outline-ring';
 
-async function loadReview(text: (key: string) => string) {
+async function loadReview(
+  text: (key: string) => string,
+  context?: Awaited<ReturnType<typeof createTRPCContext>>
+) {
   try {
-    const ctx = await createTRPCContext();
+    const ctx = context ?? (await createTRPCContext());
     const caller = pharmacyStagedReviewRouter.createCaller(ctx).pharmacyMedicine;
-    const branches = await caller.stagedBranches();
-    const branchId = text('branchId') || branches[0]?.id || '';
     const batchPage = Number(text('batchPage') || '1');
-    const batches = branchId ? await caller.stagedBatches({ branchId, page: batchPage }) : null;
-    const firstBatch = batches?.batches[0];
+    const rowsInput = (selected: { branchId: string; sourceId: string; batchId: string }) => ({
+      ...selected,
+      query: text('query'),
+      page: Number(text('page') || '1'),
+      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision',
+    });
+    const explicit = {
+      branchId: text('branchId'),
+      sourceId: text('sourceId'),
+      batchId: text('batchId'),
+    };
+    // Independent loads run concurrently when the URL already names the selection;
+    // otherwise only the dependent defaults are resolved sequentially.
+    const canParallel = Boolean(explicit.branchId && explicit.sourceId && explicit.batchId);
+    const branchesPromise = caller.stagedBranches();
+    const [branches, batches, parallelResult, parallelDetail] = canParallel
+      ? await Promise.all([
+          branchesPromise,
+          caller.stagedBatches({ branchId: explicit.branchId, page: batchPage }),
+          caller.stagedRows(rowsInput(explicit)),
+          text('rowId') ? caller.stagedDetail({ ...explicit, rowId: text('rowId') }) : null,
+        ])
+      : [await branchesPromise, null, null, null];
+    const branchId = text('branchId') || branches[0]?.id || '';
+    const loadedBatches =
+      batches ?? (branchId ? await caller.stagedBatches({ branchId, page: batchPage }) : null);
+    const firstBatch = loadedBatches?.batches[0];
     const selected = {
       branchId,
       sourceId: text('sourceId') || (!text('batchId') ? firstBatch?.sourceId : '') || '',
       batchId: text('batchId') || (!text('sourceId') ? firstBatch?.id : '') || '',
     };
     const result =
-      selected.sourceId && selected.batchId
-        ? await caller.stagedRows({
-            ...selected,
-            query: text('query'),
-            page: Number(text('page') || '1'),
-            filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision',
-          })
-        : null;
-    const detail = text('rowId')
-      ? await caller.stagedDetail({ ...selected, rowId: text('rowId') })
-      : null;
-    return { branches, branchId, batchPage, batches, selected, result, detail };
+      parallelResult ??
+      (selected.sourceId && selected.batchId ? await caller.stagedRows(rowsInput(selected)) : null);
+    const detail =
+      parallelDetail ??
+      (text('rowId') ? await caller.stagedDetail({ ...selected, rowId: text('rowId') }) : null);
+    return { branches, branchId, batchPage, batches: loadedBatches, selected, result, detail };
   } catch (error) {
     if (
       !(error instanceof TRPCError) ||
@@ -56,14 +76,16 @@ export async function StagedMedicineCatalogue({
   searchParams,
   route = '/pharmacy/medicines',
   heading = 'Medicine catalogue',
+  ctx,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
+  ctx?: Awaited<ReturnType<typeof createTRPCContext>>;
   route?: string;
   heading?: string;
 }) {
   const params = await searchParams;
   const text = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '');
-  const loaded = await loadReview(text);
+  const loaded = await loadReview(text, ctx);
   const href = (change: Record<string, string>) => {
     const next = new URLSearchParams('selected' in loaded ? loaded.selected : {});
     for (const key of ['branchId', 'sourceId', 'batchId', 'query', 'filter', 'page', 'batchPage'])

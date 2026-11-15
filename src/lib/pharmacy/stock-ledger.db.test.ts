@@ -487,7 +487,13 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(count.status).toBe('AWAITING_COAUTH');
     await expect(
       inOrg(ORG_A, (db) =>
-        deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('same-actor'))
+        deps.operations.approveCount(
+          db,
+          scopeOf(fixture),
+          count.id,
+          tag('same-actor'),
+          'Shelf recount'
+        )
       )
     ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
     const result = await inOrg(ORG_A, async (db) => {
@@ -495,7 +501,8 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         db,
         { ...scopeOf(fixture), actorId: 'user_second_pharmacist' },
         count.id,
-        tag('coauth')
+        tag('coauth'),
+        'Shelf recount'
       );
       const line = count.lines[0]!;
       const balance = await db.pharmacyStockBalance.findFirst({
@@ -541,7 +548,8 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         db,
         scopeOf(fixture),
         count.id,
-        tag('count-race-first')
+        tag('count-race-first'),
+        'Shelf recount'
       );
       signalFirstApproved();
       await held;
@@ -550,7 +558,13 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     await firstApproved;
 
     const second = inOrg(ORG_A, (db) =>
-      deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('count-race-second'))
+      deps.operations.approveCount(
+        db,
+        scopeOf(fixture),
+        count.id,
+        tag('count-race-second'),
+        'Shelf recount'
+      )
     );
     await new Promise((resolve) => setTimeout(resolve, 250));
     releaseFirst();
