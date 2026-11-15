@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COUNTER_ERROR_MESSAGES } from '@/lib/pharmacy/counter-messages';
+import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -1671,7 +1671,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   });
 
   it('DEV-714: a closed drawer flags only Cash and still takes a bank transfer', async () => {
-    const message = COUNTER_ERROR_MESSAGES.DRAWER_NOT_OPEN!;
+    const message = COUNTER_CASH_DRAWER_CLOSED_MESSAGE;
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(tenderButton('CASH')).toHaveAccessibleDescription(message);
     expect(tenderButton('BANK_TRANSFER')).not.toHaveAccessibleDescription();

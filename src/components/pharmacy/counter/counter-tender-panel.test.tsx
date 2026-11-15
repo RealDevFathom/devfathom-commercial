@@ -172,8 +172,7 @@ describe('DEV-714 tender buttons', () => {
 
   it('flags only the Cash button when the drawer is closed and keeps other tenders usable', async () => {
     const { props } = setup({ drawerOpen: false });
-    const message =
-      'Open the cash drawer for this counter before taking cash. Other tenders do not need the drawer.';
+    const message = 'Open the cash drawer to take cash. Other tenders do not need the drawer.';
     expect(tenderButton('CASH')).toHaveAccessibleDescription(message);
     for (const type of ['CARD', 'BANK_TRANSFER', 'KHATA'])
       expect(tenderButton(type)).not.toHaveAccessibleDescription();
@@ -345,25 +344,20 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['CARD', 'BANK_TRANSFER'])(
-    'keeps rejected %s selection and amount',
-    async (type) => {
-      const onTender = vi
-        .fn()
-        .mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
-      setup({ onTender });
-      chooseTender(type);
-      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-      await screen.findByText('Payment refused.');
-      expect(tenderButton(type)).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-      expect(onTender).toHaveBeenCalledExactlyOnceWith(
-        { type, amountMinor: 12550 },
-        { amount: '125.50', cashReceived: '' }
-      );
-    }
-  );
+  it.each(['CARD', 'BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    chooseTender(type);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(tenderButton(type)).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      { type, amountMinor: 12550 },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {

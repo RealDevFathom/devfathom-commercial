@@ -15,7 +15,7 @@ import {
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
-import { COUNTER_ERROR_MESSAGES } from '@/lib/pharmacy/counter-messages';
+import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
 
 /**
  * The tenders POS-05 recognises, in button order. Card needs a certified
@@ -472,7 +472,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   </Button>
                   {drawerNote ? (
                     <p id="tender-cash-drawer" className="text-xs text-destructive">
-                      {COUNTER_ERROR_MESSAGES.DRAWER_NOT_OPEN}
+                      {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
                     </p>
                   ) : null}
                 </div>
