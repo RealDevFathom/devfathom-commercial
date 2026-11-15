@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { Sidebar, TopNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
@@ -345,6 +346,18 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
     expect(hrefs.filter((href) => href.startsWith('/pharmacy/purchasing'))).toEqual([]);
+  });
+
+  // DEV-519: the Finance template's financial reports live behind the Reports
+  // rail entry, so a Finance member is offered it (and still not Finance setup).
+  it('offers the Finance role template the Reports destination it can open (DEV-519)', () => {
+    const finance = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'finance')!;
+    renderNavigation({ role: 'MEMBER', capabilities: [...finance.capabilities] });
+    expect(screen.getByRole('link', { name: /Reports & Insights$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports'
+    );
+    expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
   });
 
   it('ignores a cached capability answer for another signed-in identity (#979)', () => {
