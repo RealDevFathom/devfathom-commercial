@@ -22,6 +22,13 @@ const db = {
   organization: { findUnique: mocks.organizationFindUnique },
 } as unknown as ScopedDb;
 const cashier = { id: 'cashier_1', role: 'EMPLOYEE', status: 'ACTIVE' };
+const ALL_MODULES = [
+  'pharmacy-counter',
+  'pharmacy-dispensing',
+  'pharmacy-procurement',
+  'pharmacy-inventory',
+  'pharmacy-reports',
+];
 const grant = (...actions: string[]) =>
   mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
     actions.includes(action)
@@ -41,8 +48,11 @@ describe('canOpenPharmacyCommandCentre (DEV-20)', () => {
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'], false],
     ['procurement', ['pharmacy:procurement'], false],
     ['finance', ['reports:financial'], false],
-    ['manager', ['pharmacy:manage', 'pharmacy:orders'], true],
-    ['auditor', ['reports:operational'], true],
+    // A manager without the reports grant could not load a single command-centre widget.
+    ['manager without reports', ['pharmacy:manage', 'pharmacy:orders'], false],
+    // A report reader is not the Owner, an Admin or a Manager.
+    ['auditor', ['reports:operational'], false],
+    ['manager with reports', ['pharmacy:manage', 'reports:operational'], true],
   ])('decides the %s from their grants', async (_role, grants, expected) => {
     grant(...grants);
     await expect(canOpenPharmacyCommandCentre(db, cashier)).resolves.toBe(expected);
@@ -74,7 +84,7 @@ describe('loadPharmacyStaffHome (DEV-20)', () => {
       { id: 'b_main', name: 'Main', active: true },
     ]);
 
-    const home = await loadPharmacyStaffHome(db, 'org_1', cashier);
+    const home = await loadPharmacyStaffHome(db, 'org_1', cashier, ALL_MODULES);
 
     expect(home.links.map((link) => link.href)).toEqual(['/pharmacy/counter']);
     expect(home.branches).toEqual([{ id: 'b_main', name: 'Main' }]);
@@ -105,14 +115,38 @@ describe('loadPharmacyStaffHome (DEV-20)', () => {
 
   it('offers a pharmacist the queue but not the Counter or purchasing', async () => {
     grant('pharmacy:dispense', 'pharmacy:close');
-    const home = await loadPharmacyStaffHome(db, 'org_1', cashier);
+    const home = await loadPharmacyStaffHome(db, 'org_1', cashier, ALL_MODULES);
     expect(home.links.map((link) => link.key)).toEqual(['dispense']);
+  });
+
+  it('offers no link the workspace package does not license, whatever the grant', async () => {
+    grant('pharmacy:counter', 'pharmacy:dispense', 'pharmacy:procurement', 'pharmacy:inventory');
+    // A pharmacist in a package without dispensing gets no queue link.
+    const home = await loadPharmacyStaffHome(db, 'org_1', cashier, [
+      'pharmacy-counter',
+      'pharmacy-inventory',
+    ]);
+    expect(home.links.map((link) => link.key)).toEqual(['counter', 'inventory']);
+    expect(mocks.can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('gives a report reader the Reports link instead of the command centre', async () => {
+    grant('reports:operational');
+    const home = await loadPharmacyStaffHome(db, 'org_1', cashier, ALL_MODULES);
+    expect(home.links).toEqual([
+      expect.objectContaining({ key: 'reports', href: '/pharmacy/reports' }),
+    ]);
   });
 
   it('returns an empty home, not an error, for an unassigned member with no grants', async () => {
     grant();
     mocks.organizationFindUnique.mockResolvedValue(null);
-    await expect(loadPharmacyStaffHome(db, 'org_1', cashier)).resolves.toEqual({
+    await expect(loadPharmacyStaffHome(db, 'org_1', cashier, ALL_MODULES)).resolves.toEqual({
       links: [],
       branches: [],
       shifts: [],

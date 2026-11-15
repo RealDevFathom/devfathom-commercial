@@ -121,8 +121,8 @@ export function PharmacyStaffHome({ home }: { home: PharmacyStaffHomeData }) {
       {home.links.length === 0 ? (
         <SectionCard eyebrow="Access" title="No pharmacy tools assigned" titleLevel={2}>
           <p role="status" className="text-sm leading-6 text-text-body">
-            Your role does not include counter, dispensing, purchasing or inventory work yet. Ask
-            your owner or manager to update your role.
+            No counter, dispensing, purchasing, inventory or reports work is available to your role
+            in this workspace yet. Ask your owner or manager to update your role.
           </p>
         </SectionCard>
       ) : null}

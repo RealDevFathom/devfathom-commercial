@@ -52,7 +52,7 @@ export default async function DashboardPage({
         )
       : null;
 
-  // DEV-20: only the owner, an administrator or a manager (or an operational-reports holder)
+  // DEV-20: only the owner/administrator or a manager who holds the operational-reports grant
   // gets the Owner command centre. Every other pharmacy member lands on their own staff home,
   // decided here on the server from their grants, never from a client-side flag.
   const pharmacyStaffHome =
@@ -60,7 +60,12 @@ export default async function DashboardPage({
       ? await withTenantDb(organizationId, async (db) =>
           (await canOpenPharmacyCommandCentre(db, user))
             ? null
-            : loadPharmacyStaffHome(db, organizationId, user)
+            : loadPharmacyStaffHome(
+                db,
+                organizationId,
+                user,
+                ssr?.entitlements.enabledModules ?? []
+              )
         )
       : null;
 

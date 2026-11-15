@@ -1,4 +1,5 @@
 import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { isModuleGranted } from '@/lib/module-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
@@ -10,23 +11,25 @@ type HomeUser = {
 };
 
 /**
- * DEV-20: the Owner command centre is the dashboard of the organization administrator
- * (Owner/Admin), a pharmacy manager, and holders of the operational reports grant. Every
- * other pharmacy role (cashier, pharmacist, procurement, inventory, finance) lands on its
- * own staff home instead. Decided on the server for every dashboard render.
+ * DEV-20: the Owner command centre belongs to the organization administrator (Owner/Admin)
+ * and to a manager who can actually use it: `pharmacy:manage` together with
+ * `reports:operational`, which every command-centre read and the layout save require. Every
+ * other pharmacy member (cashier, pharmacist, procurement, inventory, finance, auditor, or a
+ * manager without the reports grant) lands on their own staff home instead. Decided on the
+ * server for every dashboard render.
  */
 export const PHARMACY_COMMAND_CENTRE_ACTIONS = [
-  'reports:operational',
   'pharmacy:manage',
+  'reports:operational',
 ] as const satisfies readonly Action[];
 
 export async function canOpenPharmacyCommandCentre(db: ScopedDb, user: HomeUser) {
   if (user.role === 'ADMIN') return true;
   const subject = subjectFromSession(user);
   for (const action of PHARMACY_COMMAND_CENTRE_ACTIONS) {
-    if (await can(subject, action, undefined, { db })) return true;
+    if (!(await can(subject, action, undefined, { db }))) return false;
   }
-  return false;
+  return true;
 }
 
 /** Work a staff member may start from their home, each behind its own capability. */
@@ -34,6 +37,7 @@ export const PHARMACY_STAFF_LINKS = [
   {
     key: 'counter',
     action: 'pharmacy:counter',
+    module: 'pharmacy-counter',
     href: '/pharmacy/counter',
     label: 'Open Counter',
     description: 'Ring up sales, take payment and run your cash drawer.',
@@ -41,6 +45,7 @@ export const PHARMACY_STAFF_LINKS = [
   {
     key: 'dispense',
     action: 'pharmacy:dispense',
+    module: 'pharmacy-dispensing',
     href: '/pharmacy/pharmacist-queue',
     label: 'Pharmacist queue',
     description: 'Review prescriptions and release held items.',
@@ -48,6 +53,7 @@ export const PHARMACY_STAFF_LINKS = [
   {
     key: 'procurement',
     action: 'pharmacy:procurement',
+    module: 'pharmacy-procurement',
     href: '/pharmacy/purchasing',
     label: 'Purchasing',
     description: 'Raise orders and receive supplier deliveries.',
@@ -55,19 +61,29 @@ export const PHARMACY_STAFF_LINKS = [
   {
     key: 'inventory',
     action: 'pharmacy:inventory',
+    module: 'pharmacy-inventory',
     href: '/pharmacy/inventory',
     label: 'Inventory',
     description: 'Check stock, batches and expiry.',
   },
+  {
+    key: 'reports',
+    action: 'reports:operational',
+    module: 'pharmacy-reports',
+    href: '/pharmacy/reports',
+    label: 'Reports',
+    description: 'Read the operational reports your role allows.',
+  },
 ] as const satisfies readonly {
   key: string;
   action: Action;
+  module: string;
   href: string;
   label: string;
   description: string;
 }[];
 
-export type PharmacyStaffLink = Omit<(typeof PHARMACY_STAFF_LINKS)[number], 'action'>;
+export type PharmacyStaffLink = Omit<(typeof PHARMACY_STAFF_LINKS)[number], 'action' | 'module'>;
 
 export type PharmacyStaffHome = {
   links: PharmacyStaffLink[];
@@ -82,17 +98,20 @@ export type PharmacyStaffHome = {
 };
 
 /**
- * The signed-in member's own home: the work their grants allow, their active branch
- * assignments in this organization, and only the cash drawers they opened themselves.
+ * The signed-in member's own home: the work their grants allow in the modules this workspace
+ * licenses, their active branch assignments in this organization, and only the cash drawers
+ * they opened themselves.
  */
 export async function loadPharmacyStaffHome(
   db: ScopedDb,
   organizationId: string,
-  user: HomeUser
+  user: HomeUser,
+  enabledModules: readonly string[]
 ): Promise<PharmacyStaffHome> {
   const subject = subjectFromSession(user);
   const links: PharmacyStaffLink[] = [];
-  for (const { action, ...link } of PHARMACY_STAFF_LINKS) {
+  for (const { action, module, ...link } of PHARMACY_STAFF_LINKS) {
+    if (!isModuleGranted(module, enabledModules)) continue;
     if (await can(subject, action, undefined, { db })) links.push(link);
   }
   const [assignments, drawers, organization] = await Promise.all([

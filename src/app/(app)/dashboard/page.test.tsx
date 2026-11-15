@@ -224,18 +224,21 @@ describe('PHARMACY dashboard role routing (DEV-20)', () => {
     ['procurement manager', ['pharmacy:procurement']],
     ['inventory clerk', ['pharmacy:inventory']],
     ['finance', ['reports:financial']],
+    ['manager without the reports grant', ['pharmacy:manage', 'pharmacy:orders']],
+    ['operational reports reader', ['reports:operational']],
   ])('lands a %s on their own staff home, not the Owner command centre', async (_name, grants) => {
     const { user, page } = await render('EMPLOYEE', grants);
     expect(page.props.children.type).toBe(PharmacyStaffHome);
     expect(page.props.children.props).toEqual({ home });
-    expect(mocks.loadPharmacyStaffHome).toHaveBeenCalledWith(mocks.db, 'tenant', user);
+    expect(mocks.loadPharmacyStaffHome).toHaveBeenCalledWith(mocks.db, 'tenant', user, [
+      'pharmacy-reports',
+    ]);
     expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
   it.each([
     ['Admin (owner)', 'ADMIN', []],
-    ['manager', 'EMPLOYEE', ['pharmacy:manage', 'pharmacy:orders']],
-    ['operational reports holder', 'EMPLOYEE', ['reports:operational']],
+    ['manager with the reports grant', 'EMPLOYEE', ['pharmacy:manage', 'reports:operational']],
   ])('keeps the Owner command centre for a %s', async (_name, role, grants) => {
     const { page } = await render(role, grants);
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
