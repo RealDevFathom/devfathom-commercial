@@ -46,6 +46,22 @@ const prescriptionCalendarDate = z
     'Prescription validity must be a calendar date.'
   );
 
+/** Optional free text: trimmed, and an empty field is stored as absent. */
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform((value) => value || undefined);
+
+function prescriberConflict() {
+  return new TRPCError({
+    code: 'CONFLICT',
+    message: 'A prescriber with this registration number is already in the directory.',
+  });
+}
+
 async function requireCounterPatientAccess(
   ctx: Pick<TRPCContext, 'db' | 'requestMeta'> & {
     session: NonNullable<TRPCContext['session']>;
@@ -200,18 +216,48 @@ export const pharmacyPrescriptionsRouter = router({
         })),
       };
     }),
-  createPatient: capabilityProcedure('pharmacy:prescriptions')
+  // DEV-626 / DEV-53 / #1036: registering a patient or prescriber is
+  // prescription work, so it carries the same module + `pharmacy:prescriptions`
+  // gate (and raw-input audit suppression for patient identifiers) as capture.
+  createPatient: fileProcedure
     .input(
       z
         .object({
           displayName: z.string().trim().min(1).max(200),
-          cnic: z.string().max(32).optional(),
-          phone: z.string().max(32).optional(),
+          cnic: optionalText(32),
+          phone: optionalText(32),
           dateOfBirth: z.date().optional(),
         })
         .strict()
     )
     .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
+
+  createPrescriber: fileProcedure
+    .input(
+      z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          registrationNumber: z.string().trim().min(1).max(64),
+          phone: optionalText(32),
+          facility: optionalText(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const duplicate = await ctx.db.pharmacyPrescriber.findFirst({
+        where: { organizationId, registrationNumber: input.registrationNumber },
+        select: { id: true },
+      });
+      if (duplicate) throw prescriberConflict();
+      try {
+        return await ctx.db.pharmacyPrescriber.create({ data: input });
+      } catch (error) {
+        // A concurrent registration that raced past the pre-check.
+        if ((error as { code?: unknown } | null)?.code === 'P2002') throw prescriberConflict();
+        throw error;
+      }
+    }),
 
   recordConsent: capabilityProcedure('pharmacy:prescriptions')
     .input(

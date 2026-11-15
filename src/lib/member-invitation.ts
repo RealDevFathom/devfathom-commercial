@@ -64,6 +64,8 @@ export async function createMemberInvitation(
     invitedById: string;
     profile: MemberInviteProfile;
     refreshPendingInvite?: boolean;
+    /** Runs under the lock before a pending invite is refreshed; throw to refuse. */
+    onRefresh?: (existing: { id: string }) => Promise<void>;
   }
 ) {
   const { token, tokenHash } = generateInviteToken();
@@ -92,6 +94,7 @@ export async function createMemberInvitation(
           'This person already has a pending invitation. An organization administrator can re-send it from Team.',
       });
     }
+    if (existing && input.onRefresh) await input.onRefresh(existing);
     if (!existing) {
       const occupiedSeats = await tx.user.count({
         where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },

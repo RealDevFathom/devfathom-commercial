@@ -45,6 +45,27 @@ const notificationPrefsSchema = z
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
 
+// #435: admin:access lets a member into the admin procedures, but granting or
+// revoking a role is its own `team:setRole` capability. Evaluate it through the
+// ABAC engine so a custom role or DENY override on an admin is enforced before
+// any role is written.
+async function assertCanSetRole(
+  user: Parameters<typeof subjectFromSession>[0],
+  db: NonNullable<Parameters<typeof can>[3]>['db'],
+  resource: { type: 'User'; id?: string; targetRole: string }
+) {
+  const allowed = await can(subjectFromSession(user), 'team:setRole', resource, {
+    source: 'TRPC',
+    db,
+  });
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to change member roles.',
+    });
+  }
+}
+
 // #424: the organization row lock serializes admin-roster changes across
 // requests, but a batched tRPC request runs every mutation concurrently inside
 // ONE shared transaction (nested `$transaction` reuses it). Postgres row locks
@@ -191,6 +212,14 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Inviting a new member at the baseline EMPLOYEE role with no role template
+      // grants no privilege; any other role or a role template is a role grant.
+      // A baseline re-invite of a pending member is checked below, in the
+      // transaction, because it can still revoke that member's role.
+      const grantsRole = input.role !== 'EMPLOYEE' || input.organizationRoleId !== null;
+      if (grantsRole) {
+        await assertCanSetRole(ctx.session.user, ctx.db, { type: 'User', targetRole: input.role });
+      }
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -226,6 +255,21 @@ export const teamRouter = router({
           seatLimit: ctx.entitlements.seatLimit,
           invitedById: ctx.session.user.id,
           profile,
+          // Re-inviting overwrites the pending member's role and role template.
+          onRefresh: async (existing) => {
+            if (grantsRole) return;
+            const current = await tx.user.findUnique({
+              where: { id: existing.id },
+              select: { role: true, organizationRoleId: true },
+            });
+            if (current?.role !== input.role || current.organizationRoleId !== null) {
+              await assertCanSetRole(ctx.session.user, tx, {
+                type: 'User',
+                id: existing.id,
+                targetRole: input.role,
+              });
+            }
+          },
         })
       );
 
@@ -872,6 +916,15 @@ export const teamRouter = router({
               true
             >,
           });
+          // The edit form always sends the current role; only an actual
+          // grant or revoke needs `team:setRole`. Checked against the locked row.
+          if (input.role !== undefined && before?.role !== input.role) {
+            await assertCanSetRole(ctx.session.user, tx, {
+              type: 'User',
+              id,
+              targetRole: input.role,
+            });
+          }
           if (
             before?.role === 'ADMIN' &&
             before.status === 'ACTIVE' &&
