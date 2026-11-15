@@ -1,3 +1,4 @@
+import { renderToString } from 'react-dom/server';
 import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
@@ -6,6 +7,12 @@ const mocks = vi.hoisted(() => ({
   sessionStatus: 'authenticated',
   sessionRevoked: false,
   organizationId: 'org',
+  accountId: 'owner',
+  entitlementOrganizationId: 'org',
+  fetching: false,
+  mutationClose: null as Record<string, unknown> | null,
+  mutationError: null as Error | null,
+  drawerId: 'd',
   branches: [{ id: 'b', name: 'Main' }],
   loading: false,
   error: null as Error | null,
@@ -42,7 +49,7 @@ vi.mock('next-auth/react', () => ({
     status: mocks.sessionStatus,
     data: {
       user: {
-        id: 'owner',
+        id: mocks.accountId,
         role: mocks.role,
         organizationId: mocks.organizationId,
         status: 'ACTIVE',
@@ -52,7 +59,10 @@ vi.mock('next-auth/react', () => ({
   }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ organizationId: 'org', enabledModules: mocks.enabledModules }),
+  useEntitlements: () => ({
+    organizationId: mocks.entitlementOrganizationId,
+    enabledModules: mocks.enabledModules,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -89,6 +99,7 @@ vi.mock('@/lib/trpc', () => ({
           mocks.previewInput(input);
           return {
             isLoading: mocks.loading,
+            isFetching: mocks.fetching,
             error: mocks.error,
             refetch: vi.fn(),
             data: {
@@ -101,7 +112,7 @@ vi.mock('@/lib/trpc', () => ({
               ],
               drawers: [
                 {
-                  id: 'd',
+                  id: mocks.drawerId,
                   deviceId: 'counter-0f3b9a5e-6c2d-4f1e-9a7b-2c4d6e8f0a1b',
                   status: 'OPEN',
                   openedAt: new Date('2026-09-29T04:12:00Z'),
@@ -116,7 +127,14 @@ vi.mock('@/lib/trpc', () => ({
           };
         },
       },
-      closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      closeDay: {
+        useMutation: () => ({
+          mutate: mocks.mutate,
+          reset: vi.fn(),
+          data: mocks.mutationClose,
+          error: mocks.mutationError,
+        }),
+      },
       closeAnomalyCheck: {
         useQuery: () => ({
           isLoading: false,
@@ -147,8 +165,16 @@ import {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 beforeEach(() => {
+  sessionStorage.clear();
+  mocks.accountId = 'owner';
+  mocks.entitlementOrganizationId = 'org';
+  mocks.fetching = false;
+  mocks.mutationClose = null;
+  mocks.mutationError = null;
+  mocks.drawerId = 'd';
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
   mocks.enabledModules = ['pharmacy-counter'];
@@ -175,6 +201,212 @@ beforeEach(() => {
   mocks.printZReport.mockReset();
 });
 describe('day-close console', () => {
+  it('does not read browser drafts during server rendering', () => {
+    const read = vi.spyOn(Storage.prototype, 'getItem');
+    expect(renderToString(<PharmacyDayCloseConsole />)).toContain('Day close');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('retains a rejected close draft and still validates restored invalid amounts', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    fireEvent.change(screen.getByLabelText(/Variance note/), { target: { value: 'Recount' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close and lock day' }));
+    mocks.mutationError = new Error('Close refused');
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    view.unmount();
+    const restored = render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    expect(screen.getByLabelText(/Variance note/)).toHaveValue('Recount');
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.345' },
+    });
+    restored.unmount();
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText(/^Counted cash for drawer 1/)).toHaveValue('12.345');
+    expect(screen.getByLabelText(/^Counted cash for drawer 1/)).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeDisabled();
+    expect(mocks.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('never applies a saved count to a different drawer', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    view.unmount();
+    mocks.drawerId = 'new-drawer';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeDisabled();
+  });
+
+  it('warns if the sessionStorage getter itself is blocked', () => {
+    vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => {
+      throw new Error('Blocked');
+    });
+    render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Leaving this page may discard/);
+  });
+
+  it('restores counts and the variance note after a full remount, requiring fresh confirmation', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    fireEvent.change(screen.getByLabelText(/Variance note/), {
+      target: { value: 'Recount in progress' },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeEnabled();
+    view.unmount();
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    expect(screen.getByLabelText(/Variance note/)).toHaveValue('Recount in progress');
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeDisabled();
+    expect(mocks.mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close and lock day' }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        counts: [{ drawerSessionId: 'd', countedCashMinor: 1234 }],
+        varianceNote: 'Recount in progress',
+      })
+    );
+  });
+
+  it.each(['account', 'organization', 'branch', 'date'])(
+    'isolates drafts by %s and restores the original scope when returning',
+    (scope) => {
+      mocks.branches.push({ id: 'b2', name: 'Second' });
+      const original = { branch: 'b', date: '2026-11-06' };
+      const view = render(<PharmacyDayCloseConsole initial={original} />);
+      fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+        target: { value: '12.34' },
+      });
+      fireEvent.change(screen.getByLabelText(/Variance note/), {
+        target: { value: 'Original scope' },
+      });
+      view.unmount();
+      if (scope === 'account') mocks.accountId = 'other-owner';
+      if (scope === 'organization') {
+        mocks.organizationId = 'other-org';
+        mocks.entitlementOrganizationId = 'other-org';
+      }
+      const other = render(
+        <PharmacyDayCloseConsole
+          initial={{
+            branch: scope === 'branch' ? 'b2' : 'b',
+            date: scope === 'date' ? '2026-11-07' : original.date,
+          }}
+        />
+      );
+      expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('');
+      expect(screen.getByLabelText(/Variance note/)).toHaveValue('');
+      fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+        target: { value: '99.00' },
+      });
+      other.unmount();
+      mocks.accountId = 'owner';
+      mocks.organizationId = 'org';
+      mocks.entitlementOrganizationId = 'org';
+      render(<PharmacyDayCloseConsole initial={original} />);
+      expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+      expect(screen.getByLabelText(/Variance note/)).toHaveValue('Original scope');
+    }
+  );
+
+  it('keeps edits during a same-mount preview refetch and persists the explicit count reset', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    fireEvent.change(screen.getByLabelText(/Variance note/), { target: { value: 'Recount' } });
+    mocks.fetching = true;
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    mocks.fetching = false;
+    view.rerender(<PharmacyDayCloseConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }));
+    view.unmount();
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('');
+    expect(screen.getByLabelText(/Variance note/)).toHaveValue('Recount');
+  });
+
+  it.each(['mutation', 'preview'])(
+    'clears a completed draft when %s reports the close',
+    (source) => {
+      const view = render(<PharmacyDayCloseConsole />);
+      fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+        target: { value: '12.34' },
+      });
+      fireEvent.change(screen.getByLabelText(/Variance note/), { target: { value: 'Short' } });
+      expect(sessionStorage.length).toBe(1);
+      const recorded = {
+        id: 'c1',
+        cashExpectedMinor: 12500,
+        cashCountedMinor: 1234,
+        isFinal: true,
+      };
+      if (source === 'mutation') mocks.mutationClose = recorded;
+      else mocks.close = recorded;
+      view.rerender(<PharmacyDayCloseConsole />);
+      expect(screen.getByRole('button', { name: 'Print Z-report' })).toBeInTheDocument();
+      expect(sessionStorage.length).toBe(0);
+      view.unmount();
+      mocks.close = null;
+      mocks.mutationClose = null;
+      render(<PharmacyDayCloseConsole />);
+      expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('');
+      expect(screen.getByLabelText(/Variance note/)).toHaveValue('');
+    }
+  );
+
+  it.each(['{broken', JSON.stringify({ counts: { d: 1234 }, note: 'wrong type' })])(
+    'ignores a malformed stored draft without crashing',
+    (raw) => {
+      const view = render(<PharmacyDayCloseConsole />);
+      fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+        target: { value: '12.34' },
+      });
+      const key = sessionStorage.key(0)!;
+      view.unmount();
+      sessionStorage.setItem(key, raw);
+      render(<PharmacyDayCloseConsole />);
+      expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('');
+      expect(screen.getByRole('alert')).toHaveTextContent(/Leaving this page may discard/);
+    }
+  );
+
+  it.each(['getItem', 'setItem'] as const)(
+    'warns when storage %s fails and keeps edits usable',
+    (method) => {
+      vi.spyOn(Storage.prototype, method).mockImplementation(() => {
+        throw new Error('Storage blocked');
+      });
+      render(<PharmacyDayCloseConsole />);
+      fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+        target: { value: '12.34' },
+      });
+      expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+      expect(screen.getByRole('alert')).toHaveTextContent(/Leaving this page may discard/);
+    }
+  );
+
   it('uses the organization currency throughout reconciliation', () => {
     render(<PharmacyDayCloseConsole />);
 
@@ -185,6 +417,7 @@ describe('day-close console', () => {
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Variance · USD')).toBeInTheDocument();
     expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Tender totals' })).toBeInTheDocument();
     expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
     expect(
       screen.getByText('· Received 130.00 · Refunds 5.00 · Net 125.00 USD')

@@ -29,6 +29,11 @@ import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/term
  *     `(organization, source, externalEventId)` unique index as the authoritative
  *     guard (a concurrent duplicate loses the race and is returned as
  *     `deduplicated`). The enqueued job is itself deduplicated on the inbox id.
+ *   - An unauthenticated envelope never reserves an event id against an
+ *     authenticated one. When a terminal event whose HMAC the route verified
+ *     arrives for an id already held by an unauthenticated row (any non-terminal
+ *     type, or a stub status), that row is replaced and the signed event is
+ *     queued. Only an authenticated row deduplicates an authenticated event.
  *   - Only VERIFIED envelopes may be processed. Terminal events apply the
  *     payment integration below; other events receive durable acknowledgement.
  *     Every other verification state is discarded without processing.
@@ -114,17 +119,40 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
+/**
+ * True only for a terminal event that a real verifier marked VERIFIED. The route
+ * stores a `terminal.*` row only after its HMAC passes; every other row carries
+ * either no check or the presence-only stub, so it is unauthenticated.
+ */
+function isAuthenticatedTerminal(
+  eventType: string | null | undefined,
+  verificationStatus: RestaurantWebhookVerificationStatus | null | undefined
+): boolean {
+  return verificationStatus === 'VERIFIED' && (eventType?.startsWith('terminal.') ?? false);
+}
+
+type ExistingInbox = RecordInboundWebhookResult['inbox'] & { eventType: string | null };
+
 async function findExistingInbox(
   tx: ScopedDb,
   source: string,
   externalEventId: string
-): Promise<RecordInboundWebhookResult['inbox'] | null> {
+): Promise<ExistingInbox | null> {
   // RLS scopes the lookup to the current organization, so `(source,
   // externalEventId)` is the effective dedup key without threading the org id.
   return tx.restaurantWebhookInbox.findFirst({
     where: { source, externalEventId },
-    select: INBOX_SELECT,
+    select: { ...INBOX_SELECT, eventType: true },
   });
+}
+
+function duplicateOf(existing: ExistingInbox): RecordInboundWebhookResult {
+  const { id, source, externalEventId, status, verificationStatus, receivedAt } = existing;
+  return {
+    inbox: { id, source, externalEventId, status, verificationStatus, receivedAt },
+    deduplicated: true,
+    enqueuedJobId: null,
+  };
 }
 
 /**
@@ -133,7 +161,8 @@ async function findExistingInbox(
  * from the request host and opens the tenant client). A repeat of the same
  * `(source, externalEventId)` returns the existing row (`deduplicated: true`) and
  * enqueues nothing new; a concurrent duplicate that loses the unique-index race is
- * resolved to the same result.
+ * resolved to the same result. The one exception is an authenticated terminal
+ * event meeting an unauthenticated row: the signed event replaces it and is queued.
  */
 export async function recordInboundWebhook(
   db: ScopedDb,
@@ -143,52 +172,63 @@ export async function recordInboundWebhook(
   const verificationStatus =
     input.verificationStatus ??
     verifyWebhookSignatureStub({ source: input.source, signature: input.signature ?? null });
+  // Only an explicit verifier result counts; the stub never authenticates.
+  const authenticated = isAuthenticatedTerminal(input.eventType, input.verificationStatus);
+  // An authenticated event deduplicates only against another authenticated row.
+  const isDuplicate = (existing: ExistingInbox) =>
+    !authenticated || isAuthenticatedTerminal(existing.eventType, existing.verificationStatus);
 
-  try {
-    return await runInboxTransaction(db, async (tx) => {
-      const existing = await findExistingInbox(tx, input.source, input.externalEventId);
-      if (existing) {
-        return { inbox: existing, deduplicated: true, enqueuedJobId: null };
-      }
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await runInboxTransaction(db, async (tx) => {
+        const existing = await findExistingInbox(tx, input.source, input.externalEventId);
+        if (existing) {
+          if (isDuplicate(existing)) return duplicateOf(existing);
+          // Authenticated promotion: drop the unauthenticated row that holds this
+          // event id. Its pending job, if any, no-ops once the row is gone.
+          await tx.restaurantWebhookInbox.deleteMany({ where: { id: existing.id } });
+        }
 
-      const inbox = await tx.restaurantWebhookInbox.create({
-        data: {
-          source: input.source,
-          externalEventId: input.externalEventId,
-          eventType: input.eventType ?? null,
-          payload: input.payload,
-          verificationStatus,
-          status: 'PENDING',
-        },
-        select: INBOX_SELECT,
+        const inbox = await tx.restaurantWebhookInbox.create({
+          data: {
+            source: input.source,
+            externalEventId: input.externalEventId,
+            eventType: input.eventType ?? null,
+            payload: input.payload,
+            verificationStatus,
+            status: 'PENDING',
+          },
+          select: INBOX_SELECT,
+        });
+
+        // Same transaction as the inbox insert: the row and its processing job
+        // commit together, so a received envelope always has a job to drain it.
+        const { job } = await enqueue(
+          tx,
+          {
+            type: WEBHOOK_PROCESS_JOB_TYPE,
+            payload: { inboxId: inbox.id },
+            idempotencyKey: webhookProcessJobKey(inbox.id),
+          },
+          now
+        );
+
+        return { inbox, deduplicated: false, enqueuedJobId: job.id };
       });
-
-      // Same transaction as the inbox insert: the row and its processing job
-      // commit together, so a received envelope always has a job to drain it.
-      const { job } = await enqueue(
-        tx,
-        {
-          type: WEBHOOK_PROCESS_JOB_TYPE,
-          payload: { inboxId: inbox.id },
-          idempotencyKey: webhookProcessJobKey(inbox.id),
-        },
-        now
-      );
-
-      return { inbox, deduplicated: false, enqueuedJobId: job.id };
-    });
-  } catch (error) {
-    // Lost the create race: another request inserted the same (org, source,
-    // externalEventId) first. Re-read and report it as a duplicate receipt.
-    if (isUniqueViolation(error)) {
-      const existing = await runInboxTransaction(db, (tx) =>
-        findExistingInbox(tx, input.source, input.externalEventId)
-      );
-      if (existing) {
-        return { inbox: existing, deduplicated: true, enqueuedJobId: null };
+    } catch (error) {
+      // Lost the create race: another request inserted the same (org, source,
+      // externalEventId) first. Re-read and report it as a duplicate receipt,
+      // unless an unauthenticated row won against an authenticated event: then
+      // retry once so the promotion above replaces it.
+      if (isUniqueViolation(error)) {
+        const existing = await runInboxTransaction(db, (tx) =>
+          findExistingInbox(tx, input.source, input.externalEventId)
+        );
+        if (existing && isDuplicate(existing)) return duplicateOf(existing);
+        if (existing && attempt < 2) continue;
       }
+      throw error;
     }
-    throw error;
   }
 }
 

@@ -406,7 +406,14 @@ describe('DEV-92 counter sale of a serialized primary pack', () => {
   it('releases the serial when the sale is voided, so the pack can be sold again', async () => {
     const { db, claims } = saleDb();
     await addSaleLine(db as never, scope, bottleLine());
-    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
+    await changeSaleStatus(
+      db as never,
+      scope,
+      'sale-a',
+      'void',
+      { kind: 'COUNTER', actorIsManager: true },
+      'Customer cancelled'
+    );
 
     expect(db.pharmacySoldPackSerial.updateMany).toHaveBeenCalledWith({
       where: { organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a', releasedAt: null },

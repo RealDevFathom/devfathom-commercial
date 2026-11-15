@@ -95,6 +95,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-623: money taken on a bill comes back through a refund, never a void.
   BILL_HAS_PAYMENTS:
     'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
+  // DEV-821: a void releases stock, so it stays with the bill's cashier.
+  NOT_BILL_OWNER:
+    'Another cashier opened this bill. Only that cashier or a manager or owner can void it.',
   // DEV-92: a serialized pack (2D code on the bottle, tube or box) is sold once.
   SERIAL_ALREADY_SOLD:
     'This pack’s serial is already on a sale. Do not sell it again; set the pack aside and check it with the pharmacist.',

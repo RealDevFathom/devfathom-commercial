@@ -24,6 +24,7 @@ export const PURCHASING_TABS = [
   { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder' },
   { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in' },
   { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims' },
+  { href: `${PURCHASING_ROUTE}/price-lists`, label: 'Price lists' },
 ] as const;
 
 /**
