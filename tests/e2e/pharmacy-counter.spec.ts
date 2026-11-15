@@ -616,15 +616,16 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         }
       }
     }
-    const override = page.getByLabel('Owner: authorize limit increase');
+    const override = page.getByLabel('Owner or manager: authorize limit increase');
     await override.focus();
     await override.press('Space');
     await page
       .getByLabel('Family Khata account')
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
+    await page.getByLabel('Reason for exceeding the limit').fill('Regular family, paying Friday');
     await page
-      .getByLabel('Owner password (current account)')
+      .getByLabel('Your password (current account)')
       .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
     await expect(page.getByText('Settled', { exact: true })).toBeVisible();

@@ -6,6 +6,7 @@ import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -101,6 +102,7 @@ export type CounterTenderPanelProps = {
       cashReceivedMinor?: number;
       familyAccountId?: string;
       ownerOverride?: boolean;
+      overrideReason?: string;
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
@@ -164,6 +166,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [khataLoading, setKhataLoading] = useState(false);
     const [khataError, setKhataError] = useState('');
     const [ownerOverride, setOwnerOverride] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
@@ -320,7 +323,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
-          (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
+          (!overLimit ||
+            (ownerOverride &&
+              Boolean(overrideReason.trim()) &&
+              Boolean(password) &&
+              Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -334,7 +341,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           } catch {
             setOutcome({
               status: 'rejected',
-              message: 'Owner re-authentication failed. Check password and authentication code.',
+              message:
+                'Owner or manager re-authentication failed. Check password and authentication code.',
             });
             return;
           } finally {
@@ -347,7 +355,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             type,
             amountMinor,
             ...(isKhata
-              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
+              ? {
+                  familyAccountId: accountId,
+                  ownerOverride: overLimit && ownerOverride,
+                  ...(overLimit && ownerOverride ? { overrideReason: overrideReason.trim() } : {}),
+                }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
             ...(manual && capture?.success
@@ -369,6 +381,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setProviderRef('');
           setPayerName('');
           setReferenceSkipped(false);
+          setOverrideReason('');
           if (isKhata && loadKhataAccounts) {
             try {
               setAccounts(await loadKhataAccounts());
@@ -781,8 +794,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner must re-enter their password
-                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  This charge exceeds the family credit limit. An owner or manager must give a
+                  reason and re-enter their password to raise the limit to{' '}
+                  {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
                   <input
@@ -791,11 +805,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setOwnerOverride(event.target.checked)}
                   />
-                  Owner: authorize limit increase
+                  Owner or manager: authorize limit increase
                 </Label>
                 {ownerOverride ? (
                   <>
-                    <Label htmlFor="khata-password">Owner password (current account)</Label>
+                    <Label htmlFor="khata-override-reason">Reason for exceeding the limit</Label>
+                    <Textarea
+                      id="khata-override-reason"
+                      required
+                      maxLength={500}
+                      value={overrideReason}
+                      disabled={!editable}
+                      onChange={(event) => setOverrideReason(event.target.value)}
+                      className="min-h-11 rounded-sm"
+                    />
+                    <Label htmlFor="khata-password">Your password (current account)</Label>
                     <Input
                       id="khata-password"
                       type="password"

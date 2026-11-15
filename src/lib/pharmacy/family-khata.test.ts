@@ -356,7 +356,12 @@ describe('counter Khata ledger gate', () => {
     await authorizeKhataCharge(
       db as never,
       scope,
-      { ...input, amountMinor: 600, ownerOverride: true },
+      {
+        ...input,
+        amountMinor: 600,
+        ownerOverride: true,
+        overrideReason: '  Regular family, paying Friday  ',
+      },
       { authorized: true, passwordAuthenticatedAt: Date.now() }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
@@ -369,6 +374,7 @@ describe('counter Khata ledger gate', () => {
           reasons: expect.arrayContaining(['1 charge(s) in the stated window']),
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
+          overrideReason: 'Regular family, paying Friday',
         }),
       }),
     });
@@ -389,6 +395,22 @@ describe('counter Khata ledger gate', () => {
       },
     });
   });
+  it.each([undefined, '', '   '])(
+    'DEV-290: refuses an authorized over-limit override without a reason (%j)',
+    async (overrideReason) => {
+      const db = fixture();
+      await expect(
+        authorizeKhataCharge(
+          db as never,
+          scope,
+          { ...input, amountMinor: 600, ownerOverride: true, overrideReason },
+          { authorized: true, passwordAuthenticatedAt: Date.now() }
+        )
+      ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+      expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+      expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();
     await expect(

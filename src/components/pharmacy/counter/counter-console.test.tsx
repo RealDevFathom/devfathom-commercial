@@ -1664,12 +1664,18 @@ it.each([404, 200])(
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+      target: { value: 'Paying on Friday' },
+    });
+    fireEvent.change(screen.getByLabelText('Your password (current account)'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerOverride: true, overrideReason: 'Paying on Friday' })
+    );
     expect(fetch).toHaveBeenCalledWith(
       '/api/login',
       expect.objectContaining({ method: 'POST', credentials: 'include' })

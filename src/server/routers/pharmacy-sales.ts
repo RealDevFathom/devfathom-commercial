@@ -176,6 +176,8 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    // DEV-290: why an owner or manager approved charging past the family credit limit.
+    overrideReason: z.string().trim().min(1).max(500).optional(),
     providerRef: z
       .string()
       .regex(/^\d{4,6}$/)
@@ -686,6 +688,15 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   });
 }
 
+async function mayApproveKhataOverLimit(ctx: TRPCContext): Promise<boolean> {
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options)))
+    return true;
+  return can(subject, 'pharmacy:manage', undefined, options);
+}
+
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))
@@ -1137,7 +1148,11 @@ export const pharmacySalesRouter = router({
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (
+          input.familyAccountId !== undefined ||
+          input.ownerOverride !== undefined ||
+          input.overrideReason !== undefined
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -1151,13 +1166,11 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
-      const ownerAuthorized =
-        input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }));
+      // DEV-290: an owner or manager (`pharmacy:manage`: Owner, Owner / Operator, Manager)
+      // or a tenant ADMIN approves an over-limit charge. The approver is the signed-in
+      // counter user, so a solo owner self-approves with fresh re-authentication; the
+      // reason and approver are written to the append-only limit-decision record.
+      const ownerAuthorized = input.ownerOverride === true && (await mayApproveKhataOverLimit(ctx));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         // Fail before any Khata limit work; applyPharmacyTender re-checks under the same locks.
