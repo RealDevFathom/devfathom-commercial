@@ -1,3 +1,5 @@
+import type { ReceiptLayout } from '@/lib/receipts/configuration';
+
 import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
 import {
   buildCounterZReportPreview,
@@ -13,6 +15,18 @@ import {
 
 // Transient browser paper choice, not a second saved designer/settings schema.
 export type CounterReceiptFormat = 'THERMAL' | 'THERMAL_58' | 'A4' | 'LABEL_50x30';
+
+/**
+ * DEV-742: the branch's saved paper preference as the counter's starting
+ * format. The cashier can still change it for the session.
+ */
+export function counterFormatFromLayout(
+  layout: Pick<ReceiptLayout, 'paperWidth' | 'browserPaper'> | null | undefined
+): CounterReceiptFormat {
+  if (!layout) return 'THERMAL';
+  if (layout.browserPaper === 'A4') return 'A4';
+  return layout.paperWidth === 58 ? 'THERMAL_58' : 'THERMAL';
+}
 
 /** A one-use, session-only window reserved during an operator gesture. */
 export type CounterBrowserPrintReservation = { cancel: () => void };
@@ -187,9 +201,9 @@ export function printCounterBrowserReceipt(
  * F3 Z-report transport: opened directly from the operator's click (no settlement await,
  * so no reserved window is needed). Receipts keep the reserved-window path above.
  */
-function printCounterDocument(html: string): void {
+function printCounterDocument(html: string, retry = 'Print receipt'): void {
   const popup = window.open('', '_blank', 'popup,width=480,height=720');
-  if (!popup) throw new Error('Allow pop-ups for this site, then retry Print receipt.');
+  if (!popup) throw new Error(`Allow pop-ups for this site, then retry ${retry}.`);
   popup.opener = null;
   try {
     popup.document.open();
@@ -199,8 +213,77 @@ function printCounterDocument(html: string): void {
     popup.print();
   } catch {
     closePopup(popup);
-    throw new Error('The browser print dialog could not open. Retry Print receipt.');
+    throw new Error(`The browser print dialog could not open. Retry ${retry}.`);
   }
+}
+
+export type PrinterTestFormat = Exclude<CounterReceiptFormat, 'LABEL_50x30'>;
+
+const PRINTER_TEST_STRINGS = {
+  en: {
+    title: 'Printer test page',
+    paper: { THERMAL: 'Thermal 80 mm', THERMAL_58: 'Thermal 58 mm', A4: 'A4 sheet' },
+    branch: 'Branch',
+    ruler: 'The line below should fit on one line without wrapping:',
+    sample: 'Sample text: English 0123456789',
+    urdu: 'Urdu sample:',
+    notReceipt: 'Test only. This is not a receipt: no sale, no receipt number, no amount.',
+  },
+  ur: {
+    title: 'پرنٹر ٹیسٹ صفحہ',
+    paper: { THERMAL: 'تھرمل 80 ملی میٹر', THERMAL_58: 'تھرمل 58 ملی میٹر', A4: 'اے 4 صفحہ' },
+    branch: 'برانچ',
+    ruler: 'نیچے والی لائن ایک ہی لائن میں آنی چاہیے:',
+    sample: 'نمونہ متن: English 0123456789',
+    urdu: 'اردو نمونہ:',
+    notReceipt: 'صرف ٹیسٹ۔ یہ رسید نہیں ہے: کوئی فروخت، رسید نمبر یا رقم نہیں۔',
+  },
+} as const;
+
+/**
+ * DEV-742: a printer test page for the browser/OS route. It carries no sale,
+ * receipt number or amount, so it can never be mistaken for a receipt.
+ */
+export function buildPrinterTestPage(
+  format: PrinterTestFormat,
+  locale: CounterReceiptLocale,
+  branchName: string
+): string {
+  if (!['en', 'ur'].includes(locale) || !['THERMAL', 'THERMAL_58', 'A4'].includes(format)) {
+    throw new Error('Choose a supported test language and paper size.');
+  }
+  const strings = PRINTER_TEST_STRINGS[locale];
+  const width = format === 'THERMAL_58' ? '58mm' : format === 'THERMAL' ? '80mm' : '190mm';
+  // Same column counts as the receipt preview: 32 at 58 mm, 48 at 80 mm.
+  const columns = format === 'THERMAL_58' ? 32 : format === 'THERMAL' ? 48 : 90;
+  const ruler = `|${'-'.repeat(columns - 2)}|`;
+  const lines = [
+    strings.title,
+    `${strings.paper[format]}`,
+    `${strings.branch}: ${branchName}`,
+    '',
+    strings.ruler,
+    ruler,
+    strings.sample,
+    `${strings.urdu} اردو متن کی جانچ`,
+    '',
+    strings.notReceipt,
+  ];
+  return `<!doctype html><html lang="${locale}" dir="${COUNTER_RECEIPT_DIRECTION[locale]}"><head>
+<meta charset="utf-8"><title>${escapeHtml(strings.title)}</title>
+<style>@page { size: ${format === 'A4' ? 'A4' : 'auto'}; margin: ${format === 'A4' ? '10mm' : '0'}; }
+* { box-sizing: border-box; } body { margin: 0; width: ${width}; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre>${receiptHtmlText(lines.join('\n'), locale)}</pre></body></html>`;
+}
+
+/** Opens the browser/OS print dialog. Returning does not confirm physical printing. */
+export function printPrinterTestPage(
+  format: PrinterTestFormat,
+  locale: CounterReceiptLocale,
+  branchName: string
+): void {
+  printCounterDocument(buildPrinterTestPage(format, locale, branchName), 'Print test page');
 }
 
 /** Z_REPORT is separate from settled-sale paper formats, sharing the isolated print transport. */

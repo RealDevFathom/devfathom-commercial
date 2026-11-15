@@ -11,6 +11,7 @@ export function CounterSubstituteProposals({
   proposals,
   state,
   prescriptionOnly,
+  canOpenSubstitution,
   error,
   disabled,
   onChoose,
@@ -20,6 +21,8 @@ export function CounterSubstituteProposals({
   proposals: readonly SubstituteProposal[];
   state: 'loading' | 'ready' | 'error';
   prescriptionOnly: boolean;
+  /** DEV-35: the member may open the substitution workspace (dispense or safety). */
+  canOpenSubstitution: boolean;
   error?: string | null;
   disabled: boolean;
   onChoose: (proposal: SubstituteProposal) => void;
@@ -82,7 +85,9 @@ export function CounterSubstituteProposals({
                 {formatMinor(proposal.priceDifferenceMinor)}
               </p>
             </div>
-            {prescriptionOnly ? (
+            {prescriptionOnly && !canOpenSubstitution ? (
+              <p className="text-sm text-text-muted">Ask a pharmacist to review</p>
+            ) : prescriptionOnly ? (
               <Link
                 href="/pharmacy/substitution"
                 className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"

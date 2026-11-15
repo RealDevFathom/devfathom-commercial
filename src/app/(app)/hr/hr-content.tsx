@@ -476,7 +476,7 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
         </p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           <Plus className="h-4 w-4" /> Request Leave
         </button>
@@ -555,7 +555,7 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
                     });
                 }}
                 disabled={!startDate || !endDate || createLeave.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
               >
                 {createLeave.isPending ? (
                   <>

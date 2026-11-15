@@ -179,7 +179,12 @@ describe('Ask Fathom context and suggestions', () => {
       });
       render(panel(entitlement('AGENCY', ['finance'])));
       expect(screen.queryByRole('button', { name: /finance/i })).not.toBeInTheDocument();
-      expect(screen.getByText(/No suggested actions/)).toBeVisible();
+      if (role === 'ADMIN') {
+        expect(screen.queryByText(/No suggested actions/)).not.toBeInTheDocument();
+        expect(screen.getByText(/Type a question below to get started/)).toBeVisible();
+      } else {
+        expect(screen.getByText(/No suggested actions/)).toBeVisible();
+      }
     }
   );
   it.each(['loading', 'unauthenticated'] as const)(

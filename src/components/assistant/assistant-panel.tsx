@@ -775,7 +775,9 @@ function EmptyState({
       </p>
       {entry.canChat && entry.suggestions.length === 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
-          No suggested actions are available for your current access.
+          {entry.accessLimited
+            ? 'No suggested actions are available for your current access.'
+            : 'Type a question below to get started.'}
         </p>
       )}
       <div className="mt-5 grid w-full gap-2">
