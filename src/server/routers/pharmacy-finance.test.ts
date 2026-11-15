@@ -13,7 +13,13 @@ const mocks = vi.hoisted(() => ({
   valuation: vi.fn(),
   margin: vi.fn(),
   leakage: vi.fn(),
+  unallocated: vi.fn(),
+  currencies: vi.fn(),
+  trueProfit: vi.fn(),
+  lotFindMany: vi.fn(),
+  batchFindMany: vi.fn(),
   medicineFindMany: vi.fn(),
+  locationFindMany: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/finance-reports')>(
@@ -23,6 +29,9 @@ vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   perpetualValuation: mocks.valuation,
   grossMargin: mocks.margin,
   leakageReport: mocks.leakage,
+  unallocatedInventoryValue: mocks.unallocated,
+  ledgerCurrencies: mocks.currencies,
+  trueProfit: mocks.trueProfit,
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -49,7 +58,6 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
     db: {
       $transaction: mocks.transaction,
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
-      medicine: { findMany: mocks.medicineFindMany },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
@@ -57,6 +65,10 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
       pharmacyBankStatementLine: { create: mocks.bankLineCreate },
+      pharmacyInventoryLot: { findMany: mocks.lotFindMany },
+      pharmacyManufacturingBatch: { findMany: mocks.batchFindMany },
+      medicine: { findMany: mocks.medicineFindMany },
+      pharmacyStockLocation: { findMany: mocks.locationFindMany },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -82,10 +94,18 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   vi.mocked(hasModule).mockReturnValue(true);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
-  mocks.branchFindMany.mockResolvedValue([]);
-  mocks.medicineFindMany.mockResolvedValue([]);
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
   mocks.comparison.mockResolvedValue({ differenceMinor: 42 });
+  mocks.unallocated.mockResolvedValue(BigInt(0));
+  mocks.currencies.mockResolvedValue([]);
+  for (const lookup of [
+    mocks.branchFindMany,
+    mocks.lotFindMany,
+    mocks.batchFindMany,
+    mocks.medicineFindMany,
+    mocks.locationFindMany,
+  ])
+    lookup.mockResolvedValue([]);
   mocks.valuation.mockResolvedValue([
     {
       branchId: 'branch_1',
@@ -309,26 +329,6 @@ describe('ledger date and dimension delegation', () => {
     });
   });
 
-  it('names branches and products for leakage rows', async () => {
-    mocks.leakage.mockResolvedValue([
-      {
-        branchId: 'branch_1',
-        medicineId: 'med_1',
-        discountMinor: 1,
-        writeOffMinor: 2,
-        shrinkageMinor: 3,
-        totalMinor: 6,
-      },
-    ]);
-    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main Branch' }]);
-    mocks.medicineFindMany.mockResolvedValue([{ id: 'med_1', productName: 'Panadol' }]);
-    const result = await caller().leakageReport(input);
-    expect(result.names).toEqual({
-      branches: { branch_1: 'Main Branch' },
-      products: { med_1: 'Panadol' },
-    });
-  });
-
   it('preserves historic valuation instead of substituting current time', async () => {
     await caller().perpetualValuation({ branchId: 'branch_1', at: '2020-01-01T05:00:00+05:00' });
     expect(mocks.valuation.mock.calls[0][2]).toEqual(new Date('2020-01-01T00:00:00Z'));
@@ -346,6 +346,142 @@ describe('ledger date and dimension delegation', () => {
     ]);
   });
 });
+describe('ledger report names and currency', () => {
+  const pkr = { organization: { id: 'org_1', currency: 'PKR' } as TRPCContext['organization'] };
+
+  it('reports the organization currency instead of currency unknown', async () => {
+    const result = await caller('ADMIN', pkr).grossMargin({ ...input, by: 'batch' });
+    expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'organization_setting' });
+  });
+
+  it('labels amounts with the currency their entries were posted in, not the setting', async () => {
+    mocks.currencies.mockResolvedValue(['PKR']);
+    const usd = { organization: { id: 'org_1', currency: 'USD' } as TRPCContext['organization'] };
+    const result = await caller('ADMIN', usd).grossMargin({ ...input, by: 'batch' });
+    expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'posted_entry_currency' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'],
+        from: new Date(input.from),
+        to: new Date(input.to),
+      }
+    );
+  });
+
+  it('labels true profit with its posted currency', async () => {
+    mocks.trueProfit.mockResolvedValue([
+      { key: 'TABLET', revenueMinor: 900, discountMinor: 0, cogsMinor: 600, grossMarginMinor: 300 },
+    ]);
+    mocks.currencies.mockResolvedValue(['PKR']);
+    const result = await caller().trueProfit({ ...input, by: 'category' });
+    expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'posted_entry_currency' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'],
+        from: new Date(input.from),
+        to: new Date(input.to),
+      }
+    );
+  });
+
+  it('never labels summed amounts from mixed currencies with one currency', async () => {
+    mocks.currencies.mockResolvedValue(['PKR', 'USD']);
+    const result = await caller('ADMIN', pkr).perpetualValuation({
+      branchId: 'branch_1',
+      at: input.to,
+    });
+    expect(result).toMatchObject({ currency: null, currencyStatus: 'mixed_posted_currencies' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['INVENTORY', 'INVENTORY_IN_TRANSIT'],
+        to: new Date(input.to),
+        inclusive: true,
+      }
+    );
+  });
+
+  it('never reports another organization or malformed currency', async () => {
+    const malformed = { organization: { id: 'org_1', currency: 'pkr ' } };
+    const result = await caller('ADMIN', malformed as Partial<TRPCContext>).leakageReport(input);
+    expect(result).toMatchObject({
+      currency: null,
+      currencyStatus: 'not_recorded_by_ledger_reader',
+    });
+  });
+
+  it('resolves valuation ids to branch, batch, medicine and location names in the organization', async () => {
+    mocks.valuation.mockResolvedValue([
+      {
+        branchId: 'branch_1',
+        lotId: 'lot_1',
+        locationId: 'loc_1',
+        medicineId: 'med_1',
+        manufacturingBatchId: 'batch_1',
+        unitCostMinor: 100,
+        valueMinor: 500,
+      },
+    ]);
+    mocks.unallocated.mockResolvedValue(BigInt(-725));
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.lotFindMany.mockResolvedValue([
+      { id: 'lot_1', batch: { batchNumber: 'B12', medicine: { productName: 'Panadol' } } },
+    ]);
+    mocks.locationFindMany.mockResolvedValue([{ id: 'loc_1', name: 'Front shelf' }]);
+    mocks.medicineFindMany.mockResolvedValue([{ id: 'med_1', productName: 'Panadol' }]);
+    mocks.batchFindMany.mockResolvedValue([
+      { id: 'batch_1', batchNumber: 'B12', medicine: { productName: 'Panadol' } },
+    ]);
+    const result = await caller('ADMIN', pkr).perpetualValuation({
+      branchId: 'branch_1',
+      at: input.to,
+    });
+    expect(result.unallocatedValueMinor).toBe(BigInt(-725));
+    expect(mocks.unallocated).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      new Date(input.to)
+    );
+    expect(result.labels).toEqual({
+      branches: { branch_1: 'Main' },
+      lots: { lot_1: 'Panadol · batch B12' },
+      batches: { batch_1: 'Panadol · batch B12' },
+      medicines: { med_1: 'Panadol' },
+      locations: { loc_1: 'Front shelf' },
+    });
+    expect(mocks.lotFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', id: { in: ['lot_1'] } } })
+    );
+  });
+
+  it('labels margin batches with batch number and medicine name', async () => {
+    mocks.margin.mockResolvedValue([
+      {
+        key: 'batch_1',
+        revenueMinor: 900,
+        discountMinor: 0,
+        cogsMinor: 600,
+        grossMarginMinor: 300,
+      },
+      { key: null, revenueMinor: -354, discountMinor: 0, cogsMinor: 0, grossMarginMinor: -354 },
+    ]);
+    mocks.batchFindMany.mockResolvedValue([
+      { id: 'batch_1', batchNumber: 'B12', medicine: { productName: 'Panadol' } },
+    ]);
+    const result = await caller().grossMargin({ ...input, by: 'batch' });
+    expect(result.labels.batches).toEqual({ batch_1: 'Panadol · batch B12' });
+    expect(mocks.batchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', id: { in: ['batch_1'] } } })
+    );
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('finance comparison boundary', () => {
   it('requires ADMIN plus operational and financial capability', async () => {
     await caller().marginComparison(input);

@@ -141,7 +141,9 @@ export function CounterSearchResults({
           : (row.storage.locationName ?? row.storage.locationCode);
         const safety = [
           !sellable
-            ? { status: 'not-sellable', tone: 'warning' as const, label: 'Not sellable' }
+            ? row.onHandUnits === 0 && row.blocked.length === 0
+              ? { status: 'out-of-stock', tone: 'warning' as const, label: 'Out of stock' }
+              : { status: 'not-sellable', tone: 'warning' as const, label: 'Not sellable' }
             : null,
           row.restriction.controlled
             ? { status: 'controlled', tone: 'danger' as const, label: 'Controlled' }

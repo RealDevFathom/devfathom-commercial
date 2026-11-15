@@ -6,6 +6,20 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import {
+  emptySmsFallbackCounts,
+  sendUtilitySmsFallback,
+  tallySms,
+  type SmsFallbackCounts,
+} from '../sms/fallback';
+import { smsFallbackReason } from '../sms/messages';
+import {
+  createSmsProvider,
+  readSmsConfig,
+  smsEnabledFor,
+  type SmsConfig,
+  type SmsProvider,
+} from '../sms/provider';
 import { lockPatientConsent } from '../consent-writer';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
@@ -72,6 +86,8 @@ export type RefillReminderRunResult = {
   duplicate: number;
   skippedNoConsent: number;
   notDue: number;
+  /** DEV-87 SMS fallback outcomes (no WhatsApp consent or permanent failure). */
+  sms: SmsFallbackCounts;
 };
 
 /**
@@ -86,11 +102,15 @@ export async function processDueWhatsAppRefillReminders(
     limit?: number;
     config?: WhatsAppConfig;
     provider?: WhatsAppProvider;
+    smsConfig?: SmsConfig;
+    smsProvider?: SmsProvider;
   } = {}
 ): Promise<RefillReminderRunResult> {
   const now = options.now ?? new Date();
   const config = options.config ?? readWhatsAppConfig();
   const provider = options.provider ?? createWhatsAppProvider(config);
+  const smsConfig = options.smsConfig ?? readSmsConfig();
+  const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
   const result: RefillReminderRunResult = {
     configured: Boolean(config.templates.refillReminder),
     scanned: 0,
@@ -101,8 +121,14 @@ export async function processDueWhatsAppRefillReminders(
     duplicate: 0,
     skippedNoConsent: 0,
     notDue: 0,
+    sms: emptySmsFallbackCounts(),
   };
-  if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
+  // `configured` reports the WhatsApp channel. A bound SMS sender still runs
+  // the job for customers it can reach, without WhatsApp credentials.
+  const whatsappReady = result.configured && config.provider !== 'meta';
+  const smsReady = smsConfig.provider !== 'disabled' && Boolean(smsConfig.organizationId);
+  if (!whatsappReady) result.configured = false;
+  if (!whatsappReady && !smsReady) return result;
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
@@ -155,7 +181,11 @@ export async function processDueWhatsAppRefillReminders(
     }
 
     const recipient = await withTenantDb(capture.organizationId, async (db) => {
-      if (config.organizationId !== capture.organizationId || !config.phoneNumberId) return null;
+      const whatsappBound =
+        whatsappReady &&
+        config.organizationId === capture.organizationId &&
+        Boolean(config.phoneNumberId);
+      if (!whatsappBound && !smsEnabledFor(smsConfig, capture.organizationId)) return null;
       const organization = await db.organization.findUnique({
         where: { id: capture.organizationId },
         select: { vertical: true, status: true, timezone: true },
@@ -208,16 +238,18 @@ export async function processDueWhatsAppRefillReminders(
           select: { granted: true, revokedAt: true, recordedAt: true },
         }),
       ]);
-      const to = normalizeWhatsAppNumber(customer?.patient.phone);
+      if (!customer) return null;
+      const to = normalizeWhatsAppNumber(customer.patient.phone);
       if (
-        !customer ||
+        !whatsappBound ||
         !to ||
         !canMessageCustomer(customer) ||
         !consent?.granted ||
         consent.revokedAt ||
         consent.recordedAt > now
       )
-        return null;
+        // No WhatsApp sender or consent: SMS only with the customer's own SMS consent.
+        return { kind: 'sms' as const, customerId: customer.id };
       const prior = await db.pharmacyMessageLog.count({
         where: {
           organizationId: capture.organizationId,
@@ -242,10 +274,31 @@ export async function processDueWhatsAppRefillReminders(
         refillCaptureId: capture.id,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, to, logId };
+      return { kind: 'whatsapp' as const, customerId: customer.id, to, logId };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    const smsFallback = (customerId: string) =>
+      sendUtilitySmsFallback(
+        {
+          organizationId: capture.organizationId,
+          branchId: capture.branchId,
+          customerId,
+          dedupeKey: plan.dedupeKey,
+          content: { kind: 'REFILL_REMINDER', dueDate: plan.dueDate },
+          refillCaptureId: capture.id,
+          dueDate: plan.dueDate,
+        },
+        smsConfig,
+        smsProvider,
+        now
+      );
+    if (recipient.kind === 'sms') {
+      const sms = await smsFallback(recipient.customerId);
+      if (sms) tallySms(result.sms, sms);
+      else result.skippedNoConsent += 1;
       continue;
     }
 
@@ -279,6 +332,10 @@ export async function processDueWhatsAppRefillReminders(
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
     else result.duplicate += 1;
+    if (smsFallbackReason({ whatsappEligible: true, whatsappOutcome: outcome })) {
+      const sms = await smsFallback(recipient.customerId);
+      if (sms) tallySms(result.sms, sms);
+    }
   }
   return result;
 }

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  counterUnitNoun,
+  describePackSetup,
   incrementRepeatScan,
   looseSaleUnitOption,
   lotSaleUnitOptions,
   previewSaleLine,
+  resolveCounterSaleUnits,
   saleUnitOptions,
   type PackLevelNode,
   type SaleUnitKind,
@@ -313,6 +316,337 @@ describe('incrementRepeatScan (POS-03: repeat scan increments the same unit)', (
     });
     expect(next[0]!.quantity).toBe(5);
     expect(source[0]!.quantity).toBe(1);
+  });
+});
+
+describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
+  const at = new Date('2026-11-15T00:00:00.000Z');
+
+  /** The server's own derivation in `addSaleLine`: priced from the lot alone. */
+  function serverUnitPrice(canonicalUnitsPerSaleUnit: number) {
+    return priceFromLot({
+      printedMrpMinor: 50_000,
+      canonicalUnitsInPack: 100,
+      canonicalUnitsPerSaleUnit,
+    }).unitPriceMinor;
+  }
+
+  it('keeps the received lot hierarchy when it agrees with the setup', () => {
+    const resolved = resolveCounterSaleUnits({
+      packLevels: THREE_LEVEL,
+      lotPackLevelId: 'box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.packMismatch).toBeNull();
+    expect(resolved.saleUnits.map((option) => option.kind)).toEqual(['PACK', 'STRIP', 'UNIT']);
+  });
+
+  it('sells a lot received against another pack level through the medicine setup', () => {
+    // The lot points at a standalone 100-tablet box the setup no longer holds.
+    expect(() =>
+      saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'old-box', unitsPerPack: 100 })
+    ).toThrowError(PharmacyMedicineError);
+    const resolved = resolveCounterSaleUnits({
+      packLevels: THREE_LEVEL,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.packMismatch).toBeNull();
+    expect(resolved.saleUnits).toEqual([
+      { kind: 'PACK', packLevelId: 'box', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 100 },
+      { kind: 'STRIP', packLevelId: 'strip', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+      { kind: 'UNIT', packLevelId: 'unit', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+    ]);
+    // Client preview and server line price agree for every offered unit.
+    for (const option of resolved.saleUnits) {
+      const preview = previewSaleLine({
+        option,
+        quantity: 1,
+        printedMrpMinor: 50_000,
+        unitsPerPack: 100,
+        availableUnits: 300,
+      });
+      expect(preview.unitPriceMinor).toBe(serverUnitPrice(option.canonicalUnitsPerSaleUnit));
+    }
+  });
+
+  it('falls back when the lot pack size disagrees, offering only units that divide it', () => {
+    // Received as a box of 120 against a 10 × 10 setup: the 100-tablet box is not offered.
+    const resolved = resolveCounterSaleUnits({
+      packLevels: THREE_LEVEL,
+      lotPackLevelId: 'box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 120,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.packMismatch).toBeNull();
+    // Anchored at the strip, the outermost level that divides the lot: one PACK, one UNIT.
+    expect(
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.levelLabel,
+        option.canonicalUnitsPerSaleUnit,
+      ])
+    ).toEqual([
+      ['PACK', 'STRIP', 10],
+      ['UNIT', 'UNIT', 1],
+    ]);
+    for (const option of resolved.saleUnits) {
+      expect(() =>
+        priceFromLot({
+          printedMrpMinor: 60_000,
+          canonicalUnitsInPack: 120,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+        })
+      ).not.toThrow();
+    }
+  });
+
+  it('offers only fallback units every sellable lot can price, since FEFO may draw on them', () => {
+    // The recommended lot is a 100-tablet box; the next lot FEFO may allocate
+    // from was received as strips of 10. The server prices each allocated lot
+    // with priceFromLot, which refuses a 100-tablet unit for the 10-tablet lot.
+    expect(() =>
+      priceFromLot({
+        printedMrpMinor: 5_000,
+        canonicalUnitsInPack: 10,
+        canonicalUnitsPerSaleUnit: 100,
+      })
+    ).toThrowError(PharmacyMedicineError);
+    const resolved = resolveCounterSaleUnits({
+      packLevels: THREE_LEVEL,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      otherLotUnitsPerPack: [10],
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.saleUnits.map((option) => [option.kind, option.levelLabel])).toEqual([
+      ['PACK', 'STRIP'],
+      ['UNIT', 'UNIT'],
+    ]);
+    for (const option of resolved.saleUnits) {
+      for (const canonicalUnitsInPack of [100, 10]) {
+        expect(() =>
+          priceFromLot({
+            printedMrpMinor: 5_000,
+            canonicalUnitsInPack,
+            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          })
+        ).not.toThrow();
+      }
+    }
+  });
+
+  it('anchors a four-level setup at the received box so kinds stay unique', () => {
+    const fourLevel: PackLevelNode[] = [
+      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+      { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 5 },
+      { id: 'strip', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 10 },
+      { id: 'unit', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 10 },
+    ];
+    const resolved = resolveCounterSaleUnits({
+      packLevels: fourLevel,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.packLevelId,
+        option.canonicalUnitsPerSaleUnit,
+      ])
+    ).toEqual([
+      ['PACK', 'box', 100],
+      ['STRIP', 'strip', 10],
+      ['UNIT', 'unit', 1],
+    ]);
+  });
+
+  it('re-links children of a revised pack level to its current version', () => {
+    // revisePackLevel closes `strip-v1` and creates `strip-v2` in the same
+    // version group; the unit level still points at the closed `strip-v1`.
+    const revised = [
+      {
+        id: 'box',
+        level: 'BOX',
+        parentPackLevelId: null,
+        unitsPerParent: 1,
+        versionGroupId: 'g-box',
+      },
+      {
+        id: 'strip-v1',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 5,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2025-01-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'strip-v2',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 10,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        effectiveTo: null,
+      },
+      {
+        id: 'unit',
+        level: 'UNIT',
+        parentPackLevelId: 'strip-v1',
+        unitsPerParent: 10,
+        versionGroupId: 'g-unit',
+      },
+    ];
+    const resolved = resolveCounterSaleUnits({
+      packLevels: revised,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.packMismatch).toBeNull();
+    expect(
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.packLevelId,
+        option.canonicalUnitsPerSaleUnit,
+      ])
+    ).toEqual([
+      ['PACK', 'box', 100],
+      ['STRIP', 'strip-v2', 10],
+      ['UNIT', 'unit', 1],
+    ]);
+  });
+
+  it('ignores superseded pack versions when falling back to the setup', () => {
+    const revised = [
+      ...THREE_LEVEL,
+      {
+        id: 'strip-old',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 5,
+        effectiveFrom: new Date('2025-01-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ];
+    const resolved = resolveCounterSaleUnits({
+      packLevels: revised,
+      lotPackLevelId: 'box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.saleUnits.map((option) => option.packLevelId)).toEqual([
+      'box',
+      'strip',
+      'unit',
+    ]);
+  });
+
+  it('falls back to the lot’s own sealed pack and loose unit when the setup cannot price it', () => {
+    // A standalone 10-tablet strip setup cannot divide a 15-tablet lot, and a
+    // setup with two strips under one box is ambiguous: both keep DEV-717's
+    // sealed-pack-plus-loose fallback instead of becoming unsellable.
+    const standalone = [
+      { id: 'strip', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 },
+    ];
+    expect(
+      resolveCounterSaleUnits({
+        packLevels: standalone,
+        lotPackLevelId: 'strip',
+        lotPackLevelLabel: 'STRIP',
+        lotUnitsPerPack: 15,
+        dosageForm: 'Tablet',
+        at,
+      })
+    ).toEqual({
+      saleUnits: [
+        { kind: 'PACK', packLevelId: 'strip', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 15 },
+        { kind: 'UNIT', packLevelId: 'strip', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+      ],
+      packMismatch: null,
+    });
+    const ambiguous = [
+      ...THREE_LEVEL,
+      { id: 'strip-2', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 5 },
+    ];
+    // A later 10-tablet lot cannot price the 100-tablet pack, so only loose is offered.
+    expect(
+      resolveCounterSaleUnits({
+        packLevels: ambiguous,
+        lotPackLevelId: 'box',
+        lotPackLevelLabel: 'BOX',
+        lotUnitsPerPack: 100,
+        otherLotUnitsPerPack: [10],
+        dosageForm: 'Capsule',
+        at,
+      }).saleUnits.map((option) => [option.kind, option.canonicalUnitsPerSaleUnit])
+    ).toEqual([['UNIT', 1]]);
+  });
+
+  it('describes an unusable lot conversion in shop words', () => {
+    const ambiguous = [
+      ...THREE_LEVEL,
+      { id: 'strip-2', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 5 },
+    ];
+    expect(
+      resolveCounterSaleUnits({
+        packLevels: ambiguous,
+        lotPackLevelId: 'box',
+        lotPackLevelLabel: 'BOX',
+        lotUnitsPerPack: 0,
+        dosageForm: 'Capsule',
+        at,
+      })
+    ).toEqual({
+      saleUnits: [],
+      packMismatch: { received: '1 box = 0 capsules', setup: null },
+    });
+    const standalone = [
+      { id: 'strip', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 },
+    ];
+    expect(
+      resolveCounterSaleUnits({
+        packLevels: standalone,
+        lotPackLevelId: 'strip',
+        lotPackLevelLabel: 'STRIP',
+        lotUnitsPerPack: 0,
+        dosageForm: 'Tablet',
+        at,
+      }).packMismatch
+    ).toEqual({ received: '1 strip = 0 tablets', setup: '1 strip = 10 tablets' });
+  });
+
+  it('describes a multi-level setup outermost first', () => {
+    expect(describePackSetup(THREE_LEVEL, counterUnitNoun('Tablet'))).toBe(
+      '1 box = 10 strips × 10 tablets'
+    );
+    expect(describePackSetup(TWO_LEVEL, counterUnitNoun('Syrup'))).toBe('1 box = 30 units');
+    const carton: PackLevelNode[] = [
+      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+      { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 10 },
+      { id: 'unit', level: 'UNIT', parentPackLevelId: 'box', unitsPerParent: 10 },
+    ];
+    expect(describePackSetup(carton, counterUnitNoun('Tablet'))).toBe(
+      '1 carton = 10 boxes × 10 tablets'
+    );
   });
 });
 

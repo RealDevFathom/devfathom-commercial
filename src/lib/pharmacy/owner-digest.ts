@@ -9,6 +9,17 @@ import {
   refreshPharmacyAnomalySignals,
   renderAnomalyDigest,
 } from './anomaly-signals-operations';
+import {
+  buildOwnerBriefing,
+  isWeeklyBriefingDay,
+  ownerBriefingConfig,
+  ownerBriefingWindow,
+  readOwnerBriefingDemand,
+  renderOwnerBriefingApp,
+  renderOwnerBriefingWhatsApp,
+  type OwnerBriefing,
+  type OwnerBriefingCadence,
+} from './owner-briefing';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
@@ -46,7 +57,15 @@ export type OwnerDigest = {
     value: number | null;
   }>;
   anomalies: Awaited<ReturnType<typeof readPharmacyAnomalySignals>>;
+  /** Daily briefing, plus the weekly summary on the configured weekday. */
+  briefings: OwnerBriefing[];
+  /** In-app text; the only rendering that names the top gap. */
   rendered: string;
+  /**
+   * Owner-only WhatsApp body: figures and status, never an item, salt or
+   * category. Null when it fails the vocabulary guard; in-app capture still runs.
+   */
+  whatsappBody: string | null;
 };
 
 export interface DigestChannel {
@@ -70,6 +89,15 @@ function renderValue(key: MetricKey, value: number | null): string {
   return moneyKeys.has(key) ? `PKR ${(value / 100).toFixed(2)}` : String(value);
 }
 
+/** A WhatsApp guard failure must never block the in-app digest capture. */
+function safeWhatsAppBody(briefings: OwnerBriefing[]): string | null {
+  try {
+    return briefings.map(renderOwnerBriefingWhatsApp).join('\n\n');
+  } catch {
+    return null;
+  }
+}
+
 export async function composeOwnerDigest(
   db: ScopedDb,
   input: {
@@ -91,6 +119,25 @@ export async function composeOwnerDigest(
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
     readPharmacyAnomalySignals(db, filters),
   ]);
+  const config = ownerBriefingConfig();
+  const cadences: OwnerBriefingCadence[] = isWeeklyBriefingDay(input.businessDate, config)
+    ? ['DAILY', 'WEEKLY']
+    : ['DAILY'];
+  const briefings: OwnerBriefing[] = [];
+  for (const cadence of cadences) {
+    const window = ownerBriefingWindow(input.businessDate, cadence, config);
+    const [ledger, demand] = await Promise.all([
+      cadence === 'DAILY'
+        ? Promise.resolve(report)
+        : readPharmacyOwnerCommandCentre(db, {
+            branchIds: [input.branchId],
+            from: window.from,
+            to: window.to,
+          }),
+      readOwnerBriefingDemand(db, input, window, config),
+    ]);
+    briefings.push(buildOwnerBriefing(window, ledger.metrics, demand, config));
+  }
   const contracts = new Map(PHARMACY_METRIC_CONTRACT.map((contract) => [contract.key, contract]));
   const metrics = DIGEST_METRIC_KEYS.map((key) => {
     const contract = contracts.get(key);
@@ -102,12 +149,15 @@ export async function composeOwnerDigest(
     freshness: report.freshness,
     metrics,
     anomalies,
+    briefings,
     rendered: [
       `Daily owner digest · ${input.branchName} · ${input.businessDate}`,
+      ...briefings.map(renderOwnerBriefingApp),
       ...metrics.map((metric) => `${metric.label}: ${renderValue(metric.key, metric.value)}`),
       ...renderAnomalyDigest(anomalies),
       `As of ${report.freshness.asOf}`,
     ].join('\n'),
+    whatsappBody: safeWhatsAppBody(briefings),
   };
 }
 
@@ -141,7 +191,10 @@ export class CaptureChannel implements DigestChannel {
   }
 }
 
-/** Provider seam only. No request is made and no send is claimed. */
+/**
+ * Provider seam only. No request is made and no send is claimed. When wired, it
+ * must send `digest.whatsappBody` (never `rendered`) to the owner only.
+ */
 export class WhatsAppChannel implements DigestChannel {
   readonly name = 'whatsapp';
   readonly configured = Boolean(
