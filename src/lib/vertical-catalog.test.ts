@@ -543,9 +543,27 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },
-      { key: 'finance', capabilities: ['reports:financial'] },
+      { key: 'finance', capabilities: ['reports:operational', 'reports:financial'] },
       { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
+  });
+
+  // DEV-519: the pharmacy financial reports (Reports command centre sections,
+  // supplier-credit follow-up) are reached through the Reports rail entry and
+  // page, which check `reports:operational`. A template granting financial
+  // reports must also grant the access those pages check.
+  it('grants every financial-reports template the operational reports access its pages check', () => {
+    const financial = PHARMACY_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.some((grant) => capabilityMatches(grant, 'reports:financial'))
+    );
+    expect(financial.map((role) => role.key)).toEqual(
+      expect.arrayContaining(['owner', 'owner-operator', 'finance'])
+    );
+    for (const role of financial) {
+      expect(
+        role.capabilities.some((grant) => capabilityMatches(grant, 'reports:operational'))
+      ).toBe(true);
+    }
   });
 });
 

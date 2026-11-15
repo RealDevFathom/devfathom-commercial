@@ -77,6 +77,11 @@ export async function marketingAction(
         break;
       }
       case 'growth-generate': {
+        if (!text('from') || !text('lastDay'))
+          return {
+            error: true,
+            message: 'Choose both a first day and a last day before generating insights.',
+          };
         const result = await caller.generateGrowth({
           branchId,
           ...period(),

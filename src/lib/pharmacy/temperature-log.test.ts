@@ -95,6 +95,23 @@ describe('INV-05 temperature reading sources', () => {
     });
   });
 
+  it('keeps the device serial on a live SENSOR reading (DEV-82)', async () => {
+    const { db, createMany } = database();
+    await ingestTemperatureReadings(db, scope, 'fridge_1', {
+      kind: 'SENSOR',
+      read: async () => [{ temperatureC: 9.4, recordedAt, deviceIdentifier: ' SN-001 ' }],
+    });
+    expect(createMany.mock.calls[0]![0]).toEqual({
+      data: [
+        expect.objectContaining({
+          source: 'SENSOR',
+          deviceIdentifier: 'SN-001',
+          outOfRange: true,
+        }),
+      ],
+    });
+  });
+
   it('parses the complete import before opening a transaction, so a bad later row writes nothing', async () => {
     const { db, createMany, transaction } = database();
     await expect(
