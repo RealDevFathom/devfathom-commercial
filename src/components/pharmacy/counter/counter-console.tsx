@@ -2781,8 +2781,7 @@ function ScopedPharmacyCounterConsole({
             Automatically open print dialog after payment
           </Label>
           <p id="counter-auto-print-help" className="text-xs text-text-muted">
-            This counter session only. Requires a newly settled bill and issued receipt. Physical
-            printing is not confirmed.
+            Opens the print window after each payment on this computer.
           </p>
         </div>
         {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
