@@ -61,6 +61,7 @@ import {
   searchCounterCatalog,
 } from '@/lib/pharmacy/counter';
 import {
+  COUNTER_KEYMAP_PRESETS,
   PharmacyCounterKeymapError,
   resolveCounterKeymap,
   type CounterBinding,
@@ -2333,6 +2334,10 @@ export const pharmacySalesRouter = router({
         preset: (stored?.preset ?? 'devfathom') as 'devfathom' | 'legacySpeed',
         overrides: (stored?.overrides ?? {}) as Record<string, CounterBinding>,
       });
+      if (!resolved.preset.confirmed && ctx.session.user.role !== 'ADMIN') {
+        // Retain the saved proposal for owner review, but never teach it to staff.
+        return { ...resolveCounterKeymap({ preset: 'devfathom' }), stored: false };
+      }
       return { ...resolved, stored: stored !== null };
     } catch {
       // A row that no longer resolves (a preset removed, a chord that now
@@ -2376,6 +2381,9 @@ export const pharmacySalesRouter = router({
       const organizationId = ctx.entitlements?.organizationId;
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!COUNTER_KEYMAP_PRESETS[input.preset].confirmed && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This preset is not available to staff.' });
+      }
       try {
         const resolved = resolveCounterKeymap({
           preset: input.preset,

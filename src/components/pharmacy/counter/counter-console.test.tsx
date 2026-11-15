@@ -2670,6 +2670,16 @@ describe('DEV-618 counter composition', () => {
     );
   });
 
+  it('hides the unconfirmed preset from a cashier in the shortcuts dialog', () => {
+    render(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
+    expect(within(dialog).getByLabelText('Keymap')).toHaveValue('devfathom');
+    expect(within(dialog).queryByRole('option', { name: 'Legacy Speed' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Placeholder|Phase 0/)).not.toBeInTheDocument();
+  });
+
   it.each([false, true])(
     'defaults to DevFathom and saves for an owner/admin without a saved preference or branch assignment (payment recovery available: %s)',
     async (recoveryAvailable) => {
@@ -2700,6 +2710,7 @@ describe('DEV-618 counter composition', () => {
       });
       expect(select).toBeEnabled();
       expect(select).toHaveValue('legacySpeed');
+      expect(within(dialog).getByText('Placeholder')).toBeInTheDocument();
       if (!recoveryAvailable) {
         expect(screen.getByLabelText('Scan or search')).toBeDisabled();
         expect(window.localStorage.getItem(tenderAttemptStorageKey(scope))).toBe('{');
@@ -2791,6 +2802,7 @@ describe('DEV-618 counter composition', () => {
   });
 
   it('moves branch/status beside Counter, opens shortcuts from Actions, and changes the branch', async () => {
+    mocks.session.data.user.role = 'ADMIN';
     mocks.queries.counterBranches = query({
       branches: [
         { id: 'branch-a', name: 'Model Town', code: 'MT1' },

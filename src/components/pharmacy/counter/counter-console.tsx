@@ -298,6 +298,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      keymapPreviewAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
@@ -336,12 +337,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  keymapPreviewAuthorized = false,
   safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  keymapPreviewAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
   accountEmail: string;
@@ -518,7 +521,10 @@ function ScopedPharmacyCounterConsole({
   }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
-  const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
+  const keymap =
+    keymapQuery.data && (keymapQuery.data.preset.confirmed || keymapPreviewAuthorized)
+      ? keymapQuery.data
+      : resolveCounterKeymap({ preset: 'devfathom' });
   // Preserve operator overrides before offering a receipt-only shortcut.
   const lastReceiptShift = !matchCounterAction(keymap.bindings, { key: 'r', altKey: true })
     ? false
@@ -2015,6 +2021,7 @@ function ScopedPharmacyCounterConsole({
   const keymapLegend = (
     <CounterKeymapLegend
       keymap={keymap}
+      allowUnconfirmed={keymapPreviewAuthorized}
       saving={saveKeymap.isPending}
       disabled={pending === 'tender'}
       error={saveKeymap.error ? messageFrom(saveKeymap.error) : null}
