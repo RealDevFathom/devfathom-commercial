@@ -30,8 +30,24 @@ describe('Agency E2E fail-closed runner', () => {
     expect(env.TEST_DATABASE_URL).toBe(env.DATABASE_URL);
   });
 
+  test('keeps the local CI lane runnable without mail settings or an application URL', () => {
+    const local = {
+      AGENCY_E2E: '1',
+      AGENCY_E2E_ADMIN_EMAIL: 'admin@agency-e2e.test',
+      AGENCY_E2E_ADMIN_PASSWORD: 'test-only-password',
+      AGENCY_E2E_DATABASE_URL: target,
+    };
+    expect(agencyE2eEnvironment(local).DATABASE_URL).toBe(new URL(target).href);
+    expect(
+      agencyE2eEnvironment({ ...local, NEXT_PUBLIC_APP_URL: 'http://localhost:4327' }).DATABASE_URL
+    ).toBe(new URL(target).href);
+    expect(agencyE2eEnvironment({ ...local, AUTH_URL: 'http://127.0.0.1:4327' }).DATABASE_URL).toBe(
+      new URL(target).href
+    );
+  });
+
   test.each(['BREVO_API_KEY', 'BREVO_SENDER_EMAIL'] as const)(
-    'requires %s before the lane starts',
+    'requires %s before a non-local lane starts',
     (name) => {
       expect(() =>
         agencyE2eEnvironment({
@@ -44,14 +60,14 @@ describe('Agency E2E fail-closed runner', () => {
   );
 
   test.each([
-    undefined,
     '',
     'invalid',
     'javascript:alert(1)',
     'http://staging.example.test',
-    'http://localhost:4327',
+    'http://agency.example.test',
     'https://user:password@example.test',
-  ])('rejects a missing or unsafe application URL %s', (url) => {
+    'http://user:password@localhost:4327',
+  ])('rejects a malformed or unsafe application URL %s', (url) => {
     expect(() =>
       agencyE2eEnvironment({
         ...credentials,
@@ -76,9 +92,16 @@ describe('Agency E2E fail-closed runner', () => {
         AUTH_URL: 'https://auth.example.test',
       })
     ).toThrow('HTTPS');
+    expect(() =>
+      agencyE2eEnvironment({
+        ...env,
+        BREVO_API_KEY: undefined,
+        AUTH_URL: 'https://auth.example.test',
+      })
+    ).toThrow('BREVO_API_KEY');
   });
 
-  test('refuses capture mode and malformed sender addresses', () => {
+  test('refuses capture mode on a public URL and malformed sender addresses', () => {
     const env = { ...credentials, AGENCY_E2E_DATABASE_URL: target };
     expect(() => agencyE2eEnvironment({ ...env, EMAIL_DELIVERY_MODE: 'capture' })).toThrow(
       'real email delivery'
@@ -86,6 +109,13 @@ describe('Agency E2E fail-closed runner', () => {
     expect(() => agencyE2eEnvironment({ ...env, BREVO_SENDER_EMAIL: 'not-an-email' })).toThrow(
       'valid sender'
     );
+    expect(() =>
+      agencyE2eEnvironment({
+        ...env,
+        NEXT_PUBLIC_APP_URL: 'http://localhost:4327',
+        BREVO_SENDER_EMAIL: 'not-an-email',
+      })
+    ).toThrow('valid sender');
     expect(agencyE2eEnvironment({ ...env, EMAIL_DELIVERY_MODE: 'send' }).DATABASE_URL).toBe(
       new URL(target).href
     );
