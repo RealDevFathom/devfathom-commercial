@@ -580,7 +580,11 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       await expect(page.getByText('Loyalty customer linked to this bill.')).toBeVisible();
     };
     await makeBill();
-    await page.getByLabel('Tender', { exact: true }).selectOption('KHATA');
+    await pressControl(
+      page
+        .getByRole('group', { name: 'Tender', exact: true })
+        .getByRole('button', { name: 'Khata', exact: true })
+    );
     await page.getByLabel('Family Khata account').selectOption(familyId);
     await page.getByLabel('Amount', { exact: true }).fill('1.00');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
@@ -828,7 +832,7 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(otc.name);
   await expect(receipt).toContainText(otc.batchNumber);
-  // DEV-645: refunds belong to managers and owners; a cashier never sees the entry.
+  // DEV-645: refunds belong to managers and owners; a cashier only gets the Returns entry.
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toHaveCount(0);
 });
 

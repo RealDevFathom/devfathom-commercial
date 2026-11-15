@@ -8,6 +8,10 @@ const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
 const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
 const suppliers = vi.hoisted(() => vi.fn());
+const extraCatalog = vi.hoisted(() => ({
+  reports: [] as Array<{ key: string; label: string; metrics: string[]; filters: string[] }>,
+  metrics: [] as Array<Record<string, string | null>>,
+}));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -131,8 +135,10 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
             metrics: ['salesMinor'],
             filters: ['branch', 'date', 'supplier', 'ingredient', 'batch'],
           },
+          ...extraCatalog.reports,
         ],
         metrics: [
+          ...extraCatalog.metrics,
           {
             key: 'salesMinor',
             label: "Today's sales",
@@ -159,7 +165,45 @@ describe('pharmacy report catalog filters', () => {
     commandCentre.mockClear();
     expiryError.value = null;
     suppliers.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
+    extraCatalog.reports = [];
+    extraCatalog.metrics = [];
   });
+
+  it.each([
+    [{ branch: 'b1' }, '/pharmacy/inventory/expiry?within=180&branch=b1'],
+    [{}, '/pharmacy/inventory/expiry?within=180'],
+  ])(
+    'drills expiry value 180 days into the expiry board in the report branch scope (%o)',
+    async (searchParams, href) => {
+      extraCatalog.reports = [
+        {
+          key: 'stock-expiry',
+          label: 'Stock and expiry',
+          metrics: ['expiryValueMinor180'],
+          filters: ['branch'],
+        },
+      ];
+      extraCatalog.metrics = [
+        {
+          key: 'expiryValueMinor180',
+          label: 'Expiry value · 180 days',
+          definition: 'Available stock expiring within 180 days.',
+          source: 'pharmacy_stock_balances',
+          scope: 'selected branches at read time',
+          permission: 'reports:operational',
+          drillThrough: '/pharmacy/inventory/expiry?within=180',
+        },
+      ];
+
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve(searchParams) }));
+
+      const card = screen.getByRole('heading', { name: 'Expiry value · 180 days' }).parentElement!;
+      expect(within(card).getByRole('link', { name: 'Drill through' })).toHaveAttribute(
+        'href',
+        href
+      );
+    }
+  );
 
   it('names the missing reports capability and who can grant it', async () => {
     actor.role = 'MEMBER';

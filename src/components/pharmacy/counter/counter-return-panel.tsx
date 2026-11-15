@@ -76,37 +76,39 @@ type Props = {
   accountId: string;
   deviceId: () => string;
   businessDate: () => Date;
-  /** False when the signed-in manager/owner has no staff PIN yet; first-time setup is offered. */
+  /** DEV-647: managers and owners only. The server enforces the same rule. */
+  refundAuthorized?: boolean;
+  /** DEV-645: false when that manager or owner has no staff PIN yet; first-time setup is offered. */
   refundPinReady?: boolean;
 };
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-/**
- * DEV-645: Returns & refunds is a manager/owner tool. The entry is not rendered for
- * anyone else (cashiers); the server refuses their refunds regardless.
- */
-export function CounterReturnPanel({
-  refundsAuthorized,
-  ...props
-}: Props & { refundsAuthorized: boolean }) {
+export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized' | 'refundPinReady'>) {
   const [open, setOpen] = useState(false);
-  if (!refundsAuthorized) return null;
+  // DEV-647: cashiers record returns only; refunds stay with managers and owners.
+  const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
+  const refundAuthorized = access.data?.authorized === true;
+  const title = refundAuthorized ? 'Returns & refunds' : 'Returns';
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
-        Returns & refunds
+        {title}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogTitle>Returns & refunds</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Find the original receipt, record returned stock, then refund its original tenders.
+            {refundAuthorized
+              ? 'Find the original receipt, record returned stock, then refund its original tenders.'
+              : 'Find the original receipt and record returned stock. A manager or owner refunds it.'}
           </DialogDescription>
           {open && (
             <ReturnForm
               key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
               {...props}
+              refundAuthorized={refundAuthorized}
+              refundPinReady={access.data?.pinReady !== false}
             />
           )}
         </DialogContent>
@@ -130,6 +132,7 @@ export function ReturnForm({
   accountId,
   deviceId,
   businessDate,
+  refundAuthorized = false,
   refundPinReady = true,
 }: Props) {
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
@@ -172,9 +175,7 @@ export function ReturnForm({
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
-  // The approving manager/owner's own PIN. Single-use and never saved on this device.
-  const [approvalPin, setApprovalPin] = useState('');
-  const approvalReady = witnessPinPattern.test(approvalPin);
+  const [managerPin, setManagerPin] = useState('');
   const [pinSet, setPinSet] = useState(refundPinReady);
   const [newPin, setNewPin] = useState('');
   const [newPinRepeat, setNewPinRepeat] = useState('');
@@ -230,23 +231,21 @@ export function ReturnForm({
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(
-    next: Attempt,
-    controlledWitness?: ControlledWitness,
-    refundApprovalPin?: string
-  ) {
+  const managerPinReady = witnessPinPattern.test(managerPin);
+
+  async function execute(next: Attempt, controlledWitness?: ControlledWitness, pin?: string) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
     const retry = !!attempt;
     setBusy(true);
     setError('');
     setMessage('');
-    // Witness and approval PINs are single-use: clear them whatever the outcome.
+    // Witness and manager PINs are single-use: clear them whatever the outcome.
     setWitnessPin('');
-    setApprovalPin('');
+    setManagerPin('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
-      // Witness and approval PINs are deliberately excluded from persistent storage.
+      // The witness PIN is deliberately excluded from persistent storage.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') {
@@ -270,12 +269,27 @@ export function ReturnForm({
           );
           return;
         }
-      } else
-        await refund.mutateAsync({
+      } else {
+        // The manager PIN is sent with the request only, never saved with the attempt.
+        const result = await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
-          approvalPin: refundApprovalPin,
+          managerPin: pin ?? '',
         });
+        if (isBlockedResult(result)) {
+          // Refused before any money moved. Keep a retried attempt for reconciliation.
+          if (!retry) {
+            try {
+              localStorage.removeItem(storageKey);
+              setAttempt(null);
+            } catch {
+              /* Keep recovery locked. */
+            }
+          }
+          setError(`${result.blocked}${retry ? ' Then retry the saved refund.' : ''}`);
+          return;
+        }
+      }
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
@@ -284,18 +298,14 @@ export function ReturnForm({
       setAmount('');
       setMessage(
         next.kind === 'return'
-          ? 'Return recorded. Choose an original tender to refund.'
+          ? refundAuthorized
+            ? 'Return recorded. Choose an original tender to refund.'
+            : 'Return recorded. A manager or owner must refund it with their PIN.'
           : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      // A refused PIN on a retried refund keeps its saved reference: an earlier ambiguous
-      // outcome must still be reconciled with the same idempotency key.
-      const keepForPin = retry && next.kind === 'refund' && code === 'FORBIDDEN';
-      if (
-        !keepForPin &&
-        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')
-      ) {
+      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -369,23 +379,23 @@ export function ReturnForm({
     </section>
   );
 
-  const approvalField = (
+  const managerPinField = (
     <div className="space-y-2">
-      <Label htmlFor="refund-approval-pin">Your manager or owner PIN</Label>
+      <Label htmlFor="refund-manager-pin">Your manager or owner PIN</Label>
       <Input
-        id="refund-approval-pin"
+        id="refund-manager-pin"
         type="password"
         inputMode="numeric"
         autoComplete="off"
         maxLength={8}
         className="h-11"
-        aria-describedby="refund-approval-pin-hint"
+        aria-describedby="refund-manager-pin-hint"
         disabled={busy || !online || !ready}
-        value={approvalPin}
-        onChange={(event) => setApprovalPin(event.target.value.replace(/\D/g, ''))}
+        value={managerPin}
+        onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
-      <p id="refund-approval-pin-hint" className="text-sm text-text-muted">
-        Every refund needs your PIN. It is checked by the server and never saved on this device.
+      <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
+        Required for every refund. The PIN is never saved on this device.
       </p>
     </div>
   );
@@ -404,7 +414,7 @@ export function ReturnForm({
       setPinSet(true);
       setMessage('PIN set. Enter it below to approve each refund.');
     } catch (cause) {
-      // An existing PIN means the approval field is the right next step.
+      // An existing PIN means the PIN field is the right next step.
       if ((cause as { data?: { code?: string } })?.data?.code === 'CONFLICT') setPinSet(true);
       setError(counterErrorMessage(cause));
     } finally {
@@ -413,6 +423,8 @@ export function ReturnForm({
     }
   }
 
+  const pinMismatch = !!newPinRepeat && newPinRepeat !== newPin;
+  // DEV-645: a manager or owner with no staff PIN sets one before their first refund.
   const pinSetup = (
     <section
       aria-label="Set up your refund PIN"
@@ -444,11 +456,14 @@ export function ReturnForm({
         className="h-11"
         disabled={busy || !online}
         value={newPinRepeat}
-        aria-invalid={!!newPinRepeat && newPinRepeat !== newPin}
+        aria-invalid={pinMismatch}
+        aria-describedby={pinMismatch ? 'refund-new-pin-mismatch' : undefined}
         onChange={(event) => setNewPinRepeat(event.target.value.replace(/\D/g, ''))}
       />
-      {!!newPinRepeat && newPinRepeat !== newPin && (
-        <p className="text-sm text-destructive">The two PINs do not match.</p>
+      {pinMismatch && (
+        <p id="refund-new-pin-mismatch" className="text-sm text-destructive">
+          The two PINs do not match.
+        </p>
       )}
       <Button
         variant="outline"
@@ -460,7 +475,7 @@ export function ReturnForm({
       </Button>
     </section>
   );
-  const refundApproval = pinSet ? approvalField : pinSetup;
+  const refundPinControl = pinSet ? managerPinField : pinSetup;
 
   function print() {
     try {
@@ -507,18 +522,28 @@ export function ReturnForm({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {attempt?.kind === 'refund' && refundApproval}
+      {attempt?.kind === 'refund' &&
+        (refundAuthorized ? (
+          refundPinControl
+        ) : (
+          <p role="note" className="text-sm text-text-muted">
+            This saved refund is kept for reconciliation. A manager or owner must retry it with
+            their PIN.
+          </p>
+        ))}
       {attempt && (
         <Button
           className="h-11"
-          onClick={() => void execute(attempt, witness, approvalPin)}
+          onClick={() =>
+            void execute(attempt, witness, attempt.kind === 'refund' ? managerPin : undefined)
+          }
           disabled={
             busy ||
             !online ||
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
             (attempt.kind === 'return' && (!data || !witnessReady)) ||
-            (attempt.kind === 'refund' && !approvalReady)
+            (attempt.kind === 'refund' && (!refundAuthorized || !managerPinReady))
           }
         >
           Retry saved {attempt.kind}
@@ -805,88 +830,98 @@ export function ReturnForm({
               Record return
             </Button>
           </fieldset>
-          <fieldset
-            disabled={locked || stale}
-            className="space-y-3 rounded-lg border border-border-subtle p-4"
-          >
-            <legend className="px-1 font-semibold">2. Refund original tender</legend>
-            <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
-            <Label htmlFor="refund-tender">Original tender</Label>
-            <select
-              id="refund-tender"
-              className={selectClass}
-              value={tenderId}
-              onChange={(event) => {
-                setTenderId(event.target.value);
-                setManual(false);
-              }}
+          {refundAuthorized ? (
+            <fieldset
+              disabled={locked || stale}
+              className="space-y-3 rounded-lg border border-border-subtle p-4"
             >
-              <option value="">Choose tender</option>
-              {data.tenders.map((row) => (
-                <option key={row.id} value={row.id} disabled={row.refundedMinor >= row.amountMinor}>
-                  {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
-                </option>
-              ))}
-            </select>
-            <Label htmlFor="refund-amount">Refund amount (PKR)</Label>
-            <Input
-              id="refund-amount"
-              className="h-11"
-              inputMode="decimal"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-            <p className="text-sm text-text-muted">
-              Refund up to PKR {formatMinor(available)} on this tender. Repeat with another original
-              tender for a mixed payment. Loyalty refunds restore redeemed points.
-            </p>
-            {manualRequired && (
-              <label className="flex min-h-11 items-start gap-2">
-                <input
-                  type="checkbox"
-                  checked={manual}
-                  onChange={(event) => setManual(event.target.checked)}
-                />
-                No provider refund adapter is configured. Issue CASH from this drawer; manual
-                reversal required. I will reconcile the original provider separately.
-              </label>
-            )}
-            {!attempt && refundApproval}
-            <Button
-              variant="destructive"
-              className="h-11"
-              disabled={
-                !tender ||
-                !Number.isSafeInteger(amountMinor) ||
-                amountMinor <= 0 ||
-                amountMinor > available ||
-                (manualRequired && !manual) ||
-                !approvalReady
-              }
-              onClick={() =>
-                void execute(
-                  {
-                    kind: 'refund',
-                    saleId,
-                    input: {
-                      branchId,
-                      originalTenderId: tenderId,
-                      amountMinor,
-                      deviceId: deviceId(),
-                      businessDate: businessDate().toISOString(),
-                      reason,
-                      idempotencyKey: browserUuid(),
-                      manualCashFallback: manualRequired && manual,
+              <legend className="px-1 font-semibold">2. Refund original tender</legend>
+              <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
+              <Label htmlFor="refund-tender">Original tender</Label>
+              <select
+                id="refund-tender"
+                className={selectClass}
+                value={tenderId}
+                onChange={(event) => {
+                  setTenderId(event.target.value);
+                  setManual(false);
+                }}
+              >
+                <option value="">Choose tender</option>
+                {data.tenders.map((row) => (
+                  <option
+                    key={row.id}
+                    value={row.id}
+                    disabled={row.refundedMinor >= row.amountMinor}
+                  >
+                    {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                  </option>
+                ))}
+              </select>
+              <Label htmlFor="refund-amount">Refund amount (PKR)</Label>
+              <Input
+                id="refund-amount"
+                className="h-11"
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+              <p className="text-sm text-text-muted">
+                Refund up to PKR {formatMinor(available)} on this tender. Repeat with another
+                original tender for a mixed payment. Loyalty refunds restore redeemed points.
+              </p>
+              {manualRequired && (
+                <label className="flex min-h-11 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={manual}
+                    onChange={(event) => setManual(event.target.checked)}
+                  />
+                  No provider refund adapter is configured. Issue CASH from this drawer; manual
+                  reversal required. I will reconcile the original provider separately.
+                </label>
+              )}
+              {!attempt && refundPinControl}
+              <Button
+                variant="destructive"
+                className="h-11"
+                disabled={
+                  !tender ||
+                  !Number.isSafeInteger(amountMinor) ||
+                  amountMinor <= 0 ||
+                  amountMinor > available ||
+                  (manualRequired && !manual) ||
+                  !managerPinReady
+                }
+                onClick={() =>
+                  void execute(
+                    {
+                      kind: 'refund',
+                      saleId,
+                      input: {
+                        branchId,
+                        originalTenderId: tenderId,
+                        amountMinor,
+                        deviceId: deviceId(),
+                        businessDate: businessDate().toISOString(),
+                        reason,
+                        idempotencyKey: browserUuid(),
+                        manualCashFallback: manualRequired && manual,
+                      },
                     },
-                  },
-                  undefined,
-                  approvalPin
-                )
-              }
-            >
-              Confirm refund
-            </Button>
-          </fieldset>
+                    undefined,
+                    managerPin
+                  )
+                }
+              >
+                Confirm refund
+              </Button>
+            </fieldset>
+          ) : (
+            <p role="note" className="text-sm text-text-muted">
+              Refunds need a manager or owner. Ask one to refund this receipt with their PIN.
+            </p>
+          )}
           <section aria-label="Return and refund history" className="space-y-2">
             <h3 className="font-semibold">Return and refund history</h3>
             {data.returns.length === 0 && <p>No returns recorded.</p>}

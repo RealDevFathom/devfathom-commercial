@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
+// DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: async () => true,
+  authenticateRefundPin: async () => ({ verified: true }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -13,27 +19,28 @@ vi.mock('@/server/audit', async (original) => ({
   recordTrpcAudit: vi.fn(),
   recordAudit: vi.fn(),
 }));
-// DEV-645: every refund is approved by the signed-in manager/owner's own PIN.
-vi.mock('@/lib/pharmacy/refund-approval', () => ({
-  REFUND_APPROVAL_POLICY: 'PHARMACY_REFUND_MANAGER_PIN',
-  verifyRefundApproverPin: vi.fn(async () => ({
-    staffProfileId: 'staff-owner-a',
-    pinReauthenticatedAt: new Date('2026-10-02T09:00:00Z'),
-  })),
-}));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   refundPharmacyTender: vi.fn(),
   applyPharmacyTender: vi.fn(),
   readPharmacyTenderOutcome: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/khata-repayment', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/khata-repayment')>()),
+  recordKhataRepayment: vi.fn(),
+  searchKhataRepaymentAccounts: vi.fn(),
+}));
 import {
   applyPharmacyTender,
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
+import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
+import {
+  recordKhataRepayment,
+  searchKhataRepaymentAccounts,
+} from '@/lib/pharmacy/khata-repayment';
 import { can, subjectFromSession } from '@/lib/abac';
-import { verifyRefundApproverPin } from '@/lib/pharmacy/refund-approval';
 import * as abac from '@/lib/abac';
 import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
 import { recordAudit } from '@/server/audit';
@@ -52,8 +59,6 @@ const input = {
   familyAccountId: 'family-a',
 };
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
-const APPROVAL_PIN = '2468';
-const manage = { capability: 'pharmacy:manage', effect: 'ALLOW' } as const;
 
 function fixture(
   permissions: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
@@ -159,7 +164,8 @@ beforeEach(() => {
 
 describe('Khata read and write permissions (#831)', () => {
   const finance: Permission[] = [{ capability: 'reports:financial', effect: 'ALLOW' }];
-  const refund = {
+  // DEV-647: the manager PIN is checked by the router and never reaches settlement.
+  const settlement = {
     branchId: 'branch-a',
     originalTenderId: 'tender-a',
     deviceId: 'device-a',
@@ -168,6 +174,7 @@ describe('Khata read and write permissions (#831)', () => {
     reason: 'Return',
     idempotencyKey: 'refund-a',
   };
+  const refund = { ...settlement, managerPin: '1234' };
 
   it('allows reports-only account, statement and tender-outcome reads without posting', async () => {
     const f = fixture(finance, 'EMPLOYEE');
@@ -237,14 +244,9 @@ describe('Khata read and write permissions (#831)', () => {
     }
   );
 
-  it.each([
-    ['*', true],
-    ['pharmacy:*', true],
-    // DEV-645: a counter-only (cashier) grant still charges Khata but cannot refund.
-    ['pharmacy:counter', false],
-  ] as const)(
-    'preserves owner %s access to charges and credit refunds (refund allowed: %s)',
-    async (capability, refundAllowed) => {
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'preserves owner %s access to charges and credit refunds',
+    async (capability) => {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       await expect(f.caller().tender(input)).resolves.toMatchObject({ tenderId: 'tender-a' });
       expect(applyPharmacyTender).toHaveBeenCalledExactlyOnceWith(
@@ -266,31 +268,13 @@ describe('Khata read and write permissions (#831)', () => {
         id: 'khata:tender-a',
         familyAccountId: 'family-a',
       });
-      if (!refundAllowed) {
-        await expect(
-          f.caller().refundTender({ ...refund, approvalPin: APPROVAL_PIN })
-        ).rejects.toMatchObject({
-          code: 'FORBIDDEN',
-          message: 'Only a manager or owner can refund.',
-        });
-        expect(verifyRefundApproverPin).not.toHaveBeenCalled();
-        expect(refundPharmacyTender).not.toHaveBeenCalled();
-        return;
-      }
-      await expect(
-        f.caller().refundTender({ ...refund, approvalPin: APPROVAL_PIN })
-      ).resolves.toMatchObject({
+      await expect(f.caller().refundTender(refund)).resolves.toMatchObject({
         refundId: 'refund-a',
       });
-      expect(verifyRefundApproverPin).toHaveBeenCalledExactlyOnceWith(
-        'org-a',
-        'owner-a',
-        APPROVAL_PIN
-      );
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
-        refund
+        settlement
       );
       expect(f.db.pharmacyKhataEvent.create).toHaveBeenLastCalledWith({
         data: expect.objectContaining({ kind: 'PAYMENT', amountMinor: 50 }),
@@ -327,62 +311,56 @@ describe('Khata read and write permissions (#831)', () => {
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
-const khataPaths: {
-  name: string;
-  run: (caller: Caller, branchId: string) => Promise<unknown>;
-  /** DEV-645: refunds additionally need a manager/owner grant and the actor's PIN. */
-  refund?: true;
-}[] = [
-  {
-    name: 'accounts',
-    run: (c, branchId) => c.khataAccounts({ branchId, saleId: input.saleId }),
-  },
-  {
-    name: 'statement',
-    run: (c, branchId) =>
-      c.khataStatement({
-        branchId,
-        saleId: input.saleId,
-        familyAccountId: input.familyAccountId,
-      }),
-  },
-  { name: 'Khata charge', run: (c, branchId) => c.tender({ ...input, branchId }) },
-  {
-    name: 'credit charge',
-    run: (c, branchId) => c.tender({ ...input, branchId, type: 'CREDIT' }),
-  },
-  { name: 'Khata outcome', run: (c, branchId) => c.tenderOutcome({ ...input, branchId }) },
-  {
-    name: 'credit outcome',
-    run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
-  },
-  {
-    name: 'legacy credit outcome without a family account',
-    run: (c, branchId) =>
-      c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
-  },
-  {
-    name: 'credit refund',
-    refund: true,
-    run: (c, branchId) =>
-      c.refundTender({
-        branchId,
-        originalTenderId: 'tender-a',
-        deviceId: input.deviceId,
-        businessDate: input.businessDate,
-        amountMinor: 50,
-        reason: 'Return',
-        idempotencyKey: 'refund-a',
-        approvalPin: APPROVAL_PIN,
-      }),
-  },
-];
+const khataPaths: { name: string; run: (caller: Caller, branchId: string) => Promise<unknown> }[] =
+  [
+    {
+      name: 'accounts',
+      run: (c, branchId) => c.khataAccounts({ branchId, saleId: input.saleId }),
+    },
+    {
+      name: 'statement',
+      run: (c, branchId) =>
+        c.khataStatement({
+          branchId,
+          saleId: input.saleId,
+          familyAccountId: input.familyAccountId,
+        }),
+    },
+    { name: 'Khata charge', run: (c, branchId) => c.tender({ ...input, branchId }) },
+    {
+      name: 'credit charge',
+      run: (c, branchId) => c.tender({ ...input, branchId, type: 'CREDIT' }),
+    },
+    { name: 'Khata outcome', run: (c, branchId) => c.tenderOutcome({ ...input, branchId }) },
+    {
+      name: 'credit outcome',
+      run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
+    },
+    {
+      name: 'legacy credit outcome without a family account',
+      run: (c, branchId) =>
+        c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
+    },
+    {
+      name: 'credit refund',
+      run: (c, branchId) =>
+        c.refundTender({
+          branchId,
+          originalTenderId: 'tender-a',
+          deviceId: input.deviceId,
+          businessDate: input.businessDate,
+          amountMinor: 50,
+          reason: 'Return',
+          idempotencyKey: 'refund-a',
+          managerPin: '1234',
+        }),
+    },
+  ];
 
-describe.each(khataPaths)('Khata $name authorization', ({ run, refund }) => {
+describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
   it('allows the assigned branch with real counter permissions and no dispense grant', async () => {
     const f = fixture();
     f.user.role = 'EMPLOYEE';
-    if (refund) f.member.organizationRole.permissions.push(manage);
     await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
   });
 
@@ -391,7 +369,6 @@ describe.each(khataPaths)('Khata $name authorization', ({ run, refund }) => {
     async (source) => {
       const f = fixture();
       f.user.role = 'EMPLOYEE';
-      if (refund) f.member.organizationRole.permissions.push(manage);
       const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
       if (source === 'user') f.member.permissionOverrides = [denial];
       else f.member.organizationRole.permissions.push(denial);
@@ -465,7 +442,6 @@ describe.each(khataPaths)('Khata $name authorization', ({ run, refund }) => {
     'preserves and audits tenant-admin access with assignments $assignments',
     async ({ assignments }) => {
       const f = fixture();
-      if (refund) f.member.organizationRole.permissions.push(manage);
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({
@@ -598,6 +574,7 @@ describe('Khata router trust and recovery boundary', () => {
           amountMinor: 50,
           reason: 'Return',
           idempotencyKey: 'refund-a',
+          managerPin: '1234',
         })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(refundPharmacyTender).not.toHaveBeenCalled();
@@ -735,6 +712,7 @@ describe('Khata router trust and recovery boundary', () => {
       amountMinor: 50,
       reason: 'Return',
       idempotencyKey: 'refund-a',
+      managerPin: '1234',
     };
 
     await expect(f.caller().tender(input)).rejects.toMatchObject({
@@ -843,7 +821,7 @@ describe('Khata router trust and recovery boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
   it('appends a refund payment once without editing the original charge', async () => {
-    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }, manage]);
+    const f = fixture();
     const charge = { id: 'khata:tender-a', familyAccountId: 'family-a' };
     f.db.pharmacyKhataEvent.findFirst
       .mockResolvedValueOnce(charge)
@@ -864,7 +842,7 @@ describe('Khata router trust and recovery boundary', () => {
       amountMinor: 50,
       reason: 'Return',
       idempotencyKey: 'refund-a',
-      approvalPin: APPROVAL_PIN,
+      managerPin: '1234',
     };
     await f.caller().refundTender(refund);
     await f.caller().refundTender(refund);
@@ -876,5 +854,189 @@ describe('Khata router trust and recovery boundary', () => {
         amountMinor: 50,
       }),
     });
+  });
+});
+
+describe('DEV-716 khataSignup', () => {
+  const signup = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    displayName: 'Ayesha',
+    phone: '0300 1234567',
+    consentGranted: true as const,
+  };
+  function signupDb(f: ReturnType<typeof fixture>) {
+    const db = f.db as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+    db.pharmacyPatient = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi
+        .fn()
+        .mockResolvedValue({ id: 'patient-a', displayName: 'Ayesha', phone: '03001234567' }),
+    };
+    let consented = false;
+    db.patientConsent = {
+      findFirst: vi.fn(async () => (consented ? { granted: true, revokedAt: null } : null)),
+      create: vi.fn(async () => {
+        consented = true;
+        return { id: 'consent-a' };
+      }),
+    };
+    db.pharmacySaleLine = { findFirst: vi.fn().mockResolvedValue(null) };
+    db.pharmacyCustomer = {
+      upsert: vi
+        .fn()
+        .mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha', phoneLast4: '4567' }),
+    };
+    db.pharmacySale = {
+      findFirst: vi.fn().mockResolvedValue({ id: 'sale-a', status: 'OPEN' }),
+      update: vi.fn().mockResolvedValue({}),
+    };
+    db.pharmacyFamilyAccount.findFirst = vi.fn().mockResolvedValue(null);
+    db.pharmacyFamilyAccount.create = vi.fn().mockResolvedValue({ id: 'family-new' });
+    db.pharmacyFamilyMember = { create: vi.fn().mockResolvedValue({ id: 'member-new' }) };
+    db.pharmacyLoyaltyPointsEntry = { findFirst: vi.fn().mockResolvedValue(null) };
+    f.db.$queryRaw.mockResolvedValue([{ id: 'patient-a' }]);
+    return db;
+  }
+
+  it('lets a counter cashier open a 0-limit account linked to the sale', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'EMPLOYEE');
+    const db = signupDb(f);
+    await expect(f.caller().khataSignup(signup)).resolves.toEqual({
+      customerId: 'customer-a',
+      familyAccountId: 'family-new',
+      created: true,
+    });
+    expect(db.patientConsent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ purpose: 'LOYALTY', granted: true, patientId: 'patient-a' }),
+    });
+    expect(db.pharmacySale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { customerId: 'customer-a' } })
+    );
+    expect(db.pharmacyFamilyAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ creditLimitMinor: 0 }) })
+    );
+  });
+
+  it('rejects a client-supplied limit and missing consent at the input boundary', async () => {
+    const f = fixture();
+    const db = signupDb(f);
+    await expect(
+      f.caller().khataSignup({ ...signup, creditLimitMinor: 500000 } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller().khataSignup({ ...signup, consentGranted: false } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(f.caller().khataSignup({ ...signup, phone: undefined })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+  });
+
+  it('denies finance-only and dispense-only operators before any write', async () => {
+    for (const capability of ['reports:financial', 'pharmacy:dispense']) {
+      const f = fixture([{ capability, effect: 'ALLOW' }], 'EMPLOYEE');
+      const db = signupDb(f);
+      await expect(f.caller().khataSignup(signup)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyPatient.create).not.toHaveBeenCalled();
+      expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a sale that is no longer open without opening an account', async () => {
+    const f = fixture();
+    const db = signupDb(f);
+    db.pharmacySale.findFirst.mockResolvedValue(null);
+    await expect(f.caller().khataSignup(signup)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('K4 counter khata repayment (DEV-731)', () => {
+  const payment = {
+    branchId: 'branch-a',
+    familyAccountId: 'family-a',
+    amountMinor: 500,
+    tender: 'CASH' as const,
+    deviceId: 'device-a',
+    businessDate: input.businessDate,
+    idempotencyKey: 'khata-payment:1',
+  };
+  const slip = {
+    receiptReference: 'KP-0123456789',
+    familyAccountId: 'family-a',
+    accountName: 'Family',
+    amountMinor: 500,
+    tender: 'CASH' as const,
+    payerReference: null,
+    balanceAfterMinor: 0,
+    recordedAt: new Date('2026-11-15T06:00:00.000Z'),
+    currency: 'PKR',
+    replayed: false,
+  };
+  const counterScope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' };
+
+  it('records a counter repayment in one transaction bound to the branch', async () => {
+    vi.mocked(recordKhataRepayment).mockResolvedValue(slip);
+    const f = fixture();
+    await expect(f.caller().recordKhataPayment(payment)).resolves.toEqual(slip);
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+    expect(f.db.$queryRaw).toHaveBeenCalled();
+    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment);
+  });
+
+  it('lists repayment accounts for counter users without a sale', async () => {
+    vi.mocked(searchKhataRepaymentAccounts).mockResolvedValue([]);
+    const f = fixture();
+    await expect(
+      f.caller().khataPaymentAccounts({ branchId: 'branch-a', query: 'Khan' })
+    ).resolves.toEqual([]);
+    expect(searchKhataRepaymentAccounts).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      counterScope,
+      'Khan'
+    );
+  });
+
+  it('denies reports-only users the repayment write before opening a transaction', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }], 'EMPLOYEE');
+    await expect(f.caller().recordKhataPayment(payment)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(recordKhataRepayment).not.toHaveBeenCalled();
+  });
+
+  it('lets a counter DENY override owner access for repayments', async () => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
+    await expect(f.caller().recordKhataPayment(payment)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(recordKhataRepayment).not.toHaveBeenCalled();
+  });
+
+  it('answers ledger refusals as typed bad requests', async () => {
+    vi.mocked(recordKhataRepayment).mockRejectedValue(
+      new FamilyKhataError('PAYMENT_EXCEEDS_BALANCE')
+    );
+    const f = fixture();
+    await expect(f.caller().recordKhataPayment(payment)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'PAYMENT_EXCEEDS_BALANCE',
+    });
+  });
+
+  it('rejects a khata (credit) tender as the repayment tender', async () => {
+    const f = fixture();
+    await expect(
+      f.caller().recordKhataPayment({ ...payment, tender: 'KHATA' as never })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(recordKhataRepayment).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
   pharmacists: {} as Record<string, unknown>,
+  refundAccess: {} as Record<string, unknown>,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -19,23 +20,25 @@ vi.mock('@/lib/trpc', () => ({
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
       provisionMyRefundPin: { useMutation: () => ({ mutateAsync: mocks.provisionPin }) },
+      refundAccess: { useQuery: () => mocks.refundAccess },
     },
     pharmacySafety: {
       controlledPharmacists: { useQuery: () => mocks.pharmacists },
     },
   },
 }));
-const props = {
+const base = {
   branchId: 'b',
   organizationId: 'o',
   accountId: 'a',
   deviceId: () => 'd',
   businessDate: () => new Date('2026-09-29'),
 };
+const props = { ...base, refundAuthorized: true };
 function chooseReceipt() {
   fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
 }
-function enterApprovalPin(pin = '4321') {
+function enterManagerPin(pin = '2468') {
   fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), { target: { value: pin } });
 }
 beforeEach(() => {
@@ -45,6 +48,7 @@ beforeEach(() => {
   mocks.returnLine.mockResolvedValue({});
   mocks.refund.mockResolvedValue({});
   mocks.pharmacists = { data: [{ id: 'staff-w', name: 'Witness Pharmacist' }] };
+  mocks.refundAccess = { data: { authorized: true } };
   mocks.lookup = {
     isSuccess: true,
     data: [
@@ -168,10 +172,12 @@ describe('counter returns', () => {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-    enterApprovalPin();
+    enterManagerPin();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
     await waitFor(() =>
-      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
+      expect(mocks.refund).toHaveBeenCalledWith(
+        expect.objectContaining({ branchId: 'b', managerPin: '2468' })
+      )
     );
   });
   it('explains lookup permission errors and offers retry', () => {
@@ -236,14 +242,13 @@ describe('counter returns', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'card' } });
+    enterManagerPin();
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '6.00' } });
     const submit = screen.getByRole('button', { name: 'Confirm refund' });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '5.00' } });
     expect(submit).toBeDisabled();
     fireEvent.click(screen.getByLabelText(/No provider refund adapter/));
-    expect(submit).toBeDisabled();
-    enterApprovalPin();
     expect(submit).toBeEnabled();
   });
   it.each([false, true])(
@@ -254,7 +259,7 @@ describe('counter returns', () => {
       chooseReceipt();
       fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
       fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-      enterApprovalPin();
+      enterManagerPin();
       fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
       await screen.findByRole('button', { name: 'Retry saved refund' });
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Disconnected'));
@@ -271,7 +276,7 @@ describe('counter returns', () => {
       render(<ReturnForm {...props} />);
       const retry = await screen.findByRole('button', { name: 'Retry saved refund' });
       expect(retry).toBeDisabled();
-      enterApprovalPin();
+      enterManagerPin();
       fireEvent.click(retry);
       await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
@@ -283,7 +288,7 @@ describe('counter returns', () => {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-    enterApprovalPin();
+    enterManagerPin();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
     await screen.findByRole('button', { name: 'Retry saved refund' });
     const key = 'pharmacy-return:o:a:b';
@@ -453,63 +458,94 @@ describe('controlled medicine returns', () => {
     expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
   });
 });
-
-describe('DEV-645 manager/owner refund approval', () => {
-  it('hides Returns & refunds from staff who cannot refund', () => {
-    const view = render(<CounterReturnPanel {...props} refundsAuthorized={false} />);
-    expect(screen.queryByRole('button', { name: 'Returns & refunds' })).not.toBeInTheDocument();
-    view.rerender(<CounterReturnPanel {...props} refundsAuthorized />);
-    expect(screen.getByRole('button', { name: 'Returns & refunds' })).toBeVisible();
+describe('DEV-647 refund access', () => {
+  it('hides the refund step from a cashier but keeps returns', () => {
+    render(<ReturnForm {...props} refundAuthorized={false} />);
+    chooseReceipt();
+    expect(screen.getByRole('button', { name: 'Record return' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Original tender')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/Refunds need a manager or owner/)).toBeVisible();
   });
-
-  it('requires the approver PIN, sends it, and never saves it on the device', async () => {
-    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+  it('fails closed to the cashier view when refund access is not granted', () => {
+    render(<ReturnForm {...base} />);
+    chooseReceipt();
+    expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
+  });
+  it.each([
+    [{ data: { authorized: false } }, 'Returns'],
+    [{ isLoading: true }, 'Returns'],
+    [{ isError: true }, 'Returns'],
+    [{ data: { authorized: true } }, 'Returns & refunds'],
+  ])('labels the counter entry from refund access %#', (access, label) => {
+    mocks.refundAccess = access;
+    render(<CounterReturnPanel {...base} />);
+    expect(screen.getByRole('button', { name: label })).toBeVisible();
+    if (label === 'Returns')
+      expect(screen.queryByRole('button', { name: /refunds/ })).not.toBeInTheDocument();
+  });
+  it('needs the manager PIN and never saves it with the attempt', async () => {
+    let saved = '';
+    mocks.refund.mockImplementationOnce(async () => {
+      saved = localStorage.getItem('pharmacy-return:o:a:b') ?? '';
+      return {};
+    });
     render(<ReturnForm {...props} />);
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     const submit = screen.getByRole('button', { name: 'Confirm refund' });
     expect(submit).toBeDisabled();
-    enterApprovalPin('12');
+    enterManagerPin('12');
     expect(submit).toBeDisabled();
-    enterApprovalPin('987654');
+    enterManagerPin('9753');
+    expect(submit).toBeEnabled();
     fireEvent.click(submit);
-    await screen.findByRole('button', { name: 'Retry saved refund' });
-    expect(mocks.refund).toHaveBeenCalledWith(
-      expect.objectContaining({ originalTenderId: 'cash', approvalPin: '987654' })
-    );
-    const saved = localStorage.getItem('pharmacy-return:o:a:b')!;
+    await waitFor(() => expect(mocks.refund).toHaveBeenCalledOnce());
     expect(saved).toContain('"kind":"refund"');
-    expect(saved).not.toContain('987654');
+    expect(saved).not.toContain('9753');
     expect(screen.getByLabelText('Your manager or owner PIN')).toHaveValue('');
   });
-
-  it('keeps a saved refund for reconciliation when its retry PIN is refused', async () => {
+  it('keeps a saved refund for a manager when the user has no refund access', async () => {
     mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    enterManagerPin();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByRole('button', { name: 'Retry saved refund' });
+    const saved = localStorage.getItem('pharmacy-return:o:a:b');
+    view.unmount();
+    render(<ReturnForm {...base} />);
+    expect(screen.getByRole('button', { name: 'Retry saved refund' })).toBeDisabled();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/A manager or owner must retry it/)).toBeVisible();
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBe(saved);
+    expect(mocks.refund).toHaveBeenCalledOnce();
+  });
+  it('reports a refused PIN without keeping a fresh attempt', async () => {
+    mocks.refund.mockResolvedValueOnce({
+      blocked: 'Refund not recorded. Enter your manager or owner PIN.',
+    });
     render(<ReturnForm {...props} />);
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-    enterApprovalPin();
+    enterManagerPin();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
-    const retry = await screen.findByRole('button', { name: 'Retry saved refund' });
-    mocks.refund.mockRejectedValueOnce(
-      Object.assign(new Error('Your PIN was not accepted.'), { data: { code: 'FORBIDDEN' } })
-    );
-    enterApprovalPin('0000');
-    fireEvent.click(retry);
-    await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('PIN was not accepted')
+      expect(screen.getByRole('alert')).toHaveTextContent('Enter your manager or owner PIN')
     );
-    expect(screen.getByRole('button', { name: 'Retry saved refund' })).toBeVisible();
-    expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('"kind":"refund"');
-    expect(mocks.refund.mock.calls[1][0].idempotencyKey).toBe(
-      mocks.refund.mock.calls[0][0].idempotencyKey
-    );
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry saved refund' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Refund recorded/)).not.toBeInTheDocument();
   });
+});
 
-  it('offers first-time PIN setup to a manager without a PIN, then asks for it', async () => {
+describe('DEV-645 first-time refund PIN setup', () => {
+  it('offers setup to a manager without a PIN, then asks for that PIN', async () => {
     mocks.provisionPin.mockResolvedValue({ id: 'cred', staffProfileId: 'staff' });
     render(<ReturnForm {...props} refundPinReady={false} />);
     chooseReceipt();
@@ -518,6 +554,7 @@ describe('DEV-645 manager/owner refund approval', () => {
     expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
     const setPin = screen.getByRole('button', { name: 'Set PIN' });
+    expect(setPin).toBeDisabled();
     fireEvent.change(screen.getByLabelText('New PIN'), { target: { value: '7351' } });
     fireEvent.change(screen.getByLabelText('Repeat new PIN'), { target: { value: '7352' } });
     expect(screen.getByText('The two PINs do not match.')).toBeVisible();
@@ -527,10 +564,10 @@ describe('DEV-645 manager/owner refund approval', () => {
     await waitFor(() => expect(mocks.provisionPin).toHaveBeenCalledWith({ pin: '7351' }));
     await screen.findByText(/PIN set\./);
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
-    enterApprovalPin('7351');
+    enterManagerPin('7351');
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
     await waitFor(() =>
-      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ approvalPin: '7351' }))
+      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ managerPin: '7351' }))
     );
   });
 
@@ -552,5 +589,19 @@ describe('DEV-645 manager/owner refund approval', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('already have a staff PIN')
     );
     expect(screen.getByLabelText('Your manager or owner PIN')).toBeVisible();
+  });
+
+  it('never offers PIN setup to someone who cannot refund', () => {
+    render(<ReturnForm {...base} refundPinReady={false} />);
+    chooseReceipt();
+    expect(screen.queryByRole('button', { name: 'Set PIN' })).not.toBeInTheDocument();
+  });
+
+  it('passes pinReady from refund access into the form', () => {
+    mocks.refundAccess = { data: { authorized: true, pinReady: false } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns & refunds' }));
+    chooseReceipt();
+    expect(screen.getByRole('region', { name: 'Set up your refund PIN' })).toBeVisible();
   });
 });

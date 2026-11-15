@@ -49,6 +49,7 @@ import {
   composerProofNeedsRenewal,
   countQueuedCommands,
   type PosQueueSnapshot,
+  type PosQuotedModifier,
 } from '@/lib/restaurant/pos-command-queue';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 import {
@@ -67,7 +68,13 @@ type OpenOrder = {
   itemCount: number;
   subtotal: string;
 };
-type LocalDraftLine = AddMenuItemInput & { lineId: string; name: string; quotedUnitPrice: string };
+type LocalDraftLine = AddMenuItemInput & {
+  lineId: string;
+  name: string;
+  quotedUnitPrice: string;
+  /** The modifier deltas shown when the line was added; reviewed again before replay. */
+  quotedModifiers: PosQuotedModifier[];
+};
 type DeliveryCustomer = {
   customerId: string;
   displayName: string | null;
@@ -712,6 +719,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           seatNumber: line.seatNumber,
           modifierOptionIds: line.modifierOptionIds,
           quotedUnitPrice: line.quotedUnitPrice,
+          quotedModifiers: line.quotedModifiers,
         })),
       });
       if (!enqueued.ok) throw new Error(enqueued.message);
@@ -1055,6 +1063,10 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
             .find((candidate) => candidate.id === input.menuItemId);
           if (!item?.price) return;
           const quotedUnitPrice = item.price;
+          const quotedModifiers = (item.modifierGroups ?? [])
+            .flatMap((group) => group.options)
+            .filter((option) => input.modifierOptionIds.includes(option.id))
+            .map((option) => ({ optionId: option.id, priceDelta: option.priceDelta }));
           setDraftLines((current) => [
             ...current,
             {
@@ -1062,6 +1074,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
               lineId: browserUuid(),
               name: item.displayName ?? item.product.name,
               quotedUnitPrice,
+              quotedModifiers,
             },
           ]);
           setNotice({

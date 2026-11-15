@@ -14,13 +14,11 @@ vi.mock('@/lib/pharmacy/counter-evidence', async (importOriginal) => ({
 }));
 
 vi.mock('server-only', () => ({}));
-// DEV-645: refunds are approved by the manager's own PIN; this suite is about the cap.
-vi.mock('@/lib/pharmacy/refund-approval', () => ({
-  REFUND_APPROVAL_POLICY: 'PHARMACY_REFUND_MANAGER_PIN',
-  verifyRefundApproverPin: vi.fn(async () => ({
-    staffProfileId: 'staff-1',
-    pinReauthenticatedAt: new Date('2026-09-29T10:00:00Z'),
-  })),
+// DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: async () => true,
+  authenticateRefundPin: async () => ({ verified: true }),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -29,10 +27,10 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
-  annotateAudit: vi.fn(),
 }));
 
 import { refundPharmacyTender } from '@/lib/pharmacy/settlement';
@@ -60,10 +58,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: [
-            { capability: 'pharmacy:dispense', effect: 'ALLOW' },
-            { capability: 'pharmacy:manage', effect: 'ALLOW' },
-          ],
+          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
         },
         permissionOverrides: [],
       }),
@@ -149,7 +144,7 @@ for (const boundary of ['service', 'API'] as const) {
       const run = (f: ReturnType<typeof fixture>, amountMinor = 100) => {
         const request = { ...input, ...flag, amountMinor };
         return boundary === 'API'
-          ? f.caller.refundTender({ ...request, approvalPin: '2468' })
+          ? f.caller.refundTender({ ...request, managerPin: '1234' })
           : refundPharmacyTender(f.db as unknown as ScopedDb, scope, request);
       };
       const assertLocked = (f: ReturnType<typeof fixture>) => {
@@ -212,11 +207,11 @@ it('includes unidentified quarantine holdings in the mandatory refund cap', asyn
   const sale = await f.db.pharmacySale.findFirst();
   sale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
   await expect(
-    f.caller.refundTender({ ...input, amountMinor: 201, approvalPin: '2468' })
+    f.caller.refundTender({ ...input, amountMinor: 201, managerPin: '1234' })
   ).rejects.toThrow('REFUND_EXCEEDS_TENDER');
   expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
   await expect(
-    f.caller.refundTender({ ...input, amountMinor: 200, approvalPin: '2468' })
+    f.caller.refundTender({ ...input, amountMinor: 200, managerPin: '1234' })
   ).resolves.toMatchObject({
     refundId: 'refund-1',
   });
