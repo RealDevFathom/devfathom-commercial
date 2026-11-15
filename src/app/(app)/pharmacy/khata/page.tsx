@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { revalidatePath } from 'next/cache';
 import { redirect, unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
