@@ -12,6 +12,7 @@ type UsageRow = { provider: string; costUsd: number; createdAt: Date };
 const store = vi.hoisted(() => ({
   prices: [] as PriceRow[],
   usage: [] as UsageRow[],
+  priceQueries: [] as string[],
 }));
 
 // In-memory stand-in for the platform database: it interprets the two ledger
@@ -20,6 +21,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async (query: { sql: string; values: unknown[] }) => {
       if (query.sql.includes('ai_model_prices')) {
+        store.priceQueries.push(query.sql.replace(/\s+/g, ' ').trim());
         const [provider, model, at] = query.values as [string, string, Date];
         const rows = store.prices
           .filter(
@@ -53,7 +55,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   };
 });
 
-import { FALLBACK_PRICE_USD_PER_MTOK, listPriceFor } from './model-defaults';
+import {
+  DEFAULT_MODEL_PRICES_USD_PER_MTOK,
+  FALLBACK_PRICE_USD_PER_MTOK,
+  listPriceFor,
+  type TieredAIProviderName,
+} from './model-defaults';
+import { __setRouterDependenciesForTests, readRoutedAvailability } from './router';
 import { computeAIUsageCost, readProviderSpend, recordProviderUsage } from './spend';
 
 const base = {
@@ -67,6 +75,8 @@ const T = (iso: string) => new Date(iso);
 beforeEach(() => {
   store.prices = [];
   store.usage = [];
+  store.priceQueries = [];
+  __setRouterDependenciesForTests(null);
 });
 
 describe('unknown-model fallback price', () => {
@@ -90,7 +100,32 @@ describe('unknown-model fallback price', () => {
   });
 });
 
+describe('every default model list price', () => {
+  it.each(Object.entries(DEFAULT_MODEL_PRICES_USD_PER_MTOK))(
+    'records %s at its own list price, below the provider fallback',
+    async (key, price) => {
+      const [provider, ...rest] = key.split(':');
+      const model = rest.join(':');
+      const cost = await recordProviderUsage({
+        ...base,
+        provider: provider as TieredAIProviderName,
+        model,
+      });
+      expect(cost).toBe(price.input + price.output);
+      const fb = FALLBACK_PRICE_USD_PER_MTOK[provider as TieredAIProviderName];
+      expect(cost).toBeLessThan(fb.input + fb.output);
+    }
+  );
+});
+
 describe('effective-date precedence of price rows', () => {
+  it('queries rows effective at or before the call time, newest first', async () => {
+    await recordProviderUsage({ ...base, provider: 'anthropic', model: 'claude-sonnet-5-5' });
+    const sql = store.priceQueries[0];
+    expect(sql).toContain('"effectiveFrom" <= ');
+    expect(sql).toContain('ORDER BY "effectiveFrom" DESC LIMIT 1');
+  });
+
   const row = (effectiveFrom: string, input: number, output: number): PriceRow => ({
     provider: 'anthropic',
     model: 'claude-sonnet-5-5',
@@ -161,30 +196,52 @@ describe('decimal rounding', () => {
 });
 
 describe('budget decision driven by recorded costs', () => {
+  // Only Anthropic is configured, so the real router has nowhere to fail over to.
+  const ENV = {
+    NODE_ENV: 'production',
+    AI_PROVIDER: 'auto',
+    ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
+    AI_ANTHROPIC_MONTHLY_CAP_USD: '20',
+  };
   const bounds = { from: T('2026-11-01T00:00:00Z'), to: T('2026-12-01T00:00:00Z') };
-  const call = (model: string, createdAt: string, inputTokens = 1_000_000) =>
+  const call = (model: string, createdAt: string) =>
     recordProviderUsage({
       ...base,
       provider: 'anthropic',
       model,
-      inputTokens,
+      inputTokens: 1_000_000,
       outputTokens: 0,
       createdAt: T(createdAt),
     });
 
-  it('trips the cap early because unknown models are priced high', async () => {
-    const cap = 20;
+  beforeEach(() => {
+    // The real ledger functions feed the real router cap check.
+    __setRouterDependenciesForTests({
+      now: () => T('2026-11-10T12:00:00Z'),
+      storedSettings: async () => null,
+      spend: readProviderSpend,
+      record: recordProviderUsage,
+      apiKey: async () => 'key',
+    });
+  });
+
+  it('trips the router cap early because unknown models are priced high', async () => {
     await call('claude-sonnet-5-5', '2026-11-05T00:00:00Z'); // $2
-    expect(await readProviderSpend('anthropic', bounds.from, bounds.to)).toBe(2);
-    expect((await readProviderSpend('anthropic', bounds.from, bounds.to)) >= cap).toBe(false);
-
     await call('claude-unknown-9', '2026-11-06T00:00:00Z'); // $15 fallback
-    const spent = await readProviderSpend('anthropic', bounds.from, bounds.to);
-    expect(spent).toBe(17);
-    expect(spent >= cap).toBe(false);
+    expect(await readProviderSpend('anthropic', bounds.from, bounds.to)).toBe(17);
+    await expect(readRoutedAvailability(ENV)).resolves.toEqual({ available: true });
 
-    await call('claude-unknown-9', '2026-11-07T00:00:00Z');
-    expect((await readProviderSpend('anthropic', bounds.from, bounds.to)) >= cap).toBe(true);
+    await call('claude-unknown-9', '2026-11-07T00:00:00Z'); // $32 >= $20 cap
+    await expect(readRoutedAvailability(ENV)).resolves.toEqual({
+      available: false,
+      reason: 'CAPPED',
+    });
+  });
+
+  it('keeps the provider available when the same traffic is on the cheap known model', async () => {
+    for (const day of ['05', '06', '07'])
+      await call('claude-haiku-5-5', `2026-11-${day}T00:00:00Z`);
+    await expect(readRoutedAvailability(ENV)).resolves.toEqual({ available: true });
   });
 
   it('counts only the requested provider and month', async () => {
