@@ -21,7 +21,7 @@ export default function GlobalError({
         </p>
         <button
           onClick={reset}
-          className="mt-6 flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white mx-auto hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="mt-6 flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground mx-auto hover:bg-[#0C2E2C] active:scale-[0.98]"
         >
           <RefreshCw className="h-4 w-4" />
           Try Again

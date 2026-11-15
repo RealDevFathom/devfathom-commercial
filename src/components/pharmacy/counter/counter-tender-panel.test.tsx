@@ -344,7 +344,8 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['CARD', 'BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
+  // DEV-713: CARD now needs slip details; see the manual card tender tests.
+  it.each(['BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
     const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
     setup({ onTender });
     chooseTender(type);
@@ -357,6 +358,134 @@ describe('CounterTenderPanel acknowledgement', () => {
       { type, amountMinor: 12550 },
       { amount: '125.50', cashReceived: '' }
     );
+  });
+});
+
+describe('DEV-713 manual card tender', () => {
+  it('takes a terminal card with reference and approval code, no provider wording', async () => {
+    const { props } = setup();
+    chooseTender('CARD');
+    expect(screen.queryByText(/certified payment provider/)).not.toBeInTheDocument();
+    expect(screen.getByText(/recorded as the person who confirmed this payment/)).toBeVisible();
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    const reference = screen.getByLabelText('Card last 4 digits or terminal reference');
+    fireEvent.change(reference, { target: { value: '4242' } });
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A' } });
+    expect(screen.getByLabelText('Approval code')).toHaveAttribute('aria-invalid', 'true');
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+    // A full card number is refused before any payment is sent.
+    fireEvent.change(reference, { target: { value: '4242424242424242' } });
+    expect(reference).toHaveAttribute('aria-invalid', 'true');
+    expect(button).toBeDisabled();
+    fireEvent.change(reference, { target: { value: '4242' } });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'CARD', amountMinor: 25000, providerRef: '4242', approvalCode: 'A1B2C3' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+    await screen.findByText('Payment recorded.');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
+  });
+
+  it('keeps a rejected card selection, amount and slip details', async () => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    chooseTender('CARD');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: 'RRN123456' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '0042' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(tenderButton('CARD')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('0042');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      { type: 'CARD', amountMinor: 12550, providerRef: 'RRN123456', approvalCode: '0042' },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
+
+  it('clears card slip details when another tender is chosen', () => {
+    setup();
+    chooseTender('CARD');
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2' } });
+    chooseTender('BANK_TRANSFER');
+    chooseTender('CARD');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
+  });
+});
+
+describe('DEV-713 wallet is its own tender, separate from card', () => {
+  it('shows enabled wallets in their own Wallet group, apart from Card', () => {
+    setup({
+      manualSettings: {
+        JAZZCASH: { destination: '', allowReferenceSkip: false },
+        RAAST: { destination: '', allowReferenceSkip: false },
+      },
+    });
+    const wallet = screen.getByRole('group', { name: 'Wallet' });
+    expect(
+      within(wallet)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['JazzCash', 'Raast']);
+    expect(within(wallet).queryByRole('button', { name: 'Card' })).not.toBeInTheDocument();
+    chooseTender('CARD');
+    expect(
+      screen.getByText(/Take JazzCash, Easypaisa or Raast under Wallet, not Card/)
+    ).toBeVisible();
+    expect(screen.queryByText(/wallet tap/)).not.toBeInTheDocument();
+    chooseTender('JAZZCASH');
+    expect(screen.queryByLabelText('Approval code')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Transaction ID (last 4–6 digits)')).toBeVisible();
+  });
+
+  it('shows no Wallet group when the branch has enabled no wallet', () => {
+    setup({ manualSettings: {} });
+    expect(screen.queryByRole('group', { name: 'Wallet' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DEV-713 wallets enabled without merchant details', () => {
+  it('takes an enabled wallet with no IBAN, till number or QR on file', async () => {
+    const { props } = setup({
+      manualSettings: { EASYPAISA: { destination: '', allowReferenceSkip: false } },
+    });
+    chooseTender('EASYPAISA');
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/you are recorded as the person who confirmed it/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Bilal' } });
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      target: { value: '9876' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'EASYPAISA', amountMinor: 25000, payerName: 'Bilal', providerRef: '9876' },
+        expect.anything()
+      )
+    );
+  });
+
+  it('offers no wallet button while merchant settings are still loading', () => {
+    setup({
+      manualSettingsLoading: true,
+      manualSettings: { RAAST: { destination: '', allowReferenceSkip: false } },
+    });
+    expect(tenderButtons().map((button) => button.textContent)).toEqual([
+      'Cash',
+      'Card',
+      'Bank transfer',
+      'Khata',
+    ]);
   });
 });
 
@@ -619,3 +748,110 @@ it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('DEV-716 inline Khata signup', () => {
+  it('signs up a new customer with name, phone and consent, then reloads accounts', async () => {
+    const account = {
+      id: 'family-new',
+      displayName: 'Ayesha',
+      creditLimitMinor: 0,
+      balanceMinor: 0,
+    };
+    const loadKhataAccounts = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([account]);
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({ loadKhataAccounts, signUpKhata });
+    chooseTender('KHATA');
+    const open = await screen.findByRole('button', { name: 'Open Khata account' });
+    expect(screen.getByText(/The credit limit starts at/)).toHaveTextContent('0.00');
+
+    fireEvent.change(screen.getByLabelText('Customer name'), { target: { value: ' Ayesha ' } });
+    fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '0300 1234567' } });
+    expect(open).toBeDisabled();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        displayName: 'Ayesha',
+        phone: '0300 1234567',
+        consentGranted: true,
+      })
+    );
+    await waitFor(() => expect(loadKhataAccounts).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('option', { name: 'Ayesha' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Khata account' })).not.toBeInTheDocument();
+  });
+
+  it('offers the selected counter patient as payer without re-asking name and phone', async () => {
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    expect(screen.queryByLabelText('Phone')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        patientId: 'patient-a',
+        displayName: 'Bilal',
+        consentGranted: true,
+      })
+    );
+  });
+
+  it('shows a failure and keeps the form when signup is refused', async () => {
+    const signUpKhata = vi
+      .fn()
+      .mockRejectedValue(new Error('This bill is no longer open for payment.'));
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This bill is no longer open for payment.'
+    );
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeInTheDocument();
+  });
+
+  it('clears the consent tick when the payer changes', async () => {
+    const props = {
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender, props: all } = setup({
+      ...props,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    const consent = () =>
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record');
+    fireEvent.click(consent());
+    expect(consent()).toBeChecked();
+    rerender(
+      <CounterTenderPanel
+        {...all}
+        khataSignupPatient={{ patientId: 'patient-b', displayName: 'Sana' }}
+      />
+    );
+    await screen.findByText('Payer: Sana');
+    expect(consent()).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeDisabled();
+  });
+});

@@ -61,6 +61,14 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  SALE_REDEEMED_BY_OTHER_CUSTOMER:
+    'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
+  PATIENT_AMBIGUOUS:
+    'More than one patient has this name and phone. Select the patient on the counter, then open Khata.',
+  PHONE_REQUIRED: 'Enter the customer’s phone number to open a Khata account.',
+  PATIENT_NOT_FOUND: 'That patient is not available in this workspace. Select the patient again.',
+  PRESCRIPTION_PATIENT_MISMATCH:
+    'This bill carries a prescription for a different patient. Link that patient instead.',
   SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
   OVER_TENDER: 'That payment is more than the amount still due on this bill.',
@@ -68,7 +76,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
   UNCERTIFIED_PROVIDER:
-    'This card terminal is not certified for live payments. Take another tender.',
+    'This tender needs a connected provider. Take another tender.',
+  INVALID_MANUAL_CAPTURE:
+    'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',

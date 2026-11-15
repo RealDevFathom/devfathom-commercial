@@ -37,7 +37,7 @@ Fragmented work across task trackers, documents, chat, meetings, CRM, HR, and fi
 | Notes and rich editing | **IMPLEMENTED** | Available |
 | Team and HR | **IMPLEMENTED / PARTIAL** | Available; depth and policy fit require discovery |
 | Chat and realtime | **PARTIAL** | Ably when configured; fallback exists; in-house realtime is planned |
-| Ask Fathom | **PARTIAL** | Provider-adapter based, credit usage; Azure is current environment |
+| Ask Fathom | **PARTIAL** | Provider-adapter based, credit usage; AWS is current environment |
 | Email | **PARTIAL** | Capture-safe delivery exists; connected inbox roadmap follows Meetings |
 | Meetings | **PARTIAL / BLOCKED** | Wave-1 schema/reconciliation PR #23 merged and staging-verified; Cowork login/dashboard/responsive checks passed but admin discovery has an unresolved attendee-filter/list-policy defect; self-hosted media endpoints and public production rollout are not live |
 | SSO / SCIM / custom domains | **PARTIAL** | Code and contracts exist; customer IdP/DNS rollout is a gate |
@@ -80,4 +80,4 @@ The evidence-backed offer is a controlled implementation: manual activation, org
 
 **Can you promise savings, compliance, or an SLA?** Not from repository evidence. Use an owner-approved contract or validated study.
 
-**Where does it run?** Azure. Staging is live, and isolated production resources are provisioned behind a dark Azure FQDN. The approved `ffec57b4` build, bootstrap, migrations, minimum replica, and health check passed. Public custom domains are not attached: `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is DNS-unconfigured. PR #33 hardening is merged to `main`; production is **DARK / NOT PUBLICLY CUT OVER**.
+**Where does it run?** AWS. Staging runs on AWS (see `docs/deploy/aws.md`); the AWS production environment is not created yet. Public custom domains are not attached: `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is DNS-unconfigured. PR #33 hardening is merged to `main`; production is **NOT PUBLICLY CUT OVER**.

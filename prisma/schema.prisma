@@ -1466,6 +1466,10 @@ model PharmacyTender {
   providerRef       String?
   payerName         String?
   referenceSkipped  Boolean                      @default(false)
+  /// DEV-713: approval code from a standalone card terminal slip (manual card only).
+  approvalCode      String?
+  /// DEV-713: the user who confirmed a manual card or wallet tender was received.
+  confirmedById     String?
   drawerSessionId   String?
   businessDate      DateTime                     @db.Date
   actorId           String
@@ -3438,6 +3442,8 @@ model Task {
   parentId       String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  // Maintained by database triggers on task/column transitions; legacy times are unknown.
+  completedAt    DateTime?
 
   // Relations
   column       Column              @relation(fields: [columnId], references: [id], onDelete: Cascade)
@@ -3457,6 +3463,7 @@ model Task {
   @@index([columnId, order])
   @@index([createdById])
   @@index([parentId])
+  @@index([organizationId, completedAt])
   @@index([organizationId])
   @@map("tasks")
 }
@@ -3646,7 +3653,9 @@ model Payment {
   paidAt         DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // DEV-166: the INCOME ledger entry this payment posted, so revenue reports see it.
+  transaction Transaction?
 
   @@index([invoiceId])
   @@index([organizationId])
@@ -3664,12 +3673,16 @@ model Transaction {
   projectId      String?
   clientId       String?
   receiptUrl     String?
+  // DEV-166: set on the INCOME entry an invoice payment posts; removing the
+  // payment removes its revenue entry with it.
+  paymentId      String?          @unique
   date           DateTime
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   client  Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([date])
@@ -12084,6 +12097,10 @@ enum PharmacyReceivingExceptionKind {
   DAMAGE
   PRICE_CONFLICT
   PACK_CONFLICT
+  /// DEV-690 — the distributor scheme's free units did not all arrive.
+  BONUS_SHORTAGE
+  /// DEV-690 — goods arrived after the scheme on the order line had lapsed.
+  SCHEME_EXPIRED
 }
 
 enum PharmacyReceivingExceptionStatus {
@@ -12976,6 +12993,10 @@ model PharmacyGoodsReceipt {
   qualifiedPersonUserId  String?
   /// AI-03: document-level OCR proposals and their source boxes.
   ocrDraftEvidence       Json?
+  /// DEV-77: freight the supplier billed on this invoice. Like a non-creditable
+  /// tax it is part of what is owed on the invoice and of each lot's landed unit
+  /// cost, spread across the lines by their cost; never revenue.
+  freightMinor           Int                        @default(0)
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
 
@@ -13025,9 +13046,12 @@ model PharmacyGoodsReceiptLine {
   discountBps               Int                     @default(0)
   taxBps                    Int                     @default(0)
   taxCreditable             Boolean                 @default(false)
+  /// DEV-77: this line's share of the receipt freight, already inside unitCostMinor.
+  allocatedFreightMinor     Int                     @default(0)
   /// DEV-161: this line's share of its purchase order's freight and other
   /// charges, already inside unitCostMinor. Posting settles it again from the
   /// receipts that have posted, adjusting unitCostMinor by the difference only.
+  /// Zero when the receipt bills its own invoice freight.
   allocatedOrderChargeMinor Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).

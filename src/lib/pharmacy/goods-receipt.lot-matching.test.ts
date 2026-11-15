@@ -264,6 +264,44 @@ beforeEach(() => {
   });
 });
 
+describe('postGoodsReceipt — received time of the posted lot (DEV-726)', () => {
+  it('never makes a lot received later than its posting instant', async () => {
+    const { db } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [{ id: 'grl_1', lineNumber: 1, purchaseOrderLineId: 'pol_a', received: 100 }],
+    });
+    // Keyed for 21 October (stored as UTC midnight) and posted at 01:30 PKT that day,
+    // which is still 20:30 UTC on the 20th.
+    const postedAt = new Date('2026-10-20T20:30:00.000Z');
+
+    await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr_current', at: postedAt });
+
+    expect(receiveLot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ receivedAt: postedAt })
+    );
+  });
+
+  it('keeps an earlier received date as keyed', async () => {
+    const { db } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [{ id: 'grl_1', lineNumber: 1, purchaseOrderLineId: 'pol_a', received: 100 }],
+    });
+
+    await postGoodsReceipt(db, SCOPE, {
+      goodsReceiptId: 'gr_current',
+      at: new Date('2026-10-22T09:00:00.000Z'),
+    });
+
+    expect(receiveLot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ receivedAt: AT })
+    );
+  });
+});
+
 describe('postGoodsReceipt — several lots of one order line (DEV-752)', () => {
   it('raises no quantity exception when 6 + 4 packs fill a 10-pack line', async () => {
     const { db, mocks } = receiptDb({

@@ -572,6 +572,81 @@ describe('PUR-04 — the three-way match', () => {
   });
 });
 
+describe('DEV-690 — bonus-scheme check at goods-in', () => {
+  // A 10+2 scheme on 10 packs of 10: 100 paid units and 20 free ones.
+  const ORDERED = {
+    canonicalUnitsPerPack: 10,
+    orderedCanonicalUnits: 100,
+    bonusCanonicalUnits: 20,
+    listPricePerPackMinor: 10_000,
+    previouslyReceivedUnits: 0,
+    previouslyReceivedBonusUnits: 0,
+    schemeValidUntil: new Date('2026-11-30T23:59:59Z'),
+  };
+  const RECEIVED = {
+    canonicalUnitsPerPack: 10,
+    arrivedCanonicalUnits: 120,
+    rejectedCanonicalUnits: 0,
+    rejectionReason: null,
+    invoicedPricePerPackMinor: 10_000,
+    bonusCanonicalUnits: 20,
+    receivedAt: new Date('2026-11-15T10:00:00Z'),
+  };
+
+  it('raises nothing when every free unit arrives inside the scheme window', () => {
+    expect(matchReceiptLine({ ordered: ORDERED, received: RECEIVED })).toEqual([]);
+  });
+
+  it('flags missing free units even when paid extras make the total quantity match', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, bonusCanonicalUnits: 0 },
+    });
+    expect(exceptions).toEqual([
+      expect.objectContaining({ kind: 'BONUS_SHORTAGE', expectedUnits: 20, observedUnits: 0 }),
+    ]);
+  });
+
+  it('accumulates free units across deliveries', () => {
+    expect(
+      matchReceiptLine({
+        ordered: { ...ORDERED, previouslyReceivedUnits: 60, previouslyReceivedBonusUnits: 10 },
+        received: { ...RECEIVED, arrivedCanonicalUnits: 60, bonusCanonicalUnits: 10 },
+      })
+    ).toEqual([]);
+    expect(
+      matchReceiptLine({
+        ordered: { ...ORDERED, previouslyReceivedUnits: 60, previouslyReceivedBonusUnits: 5 },
+        received: { ...RECEIVED, arrivedCanonicalUnits: 60, bonusCanonicalUnits: 10 },
+      }).map((exception) => [exception.kind, exception.observedUnits])
+    ).toEqual([['BONUS_SHORTAGE', 15]]);
+  });
+
+  it('flags a scheme that had lapsed before the goods arrived', () => {
+    const [exception, ...rest] = matchReceiptLine({
+      ordered: { ...ORDERED, schemeValidUntil: new Date('2026-11-01T00:00:00Z') },
+      received: RECEIVED,
+    });
+    expect(rest).toEqual([]);
+    expect(exception?.kind).toBe('SCHEME_EXPIRED');
+    expect(exception?.detail).toContain('2026-11-01');
+  });
+
+  it('checks nothing on a line with no scheme', () => {
+    expect(
+      matchReceiptLine({
+        ordered: {
+          ...ORDERED,
+          orderedCanonicalUnits: 120,
+          bonusCanonicalUnits: 0,
+          schemeValidUntil: new Date('2026-01-01T00:00:00Z'),
+        },
+        received: { ...RECEIVED, bonusCanonicalUnits: 0 },
+      })
+    ).toEqual([]);
+  });
+});
+
 describe('PUR-04 — a posted receipt is corrected by reversal, never by an edit', () => {
   it('allows DRAFT to POSTED and POSTED to REVERSED', () => {
     expect(() => assertGoodsReceiptTransition('DRAFT', 'POSTED')).not.toThrow();

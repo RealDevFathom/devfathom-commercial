@@ -52,6 +52,8 @@ function receiptDb(input: {
   stampedUnitCostMinor: number;
   /** The order-charge share the draft was stamped with. */
   stampedOrderChargeMinor: number;
+  /** Freight the receipt's own supplier invoice billed (DEV-77). */
+  receiptFreightMinor?: number;
 }) {
   const earlier = input.earlier ?? [];
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -104,6 +106,7 @@ function receiptDb(input: {
         warrantyEvidenceRef: 'WAR',
         supplierId: 'supplier_a',
         purchaseOrderId: 'po',
+        freightMinor: input.receiptFreightMinor ?? 0,
         receivedAt: AT,
         supplier: {
           name: 'Supplier',
@@ -237,6 +240,19 @@ describe('postGoodsReceipt landed cost (PUR-03)', () => {
     });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     expect(postedCost()).toBe(100);
+    expect(lineUpdate.mock.calls[0]![0].data).not.toHaveProperty('unitCostMinor');
+  });
+
+  it('leaves a receipt that billed its own invoice freight without any order share', async () => {
+    // Drafted at (9_000 + 500 invoice freight) / 100 with no order share.
+    const { db, lineUpdate } = receiptDb({
+      freightMinor: 1_000,
+      receiptFreightMinor: 500,
+      stampedUnitCostMinor: 95,
+      stampedOrderChargeMinor: 0,
+    });
+    await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+    expect(postedCost()).toBe(95);
     expect(lineUpdate.mock.calls[0]![0].data).not.toHaveProperty('unitCostMinor');
   });
 
