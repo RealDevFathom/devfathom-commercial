@@ -83,6 +83,7 @@ export type MenuImportErrorReason =
   | 'NOTHING_TO_IMPORT'
   | 'MERGE_TARGET_NOT_FOUND'
   | 'PRICE_REQUIRED'
+  | 'VARIANTS_REVIEW_REQUIRED'
   | 'CURRENCY_MISMATCH';
 
 export class MenuImportError extends Error {
@@ -576,7 +577,64 @@ export type ReviewLineInput = {
   /** Required for MERGED, forbidden otherwise. */
   mergeProductId?: string | null;
   mergeVariantId?: string | null;
+  /**
+   * The sizes exactly as the reviewer confirmed them. `undefined` keeps any
+   * earlier confirmation; `[]` confirms the line has no sizes. Accepting a line
+   * whose extraction found sizes requires a confirmation, because commit never
+   * imports unconfirmed OCR size prices.
+   */
+  variants?: Array<{ name: string; priceAmount: string | null }>;
 };
+
+const PRICE_PATTERN = /^\d{1,10}(\.\d{1,2})?$/;
+const MAX_REVIEWED_VARIANTS = 20;
+
+/** Validate reviewer-confirmed sizes into the stored `extractedVariants` shape. */
+function normalizeReviewedVariants(
+  variants: Array<{ name: string; priceAmount: string | null }>,
+  extracted: Array<{ name: string; amount: string | null; currency: string | null }>
+): Array<{ name: string; price: { amount: string | null; currency: string | null; raw: null } }> {
+  if (variants.length > MAX_REVIEWED_VARIANTS) {
+    throw new MenuImportError(
+      `A line can carry at most ${MAX_REVIEWED_VARIANTS} sizes.`,
+      'INVALID'
+    );
+  }
+  const seen = new Set<string>();
+  return variants.map((variant) => {
+    const name = variant.name?.trim().slice(0, 120) ?? '';
+    if (!name) {
+      throw new MenuImportError('Every confirmed size needs a name.', 'INVALID');
+    }
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      throw new MenuImportError(`The size "${name}" is listed twice.`, 'INVALID');
+    }
+    seen.add(key);
+    const raw = variant.priceAmount?.trim() ?? '';
+    if (raw !== '' && !PRICE_PATTERN.test(raw)) {
+      throw new MenuImportError('A size price must be a positive decimal amount.', 'INVALID');
+    }
+    const amount = raw === '' ? null : new Prisma.Decimal(raw);
+    // Re-confirming the printed figure keeps the printed currency, so confirming
+    // a foreign size price is never a silent relabel into the line's currency.
+    // A genuinely new figure is in the line's confirmed currency (null =
+    // inherit); commit re-checks both against the organization currency.
+    const printed = extracted.find((size) => size.name.trim().toLowerCase() === key);
+    const keepsPrinted =
+      amount !== null &&
+      printed?.amount != null &&
+      amount.equals(new Prisma.Decimal(printed.amount));
+    return {
+      name,
+      price: {
+        amount: amount === null ? null : amount.toFixed(2),
+        currency: keepsPrinted ? (printed?.currency?.toUpperCase() ?? null) : null,
+        raw: null,
+      },
+    };
+  });
+}
 
 function trimmedOrNull(value: string | null | undefined, max: number): string | null | undefined {
   if (value === undefined) return undefined;
@@ -610,6 +668,8 @@ export async function reviewMenuImportLine(
       extractedCurrency: true,
       reviewedPriceAmount: true,
       reviewedCurrency: true,
+      extractedVariants: true,
+      reviewedVariants: true,
       import: { select: { status: true } },
     },
   });
@@ -634,7 +694,7 @@ export async function reviewMenuImportLine(
     if (input.priceAmount === null || input.priceAmount.trim() === '') {
       priceAmount = null;
     } else {
-      if (!/^\d{1,10}(\.\d{1,2})?$/.test(input.priceAmount.trim())) {
+      if (!PRICE_PATTERN.test(input.priceAmount.trim())) {
         throw new MenuImportError('The price must be a positive decimal amount.', 'INVALID');
       }
       priceAmount = new Prisma.Decimal(input.priceAmount.trim());
@@ -662,6 +722,15 @@ export async function reviewMenuImportLine(
       priceAmount = null;
     }
   }
+
+  const reviewedVariants =
+    input.variants === undefined
+      ? undefined
+      : normalizeReviewedVariants(input.variants, resolveVariants(line.extractedVariants));
+  const variantsUpdate =
+    reviewedVariants === undefined
+      ? {}
+      : { reviewedVariants: reviewedVariants as unknown as Prisma.InputJsonValue };
 
   if (input.decision === 'MERGED') {
     const mergeProductId = input.mergeProductId?.trim();
@@ -712,6 +781,7 @@ export async function reviewMenuImportLine(
         ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
         ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
         ...(note !== undefined ? { reviewNote: note } : {}),
+        ...variantsUpdate,
       },
     });
   }
@@ -739,6 +809,16 @@ export async function reviewMenuImportLine(
         'PRICE_REQUIRED'
       );
     }
+    // Sizes are prices too. When the menu showed sizes, the reviewer must have
+    // seen and confirmed each one; approving the base line alone is not consent
+    // to OCR size prices.
+    const confirmed = reviewedVariants ?? line.reviewedVariants;
+    if (resolveVariants(line.extractedVariants).length > 0 && confirmed === null) {
+      throw new MenuImportError(
+        'Accepting a line with sizes needs every size name and price confirmed.',
+        'VARIANTS_REVIEW_REQUIRED'
+      );
+    }
   }
 
   return db.restaurantMenuImportLine.update({
@@ -755,6 +835,7 @@ export async function reviewMenuImportLine(
       ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
       ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
       ...(note !== undefined ? { reviewNote: note } : {}),
+      ...variantsUpdate,
     },
   });
 }
@@ -1013,6 +1094,7 @@ export async function commitMenuImport(
         extractedPriceAmount: true,
         extractedCurrency: true,
         extractedVariants: true,
+        reviewedVariants: true,
         reviewedCategoryName: true,
         reviewedProductName: true,
         reviewedDescription: true,
@@ -1064,9 +1146,20 @@ export async function commitMenuImport(
         );
       }
       // Merges write only the reviewed base price to the chosen catalog target;
-      // extracted sizes are imported only when creating a new product.
+      // sizes are imported only when creating a new product, and only as the
+      // reviewer confirmed them — never straight from the OCR extraction.
+      if (
+        line.reviewStatus === 'ACCEPTED' &&
+        line.reviewedVariants === null &&
+        resolveVariants(line.extractedVariants).length > 0
+      ) {
+        throw new MenuImportError(
+          'An accepted line has extracted sizes nobody confirmed; review its sizes again.',
+          'REVIEW_INCOMPLETE'
+        );
+      }
       const variants =
-        line.reviewStatus === 'MERGED' ? [] : resolveVariants(line.extractedVariants);
+        line.reviewStatus === 'MERGED' ? [] : resolveVariants(line.reviewedVariants ?? []);
       // Menus often print one currency for a whole line ("Small 500 / Large 800"),
       // so a size price with no currency of its own inherits the line's confirmed
       // currency (already verified equal to the organization's above). This never
