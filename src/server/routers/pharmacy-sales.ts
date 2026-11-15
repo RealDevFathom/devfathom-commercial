@@ -52,6 +52,7 @@ import {
   FamilyKhataError,
   readSaleKhataAccounts,
   readSaleKhataStatement,
+  signUpSaleKhata,
 } from '@/lib/pharmacy/family-khata';
 
 import {
@@ -695,6 +696,43 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
           return readSaleKhataStatement(db, scope, input.saleId, input.familyAccountId);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // DEV-716: inline Khata signup from the Khata tender. Counter write access only;
+  // the new account always starts at a 0 limit (raising it needs the owner gate).
+  khataSignup: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          patientId: z.string().min(1).max(128).optional(),
+          displayName: z.string().trim().min(1).max(200),
+          phone: z
+            .string()
+            .trim()
+            .regex(/^\+?[\d\s-]{7,20}$/)
+            .optional(),
+          consentGranted: z.literal(true),
+        })
+        .strict()
+        .refine((value) => value.patientId !== undefined || value.phone !== undefined, {
+          message: 'Phone is required for a new patient.',
+          path: ['phone'],
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Patient name and phone are personal data; keep them out of the audit input copy.
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return signUpSaleKhata(db, scope, input);
         });
       } catch (error) {
         fail(error);

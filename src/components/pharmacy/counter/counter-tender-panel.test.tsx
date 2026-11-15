@@ -497,3 +497,80 @@ it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('DEV-716 inline Khata signup', () => {
+  it('signs up a new customer with name, phone and consent, then reloads accounts', async () => {
+    const account = {
+      id: 'family-new',
+      displayName: 'Ayesha',
+      creditLimitMinor: 0,
+      balanceMinor: 0,
+    };
+    const loadKhataAccounts = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([account]);
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({ loadKhataAccounts, signUpKhata });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    const open = await screen.findByRole('button', { name: 'Open Khata account' });
+    expect(screen.getByText(/The credit limit starts at/)).toHaveTextContent('0.00');
+
+    fireEvent.change(screen.getByLabelText('Customer name'), { target: { value: ' Ayesha ' } });
+    fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '0300 1234567' } });
+    expect(open).toBeDisabled();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        displayName: 'Ayesha',
+        phone: '0300 1234567',
+        consentGranted: true,
+      })
+    );
+    await waitFor(() => expect(loadKhataAccounts).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('option', { name: 'Ayesha' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Khata account' })).not.toBeInTheDocument();
+  });
+
+  it('offers the selected counter patient as payer without re-asking name and phone', async () => {
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText('Payer: Bilal');
+    expect(screen.queryByLabelText('Phone')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        patientId: 'patient-a',
+        displayName: 'Bilal',
+        consentGranted: true,
+      })
+    );
+  });
+
+  it('shows a failure and keeps the form when signup is refused', async () => {
+    const signUpKhata = vi.fn().mockRejectedValue(new Error('SALE_NOT_OPEN'));
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText('Payer: Bilal');
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Khata signup failed');
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeInTheDocument();
+  });
+});

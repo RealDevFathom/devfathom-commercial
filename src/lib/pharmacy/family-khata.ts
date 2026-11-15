@@ -3,6 +3,8 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { writePatientConsent } from './consent-writer';
+import { linkCustomerToSale } from './customer-loyalty';
 import { auditPatientRead } from './patient-prescriptions';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
@@ -17,6 +19,9 @@ export class FamilyKhataError extends Error {
       | 'OWNER_ACTION_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
+      | 'PATIENT_NOT_FOUND'
+      | 'CONSENT_REQUIRED'
+      | 'PHONE_REQUIRED'
   ) {
     super(reason);
   }
@@ -413,4 +418,109 @@ export async function authorizeKhataCharge(
     });
   }
   return account;
+}
+
+/** Digits only, keeping a leading `+`, so the same number always finds the same patient. */
+export function normalizeKhataPhone(phone: string) {
+  const trimmed = phone.trim();
+  return `${trimmed.startsWith('+') ? '+' : ''}${trimmed.replace(/\D/g, '')}`;
+}
+
+/**
+ * DEV-716: inline Khata signup from the counter's Khata tender.
+ *
+ * Finds (or creates) the patient, records in-person LOYALTY consent, links the
+ * customer to the OPEN sale, then creates the family account with the customer
+ * as payer and member. The limit is always 0 here: raising it goes through the
+ * owner-authorized limit decision, never through signup.
+ */
+export async function signUpSaleKhata(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  input: {
+    saleId: string;
+    patientId?: string;
+    displayName: string;
+    phone?: string;
+    consentGranted: boolean;
+  }
+) {
+  if (input.consentGranted !== true) throw new FamilyKhataError('CONSENT_REQUIRED');
+  const displayName = input.displayName.trim();
+  const phone = input.phone ? normalizeKhataPhone(input.phone) : undefined;
+  let patient: { id: string; displayName: string; phone: string | null } | null;
+  if (input.patientId) {
+    patient = await db.pharmacyPatient.findFirst({
+      where: { id: input.patientId, organizationId: scope.organizationId },
+      select: { id: true, displayName: true, phone: true },
+    });
+    if (!patient) throw new FamilyKhataError('PATIENT_NOT_FOUND');
+  } else {
+    if (!phone || phone.replace('+', '').length < 7) throw new FamilyKhataError('PHONE_REQUIRED');
+    // Same name and phone only: a shared family phone must not merge two people.
+    patient =
+      (await db.pharmacyPatient.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          phone,
+          displayName: { equals: displayName, mode: 'insensitive' },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, displayName: true, phone: true },
+      })) ??
+      (await db.pharmacyPatient.create({
+        data: { organizationId: scope.organizationId, displayName, phone },
+        select: { id: true, displayName: true, phone: true },
+      }));
+  }
+  const consent = await db.patientConsent.findFirst({
+    where: { organizationId: scope.organizationId, patientId: patient.id, purpose: 'LOYALTY' },
+    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  if (!consent?.granted || consent.revokedAt)
+    await writePatientConsent(db, scope.organizationId, scope.actorId, {
+      patientId: patient.id,
+      purpose: 'LOYALTY',
+      channel: 'IN_PERSON',
+      granted: true,
+      source: 'COUNTER_TABLET',
+    });
+  const phoneLast4 = (phone ?? patient.phone ?? '').replace(/\D/g, '').slice(-4);
+  const customer = await linkCustomerToSale(db, scope, {
+    saleId: input.saleId,
+    patientId: patient.id,
+    displayName: patient.displayName,
+    ...(phoneLast4.length === 4 ? { phoneLast4 } : {}),
+  });
+  const existing = await db.pharmacyFamilyAccount.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      members: { some: { customerId: customer.id } },
+    },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  if (existing) return { customerId: customer.id, familyAccountId: existing.id, created: false };
+  const account = await db.pharmacyFamilyAccount.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      payerCustomerId: customer.id,
+      displayName: patient.displayName,
+      creditLimitMinor: 0,
+    },
+    select: { id: true },
+  });
+  await db.pharmacyFamilyMember.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId: account.id,
+      customerId: customer.id,
+    },
+  });
+  return { customerId: customer.id, familyAccountId: account.id, created: true };
 }
