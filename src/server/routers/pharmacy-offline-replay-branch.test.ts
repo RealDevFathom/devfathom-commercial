@@ -2,8 +2,11 @@
  * DEV-830 (security scan F04): a signed offline replay creates a bill and debits stock in
  * the device's branch. It checked only `pharmacy:orders` and the device secret, so a
  * member assigned elsewhere (or holding no counter grant) could replay a sale into this
- * branch. The replaying actor now needs the counter's canonical grant and an active
- * assignment to the device's branch, as online `create` and `addLine` require.
+ * branch. Replay now takes the counter operator gate shared with establishment and
+ * snapshots (DEV-831 `counterOperatorDenial`): the canonical counter grant, an active
+ * member with a deny-wins counter ALLOW, and an active assignment to the device's branch.
+ * Each case establishes the terminal while permitted and loses access before replaying,
+ * which is the access-lost-while-offline path.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -75,6 +78,19 @@ const assignmentLookup = vi.fn(
 const db = {
   $queryRaw: vi.fn(async () => []),
   pharmacyBranch: { findFirst: vi.fn(async () => ({ id: BRANCH })) },
+  // The member's persisted counter rules mirror the grants of the current request.
+  user: {
+    findUnique: vi.fn(async () => ({
+      status: 'ACTIVE',
+      organizationId: ORG,
+      organizationRole: {
+        permissions: mocks.grants.has('pharmacy:counter')
+          ? [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
+          : [],
+      },
+      permissionOverrides: [],
+    })),
+  },
   pharmacyBranchAssignment: { findFirst: assignmentLookup },
   pharmacyInventoryLot: {
     findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
@@ -175,14 +191,20 @@ async function call(operation: 'establish' | 'replay', body: unknown, token = ''
   );
 }
 
-/** Establish a terminal session for the current actor, then replay one queued sale. */
+/**
+ * Establish a terminal session while the actor may operate this branch, then replay one
+ * queued sale with the grants and assignments the actor holds at replay time.
+ */
 async function replayAs(options: { grants: string[]; assigned: string[]; role?: string }) {
-  mocks.grants = new Set(['pharmacy:orders', ...options.grants]);
-  mocks.assignedBranches = options.assigned;
   mocks.user.role = options.role ?? 'EMPLOYEE';
+  mocks.grants = new Set(['pharmacy:orders', 'pharmacy:counter']);
+  mocks.assignedBranches = [BRANCH];
   const established = await call('establish', {});
   expect(established.status).toBe(201);
   const { sessionToken } = (await established.json()) as { sessionToken: string };
+  mocks.grants = new Set(['pharmacy:orders', ...options.grants]);
+  mocks.assignedBranches = options.assigned;
+  assignmentLookup.mockClear();
   return call('replay', command(), sessionToken);
 }
 
@@ -200,7 +222,7 @@ describe('DEV-830 offline replay branch gate', () => {
   it('refuses an actor assigned only to another branch before anything is recorded', async () => {
     const response = await replayAs({ grants: ['pharmacy:counter'], assigned: ['branch_b'] });
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: 'forbidden' });
+    expect(await response.json()).toEqual({ error: 'branch_forbidden' });
     expect(assignmentLookup.mock.calls[0]![0].where).toEqual({
       organizationId: ORG,
       userId: 'actor_a',

@@ -444,38 +444,6 @@ export async function replayCounterCommand(
   return { saleId: sale.id, receiptNumber: command.leasedReceipt.receiptNumber, replayed: false };
 }
 
-/**
- * DEV-830 (F04): replaying a queued sale opens a bill and debits stock in the device's
- * branch, so the person replaying it needs what the online counter's `create` and
- * `addLine` need: the canonical `pharmacy:counter` grant (deny wins) and an active
- * assignment to that branch. A session ADMIN of the organization keeps every active
- * branch, as online. Access lost while offline is refused with nothing written: the
- * counter's queue pauses on the 403 and keeps the command for an assigned colleague to
- * replay or a manager to reject.
- */
-export async function assertReplayActorMayUseBranch(
-  db: ScopedDb,
-  user: Parameters<typeof subjectFromSession>[0] & { id: string; role?: string | null },
-  scope: LedgerScope
-): Promise<void> {
-  if (
-    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db, source: 'REST' }))
-  )
-    throw new CounterTransportError('forbidden', 403);
-  if (user.role === 'ADMIN') return;
-  const assignment = await db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      userId: user.id,
-      branchId: scope.branchId,
-      active: true,
-      branch: { organizationId: scope.organizationId, active: true },
-    },
-    select: { branchId: true },
-  });
-  if (assignment?.branchId !== scope.branchId) throw new CounterTransportError('forbidden', 403);
-}
-
 const sessionSchema = z
   .object({
     actorId: id,
@@ -608,8 +576,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           };
         }
         verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
-        if (operation === 'replay')
-          await assertReplayActorMayUseBranch(db, actor.session.user, ctx.scope);
         if (operation === 'lease') {
           const input = z
             .object({ size: z.number().int().positive().max(MAX_RECEIPT_LEASE_SIZE) })
