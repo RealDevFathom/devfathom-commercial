@@ -86,6 +86,18 @@ it('shows an explicit permission-denied state', async () => {
   expect(screen.getByRole('alert')).toHaveTextContent('owner account');
   expect(mocks.history).not.toHaveBeenCalled();
 });
+it('names the single missing requirement from the server denial', async () => {
+  mocks.branches.mockRejectedValue(
+    new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'An owner account is required. Ask a workspace owner to open Marketing.',
+    })
+  );
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent('An owner account is required. Ask a workspace owner');
+  expect(alert).not.toHaveTextContent('Pharmacy CRM license');
+});
 it('shows retry guidance on data errors', async () => {
   mocks.history.mockRejectedValue(new Error('database unavailable'));
   const page = await Page({ searchParams: Promise.resolve({}) });
