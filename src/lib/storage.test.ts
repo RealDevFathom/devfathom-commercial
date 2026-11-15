@@ -7,12 +7,15 @@ const io = vi.hoisted(() => ({
   readFile: vi.fn(),
   rm: vi.fn(),
   writeFile: vi.fn(),
+  stat: vi.fn(),
+  copyFile: vi.fn(),
+  createReadStream: vi.fn(),
   fetch: vi.fn(),
   s3client: vi.fn(),
   s3send: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => io);
-vi.mock('node:fs', () => ({ realpathSync: io.realpath }));
+vi.mock('node:fs', () => ({ realpathSync: io.realpath, createReadStream: io.createReadStream }));
 vi.mock('@aws-sdk/client-s3', () => {
   const command = (name: string) =>
     class {
@@ -36,6 +39,8 @@ import {
   getStorageAvailability,
   putUpload,
   getUpload,
+  getUploadStream,
+  putUploadFile,
   deleteUpload,
   StorageUnavailableError,
   StoredObjectMissingError,
@@ -78,6 +83,8 @@ test.each(unavailable)('unavailable %j performs zero I/O for all operations', as
     putUpload('org-a', 'file.png', Buffer.from('bytes'), 'image/png'),
     getUpload('org-a', 'file.png'),
     deleteUpload('org-a', 'file.png'),
+    putUploadFile('org-a', 'file.zip', '/tmp/file.zip', 'application/zip'),
+    getUploadStream('org-a', 'file.zip'),
   ]);
   for (const outcome of outcomes) {
     expect(outcome.status).toBe('rejected');
@@ -320,4 +327,59 @@ test('an S3 delete failure rejects rather than claiming retention cleanup', asyn
   const failure = new Error('fake S3 denied');
   io.s3send.mockRejectedValue(failure);
   await expect(deleteUpload('org-a', 'file.png')).rejects.toBe(failure);
+});
+
+test('S3 uploads a file from disk as a sized stream and reads it back as a stream', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  const fileStream = { kind: 'file-stream' };
+  const webStream = new ReadableStream<Uint8Array>();
+  io.stat.mockResolvedValue({ size: 1234 });
+  io.createReadStream.mockReturnValue(fileStream);
+  io.s3send.mockImplementation(async (command: { command: string }) =>
+    command.command === 'GetObject'
+      ? { Body: { transformToWebStream: () => webStream }, ContentLength: 1234 }
+      : {}
+  );
+  await putUploadFile('org-a', 'a.zip', '/tmp/x/a.zip', 'application/zip');
+  expect(await getUploadStream('org-a', 'a.zip')).toEqual({ body: webStream, size: 1234 });
+  expect(io.createReadStream).toHaveBeenCalledWith('/tmp/x/a.zip');
+  expect(io.s3send.mock.calls.map(([command]) => command)).toEqual([
+    {
+      command: 'PutObject',
+      input: {
+        Bucket: 'uploads-bucket',
+        Key: 'org-a/a.zip',
+        Body: fileStream,
+        ContentLength: 1234,
+        ContentType: 'application/zip',
+      },
+    },
+    { command: 'GetObject', input: { Bucket: 'uploads-bucket', Key: 'org-a/a.zip' } },
+  ]);
+  for (const fn of [io.readFile, io.writeFile, io.copyFile]) expect(fn).not.toHaveBeenCalled();
+
+  const noSuchKey = Object.assign(new Error('gone'), {
+    name: 'NoSuchKey',
+    $metadata: { httpStatusCode: 404 },
+  });
+  io.s3send.mockRejectedValueOnce(noSuchKey);
+  await expect(getUploadStream('org-a', 'gone.zip')).rejects.toBeInstanceOf(
+    StoredObjectMissingError
+  );
+});
+
+test('local storage copies an uploaded file and refuses a stream for a missing one', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 'local');
+  vi.stubEnv('NODE_ENV', 'test');
+  await putUploadFile('org-a', 'a.zip', '/tmp/x/a.zip', 'application/zip');
+  expect(io.copyFile).toHaveBeenCalledWith(
+    '/tmp/x/a.zip',
+    expect.stringContaining('/private-uploads/org-a/a.zip')
+  );
+  io.stat.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  await expect(getUploadStream('org-a', 'a.zip')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(io.createReadStream).not.toHaveBeenCalled();
+  expect(io.s3send).not.toHaveBeenCalled();
 });

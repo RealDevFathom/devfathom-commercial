@@ -1,18 +1,33 @@
 import 'server-only';
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { PlatformJob } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
-import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
+import { deleteUpload, getUploadStream, putUploadFile } from '@/lib/storage';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { ZipFileWriter, ZipSizeLimitError } from '@/lib/zip';
 import {
-  buildOwnerDataExportZip,
+  OWNER_DATA_EXPORT_FILES,
+  exportCsvHeader,
+  exportCsvRows,
+  exportReadme,
   exportRowCounts,
   formatDateOnly,
   formatMinor,
+  type ExportFileSpec,
   type ExportRow,
+  type OwnerDataExportCounts,
+  type OwnerDataExportFileKey,
   type OwnerDataExportRows,
   type OwnerDataExportView,
 } from './owner-data-export-format';
+import {
+  newOwnerDataExportObjectName,
+  storedOwnerDataExportObjectName,
+} from './owner-data-export-object';
 import { chooseRegisterPersonName } from './register-print';
 
 /**
@@ -87,13 +102,23 @@ export async function isLiveOrganizationOwner(
   });
 }
 
+/** The archive name used before DEV-783 (no token). Kept to purge older archives. */
 export function ownerDataExportFilename(jobId: string): string {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(jobId)) throw new Error('Invalid export job id.');
   return `owner-data-export-${jobId}.zip`;
 }
 
-export function readOwnerDataExport(organizationId: string, jobId: string): Promise<Buffer> {
-  return getUpload(organizationId, ownerDataExportFilename(jobId));
+/**
+ * The stored archive as a stream: a download never holds the whole ZIP in
+ * memory. The object name comes from the job's own result, never the request.
+ */
+export async function streamOwnerDataExport(
+  organizationId: string,
+  job: { id: string; result: unknown }
+) {
+  const filename = storedOwnerDataExportObjectName(job.id, job.result);
+  if (!filename) throw new Error('That export has no stored archive.');
+  return getUploadStream(organizationId, filename);
 }
 
 export const OWNER_DATA_EXPORT_JOB_SELECT = {
@@ -152,6 +177,72 @@ export async function listOwnerDataExports(
   return jobs.map((job) => ownerDataExportView(job, now));
 }
 
+/** Per-owner rate limit: at most this many exports per rolling window. */
+export const OWNER_DATA_EXPORT_REQUEST_LIMIT = 3;
+export const OWNER_DATA_EXPORT_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export type QueueOwnerDataExportResult =
+  | { kind: 'created' | 'pending'; job: ExportJob }
+  | { kind: 'rate_limited'; retryAfterSeconds: number };
+
+/**
+ * Queue an export for one owner, or return the export already in flight for
+ * the workspace. A per-workspace transaction lock makes the in-flight check,
+ * the per-owner rate limit and the insert one step, so two simultaneous
+ * requests can neither queue twice nor both slip under the limit. Every export
+ * the owner queued in the window counts, whatever became of it.
+ */
+export async function queueOwnerDataExport(
+  db: ScopedDb,
+  input: { organizationId: string; userId: string; range: SalesRange; now: Date }
+): Promise<QueueOwnerDataExportResult> {
+  const { organizationId, userId, range, now } = input;
+  await db.$queryRawUnsafe(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    `owner-data-export:${organizationId}`
+  );
+  const pending = await db.platformJob.findFirst({
+    where: {
+      organizationId,
+      type: OWNER_DATA_EXPORT_JOB_TYPE,
+      status: { in: ['QUEUED', 'RUNNING'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: OWNER_DATA_EXPORT_JOB_SELECT,
+  });
+  if (pending) return { kind: 'pending', job: pending };
+  const windowStart = new Date(now.getTime() - OWNER_DATA_EXPORT_REQUEST_WINDOW_MS);
+  const recent = await db.platformJob.findMany({
+    where: {
+      organizationId,
+      type: OWNER_DATA_EXPORT_JOB_TYPE,
+      requestedById: userId,
+      createdAt: { gte: windowStart },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: OWNER_DATA_EXPORT_REQUEST_LIMIT,
+    select: { createdAt: true },
+  });
+  if (recent.length >= OWNER_DATA_EXPORT_REQUEST_LIMIT) {
+    // A slot frees when the oldest export in the window ages out of it.
+    const freesAt = recent[0]!.createdAt.getTime() + OWNER_DATA_EXPORT_REQUEST_WINDOW_MS;
+    return {
+      kind: 'rate_limited',
+      retryAfterSeconds: Math.max(1, Math.ceil((freesAt - now.getTime()) / 1000)),
+    };
+  }
+  const job = await db.platformJob.create({
+    data: {
+      organizationId,
+      type: OWNER_DATA_EXPORT_JOB_TYPE,
+      requestedById: userId,
+      payload: { from: range.from, to: range.to, requestedByTenant: true },
+    },
+    select: OWNER_DATA_EXPORT_JOB_SELECT,
+  });
+  return { kind: 'created', job };
+}
+
 const PURGE_BATCH = 50;
 
 /**
@@ -179,7 +270,10 @@ export async function purgeExpiredOwnerDataExports(
   let purged = 0;
   for (const job of expired) {
     if (!job.organizationId) continue;
-    await deleteUpload(job.organizationId, ownerDataExportFilename(job.id));
+    await deleteUpload(
+      job.organizationId,
+      storedOwnerDataExportObjectName(job.id, job.result) ?? ownerDataExportFilename(job.id)
+    );
     const result = (job.result && typeof job.result === 'object' ? job.result : {}) as Record<
       string,
       unknown
@@ -241,401 +335,652 @@ export function basePackUnits(levels: readonly PackNode[]): Map<string, number |
 const sumBy = <T>(items: readonly T[], value: (item: T) => number) =>
   items.reduce((total, item) => total + value(item), 0);
 
-/** Read every exported table for one organization. Every query names the tenant. */
+/** Rows read per query. Every exported table is read in pages of this size. */
+export const OWNER_DATA_EXPORT_PAGE_SIZE = 500;
+
+type PageArgs = { take: number; skip?: number; cursor?: { id: string } };
+
+/**
+ * Keyset pages over one table. Each `read` must order by a unique key ending in
+ * `id`, so the cursor resumes exactly after the last row of the previous page.
+ */
+async function* pages<T extends { id: string }>(
+  read: (page: PageArgs) => Promise<T[]>,
+  size: number = OWNER_DATA_EXPORT_PAGE_SIZE
+): AsyncGenerator<T[]> {
+  let cursor: string | null = null;
+  for (;;) {
+    const rows: T[] = await read({
+      take: size,
+      ...(cursor === null ? {} : { cursor: { id: cursor }, skip: 1 }),
+    });
+    if (rows.length > 0) yield rows;
+    if (rows.length < size) return;
+    cursor = rows[rows.length - 1]!.id;
+  }
+}
+
+async function eachRow<T extends { id: string }>(
+  read: (page: PageArgs) => Promise<T[]>,
+  visit: (row: T) => void
+) {
+  for await (const page of pages(read)) for (const row of page) visit(row);
+}
+
+const addTo = (map: Map<string, number>, key: string, value: number) =>
+  map.set(key, (map.get(key) ?? 0) + value);
+
+export type OwnerDataExportSources = Record<
+  OwnerDataExportFileKey,
+  () => AsyncIterable<ExportRow[]>
+>;
+
+/**
+ * Every exported file as a stream of row pages for one organization. Every
+ * query names the tenant. Only small lookups (codes, pack labels, per-account
+ * and per-supplier totals) are held for the whole export; the rows themselves
+ * are read and released one page at a time.
+ */
+export function ownerDataExportSources(
+  db: ScopedDb,
+  organizationId: string,
+  range: SalesRange
+): OwnerDataExportSources {
+  const where = { organizationId };
+  const bounds = rangeBounds(range);
+
+  const once = <T>(load: () => Promise<T>) => {
+    let value: Promise<T> | null = null;
+    return () => (value ??= load());
+  };
+
+  const codes = once(async () => {
+    const branchCode = new Map<string, string>();
+    const locationCode = new Map<string, string>();
+    await eachRow(
+      (page) =>
+        db.pharmacyBranch.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: { id: true, code: true },
+          ...page,
+        }),
+      (branch) => branchCode.set(branch.id, branch.code)
+    );
+    await eachRow(
+      (page) =>
+        db.pharmacyStockLocation.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: { id: true, code: true },
+          ...page,
+        }),
+      (location) => locationCode.set(location.id, location.code)
+    );
+    return {
+      branch: (id: string) => branchCode.get(id) ?? id,
+      location: (id: string) => locationCode.get(id) ?? id,
+    };
+  });
+
+  const packs = once(async () => {
+    const levels: PackNode[] = [];
+    const label = new Map<string, string>();
+    await eachRow(
+      (page) =>
+        db.packLevel.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: {
+            id: true,
+            level: true,
+            parentPackLevelId: true,
+            unitsPerParent: true,
+            effectiveTo: true,
+            presentation: { select: { presentation: true } },
+          },
+          ...page,
+        }),
+      (pack) => {
+        levels.push({
+          id: pack.id,
+          parentPackLevelId: pack.parentPackLevelId,
+          unitsPerParent: pack.unitsPerParent,
+          effectiveTo: pack.effectiveTo,
+        });
+        label.set(pack.id, `${pack.level} · ${pack.presentation.presentation}`);
+      }
+    );
+    return { label, baseUnits: basePackUnits(levels) };
+  });
+
+  const khata = once(async () => {
+    const accounts = new Map<string, { payerCustomerId: string; displayName: string }>();
+    await eachRow(
+      (page) =>
+        db.pharmacyFamilyAccount.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: { id: true, payerCustomerId: true, displayName: true },
+          ...page,
+        }),
+      (account) => accounts.set(account.id, account)
+    );
+    const accountBalance = new Map<string, number>();
+    await eachRow(
+      (page) =>
+        db.pharmacyKhataEvent.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: { id: true, familyAccountId: true, kind: true, amountMinor: true },
+          ...page,
+        }),
+      (event) =>
+        addTo(
+          accountBalance,
+          event.familyAccountId,
+          event.kind === 'PAYMENT' ? -event.amountMinor : event.amountMinor
+        )
+    );
+    const customerBalance = new Map<string, number>();
+    for (const [id, account] of accounts) {
+      addTo(customerBalance, account.payerCustomerId, accountBalance.get(id) ?? 0);
+    }
+    return { accounts, customerBalance };
+  });
+
+  const supplierTotals = once(async () => {
+    const received = new Map<string, number>();
+    await eachRow(
+      (page) =>
+        db.pharmacyGoodsReceipt.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: {
+            id: true,
+            supplierId: true,
+            postedAt: true,
+            reversedAt: true,
+            lines: { select: { acceptedCanonicalUnits: true, unitCostMinor: true } },
+          },
+          ...page,
+        }),
+      (receipt) => {
+        if (!receipt.postedAt || receipt.reversedAt) return;
+        addTo(
+          received,
+          receipt.supplierId,
+          sumBy(receipt.lines, (line) => line.acceptedCanonicalUnits * line.unitCostMinor)
+        );
+      }
+    );
+    const credits = new Map<string, number>();
+    await eachRow(
+      (page) =>
+        db.pharmacySupplierCredit.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          select: { id: true, supplierId: true, amountMinor: true },
+          ...page,
+        }),
+      (credit) => addTo(credits, credit.supplierId, credit.amountMinor)
+    );
+    return { received, credits };
+  });
+
+  const salePages = () =>
+    pages((page) =>
+      db.pharmacySale.findMany({
+        where: {
+          ...where,
+          status: { in: ['COMPLETED', 'VOID'] },
+          completedAt: {
+            not: null,
+            ...(bounds.from ? { gte: bounds.from } : {}),
+            ...(bounds.toExclusive ? { lt: bounds.toExclusive } : {}),
+          },
+        },
+        orderBy: [{ completedAt: 'asc' }, { id: 'asc' }],
+        include: {
+          lines: {
+            orderBy: { id: 'asc' },
+            include: { medicine: { select: { productName: true } } },
+          },
+        },
+        ...page,
+      })
+    );
+
+  const receiptPages = () =>
+    pages((page) =>
+      db.pharmacyGoodsReceipt.findMany({
+        where,
+        orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+        include: {
+          lines: {
+            orderBy: { lineNumber: 'asc' },
+            include: { medicine: { select: { productName: true } } },
+          },
+        },
+        ...page,
+      })
+    );
+
+  return {
+    async *medicines() {
+      const { label, baseUnits } = await packs();
+      for await (const page of pages((args) =>
+        db.packLevel.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          include: { presentation: { include: { medicine: true } } },
+          ...args,
+        })
+      )) {
+        // A pack's own barcodes, plus presentation-wide ones on its top level.
+        const barcodes = await db.medicineBarcode.findMany({
+          where: {
+            ...where,
+            OR: [
+              { packLevelId: { in: page.map((pack) => pack.id) } },
+              {
+                packLevelId: null,
+                presentationId: {
+                  in: page.filter((pack) => !pack.parentPackLevelId).map((p) => p.presentationId),
+                },
+              },
+            ],
+          },
+          orderBy: { code: 'asc' },
+          select: { presentationId: true, packLevelId: true, code: true },
+        });
+        const byPack = new Map<string, string[]>();
+        const byPresentation = new Map<string, string[]>();
+        for (const barcode of barcodes) {
+          const [map, key] = barcode.packLevelId
+            ? [byPack, barcode.packLevelId]
+            : [byPresentation, barcode.presentationId];
+          map.set(key, [...(map.get(key) ?? []), barcode.code]);
+        }
+        yield page.map((pack) => {
+          const medicine = pack.presentation.medicine;
+          return {
+            code: pack.id,
+            product: medicine.productName,
+            pack: unitsLabel(baseUnits.get(pack.id)),
+            pack_level: label.get(pack.id),
+            barcode: [
+              ...(byPack.get(pack.id) ?? []),
+              ...(pack.parentPackLevelId ? [] : (byPresentation.get(pack.presentationId) ?? [])),
+            ].join(' '),
+            medicine_id: medicine.id,
+            brand: medicine.brandName,
+            manufacturer: medicine.manufacturer,
+            drap_registration: medicine.drapRegistrationNumber,
+            units_per_parent: pack.unitsPerParent,
+            product_family: medicine.productFamily,
+            rx: medicine.rx,
+            otc: medicine.otc,
+            controlled: medicine.controlled,
+            saleable: medicine.saleable,
+          };
+        });
+      }
+    },
+
+    async *stockLots() {
+      const code = await codes();
+      const { label } = await packs();
+      for await (const page of pages((args) =>
+        db.pharmacyInventoryLot.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          include: {
+            batch: { include: { medicine: { select: { productName: true } } } },
+            packLevel: { select: { level: true } },
+            balances: { orderBy: [{ stockLocationId: 'asc' }, { disposition: 'asc' }] },
+          },
+          ...args,
+        })
+      )) {
+        yield page.flatMap((lot) =>
+          lot.balances.map((balance) => ({
+            code: lot.id,
+            product: lot.batch.medicine.productName,
+            pack: unitsLabel(lot.unitsPerPack),
+            pack_level: label.get(lot.packLevelId) ?? lot.packLevel.level,
+            batch: lot.batch.batchNumber,
+            expiry: formatDateOnly(lot.batch.expiresAt),
+            mrp: formatMinor(lot.printedMrpMinor),
+            cost: formatMinor(lot.unitCostMinor),
+            quantity: balance.onHandUnits,
+            supplier: lot.supplierName,
+            branch: code.branch(lot.branchId),
+            location: code.location(balance.stockLocationId),
+            disposition: balance.disposition,
+            supplier_invoice: lot.supplierInvoiceRef,
+          }))
+        );
+      }
+    },
+
+    async *customers() {
+      const { customerBalance } = await khata();
+      for await (const page of pages((args) =>
+        db.pharmacyCustomer.findMany({ where, orderBy: { id: 'asc' }, ...args })
+      )) {
+        yield page.map((customer) => ({
+          code: customer.id,
+          customer: customer.displayName,
+          balance: formatMinor(customerBalance.get(customer.id) ?? 0),
+          credit_limit: formatMinor(customer.creditLimitMinor),
+          phone_last4: customer.phoneLast4,
+          active: customer.active,
+          created_at: customer.createdAt,
+        }));
+      }
+    },
+
+    async *khataLedger() {
+      const code = await codes();
+      const { accounts } = await khata();
+      for await (const page of pages((args) =>
+        db.pharmacyKhataEvent.findMany({
+          where,
+          orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+          ...args,
+        })
+      )) {
+        yield page.map((event) => {
+          const account = accounts.get(event.familyAccountId);
+          return {
+            account_id: event.familyAccountId,
+            account_name: account?.displayName,
+            payer_customer_id: account?.payerCustomerId,
+            branch: code.branch(event.branchId),
+            kind: event.kind,
+            amount: formatMinor(event.amountMinor),
+            occurred_at: event.occurredAt,
+            due_at: event.dueAt,
+            note: event.note,
+          };
+        });
+      }
+    },
+
+    async *suppliers() {
+      const { received, credits } = await supplierTotals();
+      for await (const page of pages((args) =>
+        db.pharmacySupplier.findMany({ where, orderBy: { id: 'asc' }, ...args })
+      )) {
+        yield page.map((supplier) => ({
+          code: supplier.id,
+          supplier: supplier.name,
+          goods_received_value: formatMinor(received.get(supplier.id) ?? 0),
+          supplier_credits: formatMinor(credits.get(supplier.id) ?? 0),
+          legal_name: supplier.legalName,
+          contact_name: supplier.contactName,
+          contact_phone: supplier.contactPhone,
+          payment_terms_days: supplier.paymentTermsDays,
+          credit_limit: formatMinor(supplier.creditLimitMinor),
+          authorized: supplier.authorized,
+          active: supplier.active,
+        }));
+      }
+    },
+
+    async *sales() {
+      const code = await codes();
+      for await (const page of salePages()) {
+        yield page.map((sale) => {
+          const gross = sumBy(sale.lines, (line) => line.grossMinor);
+          const discount = sumBy(sale.lines, (line) => line.discountMinor);
+          return {
+            sale_id: sale.id,
+            branch: code.branch(sale.branchId),
+            receipt_number: sale.receiptNumber,
+            business_date: formatDateOnly(sale.businessDate),
+            completed_at: sale.completedAt,
+            status: sale.status,
+            customer_id: sale.customerId,
+            original_sale_id: sale.originalSaleId,
+            gross: formatMinor(gross),
+            discount: formatMinor(discount),
+            net: formatMinor(gross - discount),
+          };
+        });
+      }
+    },
+
+    async *saleLines() {
+      for await (const page of salePages()) {
+        yield page.flatMap((sale) =>
+          sale.lines.map((line) => ({
+            sale_id: sale.id,
+            line_id: line.id,
+            medicine_id: line.medicineId,
+            medicine_name: line.medicine.productName,
+            pack_level_id: line.packLevelId,
+            sale_unit: line.saleUnit,
+            sold_quantity: line.quantity,
+            base_units: line.canonicalUnits,
+            unit_price: formatMinor(line.unitPriceMinor),
+            gross: formatMinor(line.grossMinor),
+            discount: formatMinor(line.discountMinor),
+            net: formatMinor(line.grossMinor - line.discountMinor),
+            unit_cost: formatMinor(line.unitCostMinor),
+          }))
+        );
+      }
+    },
+
+    async *purchaseOrders() {
+      const code = await codes();
+      for await (const page of pages((args) =>
+        db.pharmacyPurchaseOrder.findMany({
+          where,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          ...args,
+        })
+      )) {
+        yield page.map((order) => ({
+          purchase_order_id: order.id,
+          reference: order.reference,
+          supplier_id: order.supplierId,
+          branch: order.branchId ? code.branch(order.branchId) : null,
+          status: order.status,
+          created_at: order.createdAt,
+          approved_at: order.approvedAt,
+          sent_at: order.sentAt,
+          expected_delivery_at: order.expectedDeliveryAt,
+        }));
+      }
+    },
+
+    async *goodsReceipts() {
+      const code = await codes();
+      for await (const page of receiptPages()) {
+        yield page.map((receipt) => ({
+          goods_receipt_id: receipt.id,
+          reference: receipt.reference,
+          branch: code.branch(receipt.branchId),
+          supplier_id: receipt.supplierId,
+          purchase_order_id: receipt.purchaseOrderId,
+          supplier_invoice: receipt.supplierInvoiceRef,
+          supplier_invoice_date: formatDateOnly(receipt.supplierInvoiceDate),
+          status: receipt.status,
+          received_at: receipt.receivedAt,
+          posted_at: receipt.postedAt,
+          reversed_at: receipt.reversedAt,
+          freight: formatMinor(receipt.freightMinor),
+        }));
+      }
+    },
+
+    async *goodsReceiptLines() {
+      for await (const page of receiptPages()) {
+        yield page.flatMap((receipt) =>
+          receipt.lines.map((line) => ({
+            goods_receipt_id: receipt.id,
+            line_number: line.lineNumber,
+            medicine_id: line.medicineId,
+            medicine_name: line.medicine.productName,
+            pack_level_id: line.packLevelId,
+            received_batch: line.batchNumber,
+            printed_expiry: formatDateOnly(line.printedExpiry),
+            printed_mrp: formatMinor(line.printedMrpMinor),
+            received_packs: line.receivedPacks,
+            bonus_packs: line.bonusPacks,
+            accepted_units: line.acceptedCanonicalUnits,
+            rejected_units: line.rejectedCanonicalUnits,
+            price_per_pack: formatMinor(line.invoicedPricePerPackMinor),
+            discount_bps: line.discountBps,
+            tax_bps: line.taxBps,
+            unit_cost: formatMinor(line.unitCostMinor),
+            stock_lot_id: line.inventoryLotId,
+          }))
+        );
+      }
+    },
+
+    async *controlledRegister() {
+      const code = await codes();
+      for await (const page of pages((args) =>
+        db.pharmacyControlledRegisterEntry.findMany({
+          where,
+          orderBy: [{ branchId: 'asc' }, { serial: 'asc' }, { id: 'asc' }],
+          include: {
+            patient: { select: { displayName: true } },
+            prescriber: { select: { name: true, registrationNumber: true } },
+            medicine: { select: { productName: true, manufacturer: true } },
+            line: { select: { medicine: { select: { productName: true, manufacturer: true } } } },
+            correctsEntry: { select: { serial: true } },
+          },
+          ...args,
+        })
+      )) {
+        // Names resolve exactly as the register screen does: staff profile first.
+        const personIds = [
+          ...new Set(page.flatMap((entry) => [entry.recordedByUserId, entry.witnessedByUserId])),
+        ];
+        const [users, staff] = await Promise.all([
+          db.user.findMany({
+            where: { organizationId, id: { in: personIds } },
+            select: { id: true, name: true },
+          }),
+          db.restaurantStaffProfile.findMany({
+            where: { organizationId, userId: { in: personIds } },
+            select: { userId: true, displayName: true },
+          }),
+        ]);
+        const userNames = new Map(users.map((user) => [user.id, user.name]));
+        const staffNames = new Map<string, string[]>();
+        for (const profile of staff) {
+          if (!profile.userId) continue;
+          staffNames.set(profile.userId, [
+            ...(staffNames.get(profile.userId) ?? []),
+            profile.displayName,
+          ]);
+        }
+        const personName = (id: string) =>
+          chooseRegisterPersonName([...(staffNames.get(id) ?? []), userNames.get(id)], id);
+
+        yield page.map((entry) => {
+          const medicine = entry.medicine ?? entry.line?.medicine ?? null;
+          return {
+            branch: code.branch(entry.branchId),
+            register_serial: entry.serial,
+            recorded_at: entry.createdAt,
+            entry_kind: entry.entryKind,
+            medicine_name: medicine?.productName,
+            manufacturer: entry.manufacturer ?? medicine?.manufacturer,
+            register_batch: entry.batchNumber,
+            quantity_units: entry.quantityCanonicalUnits,
+            balance_change: entry.balanceDelta,
+            running_balance: entry.runningBalance,
+            patient: entry.patient?.displayName,
+            prescriber: entry.prescriberName ?? entry.prescriber?.name,
+            prescriber_reg_no: entry.prescriberRegNo ?? entry.prescriber?.registrationNumber,
+            counterparty: entry.counterpartyName,
+            rx_serial_written: entry.rxSerialWritten,
+            emergency: entry.emergency,
+            corrects_serial: entry.correctsEntry?.serial,
+            correction_reason: entry.correctionReason,
+            recorded_by: personName(entry.recordedByUserId),
+            witnessed_by: personName(entry.witnessedByUserId),
+          };
+        });
+      }
+    },
+  };
+}
+
+/** Every exported row in memory. For small fixtures and tests; the job streams. */
 export async function loadOwnerDataExportRows(
   db: ScopedDb,
   organizationId: string,
   range: SalesRange
 ): Promise<OwnerDataExportRows> {
-  const where = { organizationId };
-  const bounds = rangeBounds(range);
-  const [
-    branches,
-    locations,
-    packLevels,
-    barcodes,
-    lots,
-    customers,
-    familyAccounts,
-    khataEvents,
-    suppliers,
-    supplierCredits,
-    sales,
-    purchaseOrders,
-    goodsReceipts,
-    registerEntries,
-  ] = await Promise.all([
-    db.pharmacyBranch.findMany({ where, select: { id: true, code: true } }),
-    db.pharmacyStockLocation.findMany({ where, select: { id: true, code: true } }),
-    db.packLevel.findMany({
-      where,
-      orderBy: { id: 'asc' },
-      include: { presentation: { include: { medicine: true } } },
-    }),
-    db.medicineBarcode.findMany({
-      where,
-      orderBy: { code: 'asc' },
-      select: { presentationId: true, packLevelId: true, code: true },
-    }),
-    db.pharmacyInventoryLot.findMany({
-      where,
-      orderBy: { id: 'asc' },
-      include: {
-        batch: { include: { medicine: { select: { productName: true } } } },
-        packLevel: { select: { level: true } },
-        balances: { orderBy: [{ stockLocationId: 'asc' }, { disposition: 'asc' }] },
-      },
-    }),
-    db.pharmacyCustomer.findMany({ where, orderBy: { id: 'asc' } }),
-    db.pharmacyFamilyAccount.findMany({ where, orderBy: { id: 'asc' } }),
-    db.pharmacyKhataEvent.findMany({ where, orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }] }),
-    db.pharmacySupplier.findMany({ where, orderBy: { id: 'asc' } }),
-    db.pharmacySupplierCredit.findMany({ where, select: { supplierId: true, amountMinor: true } }),
-    db.pharmacySale.findMany({
-      where: {
-        ...where,
-        status: { in: ['COMPLETED', 'VOID'] },
-        completedAt: {
-          not: null,
-          ...(bounds.from ? { gte: bounds.from } : {}),
-          ...(bounds.toExclusive ? { lt: bounds.toExclusive } : {}),
-        },
-      },
-      orderBy: [{ completedAt: 'asc' }, { id: 'asc' }],
-      include: {
-        lines: {
-          orderBy: { id: 'asc' },
-          include: { medicine: { select: { productName: true } } },
-        },
-      },
-    }),
-    db.pharmacyPurchaseOrder.findMany({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
-    db.pharmacyGoodsReceipt.findMany({
-      where,
-      orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
-      include: {
-        lines: {
-          orderBy: { lineNumber: 'asc' },
-          include: { medicine: { select: { productName: true } } },
-        },
-      },
-    }),
-    db.pharmacyControlledRegisterEntry.findMany({
-      where,
-      orderBy: [{ branchId: 'asc' }, { serial: 'asc' }],
-      include: {
-        patient: { select: { displayName: true } },
-        prescriber: { select: { name: true, registrationNumber: true } },
-        medicine: { select: { productName: true, manufacturer: true } },
-        line: { select: { medicine: { select: { productName: true, manufacturer: true } } } },
-        correctsEntry: { select: { serial: true } },
-      },
-    }),
-  ]);
-
-  const branchCode = new Map(branches.map((branch) => [branch.id, branch.code]));
-  const locationCode = new Map(locations.map((location) => [location.id, location.code]));
-  const packLabel = new Map(
-    packLevels.map((pack) => [pack.id, `${pack.level} · ${pack.presentation.presentation}`])
-  );
-  const packBaseUnits = basePackUnits(packLevels);
-
-  const barcodesByPack = new Map<string, string[]>();
-  const barcodesByPresentationOnly = new Map<string, string[]>();
-  for (const barcode of barcodes) {
-    const [map, key] = barcode.packLevelId
-      ? [barcodesByPack, barcode.packLevelId]
-      : [barcodesByPresentationOnly, barcode.presentationId];
-    map.set(key, [...(map.get(key) ?? []), barcode.code]);
+  const sources = ownerDataExportSources(db, organizationId, range);
+  const rows = {} as Record<OwnerDataExportFileKey, ExportRow[]>;
+  for (const key of Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]) {
+    rows[key] = [];
+    for await (const page of sources[key]()) rows[key].push(...page);
   }
+  return rows;
+}
 
-  const medicines: ExportRow[] = packLevels.map((pack) => {
-    const medicine = pack.presentation.medicine;
-    return {
-      code: pack.id,
-      product: medicine.productName,
-      pack: unitsLabel(packBaseUnits.get(pack.id)),
-      pack_level: packLabel.get(pack.id),
-      barcode: [
-        ...(barcodesByPack.get(pack.id) ?? []),
-        ...(pack.parentPackLevelId
-          ? []
-          : (barcodesByPresentationOnly.get(pack.presentationId) ?? [])),
-      ].join(' '),
-      medicine_id: medicine.id,
-      brand: medicine.brandName,
-      manufacturer: medicine.manufacturer,
-      drap_registration: medicine.drapRegistrationNumber,
-      units_per_parent: pack.unitsPerParent,
-      product_family: medicine.productFamily,
-      rx: medicine.rx,
-      otc: medicine.otc,
-      controlled: medicine.controlled,
-      saleable: medicine.saleable,
-    };
-  });
+/** A file's CSV as chunks: the header, then one chunk per page of rows. */
+async function* csvChunks(
+  spec: ExportFileSpec,
+  source: AsyncIterable<ExportRow[]>,
+  onRows: (count: number) => void
+): AsyncGenerator<string> {
+  yield exportCsvHeader(spec);
+  for await (const page of source) {
+    onRows(page.length);
+    yield exportCsvRows(spec, page);
+  }
+}
 
-  const stockLots: ExportRow[] = lots.flatMap((lot) =>
-    lot.balances.map((balance) => ({
-      code: lot.id,
-      product: lot.batch.medicine.productName,
-      pack: unitsLabel(lot.unitsPerPack),
-      pack_level: packLabel.get(lot.packLevelId) ?? lot.packLevel.level,
-      batch: lot.batch.batchNumber,
-      expiry: formatDateOnly(lot.batch.expiresAt),
-      mrp: formatMinor(lot.printedMrpMinor),
-      cost: formatMinor(lot.unitCostMinor),
-      quantity: balance.onHandUnits,
-      supplier: lot.supplierName,
-      branch: branchCode.get(lot.branchId) ?? lot.branchId,
-      location: locationCode.get(balance.stockLocationId) ?? balance.stockLocationId,
-      disposition: balance.disposition,
-      supplier_invoice: lot.supplierInvoiceRef,
-    }))
-  );
+/** The largest archive the export will build: 512 MiB. Larger exports fail. */
+export const OWNER_DATA_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
 
-  const accountBalance = new Map<string, number>();
-  for (const event of khataEvents) {
-    const signed = event.kind === 'PAYMENT' ? -event.amountMinor : event.amountMinor;
-    accountBalance.set(
-      event.familyAccountId,
-      (accountBalance.get(event.familyAccountId) ?? 0) + signed
+/** A size-cap failure is permanent: retrying the same export cannot shrink it. */
+export class OwnerDataExportTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(
+      `The export is larger than ${Math.floor(maxBytes / (1024 * 1024))} MB. Choose a shorter sales date range.`
     );
+    this.name = 'OwnerDataExportTooLargeError';
   }
-  const customerBalance = new Map<string, number>();
-  for (const account of familyAccounts) {
-    customerBalance.set(
-      account.payerCustomerId,
-      (customerBalance.get(account.payerCustomerId) ?? 0) + (accountBalance.get(account.id) ?? 0)
-    );
-  }
-  const accountById = new Map(familyAccounts.map((account) => [account.id, account]));
-
-  const customerRows: ExportRow[] = customers.map((customer) => ({
-    code: customer.id,
-    customer: customer.displayName,
-    balance: formatMinor(customerBalance.get(customer.id) ?? 0),
-    credit_limit: formatMinor(customer.creditLimitMinor),
-    phone_last4: customer.phoneLast4,
-    active: customer.active,
-    created_at: customer.createdAt,
-  }));
-
-  const khataLedger: ExportRow[] = khataEvents.map((event) => {
-    const account = accountById.get(event.familyAccountId);
-    return {
-      account_id: event.familyAccountId,
-      account_name: account?.displayName,
-      payer_customer_id: account?.payerCustomerId,
-      branch: branchCode.get(event.branchId) ?? event.branchId,
-      kind: event.kind,
-      amount: formatMinor(event.amountMinor),
-      occurred_at: event.occurredAt,
-      due_at: event.dueAt,
-      note: event.note,
-    };
-  });
-
-  const receivedValue = new Map<string, number>();
-  for (const receipt of goodsReceipts) {
-    if (!receipt.postedAt || receipt.reversedAt) continue;
-    receivedValue.set(
-      receipt.supplierId,
-      (receivedValue.get(receipt.supplierId) ?? 0) +
-        sumBy(receipt.lines, (line) => line.acceptedCanonicalUnits * line.unitCostMinor)
-    );
-  }
-  const creditValue = new Map<string, number>();
-  for (const credit of supplierCredits) {
-    creditValue.set(
-      credit.supplierId,
-      (creditValue.get(credit.supplierId) ?? 0) + credit.amountMinor
-    );
-  }
-
-  const supplierRows: ExportRow[] = suppliers.map((supplier) => ({
-    code: supplier.id,
-    supplier: supplier.name,
-    goods_received_value: formatMinor(receivedValue.get(supplier.id) ?? 0),
-    supplier_credits: formatMinor(creditValue.get(supplier.id) ?? 0),
-    legal_name: supplier.legalName,
-    contact_name: supplier.contactName,
-    contact_phone: supplier.contactPhone,
-    payment_terms_days: supplier.paymentTermsDays,
-    credit_limit: formatMinor(supplier.creditLimitMinor),
-    authorized: supplier.authorized,
-    active: supplier.active,
-  }));
-
-  const saleRows: ExportRow[] = sales.map((sale) => {
-    const gross = sumBy(sale.lines, (line) => line.grossMinor);
-    const discount = sumBy(sale.lines, (line) => line.discountMinor);
-    return {
-      sale_id: sale.id,
-      branch: branchCode.get(sale.branchId) ?? sale.branchId,
-      receipt_number: sale.receiptNumber,
-      business_date: formatDateOnly(sale.businessDate),
-      completed_at: sale.completedAt,
-      status: sale.status,
-      customer_id: sale.customerId,
-      original_sale_id: sale.originalSaleId,
-      gross: formatMinor(gross),
-      discount: formatMinor(discount),
-      net: formatMinor(gross - discount),
-    };
-  });
-  const saleLines: ExportRow[] = sales.flatMap((sale) =>
-    sale.lines.map((line) => ({
-      sale_id: sale.id,
-      line_id: line.id,
-      medicine_id: line.medicineId,
-      medicine_name: line.medicine.productName,
-      pack_level_id: line.packLevelId,
-      sale_unit: line.saleUnit,
-      sold_quantity: line.quantity,
-      base_units: line.canonicalUnits,
-      unit_price: formatMinor(line.unitPriceMinor),
-      gross: formatMinor(line.grossMinor),
-      discount: formatMinor(line.discountMinor),
-      net: formatMinor(line.grossMinor - line.discountMinor),
-      unit_cost: formatMinor(line.unitCostMinor),
-    }))
-  );
-
-  const purchaseOrderRows: ExportRow[] = purchaseOrders.map((order) => ({
-    purchase_order_id: order.id,
-    reference: order.reference,
-    supplier_id: order.supplierId,
-    branch: order.branchId ? (branchCode.get(order.branchId) ?? order.branchId) : null,
-    status: order.status,
-    created_at: order.createdAt,
-    approved_at: order.approvedAt,
-    sent_at: order.sentAt,
-    expected_delivery_at: order.expectedDeliveryAt,
-  }));
-
-  const goodsReceiptRows: ExportRow[] = goodsReceipts.map((receipt) => ({
-    goods_receipt_id: receipt.id,
-    reference: receipt.reference,
-    branch: branchCode.get(receipt.branchId) ?? receipt.branchId,
-    supplier_id: receipt.supplierId,
-    purchase_order_id: receipt.purchaseOrderId,
-    supplier_invoice: receipt.supplierInvoiceRef,
-    supplier_invoice_date: formatDateOnly(receipt.supplierInvoiceDate),
-    status: receipt.status,
-    received_at: receipt.receivedAt,
-    posted_at: receipt.postedAt,
-    reversed_at: receipt.reversedAt,
-    freight: formatMinor(receipt.freightMinor),
-  }));
-  const goodsReceiptLines: ExportRow[] = goodsReceipts.flatMap((receipt) =>
-    receipt.lines.map((line) => ({
-      goods_receipt_id: receipt.id,
-      line_number: line.lineNumber,
-      medicine_id: line.medicineId,
-      medicine_name: line.medicine.productName,
-      pack_level_id: line.packLevelId,
-      received_batch: line.batchNumber,
-      printed_expiry: formatDateOnly(line.printedExpiry),
-      printed_mrp: formatMinor(line.printedMrpMinor),
-      received_packs: line.receivedPacks,
-      bonus_packs: line.bonusPacks,
-      accepted_units: line.acceptedCanonicalUnits,
-      rejected_units: line.rejectedCanonicalUnits,
-      price_per_pack: formatMinor(line.invoicedPricePerPackMinor),
-      discount_bps: line.discountBps,
-      tax_bps: line.taxBps,
-      unit_cost: formatMinor(line.unitCostMinor),
-      stock_lot_id: line.inventoryLotId,
-    }))
-  );
-
-  // Names resolve exactly as the register screen does: staff profile first.
-  const personIds = [
-    ...new Set(
-      registerEntries.flatMap((entry) => [entry.recordedByUserId, entry.witnessedByUserId])
-    ),
-  ];
-  const [users, staff] = personIds.length
-    ? await Promise.all([
-        db.user.findMany({
-          where: { organizationId, id: { in: personIds } },
-          select: { id: true, name: true },
-        }),
-        db.restaurantStaffProfile.findMany({
-          where: { organizationId, userId: { in: personIds } },
-          select: { userId: true, displayName: true },
-        }),
-      ])
-    : [[], []];
-  const userNames = new Map(users.map((user) => [user.id, user.name]));
-  const staffNames = new Map<string, string[]>();
-  for (const profile of staff) {
-    if (!profile.userId) continue;
-    staffNames.set(profile.userId, [
-      ...(staffNames.get(profile.userId) ?? []),
-      profile.displayName,
-    ]);
-  }
-  const personName = (id: string) =>
-    chooseRegisterPersonName([...(staffNames.get(id) ?? []), userNames.get(id)], id);
-
-  const controlledRegister: ExportRow[] = registerEntries.map((entry) => {
-    const medicine = entry.medicine ?? entry.line?.medicine ?? null;
-    return {
-      branch: branchCode.get(entry.branchId) ?? entry.branchId,
-      register_serial: entry.serial,
-      recorded_at: entry.createdAt,
-      entry_kind: entry.entryKind,
-      medicine_name: medicine?.productName,
-      manufacturer: entry.manufacturer ?? medicine?.manufacturer,
-      register_batch: entry.batchNumber,
-      quantity_units: entry.quantityCanonicalUnits,
-      balance_change: entry.balanceDelta,
-      running_balance: entry.runningBalance,
-      patient: entry.patient?.displayName,
-      prescriber: entry.prescriberName ?? entry.prescriber?.name,
-      prescriber_reg_no: entry.prescriberRegNo ?? entry.prescriber?.registrationNumber,
-      counterparty: entry.counterpartyName,
-      rx_serial_written: entry.rxSerialWritten,
-      emergency: entry.emergency,
-      corrects_serial: entry.correctsEntry?.serial,
-      correction_reason: entry.correctionReason,
-      recorded_by: personName(entry.recordedByUserId),
-      witnessed_by: personName(entry.witnessedByUserId),
-    };
-  });
-
-  return {
-    medicines,
-    stockLots,
-    customers: customerRows,
-    khataLedger,
-    suppliers: supplierRows,
-    sales: saleRows,
-    saleLines,
-    purchaseOrders: purchaseOrderRows,
-    goodsReceipts: goodsReceiptRows,
-    goodsReceiptLines,
-    controlledRegister,
-  };
 }
 
 /**
  * The platform worker's handler. It runs inside `withPlatformDb`, so it first
  * drops to the job's tenant scope: every read below is then held to that
  * organization by row-level security as well as by its own `where`.
+ *
+ * Tables are read a page at a time and each page is written straight into a
+ * ZIP on local disk, so neither the rows nor the archive is held in memory; the
+ * finished file is then streamed to storage. The archive stops at
+ * `maxBytes` and the job fails permanently instead. The worker runs this in a
+ * REPEATABLE READ transaction, so files read in separate passes (sales and
+ * sale lines, receipts and receipt lines) all come from one snapshot.
  */
 export async function runPharmacyOwnerDataExportJob(
   db: ScopedDb,
   job: Pick<PlatformJob, 'id' | 'organizationId'>,
   payload: Record<string, unknown>,
-  now: () => Date = () => new Date()
+  now: () => Date = () => new Date(),
+  options: { maxBytes?: number } = {}
 ) {
   const organizationId = job.organizationId;
   if (!organizationId) throw new Error('Owner data export requires an organization.');
   const range = parseSalesRange(payload);
   if (!range) throw new Error('Owner data export has an invalid sales range.');
+  const maxBytes = options.maxBytes ?? OWNER_DATA_EXPORT_MAX_BYTES;
+  const filename = newOwnerDataExportObjectName(job.id);
   await db.$queryRawUnsafe(
     `SELECT set_config('app.current_organization_id', $1, true),
             set_config('app.current_user_id', '', true),
@@ -646,24 +991,48 @@ export async function runPharmacyOwnerDataExportJob(
     where: { id: organizationId },
     select: { displayName: true, legalName: true },
   });
-  const rows = await loadOwnerDataExportRows(db, organizationId, range);
   const generatedAt = now();
-  const archive = buildOwnerDataExportZip(
-    {
-      organizationName: organization?.displayName || organization?.legalName || 'Pharmacy',
-      generatedAt,
-      salesFrom: range.from ? new Date(`${range.from}T00:00:00.000Z`) : null,
-      salesTo: range.to ? new Date(`${range.to}T00:00:00.000Z`) : null,
-    },
-    rows
-  );
-  const filename = ownerDataExportFilename(job.id);
-  await putUpload(organizationId, filename, archive, 'application/zip');
-  return {
-    filename,
-    bytes: archive.length,
-    rowCounts: exportRowCounts(rows),
-    generatedAt: generatedAt.toISOString(),
-    expiresAt: new Date(generatedAt.getTime() + OWNER_DATA_EXPORT_LINK_TTL_MS).toISOString(),
-  };
+  const sources = ownerDataExportSources(db, organizationId, range);
+  const directory = await mkdtemp(join(tmpdir(), 'owner-data-export-'));
+  try {
+    const path = join(directory, filename);
+    const zip = await ZipFileWriter.create(path, { maxBytes });
+    const counts = {} as OwnerDataExportCounts;
+    let bytes: number;
+    try {
+      for (const key of Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]) {
+        counts[key] = 0;
+        const spec: ExportFileSpec = OWNER_DATA_EXPORT_FILES[key];
+        await zip.addEntry(
+          spec.name,
+          csvChunks(spec, sources[key](), (count) => (counts[key] += count))
+        );
+      }
+      const readme = exportReadme(
+        {
+          organizationName: organization?.displayName || organization?.legalName || 'Pharmacy',
+          generatedAt,
+          salesFrom: range.from ? new Date(`${range.from}T00:00:00.000Z`) : null,
+          salesTo: range.to ? new Date(`${range.to}T00:00:00.000Z`) : null,
+        },
+        counts
+      );
+      await zip.addEntry('README.md', [readme]);
+      bytes = await zip.close();
+    } catch (error) {
+      await zip.abort();
+      if (error instanceof ZipSizeLimitError) throw new OwnerDataExportTooLargeError(maxBytes);
+      throw error;
+    }
+    await putUploadFile(organizationId, filename, path, 'application/zip');
+    return {
+      filename,
+      bytes,
+      rowCounts: exportRowCounts(counts),
+      generatedAt: generatedAt.toISOString(),
+      expiresAt: new Date(generatedAt.getTime() + OWNER_DATA_EXPORT_LINK_TTL_MS).toISOString(),
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
