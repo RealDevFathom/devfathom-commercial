@@ -40,6 +40,15 @@ import {
  * PARTIALLY_RECEIVED orders. Approval is gated (at the console edge) on
  * `purchasing:approve`, creation on `purchasing:create`; this module enforces
  * the transitions themselves so an out-of-band call cannot skip a state.
+ *
+ * Concurrency (DEV-775): every command that reads a PO's status to decide what
+ * it may do — line edits, lifecycle transitions and receiving — runs in one
+ * transaction that first takes the PO row lock (`SELECT … FOR UPDATE`) and
+ * re-reads the status under it, and every status write is a conditional
+ * transition from the states it was validated against. Two sessions acting on
+ * the same PO therefore serialize on one current status: a stale cancel cannot
+ * overwrite a committed receipt, and a receipt cannot post against an order
+ * that was cancelled while it waited.
  */
 
 export type PurchasingErrorReason =
@@ -242,18 +251,20 @@ export async function addPurchaseOrderLine(
   purchaseOrderId: string,
   line: PurchaseOrderLineInput
 ) {
-  const order = await requirePurchaseOrderStatus(db, purchaseOrderId, 'DRAFT');
-  await db.restaurantPurchaseOrderLine.create({
-    data: {
-      purchaseOrderId: order.id,
-      stockItemId: line.stockItemId,
-      orderedQuantity: decimal(line.orderedQuantity),
-      unitId: line.unitId,
-      unitCost: decimal(line.unitCost),
-    },
-    select: { id: true },
+  return runStockTransaction(db, async (tx) => {
+    const order = await requirePurchaseOrderStatus(tx, purchaseOrderId, 'DRAFT');
+    await tx.restaurantPurchaseOrderLine.create({
+      data: {
+        purchaseOrderId: order.id,
+        stockItemId: line.stockItemId,
+        orderedQuantity: decimal(line.orderedQuantity),
+        unitId: line.unitId,
+        unitCost: decimal(line.unitCost),
+      },
+      select: { id: true },
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 export type UpdatePurchaseOrderLineInput = {
@@ -268,24 +279,28 @@ export async function updatePurchaseOrderLine(
   lineId: string,
   patch: UpdatePurchaseOrderLineInput
 ) {
-  await requirePurchaseOrderStatus(db, purchaseOrderId, 'DRAFT');
-  const line = await db.restaurantPurchaseOrderLine.findFirst({
-    where: { id: lineId, purchaseOrderId },
-    select: { id: true },
+  return runStockTransaction(db, async (tx) => {
+    await requirePurchaseOrderStatus(tx, purchaseOrderId, 'DRAFT');
+    const line = await tx.restaurantPurchaseOrderLine.findFirst({
+      where: { id: lineId, purchaseOrderId },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new PurchasingError('The order line is not on this order.', 'LINE_NOT_ON_ORDER');
+    }
+    await tx.restaurantPurchaseOrderLine.update({
+      where: { id: lineId },
+      data: {
+        ...(patch.orderedQuantity !== undefined
+          ? { orderedQuantity: decimal(patch.orderedQuantity) }
+          : {}),
+        ...(patch.unitId !== undefined ? { unitId: patch.unitId } : {}),
+        ...(patch.unitCost !== undefined ? { unitCost: decimal(patch.unitCost) } : {}),
+      },
+      select: { id: true },
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  if (!line) throw new PurchasingError('The order line is not on this order.', 'LINE_NOT_ON_ORDER');
-  await db.restaurantPurchaseOrderLine.update({
-    where: { id: lineId },
-    data: {
-      ...(patch.orderedQuantity !== undefined
-        ? { orderedQuantity: decimal(patch.orderedQuantity) }
-        : {}),
-      ...(patch.unitId !== undefined ? { unitId: patch.unitId } : {}),
-      ...(patch.unitCost !== undefined ? { unitCost: decimal(patch.unitCost) } : {}),
-    },
-    select: { id: true },
-  });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 export async function removePurchaseOrderLine(
@@ -293,30 +308,33 @@ export async function removePurchaseOrderLine(
   purchaseOrderId: string,
   lineId: string
 ) {
-  await requirePurchaseOrderStatus(db, purchaseOrderId, 'DRAFT');
-  const { count } = await db.restaurantPurchaseOrderLine.deleteMany({
-    where: { id: lineId, purchaseOrderId },
+  return runStockTransaction(db, async (tx) => {
+    await requirePurchaseOrderStatus(tx, purchaseOrderId, 'DRAFT');
+    const { count } = await tx.restaurantPurchaseOrderLine.deleteMany({
+      where: { id: lineId, purchaseOrderId },
+    });
+    if (count === 0)
+      throw new PurchasingError('The order line is not on this order.', 'LINE_NOT_ON_ORDER');
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  if (count === 0)
-    throw new PurchasingError('The order line is not on this order.', 'LINE_NOT_ON_ORDER');
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 // ── Purchase orders — lifecycle transitions (server-side guards) ────────────────
 
 export async function submitPurchaseOrder(db: ScopedDb, purchaseOrderId: string, now?: Date) {
-  const order = await requirePurchaseOrderStatus(db, purchaseOrderId, 'DRAFT');
-  const lineCount = await db.restaurantPurchaseOrderLine.count({
-    where: { purchaseOrderId: order.id },
+  return runStockTransaction(db, async (tx) => {
+    const order = await requirePurchaseOrderStatus(tx, purchaseOrderId, 'DRAFT');
+    const lineCount = await tx.restaurantPurchaseOrderLine.count({
+      where: { purchaseOrderId: order.id },
+    });
+    if (lineCount === 0)
+      throw new PurchasingError('Cannot submit a purchase order with no lines.', 'EMPTY_ORDER');
+    await transitionPurchaseOrder(tx, order.id, ['DRAFT'], {
+      status: 'SUBMITTED',
+      submittedAt: now ?? new Date(),
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  if (lineCount === 0)
-    throw new PurchasingError('Cannot submit a purchase order with no lines.', 'EMPTY_ORDER');
-  await db.restaurantPurchaseOrder.update({
-    where: { id: order.id },
-    data: { status: 'SUBMITTED', submittedAt: now ?? new Date() },
-    select: { id: true },
-  });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 export type ApprovePurchaseOrderInput = {
@@ -329,49 +347,49 @@ export async function approvePurchaseOrder(
   purchaseOrderId: string,
   input: ApprovePurchaseOrderInput = {}
 ) {
-  const order = await requirePurchaseOrderStatus(db, purchaseOrderId, 'SUBMITTED');
-  await db.restaurantPurchaseOrder.update({
-    where: { id: order.id },
-    data: {
+  return runStockTransaction(db, async (tx) => {
+    const order = await requirePurchaseOrderStatus(tx, purchaseOrderId, 'SUBMITTED');
+    await transitionPurchaseOrder(tx, order.id, ['SUBMITTED'], {
       status: 'APPROVED',
       approvedAt: input.now ?? new Date(),
       approvedByStaffProfileId: input.approvedByStaffProfileId ?? null,
-    },
-    select: { id: true },
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 export async function cancelPurchaseOrder(db: ScopedDb, purchaseOrderId: string, now?: Date) {
-  const order = await requirePurchaseOrder(db, purchaseOrderId);
-  if (!CANCELLABLE_STATUSES.has(order.status)) {
-    throw new PurchasingError(
-      `A purchase order in ${order.status} cannot be cancelled.`,
-      'INVALID_STATE'
-    );
-  }
-  await db.restaurantPurchaseOrder.update({
-    where: { id: order.id },
-    data: { status: 'CANCELLED', cancelledAt: now ?? new Date() },
-    select: { id: true },
+  return runStockTransaction(db, async (tx) => {
+    const order = await requirePurchaseOrder(tx, purchaseOrderId);
+    if (!CANCELLABLE_STATUSES.has(order.status)) {
+      throw new PurchasingError(
+        `A purchase order in ${order.status} cannot be cancelled.`,
+        'INVALID_STATE'
+      );
+    }
+    await transitionPurchaseOrder(tx, order.id, [...CANCELLABLE_STATUSES], {
+      status: 'CANCELLED',
+      cancelledAt: now ?? new Date(),
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 export async function closePurchaseOrder(db: ScopedDb, purchaseOrderId: string, now?: Date) {
-  const order = await requirePurchaseOrder(db, purchaseOrderId);
-  if (!CLOSEABLE_STATUSES.has(order.status)) {
-    throw new PurchasingError(
-      `A purchase order in ${order.status} cannot be closed.`,
-      'INVALID_STATE'
-    );
-  }
-  await db.restaurantPurchaseOrder.update({
-    where: { id: order.id },
-    data: { status: 'CLOSED', closedAt: now ?? new Date() },
-    select: { id: true },
+  return runStockTransaction(db, async (tx) => {
+    const order = await requirePurchaseOrder(tx, purchaseOrderId);
+    if (!CLOSEABLE_STATUSES.has(order.status)) {
+      throw new PurchasingError(
+        `A purchase order in ${order.status} cannot be closed.`,
+        'INVALID_STATE'
+      );
+    }
+    await transitionPurchaseOrder(tx, order.id, [...CLOSEABLE_STATUSES], {
+      status: 'CLOSED',
+      closedAt: now ?? new Date(),
+    });
+    return getPurchaseOrder(tx, purchaseOrderId);
   });
-  return getPurchaseOrder(db, purchaseOrderId);
 }
 
 // ── Receiving ───────────────────────────────────────────────────────────────────
@@ -468,8 +486,18 @@ export async function receivePurchaseOrder(
       });
     }
 
+    // Lock the PO row and re-read its status under the lock BEFORE any receipt
+    // or stock write, so a concurrent cancel/close/receive serializes behind
+    // (or ahead of) this receipt instead of acting on a stale status.
+    const locked = await requirePurchaseOrder(tx, input.purchaseOrderId);
+    if (!RECEIVABLE_STATUSES.has(locked.status)) {
+      throw new PurchasingError(
+        `A purchase order in ${locked.status} cannot receive goods.`,
+        'INVALID_STATE'
+      );
+    }
     const order = await tx.restaurantPurchaseOrder.findUnique({
-      where: { id: input.purchaseOrderId },
+      where: { id: locked.id },
       select: {
         id: true,
         status: true,
@@ -615,10 +643,8 @@ export async function receivePurchaseOrder(
 
     const nextStatus = await deriveOrderStatusAfterReceipt(tx, order.lines);
     if (nextStatus !== order.status) {
-      await tx.restaurantPurchaseOrder.update({
-        where: { id: order.id },
-        data: { status: nextStatus },
-        select: { id: true },
+      await transitionPurchaseOrder(tx, order.id, [order.status as PurchaseOrderStatus], {
+        status: nextStatus,
       });
     }
 
@@ -926,17 +952,22 @@ export async function getPurchaseReceipt(db: ScopedDb, id: string) {
 
 // ── Internals ────────────────────────────────────────────────────────────────────
 
-async function requirePurchaseOrder(db: ScopedDb, id: string) {
-  const order = await db.restaurantPurchaseOrder.findUnique({
-    where: { id },
-    select: { id: true, status: true },
-  });
+/**
+ * Lock the purchase-order row (`FOR UPDATE`) and read its CURRENT status under
+ * the lock. Must run inside the command's transaction: the lock is held until
+ * that transaction ends, so every PO command serializes on one current status.
+ * RLS still applies, so another organization's PO reads as NOT_FOUND.
+ */
+async function requirePurchaseOrder(tx: ScopedDb, id: string) {
+  const rows = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+    SELECT id, status::text AS status FROM restaurant_purchase_orders WHERE id = ${id} FOR UPDATE`;
+  const order = rows[0];
   if (!order) throw new PurchasingError('The purchase order does not exist.', 'NOT_FOUND');
   return { id: order.id, status: order.status as PurchaseOrderStatus };
 }
 
-async function requirePurchaseOrderStatus(db: ScopedDb, id: string, expected: PurchaseOrderStatus) {
-  const order = await requirePurchaseOrder(db, id);
+async function requirePurchaseOrderStatus(tx: ScopedDb, id: string, expected: PurchaseOrderStatus) {
+  const order = await requirePurchaseOrder(tx, id);
   if (order.status !== expected) {
     throw new PurchasingError(
       `Expected a ${expected} purchase order but it is ${order.status}.`,
@@ -944,6 +975,29 @@ async function requirePurchaseOrderStatus(db: ScopedDb, id: string, expected: Pu
     );
   }
   return order;
+}
+
+/**
+ * Conditional status transition: writes only while the PO is still in one of
+ * the `from` states the caller validated, and fails closed otherwise — a stale
+ * status read can never overwrite a newer lifecycle state.
+ */
+async function transitionPurchaseOrder(
+  tx: ScopedDb,
+  id: string,
+  from: readonly PurchaseOrderStatus[],
+  data: Prisma.RestaurantPurchaseOrderUncheckedUpdateManyInput & { status: PurchaseOrderStatus }
+): Promise<void> {
+  const { count } = await tx.restaurantPurchaseOrder.updateMany({
+    where: { id, status: { in: [...from] } },
+    data,
+  });
+  if (count !== 1) {
+    throw new PurchasingError(
+      'The purchase order changed state while this command ran. Reload it and try again.',
+      'INVALID_STATE'
+    );
+  }
 }
 
 async function upsertBatch(

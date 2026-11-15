@@ -42,10 +42,12 @@ describe('PlatformShell compact navigation', () => {
   it('names the platform logo link and points it to platform home', () => {
     renderShell();
 
-    expect(screen.getByRole('link', { name: 'DevFathom platform home' })).toHaveAttribute(
-      'href',
-      '/platform'
-    );
+    const link = screen.getByRole('link', { name: 'DevFathom Platform control home' });
+    expect(link).toHaveAttribute('href', '/platform');
+    // WCAG 2.5.3: the accessible name must contain the visible label text.
+    expect(link.getAttribute('aria-label')).toContain('DevFathom Platform control');
+    expect(link).toHaveTextContent('DevFathom');
+    expect(link).toHaveTextContent('Platform control');
   });
 
   it('returns focus to the trigger when the close button is activated by keyboard', () => {

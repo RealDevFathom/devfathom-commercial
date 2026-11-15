@@ -1,13 +1,13 @@
 import { SectionCard } from '@/components/ui/section-card';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 const LIMIT = 5;
 const linkClass =
   'inline-flex min-h-11 items-center rounded-sm text-sm font-medium text-text-strong underline underline-offset-4 hover:text-text-body focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring';
 const money = (value: number) =>
   `PKR ${(value / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const date = (value: number) =>
-  new Date(value).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+const date = (value: number) => formatUtcInstant(new Date(value));
 
 export function FollowUpQueue({
   queue,

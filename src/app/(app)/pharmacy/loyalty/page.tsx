@@ -8,7 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { LoyaltyCustomerSearch } from './customer-search';
+import { EarnRateForm } from './earn-rate-form';
+import { describeLoyaltyEarnRule } from '@/lib/commerce/loyalty-arithmetic';
+import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
 
 export const metadata = { title: 'Loyalty points · Pharmacy' };
 const linkClass =
@@ -18,6 +22,7 @@ const eventLabels: Record<string, string> = {
   REDEEM: 'Points redeemed',
   REFUND: 'Redeemed points restored',
   EARN_REVERSAL: 'Earned points reversed',
+  KHATA_EARN: 'Points earned on khata payment',
 };
 
 async function loadLoyalty(text: (key: string) => string) {
@@ -29,7 +34,10 @@ async function loadLoyalty(text: (key: string) => string) {
     if (!branches.some((branch) => branch.id === branchId))
       throw new TRPCError({ code: 'NOT_FOUND' });
     const query = text('query');
-    const { customers, hasMore } = await caller.customers({ branchId, query });
+    const [{ customers, hasMore }, earnRate] = await Promise.all([
+      caller.customers({ branchId, query }),
+      caller.earnRate(),
+    ]);
     const customerId = text('customerId');
     const history = customerId
       ? await caller.history({ branchId, customerId, page: Number(text('page') || 1) })
@@ -43,6 +51,7 @@ async function loadLoyalty(text: (key: string) => string) {
       hasMore,
       customerId,
       history,
+      earnRate,
     };
   } catch (error) {
     unstable_rethrow(error);
@@ -98,7 +107,7 @@ export default async function LoyaltyPage({
         </SectionCard>
       </main>
     );
-  const { branches, branchId, query, customers, hasMore, customerId, history } = data;
+  const { branches, branchId, query, customers, hasMore, customerId, history, earnRate } = data;
   const href = (id: string, page = 1) =>
     `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, query, page: String(page) })}`;
   const branchName = branches.find((branch) => branch.id === branchId)!.name;
@@ -115,6 +124,64 @@ export default async function LoyaltyPage({
   return (
     <main className="min-w-0 space-y-6">
       {header}
+      <SectionCard title="Earning rate" titleLevel={2}>
+        {earnRate.current ? (
+          <Stat label="Current earning rate" value={describeLoyaltyEarnRule(earnRate.current)} />
+        ) : (
+          <p className="text-sm font-medium text-warning">
+            Points are not being earned: set an earn rate below. Existing balances stay available to
+            redeem.
+          </p>
+        )}
+        <p className="mt-2 mb-5 text-sm text-text-muted">
+          {earnRate.current
+            ? `Version ${earnRate.current.version}, in effect since ${earnRate.current.effectiveFrom.toISOString().slice(0, 10)} (UTC). `
+            : ''}
+          Every purchase earns, including khata purchases once the customer pays them off. Points
+          tenders never earn. 1 point always redeems for PKR 1. A new rate applies from when it is
+          saved; points already earned keep the rate they were earned at.
+        </p>
+        <EarnRateForm
+          presets={LOYALTY_EARN_PRESETS.map((preset) => ({ id: preset.id, label: preset.label }))}
+        />
+        {earnRate.versions.length > 1 && (
+          <div
+            className="mt-5 overflow-x-auto"
+            role="region"
+            aria-label="Earning rate history"
+            tabIndex={0}
+          >
+            <table className="w-full text-sm">
+              <caption className="sr-only">Earning rate history</caption>
+              <thead className="font-mono text-xs uppercase">
+                <tr>
+                  {['Version', 'Rate', 'From (UTC)'].map((t) => (
+                    <th key={t} scope="col" className="p-3 text-left">
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {earnRate.versions.map((version) => (
+                  <tr
+                    key={version.id}
+                    className="border-t border-border-subtle hover:bg-surface-sunken"
+                  >
+                    <td className="p-3 font-mono tabular-nums">{version.version}</td>
+                    <td className="p-3">{describeLoyaltyEarnRule(version)}</td>
+                    <td className="whitespace-nowrap p-3">
+                      <time dateTime={version.effectiveFrom.toISOString()}>
+                        {formatUtcInstant(version.effectiveFrom)}
+                      </time>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
       <SectionCard title="Customers" titleLevel={2}>
         <LoyaltyCustomerSearch branches={branches} branchId={branchId} query={query} />
         <p className="mt-3 text-sm text-text-muted">
@@ -246,7 +313,7 @@ export default async function LoyaltyPage({
                     >
                       <td className="whitespace-nowrap p-3">
                         <time dateTime={e.occurredAt.toISOString()}>
-                          {e.occurredAt.toISOString().replace('T', ' ').slice(0, 19)}
+                          {formatUtcInstant(e.occurredAt)}
                         </time>
                       </td>
                       <td className="p-3">

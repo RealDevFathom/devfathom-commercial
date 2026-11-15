@@ -6,6 +6,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { RestaurantDeliveryFulfillmentStatus } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { OrderCommandError, serveDeliveredOrderItems } from './orders';
+
 export type DeliveryErrorReason =
   | 'NOT_FOUND'
   | 'INVALID_INPUT'
@@ -559,9 +561,18 @@ export function transitionDeliveryFulfillment(
     fulfillmentId: string;
     status: Exclude<RestaurantDeliveryFulfillmentStatus, 'PENDING'>;
     now?: Date;
+    /** The operator + terminal recorded on the order events a hand-off writes. */
+    actor?: { staffProfileId: string; deviceId: string } | null;
   }
 ) {
   return transaction(db, async (tx) => {
+    if (input.status === 'DELIVERED') {
+      // DELIVERED serves the order's items, so take the order row first and the
+      // fulfillment second, the same lock order closeOrder uses.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT o."id" FROM "restaurant_orders" o JOIN "restaurant_delivery_fulfillments" f ON f."orderId" = o."id" WHERE f."id" = ${input.fulfillmentId} AND f."organizationId" = ${input.organizationId} AND f."branchId" = ${input.branchId} FOR UPDATE OF o`
+      );
+    }
     const [current] = await tx.$queryRaw<
       Array<{
         status: RestaurantDeliveryFulfillmentStatus;
@@ -629,6 +640,22 @@ export function transitionDeliveryFulfillment(
           : input.status === 'CANCELLED'
             ? { cancelledAt: now }
             : { failedAt: now };
+    if (input.status === 'DELIVERED') {
+      // The guest has the food: serve the remaining PREPARED items in this same
+      // transaction so the delivered, paid order can close. Close bookkeeping
+      // (loyalty, inventory) stays with closeOrder and runs once there.
+      try {
+        await serveDeliveredOrderItems(tx, current.orderId, {
+          staffProfileId: input.actor?.staffProfileId ?? null,
+          deviceId: input.actor?.deviceId ?? null,
+        });
+      } catch (error) {
+        if (error instanceof OrderCommandError && error.reason === 'ITEM_STATE') {
+          throw new DeliveryError(error.message, 'INVALID_TRANSITION');
+        }
+        throw error;
+      }
+    }
     return tx.restaurantDeliveryFulfillment.update({
       where: { id: input.fulfillmentId },
       data: { status: input.status, paymentMode, ...timestamps },
