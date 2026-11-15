@@ -323,6 +323,8 @@ export function OrganizationAdminContent() {
       locale: formValue(values, 'locale'),
       primaryContactName: formValue(values, 'primaryContactName') || null,
       primaryContactEmail: formValue(values, 'primaryContactEmail'),
+      invoiceAddress: formValue(values, 'invoiceAddress') || null,
+      taxId: formValue(values, 'taxId') || null,
     });
   };
   const submitBrand = (event: FormEvent<HTMLFormElement>) => {
@@ -444,6 +446,14 @@ export function OrganizationAdminContent() {
                 type="email"
                 defaultValue={organization.primaryContactEmail ?? ''}
               />
+            </label>
+            <label className="sm:col-span-2">
+              <span className={labelClass}>Invoice address</span>
+              <Input name="invoiceAddress" defaultValue={organization.invoiceAddress ?? ''} />
+            </label>
+            <label>
+              <span className={labelClass}>Tax ID</span>
+              <Input name="taxId" defaultValue={organization.taxId ?? ''} />
             </label>
             <div className="sm:col-span-2">
               <SubmitButton pending={profile.isPending}>Save profile</SubmitButton>

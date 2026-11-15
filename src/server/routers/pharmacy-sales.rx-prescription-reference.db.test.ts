@@ -632,22 +632,46 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     const added = await addReferencedSale(lines.fullCompletion);
     const { completePaidPharmacySale, completionSaleInclude } =
       await import('@/lib/pharmacy/sale-completion');
+    const complete = () =>
+      withTenantDb(
+        ids.org,
+        async (tx) => {
+          const sale = await tx.pharmacySale.findFirstOrThrow({
+            where: { id: added.saleId, organizationId: ids.org, branchId: ids.branch },
+            include: completionSaleInclude,
+          });
+          await completePaidPharmacySale(
+            tx,
+            { organizationId: ids.org, branchId: ids.branch, actorId: ids.pharmacist },
+            sale,
+            { deviceId: `dev_r518_${suffix}`, businessDate: new Date('2026-10-23T00:00:00.000Z') }
+          );
+        },
+        { userId: ids.pharmacist }
+      );
+    // DEV-629: addLine queued the pharmacist review; completion waits for its SIGN decision.
+    await expect(complete()).rejects.toMatchObject({
+      name: 'PharmacyDispensingError',
+      code: 'PHARMACIST_APPROVAL_REQUIRED',
+    });
     await withTenantDb(
       ids.org,
       async (tx) => {
-        const sale = await tx.pharmacySale.findFirstOrThrow({
-          where: { id: added.saleId, organizationId: ids.org, branchId: ids.branch },
-          include: completionSaleInclude,
+        const review = await tx.pharmacyPharmacistReviewItem.findFirstOrThrow({
+          where: { saleLineId: added.saleLineId, prescriptionLineId: lines.fullCompletion },
         });
-        await completePaidPharmacySale(
-          tx,
-          { organizationId: ids.org, branchId: ids.branch, actorId: ids.pharmacist },
-          sale,
-          { deviceId: `dev_r518_${suffix}`, businessDate: new Date('2026-10-23T00:00:00.000Z') }
-        );
+        await tx.pharmacyPharmacistReviewDecision.create({
+          data: {
+            reviewItemId: review.id,
+            kind: 'SIGN',
+            actorUserId: ids.pharmacist,
+            signedAt: new Date(),
+          },
+        });
       },
       { userId: ids.pharmacist }
     );
+    await complete();
     const state = await withTenantDb(ids.org, async (tx) => ({
       sale: await tx.pharmacySale.findFirstOrThrow({ where: { id: added.saleId } }),
       fill: await tx.prescriptionFill.findFirst({

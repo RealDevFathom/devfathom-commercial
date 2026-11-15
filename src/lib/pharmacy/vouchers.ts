@@ -1,6 +1,23 @@
 import { Prisma } from '@/generated/prisma/client';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { z } from 'zod';
+
+import {
+  authorizeCounterApproval,
+  CounterApprovalDenied,
+  confirmCounterApproval,
+  type CounterApproval,
+} from './counter-line-approval';
+import { verifyRefundPin } from './refund-authorization';
+import {
+  VOUCHER_MAX_DISCOUNT_MINOR,
+  VOUCHER_MAX_USES,
+  VOUCHER_MAX_VALIDITY_DAYS,
+  VOUCHER_SECOND_APPROVER_POLICY,
+  VOUCHER_SOLE_OWNER_POLICY,
+  VOUCHER_WITHIN_CAP_POLICY,
+  voucherNeedsSecondApprover,
+} from './voucher-controls';
 
 import {
   marketingScopeInput,
@@ -14,6 +31,12 @@ import {
   voucherEligibleCategories,
   VoucherScopeError,
 } from './voucher-scope';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const approvalPin = z
+  .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
+  .strict();
 
 /**
  * DEV-27: an owner issues a voucher as a stored record carrying its
@@ -30,9 +53,13 @@ export const voucherIssueInput = marketingScopeInput
       .regex(/^[A-Za-z0-9-]+$/),
     name: z.string().trim().min(1).max(100),
     body: z.string().trim().min(1).max(1000),
-    discountMinor: z.number().int().positive().max(100_000_000),
+    discountMinor: z.number().int().positive().max(VOUCHER_MAX_DISCOUNT_MINOR),
     eligibleCategories: z.array(z.enum(VOUCHER_NON_DRUG_CATEGORIES)).max(10).optional(),
-    validUntil: z.date().optional(),
+    // DEV-819: a use limit and an expiry are required.
+    maxUses: z.number().int().min(1).max(VOUCHER_MAX_USES),
+    validUntil: z.date(),
+    // DEV-819: above the value cap, a second approver's PIN (or the solo owner's own).
+    approval: approvalPin.optional(),
     reviewed: z.literal(true),
   })
   .strict();
@@ -48,7 +75,41 @@ export function voucherMessages(body: string) {
   };
 }
 
-export async function issueVoucher(db: ScopedDb, scope: MarketingScope, input: VoucherIssueInput) {
+export class VoucherApprovalRequired extends MarketingWorkflowError {
+  constructor() {
+    super(
+      'This voucher is above the value cap. A second manager or owner must approve it with their PIN.'
+    );
+  }
+}
+
+/**
+ * DEV-819: resolves the second approval for a voucher above the value cap BEFORE the issue
+ * transaction opens, so a wrong PIN's lockout strike commits even though the issue fails.
+ * Returns null when the voucher is within the cap. `issueVoucher` re-checks the result.
+ */
+export async function authorizeVoucherIssue(
+  db: ScopedDb,
+  scope: MarketingScope,
+  input: VoucherIssueInput
+): Promise<CounterApproval | null> {
+  const parsed = voucherIssueInput.parse(input);
+  if (!voucherNeedsSecondApprover(parsed)) return null;
+  if (!parsed.approval) throw new VoucherApprovalRequired();
+  try {
+    return await authorizeCounterApproval(db, scope, 'DISCOUNT', parsed.approval);
+  } catch (error) {
+    if (error instanceof CounterApprovalDenied) throw new VoucherApprovalRequired();
+    throw error;
+  }
+}
+
+export async function issueVoucher(
+  db: ScopedDb,
+  scope: MarketingScope,
+  input: VoucherIssueInput,
+  approval: CounterApproval | null = null
+) {
   const parsed = voucherIssueInput.parse(input);
   validateMarketingBody(parsed.body);
   let messages: ReturnType<typeof voucherMessages>;
@@ -63,8 +124,37 @@ export async function issueVoucher(db: ScopedDb, scope: MarketingScope, input: V
       );
     throw error;
   }
-  if (parsed.validUntil && parsed.validUntil.getTime() <= Date.now())
+  const now = Date.now();
+  if (parsed.validUntil.getTime() <= now)
     throw new MarketingWorkflowError('Choose an expiry date in the future.');
+  if (parsed.validUntil.getTime() > now + VOUCHER_MAX_VALIDITY_DAYS * DAY_MS)
+    throw new MarketingWorkflowError(
+      `Choose an expiry within ${VOUCHER_MAX_VALIDITY_DAYS} days of today.`
+    );
+  // DEV-819: above the cap the approval must be a verified second approver, or the solo
+  // owner's own fresh PIN. The issuer's session alone never approves it.
+  let approvedByUserId = scope.actorId;
+  let approvalPolicy = VOUCHER_WITHIN_CAP_POLICY;
+  let approvalCredentialId: string | null = null;
+  if (voucherNeedsSecondApprover(parsed)) {
+    if (!approval || !approval.credentialId) throw new VoucherApprovalRequired();
+    const selfApproved = approval.approvedByUserId === scope.actorId;
+    if (
+      selfApproved !== approval.selfApproved ||
+      approval.approvalPolicy !==
+        (selfApproved ? VOUCHER_SOLE_OWNER_POLICY : VOUCHER_SECOND_APPROVER_POLICY)
+    )
+      throw new VoucherApprovalRequired();
+    try {
+      await confirmCounterApproval(db, scope, 'DISCOUNT', approval);
+    } catch (error) {
+      if (error instanceof CounterApprovalDenied) throw new VoucherApprovalRequired();
+      throw error;
+    }
+    approvedByUserId = approval.approvedByUserId;
+    approvalPolicy = approval.approvalPolicy;
+    approvalCredentialId = approval.credentialId;
+  }
   try {
     const voucher = await db.pharmacyVoucher.create({
       data: {
@@ -75,16 +165,99 @@ export async function issueVoucher(db: ScopedDb, scope: MarketingScope, input: V
         body: parsed.body,
         discountMinor: parsed.discountMinor,
         eligibleCategories: [...eligibleCategories],
-        validUntil: parsed.validUntil ?? null,
+        validUntil: parsed.validUntil,
+        maxUses: parsed.maxUses,
         issuedByUserId: scope.actorId,
+        approvedByUserId,
+        approvalPolicy,
+        approvalCredentialId,
       },
     });
+    if (approvalCredentialId)
+      await db.auditLog.create({
+        data: {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          source: 'TRPC',
+          category: 'PHARMACY',
+          operation: 'EXECUTE',
+          action: 'pharmacy_voucher_approval',
+          outcome: 'SUCCESS',
+          targetType: 'PharmacyVoucher',
+          targetId: voucher.id,
+          metadata: {
+            branchId: scope.branchId,
+            policy: approvalPolicy,
+            approvedByUserId,
+            selfApproved: approvedByUserId === scope.actorId,
+            pinVerified: true,
+            credentialId: approvalCredentialId,
+            discountMinor: parsed.discountMinor,
+            maxUses: parsed.maxUses,
+          },
+        },
+      });
     return { voucher, messages };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
       throw new MarketingWorkflowError('A voucher with this code already exists in this branch.');
     throw error;
   }
+}
+
+export const voucherRevokeInput = marketingScopeInput
+  .extend({
+    voucherId: z.string().trim().min(1).max(128),
+    reason: z.string().trim().min(3).max(300),
+  })
+  .strict();
+
+export type VoucherRevokeInput = z.infer<typeof voucherRevokeInput>;
+
+/** DEV-819: revoking a voucher stops every later redemption; it cannot be undone. */
+export async function revokeVoucher(
+  db: ScopedDb,
+  scope: MarketingScope,
+  input: VoucherRevokeInput
+) {
+  const parsed = voucherRevokeInput.parse(input);
+  const revoked = await db.pharmacyVoucher.updateMany({
+    where: {
+      id: parsed.voucherId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      revokedAt: null,
+    },
+    data: {
+      active: false,
+      revokedAt: new Date(),
+      revokedByUserId: scope.actorId,
+      revokeReason: parsed.reason,
+    },
+  });
+  if (revoked.count !== 1)
+    throw new MarketingWorkflowError('This voucher was not found or is already revoked.');
+  return { voucherId: parsed.voucherId, revoked: true as const };
+}
+
+/**
+ * DEV-819: the redeeming cashier re-enters their own staff PIN. Verified in its own tenant
+ * transaction so a wrong PIN's lockout strike commits even though the sale line is refused.
+ */
+export async function authenticateVoucherCashierPin(input: {
+  organizationId: string;
+  actorId: string;
+  pin: string | undefined;
+}): Promise<boolean> {
+  const { pin } = input;
+  if (!pin) return false;
+  const result = await withTenantDb(
+    input.organizationId,
+    (db) =>
+      verifyRefundPin(db, { organizationId: input.organizationId, actorId: input.actorId, pin }),
+    { userId: input.actorId, skipDrain: true }
+  );
+  return 'verified' in result;
 }
 
 export async function listVouchers(db: ScopedDb, scope: MarketingScope) {
