@@ -680,6 +680,27 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     }
   );
 
+  it.each([{ status: 200 }, { status: 503 }, { status: 401 }, { status: 409 }, { status: 422 }])(
+    'keeps revocation final when the counter is revoked while the replay request is in flight',
+    async (response) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(1), MATRIX);
+      const send = vi.fn(async () => {
+        await counter.revoke();
+        return response;
+      });
+
+      await expect(counter.replay(send, async () => replaySigner())).resolves.toMatchObject({
+        state: 'STOPPED',
+      });
+
+      expect(counter.snapshot().queue?.replay).toBe('STOPPED_REVOKED');
+      expect(counter.snapshot().queue?.commands).toEqual([]);
+      expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    }
+  );
+
   it('pauses without losing an upgraded persisted command when replay signing cannot complete', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);

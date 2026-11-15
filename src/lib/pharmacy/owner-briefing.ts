@@ -278,8 +278,8 @@ export async function readOwnerBriefingDemand(
 
 /** The RPT-01 command-centre figures the briefing reuses (sales, cash, expiry, khata). */
 export type OwnerBriefingLedger = {
-  salesMinor: number;
-  cashMinor: number;
+  salesMinor: number | null;
+  cashMinor: number | null;
   expiryValueMinor30: number;
   expiryValueMinor60: number;
   expiryValueMinor90: number;
@@ -290,8 +290,8 @@ export type OwnerBriefingLedger = {
 export type OwnerBriefing = {
   window: OwnerBriefingWindow;
   expiryHorizonDays: ExpiryHorizon;
-  salesMinor: number;
-  cashMinor: number;
+  salesMinor: number | null;
+  cashMinor: number | null;
   expiryAtRiskMinor: number;
   khataDueMinor: number | null;
   demand: OwnerBriefingDemand;

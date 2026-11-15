@@ -141,7 +141,9 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
         channels: { capture: { enabled: true }, whatsapp: { enabled: false, configured: false } },
       }),
       updateDigestSetting: async () => ({}),
-      packAuthenticationFlags: async () => [],
+      // Mirrors the reader: pack scans record no supplier, so a supplier filter reads null.
+      packAuthenticationFlags: async (input: { supplierId?: string }) =>
+        input.supplierId ? null : [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
         permissions: { operational: true, financial: true, owner: true },
@@ -391,6 +393,10 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
+    // DEV-256: a filter that cannot apply is explained, never shown as unfiltered flags.
+    expect(screen.getByText('Pack authentication flags')).toBeVisible();
+    expect(screen.getByText(/these flags cannot be filtered by supplier/)).toBeVisible();
+    expect(screen.queryByText('No pack authentication flags match these branches.')).toBeNull();
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('sales');
     expect(screen.getByText('Source:').parentElement).not.toHaveTextContent('pharmacy_sales');
     expect(screen.getByText('Access:').parentElement).toHaveTextContent('Financial reports');

@@ -68,7 +68,14 @@ function fixture(camera: { id: string } | null) {
         refunds: [],
       }),
     },
-    pharmacyDrawerSession: { findFirst: vi.fn().mockResolvedValue({ id: 'drawer-1' }) },
+    // DEV-821: the refunding actor runs this till.
+    pharmacyDrawerSession: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'drawer-1',
+        openedByActorId: scope.actorId,
+        operatingCashierId: scope.actorId,
+      }),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyRefund: {
       create: vi.fn(async ({ data }) => ({ id: 'refund-1', ...data })),

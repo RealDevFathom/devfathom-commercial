@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isOwnerDataExportObjectName,
   newOwnerDataExportObjectName,
+  reservedOwnerDataExportObjectName,
   storedOwnerDataExportObjectName,
 } from './owner-data-export-object';
 
@@ -44,5 +45,24 @@ describe('owner data export object names (DEV-783)', () => {
     ]) {
       expect(storedOwnerDataExportObjectName('job-1', result)).toBeNull();
     }
+  });
+});
+
+describe('reserved owner data export archive names (DEV-844)', () => {
+  it('names one archive per job from the token its payload reserved', () => {
+    const token = '0123456789abcdef0123456789abcdef';
+    expect(reservedOwnerDataExportObjectName('job-1', { archiveToken: token })).toBe(
+      `owner-data-export-job-1-${token}.zip`
+    );
+    for (const payload of [
+      null,
+      {},
+      { archiveToken: 7 },
+      { archiveToken: token.toUpperCase() },
+      { archiveToken: `${token}/../x` },
+    ]) {
+      expect(reservedOwnerDataExportObjectName('job-1', payload)).toBeNull();
+    }
+    expect(reservedOwnerDataExportObjectName('../job', { archiveToken: token })).toBeNull();
   });
 });

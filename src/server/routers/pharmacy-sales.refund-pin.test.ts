@@ -193,7 +193,11 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
         settlement,
-        { requireCurrentBusinessDate: true }
+        // DEV-821: a refund is a manager's, so any open till of the branch may pay it out.
+        {
+          requireCurrentBusinessDate: true,
+          drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+        }
       );
       // The credential is the signed-in user's own PIN.
       expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
@@ -452,7 +456,12 @@ describe('DEV-501 one confirm records the return and refunds it', () => {
           reason: 'WRONG_ITEM',
           idempotencyKey: 'return-a:refund',
         },
-        { requireCurrentBusinessDate: true }
+        // DEV-821: the manager's PIN-approved refund may come out of any open till of
+        // the branch, a colleague's included (the resolver's own suite proves the till).
+        {
+          requireCurrentBusinessDate: true,
+          drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+        }
       );
       expect(vi.mocked(returnSaleLine).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(refundPharmacyTender).mock.invocationCallOrder[0]!
@@ -501,7 +510,7 @@ describe('DEV-501 one confirm records the return and refunds it', () => {
       f.db,
       expect.anything(),
       expect.objectContaining({ amountMinor: 350, manualCashFallback: true }),
-      { requireCurrentBusinessDate: true }
+      { requireCurrentBusinessDate: true, drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
     );
     vi.mocked(refundPharmacyTender).mockClear();
     await expect(

@@ -49,6 +49,7 @@ import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/coun
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
+  actorManagesBranchDrawers,
   counterCapabilityDecision,
   RECEIPT_READ_CAPABILITIES,
 } from '@/lib/pharmacy/counter-capability';
@@ -164,6 +165,8 @@ import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-ope
 import {
   applyPharmacyTender,
   closePharmacyDrawer,
+  drawerOperatingCashierId,
+  handoverPharmacyDrawer,
   cutPharmacyDailyClose,
   lockOpenPharmacyDrawer,
   openPharmacyDrawer,
@@ -524,7 +527,13 @@ async function refundTenderInTransaction(
         code: 'FORBIDDEN',
         message: 'You do not have permission for this action.',
       });
-    return refundPharmacyTender(db, scope, refund, { requireCurrentBusinessDate: true });
+    // Both callers (refundTender, returnAndRefund) have already required a manager or
+    // owner with a fresh PIN (DEV-647), so any open till of the branch may pay the
+    // refund out (DEV-821).
+    return refundPharmacyTender(db, scope, refund, {
+      requireCurrentBusinessDate: true,
+      drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+    });
   }
   await khataScope(ctx, scope.branchId, 'write');
   await bindKhataBranch(db, scope);
@@ -649,7 +658,12 @@ function fail(error: unknown): never {
   if (error instanceof PharmacySettlementError) {
     // A drawer that is already open is a state conflict, not a malformed request.
     throw new TRPCError({
-      code: error.reason === 'OPEN_DRAWER' ? 'CONFLICT' : 'BAD_REQUEST',
+      code:
+        error.reason === 'OPEN_DRAWER'
+          ? 'CONFLICT'
+          : error.reason === 'DRAWER_NOT_YOURS'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -921,7 +935,7 @@ const MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;
  * assignment, or the audited organization-administrator exception. A cashier
  * holding only `pharmacy:counter` is refused before any lock or write.
  */
-function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+export function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   return requireCounterReceiptAccess(
     ctx,
     branch,
@@ -1221,7 +1235,19 @@ export const pharmacySalesRouter = router({
           await bindKhataBranch(db, scope);
           // DEV-630: money taken now books on today, never a client-chosen day.
           await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
-          return recordKhataRepayment(db, scope, input);
+          // DEV-821: cash goes only into a till this user runs, unless a manager or owner.
+          return recordKhataRepayment(db, scope, input, {
+            kind: 'COUNTER',
+            actorIsManager:
+              input.tender === 'CASH' &&
+              (await actorManagesBranchDrawers(
+                db,
+                ctx.session!.user,
+                scope.organizationId,
+                scope.branchId,
+                { source: 'TRPC' }
+              )),
+          });
         });
       } catch (error) {
         fail(error);
@@ -1423,13 +1449,21 @@ export const pharmacySalesRouter = router({
   /** The OPEN drawer for this counter device, so the counter never offers a second open. */
   drawerStatus: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
-    .query(async ({ ctx, input }) => ({
-      openDrawer: await readOpenPharmacyDrawer(
-        ctx.db,
-        await scopeFor(ctx, input.branchId),
-        input.deviceId
-      ),
-    })),
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const openDrawer = await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId);
+      if (!openDrawer) return { openDrawer, operatingCashier: null };
+      // DEV-821: who runs this till, so the counter can say so before a cash payment.
+      const cashierId = drawerOperatingCashierId(openDrawer);
+      const cashier = await ctx.db.user.findFirst({
+        where: { id: cashierId, organizationId: scope.organizationId },
+        select: { name: true },
+      });
+      return {
+        openDrawer,
+        operatingCashier: { name: cashier?.name ?? null, isYou: cashierId === scope.actorId },
+      };
+    }),
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
   // tRPC errors the counter can word, instead of a 500 with the raw reason.
@@ -1441,18 +1475,24 @@ export const pharmacySalesRouter = router({
           deviceId: z.string().min(1),
           businessDate: z.date(),
           openingFloatMinor: z.number().int().nonnegative(),
+          /** DEV-821: who runs the till; naming someone else is a manager's. */
+          operatingCashierId: z.string().trim().min(1).max(128).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const namesAnotherCashier =
+          input.operatingCashierId !== undefined &&
+          input.operatingCashierId !== ctx.session?.user?.id;
         // DEV-279: drawers hold cash, so they take the cash-tender gate before any
         // lock or write: canonical `pharmacy:counter` through `can()`, then the
         // counter family check, then an active branch assignment. Both checks are
         // deny-wins: a role DENY or user DENY beats any ALLOW (DEV-659).
         // DEV-31: a cashier opens an empty drawer; declaring a float is a manager's.
+        // DEV-821: so is handing the till to another cashier at open.
         const scope =
-          input.openingFloatMinor > 0
+          input.openingFloatMinor > 0 || namesAnotherCashier
             ? await requireDrawerManagerAccess(ctx, input.branchId)
             : await requireCounterReceiptAccess(ctx, input.branchId, true);
         // DEV-630: a drawer opens on the branch's current business day only.
@@ -1478,8 +1518,12 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        // A manager's paid-in/out may use any open drawer of the branch (DEV-821).
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), scope, input)
+          recordPharmacyCashMovement(txDb(tx), scope, input, {
+            kind: 'COUNTER',
+            actorIsManager: true,
+          })
         );
       } catch (error) {
         fail(error);
@@ -1500,6 +1544,65 @@ export const pharmacySalesRouter = router({
       try {
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-821: the cashiers a manager or owner may name to run a till on this branch:
+   * active members with an active assignment to it.
+   */
+  drawerCashiers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            active: true,
+            user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+          },
+          select: { user: { select: { id: true, name: true } } },
+        });
+        return rows
+          .map((row) => ({ id: row.user.id, name: row.user.name ?? 'Unnamed member' }))
+          .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-821: a manager or owner hands an open till to another cashier of the
+   * branch. Recorded append-only with the reason; the close reports read it.
+   */
+  handoverDrawer: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          drawerSessionId: z.string().min(1),
+          toCashierId: z.string().trim().min(1).max(128),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const result = await ctx.db.$transaction(async (tx) =>
+          handoverPharmacyDrawer(txDb(tx), scope, input)
+        );
+        // Metadata only: the branch access audit keeps its own target.
+        annotateAudit(ctx, {
+          metadata: {
+            drawerSessionId: input.drawerSessionId,
+            toCashierId: input.toCashierId,
+            handoverId: result.handover?.id ?? null,
+          },
+        });
+        return result;
       } catch (error) {
         fail(error);
       }
@@ -1553,11 +1656,22 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        // DEV-821: cash goes only into a till this user runs, unless a manager or owner.
+        const actorIsManager =
+          input.type === 'CASH' &&
+          (await actorManagesBranchDrawers(
+            ctx.db,
+            ctx.session!.user,
+            scope.organizationId,
+            scope.branchId,
+            { source: 'TRPC' }
+          ));
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
         // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
             requireCurrentBusinessDate: true,
+            drawerOperator: { kind: 'COUNTER', actorIsManager },
           })
         );
       }

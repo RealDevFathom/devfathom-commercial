@@ -105,4 +105,58 @@ describe('TenderPad', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('at most two places');
     expect(request).not.toHaveBeenCalled();
   });
+
+  it('requires the card machine approval code and reference before posting a card tender', async () => {
+    const request = vi.fn(async () => ({
+      tenderId: 'tender-2',
+      billId: 'bill-1',
+      type: 'CARD',
+      amount: '10.00',
+      tipAmount: '0.00',
+      changeGiven: null,
+      settled: true,
+      receiptNumber: 7,
+      remainingDue: '0.00',
+      replayed: false,
+    }));
+    render(
+      <TenderPad
+        billId="bill-1"
+        amountDue="10.00"
+        request={request as unknown as TerminalRequest}
+        onApplied={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Tender type'), { target: { value: 'CARD' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('approval code');
+    expect(request).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+    fireEvent.change(screen.getByLabelText('Last 4 digits or reference'), {
+      target: { value: '4111111111111111' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Never the full card number');
+    expect(request).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Last 4 digits or reference'), {
+      target: { value: '4242' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenCalledWith(
+      '/api/restaurant/checkout/tender',
+      expect.objectContaining({
+        body: {
+          billId: 'bill-1',
+          tender: {
+            type: 'CARD',
+            amount: '10.00',
+            manualConfirmation: { approvalCode: 'A1B2C3', reference: '4242' },
+          },
+        },
+      })
+    );
+  });
 });

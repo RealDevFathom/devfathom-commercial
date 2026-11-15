@@ -165,6 +165,7 @@ import {
   cashMinor,
   drawerOpenedLabel,
   openBillsWarning,
+  otherOperatorMovementLabel,
   PharmacyDayCloseConsole,
 } from './day-close-console';
 afterEach(() => {
@@ -840,6 +841,47 @@ describe('day-close console', () => {
     ).toHaveTextContent(
       /re-record this close report with a reason, but that never reopens the day/
     );
+  });
+  // DEV-821: the close names cash moved by anyone but the cashier running the till.
+  it("lists cash moved by someone other than the till's cashier, with who ran it", () => {
+    mocks.extraDrawers = [
+      {
+        id: 'd2',
+        deviceId: 'counter-2',
+        status: 'OPEN',
+        openedAt: new Date('2026-09-29T05:00:00Z'),
+        openedBy: 'Manager Mehreen',
+        operatingCashier: 'Bilal Ahmed',
+        expectedMinor: 2500,
+        countedMinor: null,
+        otherOperatorMovements: [
+          {
+            id: 'm1',
+            kind: 'CASH_SALE',
+            amountMinor: 2500,
+            createdAt: new Date('2026-09-29T06:05:00Z'),
+            actor: 'Ayesha Karim',
+          },
+        ],
+      },
+    ];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Run by Bilal Ahmed')).toBeInTheDocument();
+    const note = screen.getByRole('note', {
+      name: 'Drawer 2: cash moved by someone other than its cashier',
+    });
+    // 06:05 UTC is 15:05 in the workspace zone (Tokyo).
+    expect(note).toHaveTextContent('15:05 · Cash sale · by Ayesha Karim · USD 25.00');
+    // A till only its cashier used raises nothing.
+    expect(
+      screen.queryByRole('note', { name: 'Drawer 1: cash moved by someone other than its cashier' })
+    ).not.toBeInTheDocument();
+    expect(
+      otherOperatorMovementLabel(
+        { kind: 'PAID_OUT', createdAt: '2026-09-29T06:05:00Z', actor: null },
+        'UTC'
+      )
+    ).toBe('06:05 · Paid out · by a former team member');
   });
   it('totals counted cash live from the drawers entered so far', () => {
     mocks.extraDrawers = [
