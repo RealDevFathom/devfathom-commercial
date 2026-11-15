@@ -73,8 +73,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  // Raised for bad payer or reference details AND for a branch that has no
+  // merchant details for this tender, so the sentence names both remedies.
   INVALID_MANUAL_CAPTURE:
-    'The payer name or transaction reference is missing or not allowed for this branch. Check the transfer details and try again.',
+    'This transfer could not be recorded. Check the payer name and transaction reference. If they are correct, ask a manager to set up this payment method for the branch.',
   INVALID_RECEIPT_LEASE:
     "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
   LEASE_REQUIRES_SETTLEMENT:

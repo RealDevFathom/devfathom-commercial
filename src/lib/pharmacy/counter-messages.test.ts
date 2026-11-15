@@ -154,6 +154,13 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
     expect(counterErrorTone(null)).toBe('danger');
   });
 
+  it('names both remedies for a refused manual transfer', () => {
+    const message = counterErrorMessage(new PharmacySettlementError('INVALID_MANUAL_CAPTURE'));
+    expect(message).toMatch(/payer name and transaction reference/);
+    // The same code covers a branch with no merchant details for the tender.
+    expect(message).toMatch(/set up this payment method/);
+  });
+
   it('shows a correctable mapped refusal as a warning', () => {
     expect(counterErrorTone(new Error('OVER_TENDER'))).toBe('warning');
     expect(counterErrorTone(new Error('INVALID_MANUAL_CAPTURE'))).toBe('warning');
