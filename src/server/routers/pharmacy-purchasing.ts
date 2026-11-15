@@ -80,6 +80,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import { scheduleReceiptArrivalCapture } from '@/lib/pharmacy/back-in-stock-arrivals';
 import { isEffective, packConversions } from '@/lib/pharmacy/pack-conversion';
 import {
   isNonDrugRetail,
@@ -2024,8 +2025,9 @@ const purchasingRouter = router({
         })
       );
       if ('blocked' in attempt) return attempt;
+      let posted: Awaited<ReturnType<typeof postGoodsReceipt>>;
       try {
-        return await ctx.db.$transaction((tx) =>
+        posted = await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
@@ -2036,6 +2038,13 @@ const purchasingRouter = router({
       } catch (error) {
         domainError(error);
       }
+      // DEV-79: back-in-stock notices are captured after this request's
+      // transaction ends, so they can never abort or undo the posting.
+      scheduleReceiptArrivalCapture(
+        scope,
+        posted.lines.map((line) => line.inventoryLotId)
+      );
+      return posted;
     }),
 
   /** The receipt's qualified person, when they can enter a PIN to witness posting. */
