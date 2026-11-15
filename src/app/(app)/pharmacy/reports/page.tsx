@@ -24,6 +24,8 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { StaffingSuggestions } from './staffing-suggestions';
+import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -40,7 +42,9 @@ type SearchParams = Promise<
       | 'digest'
       | 'anomaly'
       | 'advisor'
-      | 'authentication',
+      | 'authentication'
+      | 'staffCapacity'
+      | 'staffMinimum',
       string | string[] | undefined
     >
   >
@@ -221,6 +225,32 @@ export default async function PharmacyReportsPage({
       });
     } catch {
       demandError = true;
+    }
+  }
+  // DEV-14: owner-adjustable assumptions; the server validates the bounds again.
+  const staffingNumber = (input: string | undefined, fallback: number) =>
+    input !== undefined && /^\d{1,3}$/.test(input) ? Number(input) : fallback;
+  const receiptsPerStaffHour = staffingNumber(
+    value(query.staffCapacity),
+    DEFAULT_STAFFING_CONFIG.receiptsPerStaffHour
+  );
+  const minimumStaff = staffingNumber(
+    value(query.staffMinimum),
+    DEFAULT_STAFFING_CONFIG.minimumStaff
+  );
+  let staffing: Awaited<ReturnType<typeof caller.staffingSuggestions>> | null = null;
+  let staffingError = false;
+  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+    try {
+      staffing = await caller.staffingSuggestions({
+        branchId: branch,
+        from,
+        to,
+        receiptsPerStaffHour,
+        minimumStaff,
+      });
+    } catch {
+      staffingError = true;
     }
   }
   const digestMessage = value(query.digest);
@@ -479,6 +509,19 @@ export default async function PharmacyReportsPage({
         failed={demandError}
         selected={!!branch}
         financial={catalog.permissions.financial}
+      />
+      <StaffingSuggestions
+        timeZone={timeZone}
+        report={staffing}
+        failed={staffingError}
+        selected={!!branch}
+        carry={Object.fromEntries(
+          Object.entries({ branch, from, to }).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string'
+          )
+        )}
+        receiptsPerStaffHour={receiptsPerStaffHour}
+        minimumStaff={minimumStaff}
       />
       {workPackScopeValid ? (
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>

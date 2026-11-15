@@ -10,6 +10,7 @@ const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
 const expiryEmpty = vi.hoisted(() => ({ value: false }));
 const suppliers = vi.hoisted(() => vi.fn());
 const demandAggregate = vi.hoisted(() => vi.fn());
+const staffingSuggestions = vi.hoisted(() => vi.fn(async () => null));
 const extraCatalog = vi.hoisted(() => ({
   reports: [] as Array<{ key: string; label: string; metrics: string[]; filters: string[] }>,
   metrics: [] as Array<Record<string, string | null>>,
@@ -66,6 +67,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
     createCaller: () => ({
       branches: reportBranches,
       suppliers,
+      staffingSuggestions,
       commandCentre,
       anomalySignals: async () => [
         {
@@ -306,6 +308,13 @@ describe('pharmacy report catalog filters', () => {
       branchId: 'b1',
       from: new Date('2026-11-08T19:00:00.000Z'),
       to: new Date('2026-11-15T19:00:00.000Z'),
+    });
+    expect(staffingSuggestions).toHaveBeenCalledWith({
+      branchId: 'b1',
+      from: '2026-11-09',
+      to: '2026-11-15',
+      receiptsPerStaffHour: 12,
+      minimumStaff: 1,
     });
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
     expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();

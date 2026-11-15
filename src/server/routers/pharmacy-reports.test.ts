@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   comparisonRead: vi.fn(),
   comparisonTx: {},
   transaction: vi.fn(),
+  saleFindMany: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
@@ -118,6 +119,7 @@ function context(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
       updateManyAndReturn: mocks.reportUpdateManyAndReturn,
     },
     pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+    pharmacySale: { findMany: mocks.saleFindMany },
   };
   // Interactive transactions run against the same mocked client delegates.
   Object.assign(mocks.comparisonTx, db);
@@ -1060,6 +1062,61 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('staffing suggestions (DEV-14)', () => {
+  const input = { branchId: 'branch_1', from: '2026-09-01', to: '2026-09-02' };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.saleFindMany.mockReset();
+    mocks.saleFindMany.mockResolvedValue([
+      { completedAt: new Date('2026-09-01T04:10:00Z') },
+      { completedAt: new Date('2026-09-01T04:20:00Z') },
+      { completedAt: new Date('2026-09-02T04:30:00Z') },
+    ]);
+  });
+  it('computes hourly footfall (UTC when no workspace zone is set) and suggests staff', async () => {
+    const report = await caller().staffingSuggestions({ ...input, receiptsPerStaffHour: 1 });
+    expect(report.totalReceipts).toBe(3);
+    expect(report.hours[4]).toMatchObject({
+      receipts: 3,
+      averagePerDay: 1.5,
+      busiestDay: 2,
+      suggestedStaff: 2,
+    });
+    expect(report.hours.filter((row) => row.suggestedStaff !== null)).toHaveLength(1);
+    expect(report.config).toEqual({ receiptsPerStaffHour: 1, minimumStaff: 1 });
+    expect(mocks.saleFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_1', branchId: 'branch_1' }),
+      })
+    );
+  });
+  it('requires operational permission, the module and an in-scope branch before reading', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().staffingSuggestions(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().staffingSuggestions({ ...input, branchId: 'other-tenant-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().staffingSuggestions(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.saleFindMany).not.toHaveBeenCalled();
+  });
+  it('rejects out-of-bounds assumptions and windows', async () => {
+    await expect(
+      caller().staffingSuggestions({ ...input, receiptsPerStaffHour: 0 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().staffingSuggestions({ ...input, minimumStaff: 21 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().staffingSuggestions({ ...input, from: '2026-01-01', to: '2026-12-31' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.saleFindMany).not.toHaveBeenCalled();
   });
 });
 
