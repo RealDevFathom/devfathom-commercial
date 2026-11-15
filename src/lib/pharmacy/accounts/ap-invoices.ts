@@ -132,15 +132,15 @@ async function assertOpenPeriod(db: ScopedDb, scope: ApInvoiceScope, at: Date) {
   }
 }
 
-const activeSettlements = { where: { status: 'ACTIVE' as const } };
-
 async function lockInvoice(db: ScopedDb, scope: ApInvoiceScope, invoiceId: string) {
   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_ap_invoices
     WHERE id=${invoiceId} AND "organizationId"=${scope.organizationId}
       AND "branchId"=${scope.branchId} FOR UPDATE`);
   const invoice = await db.pharmacyApInvoice.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: invoiceId },
-    include: { settlements: activeSettlements },
+    // Every settlement, reversed ones included: the payment and reversal
+    // checks validate the whole historical timeline, not only today's state.
+    include: { settlements: true },
   });
   if (!invoice) fail('NOT_FOUND');
   return invoice;
@@ -330,6 +330,49 @@ export function outstandingMinor(invoice: {
   );
 }
 
+type SettlementClock = {
+  amountMinor: number;
+  paidAt: Date;
+  status: string;
+  reversedAt: Date | null;
+};
+
+/** Settled amount in effect at instant `at` (payment and its reversal clocks). */
+export function settledMinorAt(settlements: readonly SettlementClock[], at: Date) {
+  return settlements
+    .filter(
+      (settlement) =>
+        settlement.paidAt <= at &&
+        !(
+          settlement.status === 'REVERSED' &&
+          settlement.reversedAt !== null &&
+          settlement.reversedAt <= at
+        )
+    )
+    .reduce((sum, settlement) => sum + settlement.amountMinor, 0);
+}
+
+/**
+ * The most a payment dated `from` may settle without the invoice being
+ * over-settled at any instant from then on. The settled amount only rises at
+ * a payment instant, so checking `from`, every later payment instant and the
+ * current state (all ACTIVE settlements) covers the whole timeline. A payment
+ * backdated before an earlier payment's reversal therefore cannot reuse the
+ * balance that reversal frees.
+ */
+export function payableMinorFrom(
+  invoice: { amountMinor: number; settlements: readonly SettlementClock[] },
+  from: Date
+) {
+  const instants = [from, ...invoice.settlements.map((s) => s.paidAt).filter((at) => at > from)];
+  const currentlyActive = invoice.amountMinor - outstandingMinor(invoice);
+  const peak = Math.max(
+    currentlyActive,
+    ...instants.map((at) => settledMinorAt(invoice.settlements, at))
+  );
+  return invoice.amountMinor - peak;
+}
+
 export async function payApInvoice(
   db: ScopedDb,
   scope: ApInvoiceScope,
@@ -364,7 +407,7 @@ export async function payApInvoice(
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status !== 'POSTED') fail('INVALID_STATE');
   if (paidAt < invoice.invoiceDate) fail('INVALID_DATE');
-  if (input.amountMinor > outstandingMinor(invoice)) fail('OVERPAYMENT');
+  if (input.amountMinor > payableMinorFrom(invoice, paidAt)) fail('OVERPAYMENT');
 
   let transaction;
   try {
@@ -533,6 +576,14 @@ export async function reverseApInvoice(
     fail('ACTIVE_SETTLEMENTS');
   }
   if (at < invoice.invoiceDate) fail('INVALID_DATE');
+  // The invoice clock may not end before its payment clocks did: an invoice
+  // reversal dated before a payment or that payment's reversal would make the
+  // aging view and the ledger disagree for the days in between.
+  for (const settlement of invoice.settlements) {
+    if (at < settlement.paidAt || (settlement.reversedAt && at < settlement.reversedAt)) {
+      fail('INVALID_DATE');
+    }
+  }
   await assertOpenPeriod(db, scope, at);
 
   const reversal = await reverseJournalEntry(db, scope, {

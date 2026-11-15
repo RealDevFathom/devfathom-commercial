@@ -613,3 +613,111 @@ describe('native reversal interlock', () => {
     expect(corrected.replayed).toBe(false);
   });
 });
+
+describe('historical settlement timeline (two clocks)', () => {
+  /** A full payment on Nov 2, reversed on Nov 10. */
+  async function paidThenReversed() {
+    const memory = memoryDb();
+    const { invoice } = await recordApInvoice(memory.scoped, scope, recordInput, NOW);
+    const { settlement } = await payApInvoice(
+      memory.scoped,
+      scope,
+      payInput(invoice.id, { amountMinor: 125_000, paidAt: '2026-11-02T00:00:00.000Z' }),
+      NOW
+    );
+    await reverseApSettlement(
+      memory.scoped,
+      scope,
+      {
+        branchId: 'branch_1',
+        settlementId: settlement.id,
+        commandKey: 'reverse-pay-0001',
+        reason: 'Bank rejected transfer',
+        at: '2026-11-10T00:00:00.000Z',
+      },
+      NOW
+    );
+    return { ...memory, invoice };
+  }
+
+  it('refuses a replacement payment backdated before the reversal that freed the balance', async () => {
+    const { scoped, transactions, invoice } = await paidThenReversed();
+    await expect(
+      payApInvoice(
+        scoped,
+        scope,
+        payInput(invoice.id, {
+          commandKey: 'pay-command-0002',
+          reference: 'PAY-0002',
+          amountMinor: 125_000,
+          paidAt: '2026-11-05T00:00:00.000Z',
+        }),
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'OVERPAYMENT' });
+    expect(transactions).toHaveLength(1);
+  });
+
+  it('accepts the replacement payment dated on or after that reversal', async () => {
+    const { scoped, transactions, invoice } = await paidThenReversed();
+    await payApInvoice(
+      scoped,
+      scope,
+      payInput(invoice.id, {
+        commandKey: 'pay-command-0002',
+        reference: 'PAY-0002',
+        amountMinor: 125_000,
+        paidAt: '2026-11-10T00:00:00.000Z',
+      }),
+      NOW
+    );
+    expect(transactions).toHaveLength(2);
+  });
+
+  it('refuses a backdated payment that would over-settle against a later active payment', async () => {
+    const memory = memoryDb();
+    const { invoice } = await recordApInvoice(memory.scoped, scope, recordInput, NOW);
+    await payApInvoice(
+      memory.scoped,
+      scope,
+      payInput(invoice.id, { amountMinor: 100_000, paidAt: '2026-11-12T00:00:00.000Z' }),
+      NOW
+    );
+    await expect(
+      payApInvoice(
+        memory.scoped,
+        scope,
+        payInput(invoice.id, {
+          commandKey: 'pay-command-0002',
+          reference: 'PAY-0002',
+          amountMinor: 25_001,
+          paidAt: '2026-11-05T00:00:00.000Z',
+        }),
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'OVERPAYMENT' });
+  });
+
+  it('refuses an invoice reversal dated before its payment reversal', async () => {
+    const { scoped, invoice, entries } = await paidThenReversed();
+    const input = {
+      branchId: 'branch_1',
+      invoiceId: invoice.id,
+      commandKey: 'reverse-inv-0001',
+      reason: 'Duplicate bill',
+    };
+    await expect(
+      reverseApInvoice(scoped, scope, { ...input, at: '2026-11-05T00:00:00.000Z' }, NOW)
+    ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
+    expect(
+      entries.filter((entry) => entry.reversesEntryId === invoice.journalEntryId)
+    ).toHaveLength(0);
+    const result = await reverseApInvoice(
+      scoped,
+      scope,
+      { ...input, at: '2026-11-10T00:00:00.000Z' },
+      NOW
+    );
+    expect(result.invoice.status).toBe('REVERSED');
+  });
+});

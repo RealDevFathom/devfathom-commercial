@@ -265,12 +265,22 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
             </p>
           </SectionCard>
           {state.view.rows.length === 0 ? (
-            <SectionCard title="Nothing outstanding" titleLevel={2}>
-              <p className="text-sm text-text-muted">
-                No supplier expense invoice for this branch was open at the end of {state.view.asOf}
-                .
-              </p>
-            </SectionCard>
+            state.view.complete ? (
+              <SectionCard title="Nothing outstanding" titleLevel={2}>
+                <p className="text-sm text-text-muted">
+                  No supplier expense invoice for this branch was open at the end of{' '}
+                  {state.view.asOf}.
+                </p>
+              </SectionCard>
+            ) : (
+              <SectionCard title="Nothing outstanding in the invoices read" titleLevel={2}>
+                <p role="alert" className="text-sm text-text-muted">
+                  None of the {state.view.scannedInvoices} invoices read was open at the end of{' '}
+                  {state.view.asOf}, but the read was capped, so later-due invoices may still be
+                  outstanding. This does not show the branch as clear.
+                </p>
+              </SectionCard>
+            )
           ) : (
             <>
               <Totals view={state.view} />

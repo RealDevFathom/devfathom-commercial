@@ -142,6 +142,19 @@ describe('ApAgingPage', () => {
     expect(output).not.toContain('Export aging CSV');
   });
 
+  it('never declares the branch clear when a capped read found nothing open', async () => {
+    mocks.aging.mockResolvedValue({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      view: { ...view, complete: false, scannedInvoices: 1000, rows: [], totals: [] },
+      retrievedAt: new Date(),
+    });
+    const output = await html({ branch: 'branch_1' });
+    expect(output).toContain('Nothing outstanding in the invoices read');
+    expect(output).toContain('later-due invoices may still be');
+    expect(output).not.toContain('No supplier expense invoice for this branch was open');
+    expect(output).not.toContain('Export aging CSV');
+  });
+
   it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(
     'maps a %s router refusal to the denial state',
     async (code) => {
