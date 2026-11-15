@@ -13,6 +13,13 @@ test('the checked-in Docker and package build contracts agree', () => {
   checkDockerBuildContract(packageSource, dockerfile);
 });
 
+test('Dockerfile.aws keeps the same build contract and Debian release guard as Dockerfile', async () => {
+  const awsDockerfile = await readFile(new URL('../Dockerfile.aws', import.meta.url), 'utf8');
+  checkDockerBuildContract(packageSource, awsDockerfile);
+  assert.match(awsDockerfile, /test "\$VERSION_CODENAME" = trixie/);
+  assert.match(awsDockerfile, /ENV NODE_OPTIONS=--max-old-space-size=8192/);
+});
+
 test('a package build-script addition cannot drift silently', () => {
   const changedPackage = JSON.parse(packageSource);
   changedPackage.scripts.build += ' && node scripts/post-build.mjs';

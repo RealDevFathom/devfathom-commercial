@@ -26,10 +26,13 @@ const item = (id: string, overrides: Record<string, unknown> = {}) => ({
 function database(products: ReturnType<typeof item>[], featuredMedicineIds: string[] = []) {
   const mock = {
     medicine: {
-      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
-        products.filter((product) => where.id.in.includes(product.id))
+      findMany: vi.fn(async ({ where }: { where: { id?: { in?: string[] } } }) =>
+        // The WhatsApp compliance linter (DEV-29) also reads catalogue names, unfiltered by id.
+        where.id?.in ? products.filter((product) => where.id!.in!.includes(product.id)) : []
       ),
     },
+    medicineAlias: { findMany: vi.fn(async () => []) },
+    ingredient: { findMany: vi.fn(async () => []) },
     pharmacyMarketingTemplate: {
       create: vi.fn(async ({ data }) => ({ id: 'template-a', ...data })),
       findFirst: vi.fn(async () => ({

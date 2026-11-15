@@ -3,6 +3,7 @@ import {
   readPharmacyMarketingReport,
   validateMarketingReportFilters,
 } from '@/lib/pharmacy/marketing-report';
+import { readLostSalesRecovery } from '@/lib/pharmacy/lost-sales-recovery-report';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import {
@@ -65,12 +66,57 @@ import {
   StaffingSuggestionError,
 } from '@/lib/pharmacy/staffing-suggestions';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
 } from '@/lib/pharmacy/category-growth-report';
 
 const reports = capabilityProcedure('reports:operational');
+
+/**
+ * DEV-505: who may read the operational reports, and over which branches.
+ * `reports:operational` keeps its organization-wide reach (Owner, Owner /
+ * Operator, Auditor). A Manager (`pharmacy:manage`) reads the same operational
+ * reports for the active branches they are assigned to and no others, unless
+ * `reports:operational` is explicitly denied to them. The Manager template does
+ * not carry `reports:operational` itself, so this never widens the finance,
+ * accounts or digest surfaces that grant reaches organization-wide.
+ */
+export async function pharmacyReportAccess(ctx: TRPCContext): Promise<'ALL' | string[]> {
+  const user = ctx.session?.user;
+  if (!user?.id) return [];
+  if (
+    await can(subjectFromSession(user), 'reports:operational', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    })
+  )
+    return 'ALL';
+  return managerBranchIds(ctx, 'reports:operational');
+}
+
+/** Operational reports a Manager may also run, narrowed to their branches. */
+const branchReports = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const reportBranches = await pharmacyReportAccess(ctx);
+  if (reportBranches !== 'ALL' && !reportBranches.length)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  return next({ ctx: { ...ctx, reportBranches } });
+});
+
+/** `scope` narrowed to the branches this report reader may see. */
+async function reportScope(ctx: TRPCContext, reportBranches: 'ALL' | string[]) {
+  const available = await scope(ctx);
+  if (reportBranches === 'ALL') return available;
+  return {
+    ...available,
+    branches: available.branches.filter((branch) => reportBranches.includes(branch.id)),
+  };
+}
 const safety = capabilityProcedure('pharmacy:safety');
 // Product decision (#479): clinical dispensing staff may FILE adverse-reaction and
 // medication-error reports, but review, readiness, submission and export stay with
@@ -298,6 +344,21 @@ export const pharmacyReportsRouter = router({
         });
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
+    }),
+  /** DEV-79: estimated lost, recovered and net demand value by branch, salt and distributor. */
+  lostSalesRecovery: reports
+    .input(filters.pick({ branchId: true, from: true, to: true }))
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      try {
+        validateMarketingReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid report dates.',
+        });
+      }
+      return readLostSalesRecovery(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
   createPharmacovigilanceReport: auditedProtectedProcedure
     .input(
@@ -610,12 +671,10 @@ export const pharmacyReportsRouter = router({
     const user = ctx.session.user;
     if (!organizationId || !user.id || user.organizationId !== organizationId)
       return { branches: [], organizationId };
-    const operational = await can(subjectFromSession(user), 'reports:operational', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-      ip: ctx.requestMeta.ip,
-    });
-    if (operational) return scope(ctx);
+    // DEV-505: an operational-report holder reads every branch; a Manager only
+    // the branches their reports are scoped to.
+    const reportBranches = await pharmacyReportAccess(ctx);
+    if (reportBranches === 'ALL' || reportBranches.length) return reportScope(ctx, reportBranches);
     const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
     if (!assigned.length) return { branches: [], organizationId };
     const branches = await ctx.db.pharmacyBranch.findMany({
@@ -625,7 +684,7 @@ export const pharmacyReportsRouter = router({
     });
     return { branches, organizationId };
   }),
-  suppliers: reports.query(async ({ ctx }) => {
+  suppliers: branchReports.query(async ({ ctx }) => {
     const { organizationId } = await scope(ctx);
     return ctx.db.pharmacySupplier.findMany({
       where: { organizationId },
@@ -633,9 +692,9 @@ export const pharmacyReportsRouter = router({
       select: { id: true, name: true },
     });
   }),
-  replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
+  replenishment: branchReports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
-    const available = await scope(ctx);
+    const available = await reportScope(ctx, ctx.reportBranches);
     if (!available.branches.some((branch) => branch.id === input.branchId))
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
     const financial =
@@ -725,7 +784,7 @@ export const pharmacyReportsRouter = router({
       badRequest(error, 'Spike detection is unavailable for this period.');
     }
   }),
-  dailyWorkPack: reports
+  dailyWorkPack: branchReports
     .input(
       filters
         .pick({ branchId: true, from: true, to: true })
@@ -733,7 +792,7 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const available = await scope(ctx);
+      const available = await reportScope(ctx, ctx.reportBranches);
       const branchIds = input.branchId
         ? [input.branchId]
         : available.branches.map((branch) => branch.id);
@@ -768,7 +827,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyDailyWorkPack(ctx.db, resolved, readAt);
     }),
-  catalog: reports.query(async ({ ctx }) => ({
+  catalog: branchReports.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
@@ -875,8 +934,8 @@ export const pharmacyReportsRouter = router({
       }
       return readRepeatPurchasing(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  commandCentre: reports.input(filters).query(async ({ ctx, input }) => {
-    const available = await scope(ctx);
+  commandCentre: branchReports.input(filters).query(async ({ ctx, input }) => {
+    const available = await reportScope(ctx, ctx.reportBranches);
     const branchIds = input.branchId
       ? [input.branchId]
       : available.branches.map((branch) => branch.id);
@@ -903,22 +962,26 @@ export const pharmacyReportsRouter = router({
         undefined,
         { db: ctx.db }
       );
+      const metrics = financial
+        ? result.metrics
+        : {
+            ...result.metrics,
+            salesMinor: null,
+            marginMinor: null,
+            cashMinor: null,
+            cashVarianceMinor: null,
+            refundsMinor: null,
+            accountsPayableMinor: null,
+            accountsReceivableMinor: null,
+            khataAgingMinor: null,
+          };
       return {
         ...result,
         permissions: { operational: true, financial },
-        metrics: financial
-          ? result.metrics
-          : {
-              ...result.metrics,
-              salesMinor: null,
-              marginMinor: null,
-              cashMinor: null,
-              cashVarianceMinor: null,
-              refundsMinor: null,
-              accountsPayableMinor: null,
-              accountsReceivableMinor: null,
-              khataAgingMinor: null,
-            },
+        // DEV-505: the safety queue is counted across the whole organization, so a
+        // branch-scoped reader (a Manager) is not shown other branches' activity.
+        metrics:
+          ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
       };
     } catch (error) {
       throw new TRPCError({
@@ -1082,7 +1145,7 @@ export const pharmacyReportsRouter = router({
       select: { branchId: true, enabled: true, timeMinutes: true, nextDueAt: true },
     });
   }),
-  getPreferences: reports.query(async ({ ctx }) => {
+  getPreferences: branchReports.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session!.user.id },
       select: { preferences: true },
@@ -1095,7 +1158,7 @@ export const pharmacyReportsRouter = router({
     const parsed = preference.safeParse(raw);
     return parsed.success ? parsed.data : fallback;
   }),
-  updatePreferences: reports.input(preference).mutation(async ({ ctx, input }) => {
+  updatePreferences: branchReports.input(preference).mutation(async ({ ctx, input }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session!.user.id },
       select: { preferences: true },
