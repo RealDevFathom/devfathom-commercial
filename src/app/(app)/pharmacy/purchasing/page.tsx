@@ -378,6 +378,12 @@ export default async function PharmacyPurchasingPage({
                 'State the demand, record what each distributor quoted, read the ranked and explained comparison, then approve and send the order. Approval is refused to whoever raised it.',
             },
             {
+              href: `${PURCHASING_ROUTE}/reorder`,
+              title: 'Reorder',
+              detail:
+                'One suggested order per distributor, worked out from recorded sales, stock and lead times. Edit the packs and confirm; nothing is sent until the order is approved and you send it.',
+            },
+            {
               href: `${PURCHASING_ROUTE}/receiving`,
               title: 'Goods in (PUR-02/04/05)',
               detail:

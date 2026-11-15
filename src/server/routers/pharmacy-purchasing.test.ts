@@ -1354,6 +1354,67 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(line).not.toHaveProperty('organizationId');
   });
 
+  it('receives a non-drug retail line with no batch, expiry or MRP at the shop retail price (#718)', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+    });
+    const { batchNumber, printedExpiry, printedMrpMinor, ...retailLine } = RECEIPT_LINE;
+    void [batchNumber, printedExpiry, printedMrpMinor];
+    await caller().createGoodsReceipt({ ...RECEIPT, lines: [retailLine] });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line).toMatchObject({
+      batchNumber: 'RETAIL-NOEXP',
+      printedExpiry: new Date('9998-12-31T00:00:00.000Z'),
+      expiryPrecision: 'DAY',
+      printedMrpMinor: 45_000,
+    });
+  });
+
+  it.each([
+    ['batch', { batchNumber: undefined }, 'MISSING_BATCH'],
+    ['expiry', { printedExpiry: undefined }, 'MISSING_EXPIRY'],
+    ['printed MRP', { printedMrpMinor: undefined }, 'MISSING_MRP'],
+  ])('still refuses a medicine line without its %s (#718)', async (_field, omitted, reason) => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'PHARMACEUTICAL',
+      retailPriceMinor: null,
+    });
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, lines: [{ ...RECEIPT_LINE, ...omitted }] })
+    ).rejects.toMatchObject({ message: expect.stringContaining(reason) });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('names a non-drug house batch after the expiry scanned from GS1 (#718)', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+    });
+    db.medicineBarcode.findFirst.mockResolvedValue({ presentation: { medicineId: 'medicine_a' } });
+    const { batchNumber, printedExpiry, printedMrpMinor, ...retailLine } = RECEIPT_LINE;
+    void [batchNumber, printedExpiry, printedMrpMinor];
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        { ...retailLine, gs1Payload: ']d2010896123456789417271231' },
+        { ...retailLine, gs1Payload: ']d2010896123456789417281130' },
+      ],
+    });
+    const lines = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(lines[0]).toMatchObject({
+      batchNumber: 'RETAIL-2027-12-31-D',
+      printedExpiry: new Date('2027-12-31T00:00:00.000Z'),
+    });
+    expect(lines[1]).toMatchObject({
+      batchNumber: 'RETAIL-2028-11-30-D',
+      printedExpiry: new Date('2028-11-30T00:00:00.000Z'),
+    });
+  });
+
   it('stamps the order landed cost, with its rebate, freight and other charges, on the receipt line', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
@@ -2695,6 +2756,7 @@ const sensitiveReads = {
   debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'medicine' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
   '%s sensitive read security',
@@ -2793,6 +2855,7 @@ const branchActions = {
   debitNotePositions: sensitiveReads.debitNotePositions,
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
   supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
+  reorderDrafts: sensitiveReads.reorderDrafts,
 };
 describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
   '%s branch security',
@@ -3010,6 +3073,7 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {
   it('inventories every query so a new read cannot silently omit the authorization matrix', () => {
