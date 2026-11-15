@@ -322,6 +322,48 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           !khataLoading &&
           (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
 
+    const disabledReason = submittable
+      ? null
+      : takingPayment
+        ? 'Taking payment… Keep this bill open.'
+        : unknown
+          ? 'Check the payment outcome before taking more money.'
+          : state === 'idle'
+            ? 'Open a bill before taking payment.'
+            : state === 'loading'
+              ? 'Checking the bill balance…'
+              : state === 'settled'
+                ? 'This bill is already paid.'
+                : state === 'stale' || state === 'error' || !balanceKnown
+                  ? 'Refresh the bill to check the balance before taking payment.'
+                  : state === 'unavailable'
+                    ? 'This bill is not available for payment. Add items or resume the bill.'
+                    : disabled
+                      ? 'Wait for the current counter action to finish before taking payment.'
+                      : blocked
+                        ? 'Resolve the safety block in Patient and checks before taking payment.'
+                        : type === 'CASH' && cashDrawerClosed
+                          ? null // The Cash button already shows and describes the drawer reason.
+                          : !amountValid
+                            ? 'Enter an amount between 0.01 and the balance due.'
+                            : cashInvalid
+                              ? 'Enter a valid cash amount with at most two decimal places.'
+                              : cashShort
+                                ? 'Cash received is less than the amount tendered.'
+                                : manualSettingsLoading && manual
+                                  ? 'Loading merchant details…'
+                                  : manual && (manualSettingsError || !merchant)
+                                    ? 'Reload merchant details before taking payment.'
+                                    : manual &&
+                                        (!capture?.success ||
+                                          (referenceSkipped && !merchant?.allowReferenceSkip))
+                                      ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
+                                      : khataLoading
+                                        ? 'Loading Khata accounts…'
+                                        : isKhata && !account
+                                          ? 'Choose a family Khata account before taking payment.'
+                                          : 'An owner must authorize the credit limit increase and re-enter their password.';
+
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
       submissionRef.current = true;
@@ -496,7 +538,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         <div className="space-y-1.5">
           <p id="tender-type-label" className="text-sm leading-none font-medium select-none">
-            Tender
+            Payment method
           </p>
           <div
             role="group"
@@ -557,8 +599,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
           {selected.requiresAdapter ? (
             <p className="text-sm text-text-muted">
-              Requires a certified payment provider. Without one configured, the server refuses this
-              tender rather than simulating an approval.
+              A payment provider must be connected before you can use this method. Ask your manager
+              if it is unavailable.
             </p>
           ) : null}
         </div>
@@ -579,7 +621,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           />
           <p id="tender-amount-help" className="text-sm text-text-muted">
             Leave blank to pay the balance due. Enter a smaller amount to split payment across
-            tenders.
+            payment methods.
           </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
@@ -889,6 +931,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {error}
         </p>
 
+        {disabledReason ? (
+          <p id="tender-disabled-reason" className="text-sm text-text-muted">
+            {disabledReason}
+          </p>
+        ) : null}
         <Button
           type="button"
           className="min-h-12 w-full rounded-sm"
@@ -897,6 +944,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             'tender-status tender-error',
             blocked ? 'tender-blocked' : '',
             type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
+            disabledReason && 'tender-disabled-reason',
           ]
             .filter(Boolean)
             .join(' ')}

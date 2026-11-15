@@ -145,6 +145,7 @@ describe('CounterCartPanel', () => {
     );
     expect(screen.queryByText(/Another medicine/)).toBeNull();
     expect(screen.queryByText('FEFO')).toBeNull();
+    expect(screen.queryByText('Earliest expiry')).toBeNull();
     expect(screen.getByText('Batch override')).toBeInTheDocument();
   });
 
@@ -176,7 +177,7 @@ describe('CounterCartPanel', () => {
     const allocation = screen.getByRole('list', { name: 'Batch allocation for Synthetic tablet' });
     const [first, second] = within(allocation).getAllByRole('listitem');
     expect(first).toHaveTextContent('Batch B-0');
-    expect(first).toHaveTextContent('FEFO');
+    expect(first).toHaveTextContent('Earliest expiry');
     expect(first).toHaveTextContent('Near expiry · 30 d');
     expect(second).toHaveTextContent('Batch B-1');
     expect(second).toHaveTextContent('Batch override');
@@ -269,7 +270,7 @@ describe('CounterLotOverride', () => {
     expect(expired).toBeDisabled();
     expect(expired!.closest('label')).toHaveTextContent('Expired');
     expect(fefo).toBeChecked();
-    expect(fefo!.closest('label')).toHaveTextContent('FEFO');
+    expect(fefo!.closest('label')).toHaveTextContent('Earliest expiry');
     expect(fefo!.closest('label')).toHaveTextContent('Near expiry · 20 d');
     expect(later).not.toBeChecked();
     expect(later!.closest('label')).not.toHaveTextContent('Near expiry');
@@ -303,9 +304,9 @@ describe('CounterLotOverride', () => {
     expect(props.onChange).toHaveBeenLastCalledWith({ inventoryLotId: null, reason: 'x' });
   });
 
-  it('Keep FEFO batch closes the override', () => {
+  it('Keep recommended batch closes the override', () => {
     const props = picker({ value: { inventoryLotId: 'lot-later', reason: 'x' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Keep FEFO batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep recommended batch' }));
     expect(props.onChange).toHaveBeenLastCalledWith(null);
   });
 
