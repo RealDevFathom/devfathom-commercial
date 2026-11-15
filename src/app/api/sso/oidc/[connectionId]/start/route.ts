@@ -1,9 +1,13 @@
 import * as client from 'openid-client';
+import { NextResponse } from 'next/server';
 import {
   callbackUrl,
   createAuthorizationState,
+  createSsoBrowserBinding,
   oidcClientSecret,
   requireIdentityConnection,
+  SSO_BROWSER_BINDING_COOKIE,
+  ssoBrowserBindingCookieOptions,
 } from '@/lib/sso';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -23,12 +27,14 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     const challenge = await client.calculatePKCECodeChallenge(verifier);
     const nonce = client.randomNonce();
     const redirectUri = callbackUrl(request, 'oidc', connection.id);
+    // F10: bind the transaction to this browser; the callback requires it.
+    const binding = createSsoBrowserBinding();
     const state = await withTenantDb(connection.organizationId, (db) =>
       createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
         kind: 'OIDC',
-        payload: { verifier, nonce, redirectUri },
+        payload: { verifier, nonce, redirectUri, browserBindingHash: binding.hash },
       })
     );
     const authorizationUrl = client.buildAuthorizationUrl(config, {
@@ -39,7 +45,13 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
       nonce,
       state,
     });
-    return Response.redirect(authorizationUrl);
+    const response = NextResponse.redirect(authorizationUrl, 302);
+    response.cookies.set(
+      SSO_BROWSER_BINDING_COOKIE,
+      binding.value,
+      ssoBrowserBindingCookieOptions()
+    );
+    return response;
   } catch (error) {
     console.error('[sso:oidc:start]', error);
     return Response.json({ error: 'OIDC sign-in could not be started.' }, { status: 400 });

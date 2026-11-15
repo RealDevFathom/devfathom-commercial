@@ -50,7 +50,7 @@ export default async function PharmacyDataExportPage() {
   if (!owner) {
     await audit(403, {}).catch(() => undefined);
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader {...HEADER} />
         <SectionCard title="Only the pharmacy owner can export all data" titleLevel={2}>
           <p className="text-sm text-text-muted">
@@ -58,7 +58,7 @@ export default async function PharmacyDataExportPage() {
             to the owner. Ask the owner to download it.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -67,7 +67,7 @@ export default async function PharmacyDataExportPage() {
     await audit(200, { count: initial.length });
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader {...HEADER} />
         <SectionCard title="Your exports could not be shown" titleLevel={2}>
           <p role="alert" className="text-sm text-text-muted">
@@ -75,11 +75,11 @@ export default async function PharmacyDataExportPage() {
             Nothing has changed. Reload the page to try again.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader {...HEADER} />
       <SectionCard title="Export everything" titleLevel={2}>
         <div className="space-y-4">
@@ -92,6 +92,6 @@ export default async function PharmacyDataExportPage() {
           <OwnerDataExportConsole initial={initial} />
         </div>
       </SectionCard>
-    </main>
+    </div>
   );
 }

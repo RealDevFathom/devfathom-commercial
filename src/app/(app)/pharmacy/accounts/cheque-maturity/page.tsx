@@ -76,7 +76,7 @@ export default async function ChequeMaturityPage({
     !(await financialReportAllowed(ctx, user))
   ) {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader
           eyebrow="Pharmacy accounts"
           heading="Recorded cheque maturity"
@@ -86,7 +86,7 @@ export default async function ChequeMaturityPage({
           Owner financial-report capability, Pharmacy Reports, and existing Finance workspace
           authorization are required. No cheque evidence was read.
         </Notice>
-      </main>
+      </div>
     );
   }
 
@@ -118,7 +118,7 @@ export default async function ChequeMaturityPage({
   }
   const unknownDate = rows.filter((row) => !row.dueDate);
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Recorded cheque maturity"
@@ -209,7 +209,7 @@ export default async function ChequeMaturityPage({
           ) : null}
         </>
       ) : null}
-    </main>
+    </div>
   );
 }
 

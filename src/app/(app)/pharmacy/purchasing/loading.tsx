@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 /** UX rule 9: the loading state has the shape of the surface, not a bare spinner. */
 export default function PharmacyPurchasingLoading() {
   return (
-    <main aria-label="Loading Purchasing & receiving" className="min-w-0 space-y-6" role="status">
+    <div aria-label="Loading Purchasing & receiving" className="min-w-0 space-y-6" role="status">
       <PageHeader
         eyebrow="Pharmacy procurement"
         heading="Purchasing & receiving"
@@ -22,6 +22,6 @@ export default function PharmacyPurchasingLoading() {
       <SectionCard title="Loading">
         <Skeleton className="h-64 w-full" />
       </SectionCard>
-    </main>
+    </div>
   );
 }

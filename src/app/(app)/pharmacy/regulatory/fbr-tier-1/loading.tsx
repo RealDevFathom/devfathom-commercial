@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function PharmacyFbrTier1Loading() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy · FBR"
         heading="Am I Tier-1?"
@@ -20,6 +20,6 @@ export default function PharmacyFbrTier1Loading() {
         </div>
         <p className="sr-only">Loading the FBR Tier-1 self-check.</p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
