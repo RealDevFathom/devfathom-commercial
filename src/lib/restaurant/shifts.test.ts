@@ -63,6 +63,8 @@ type Adjustment = {
 let adjustments: Adjustment[] = [];
 let sequence = 0;
 let beforeShiftUpdateMany: (() => void) | undefined;
+let whileAcquiringShiftLock: (() => void) | undefined;
+let shiftLocks: Array<{ sql: string; values: unknown[] }> = [];
 
 function matchesDate(value: Date, comparator: Comparator): boolean {
   const time = value.getTime();
@@ -145,6 +147,13 @@ function sortRows(rows: Row[], orderBy: unknown): Row[] {
 }
 
 const db = {
+  // Models `SELECT … FOR UPDATE`: the hook runs while the lock is contended,
+  // i.e. a transaction holding it commits before this one acquires it.
+  $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    shiftLocks.push({ sql: strings.join('?'), values });
+    whileAcquiringShiftLock?.();
+    return shifts.filter((row) => row.id === values[0]).map((row) => ({ id: row.id }));
+  },
   restaurantBranch: {
     findUnique: async ({ where }: { where: { id: string } }) => branches.get(where.id) ?? null,
   },
@@ -250,6 +259,8 @@ beforeEach(() => {
   adjustments = [];
   sequence = 0;
   beforeShiftUpdateMany = undefined;
+  whileAcquiringShiftLock = undefined;
+  shiftLocks = [];
   branches.set(BRANCH, {
     id: BRANCH,
     timezone: 'UTC',
@@ -569,6 +580,27 @@ describe('cancelShift', () => {
     await expect(
       cancelShift(db, shift.id, { now: NOON }, { organizationId: 'org_1', expectedVersion: 1 })
     ).rejects.toMatchObject({ reason: 'ACTIVE_ATTENDANCE' });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
+  });
+
+  it('reads attendance only after acquiring the shift row lock', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    // A manager's clock-in correction holds the shift lock (it inserts a
+    // separate adjustment row) and commits while cancellation waits for it.
+    whileAcquiringShiftLock = () => {
+      adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null });
+      whileAcquiringShiftLock = undefined;
+    };
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shiftLocks).toEqual([{ sql: expect.stringMatching(/FOR UPDATE/), values: [shift.id] }]);
     expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
   });
 

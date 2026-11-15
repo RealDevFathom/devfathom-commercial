@@ -373,6 +373,11 @@ function hasOpenAttendance(shift: {
  * is judged the way timekeeping judges it — the raw punches plus any manager
  * clock corrections — because a corrected clock-in with no clock-out is just
  * as open as a raw one.
+ *
+ * Call this inside a transaction. It takes the same shift row lock that
+ * employee punches and manager corrections take, so attendance is read only
+ * after any in-flight punch or correction has committed: a relation predicate
+ * on the update alone cannot see a correction row inserted concurrently.
  */
 export async function cancelShift(
   db: ScopedDb,
@@ -380,6 +385,7 @@ export async function cancelShift(
   options: { now: Date; reason?: string | null },
   cas?: ShiftCas
 ) {
+  await db.$queryRaw`SELECT "id" FROM "restaurant_shifts" WHERE "id" = ${id} FOR UPDATE`;
   const existing = await db.restaurantShift.findUnique({
     where: { id },
     select: ATTENDANCE_SELECT,
