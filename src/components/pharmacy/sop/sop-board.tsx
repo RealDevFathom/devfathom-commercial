@@ -185,6 +185,9 @@ function DueState({ item }: { item: SopBoardItem }) {
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       {item.overdue ? <StatusPill status="overdue" tone="danger" label="Overdue" /> : null}
+      {item.escalated ? (
+        <StatusPill status="escalated" tone="warning" label="Manager notified" />
+      ) : null}
       {!item.overdue && item.missedRisk ? (
         <StatusPill status="due-soon" tone="warning" label="Closing soon" />
       ) : null}
