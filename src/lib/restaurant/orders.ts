@@ -406,11 +406,11 @@ export async function closeOrderAfterSettlement(
   return true;
 }
 
-/** Marking a delivery DELIVERED is the guest hand-off. Serve every remaining PREPARED
+/** Marking a delivery DELIVERED is the guest hand-off. Serve every remaining live
  * item in the caller's transaction (voided items stay voided) and re-derive the kitchen
  * aggregate, so a delivered, settled order is closable by {@link closeOrder}, which
- * still runs the one-time close bookkeeping. A live item that never reached PREPARED
- * blocks the hand-off. A terminal order is left untouched. The caller must hold the
+ * still runs the one-time close bookkeeping. Items the kitchen never marked
+ * prepared are served too. A terminal order is left untouched. The caller must hold the
  * order row lock. Returns the ids of the items it served. */
 export async function serveDeliveredOrderItems(
   tx: ScopedDb,
@@ -419,30 +419,23 @@ export async function serveDeliveredOrderItems(
 ): Promise<string[]> {
   const order = await loadOrder(tx, orderId);
   if (order.status === 'CLOSED' || order.status === 'CANCELLED') return [];
-  const unresolved = order.items.filter(
-    (item) => item.status !== 'PREPARED' && item.status !== 'SERVED' && item.status !== 'VOIDED'
-  );
-  if (unresolved.length > 0) {
-    throw new OrderCommandError(
-      'Kitchen handoff is not complete. Prepare every live item before marking the delivery delivered.',
-      'ITEM_STATE'
-    );
-  }
-  const prepared = order.items.filter((item) => item.status === 'PREPARED');
-  for (const item of prepared) assertItemTransition(item.status, 'SERVED');
-  const servedIds = prepared.map((item) => item.id);
+  // The guest has the food, so the kitchen ledger no longer gates the hand-off:
+  // every live item (not yet served, not voided) is served, and the event
+  // records the status it was served from.
+  const live = order.items.filter((item) => item.status !== 'SERVED' && item.status !== 'VOIDED');
+  const servedIds = live.map((item) => item.id);
   if (servedIds.length > 0) {
     await tx.restaurantOrderItem.updateMany({
-      where: { orderId: order.id, id: { in: servedIds }, status: 'PREPARED' },
+      where: { orderId: order.id, id: { in: servedIds }, status: { notIn: ['SERVED', 'VOIDED'] } },
       data: { status: 'SERVED' },
     });
-    for (const itemId of servedIds) {
+    for (const item of live) {
       await appendOrderEvent(tx, {
         orderId: order.id,
         eventType: 'item.advanced',
         actorStaffProfileId: actor.staffProfileId,
         actorDeviceId: actor.deviceId,
-        payload: { itemId, from: 'PREPARED', to: 'SERVED', via: 'delivery.delivered' },
+        payload: { itemId: item.id, from: item.status, to: 'SERVED', via: 'delivery.delivered' },
       });
     }
   }
