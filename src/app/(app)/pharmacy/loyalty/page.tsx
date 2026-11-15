@@ -559,7 +559,7 @@ export default async function LoyaltyPage({
                   <tr key={r.id} className="border-t border-border-subtle hover:bg-surface-sunken">
                     <td className="whitespace-nowrap p-3">
                       <time dateTime={r.occurredAt.toISOString()}>
-                        {r.occurredAt.toISOString().replace('T', ' ').slice(0, 16)}
+                        {formatUtcInstant(r.occurredAt)}
                       </time>
                     </td>
                     <td className="p-3">

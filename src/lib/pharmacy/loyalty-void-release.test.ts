@@ -64,7 +64,7 @@ function ledger(
         },
       })),
       // The ledger replay for restored points; these fixtures have no expiring lots.
-      findMany: vi.fn(async () => []),
+      findMany: vi.fn(async (): Promise<Row[]> => []),
       create: vi.fn(async ({ data }: { data: Row }) => {
         const row = { id: `entry-${created.length}`, ...data };
         created.push(row);
