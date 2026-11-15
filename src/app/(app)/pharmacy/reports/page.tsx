@@ -61,6 +61,13 @@ function reportActionRedirect(
   copy.set(kind, state);
   return `/pharmacy/reports?${copy.toString()}`;
 }
+/** Keeps the report's branch scope on a metric drill-through (DEV-58). */
+function scopedDrillThrough(path: string, branch: string | undefined) {
+  if (!branch) return path;
+  const url = new URL(path, 'https://reports.invalid');
+  url.searchParams.set('branch', branch);
+  return `${url.pathname}${url.search}`;
+}
 function ReportNotice({ title, detail }: { title: string; detail: string }) {
   return (
     <SectionCard title={title}>
@@ -995,7 +1002,7 @@ export default async function PharmacyReportsPage({
                           {contract.drillThrough ? (
                             <Link
                               className="mt-2 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              href={contract.drillThrough}
+                              href={scopedDrillThrough(contract.drillThrough, branch)}
                             >
                               Drill through
                             </Link>

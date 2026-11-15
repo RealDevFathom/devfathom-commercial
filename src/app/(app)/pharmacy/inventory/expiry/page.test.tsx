@@ -134,3 +134,44 @@ it('DEV-660: opens an assigned branch instead of an unassigned one named in the 
   expect(mocks.lots).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch_a', withinDays: 90 });
   expect(view.queryByRole('option', { name: /Other/ })).toBeNull();
 });
+
+it('DEV-58: says so when a report drill-through names a branch the board cannot show', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'branch_a', name: 'Main', city: 'Karachi' },
+          { id: 'branch_b', name: 'Other', city: 'Lahore' },
+        ]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  mocks.lots.mockResolvedValue({
+    generatedAt: new Date('2026-11-15T00:00:00.000Z'),
+    riskBuckets: [],
+    rows: [],
+    suppliers: [],
+  });
+  const notice = /requested branch is not one of your inventory branches/;
+
+  const substituted = render(
+    await Page({ searchParams: Promise.resolve({ branch: 'branch_b', within: '180' }) })
+  );
+  expect(substituted.getByRole('status')).toHaveTextContent(notice);
+  expect(substituted.getByRole('status')).toHaveTextContent('shows Main instead');
+  cleanup();
+
+  const requested = render(
+    await Page({ searchParams: Promise.resolve({ branch: 'branch_a', within: '180' }) })
+  );
+  expect(requested.queryByText(notice)).toBeNull();
+  cleanup();
+
+  const unspecified = render(await Page({ searchParams: Promise.resolve({ within: '180' }) }));
+  expect(unspecified.queryByText(notice)).toBeNull();
+});

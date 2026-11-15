@@ -52,6 +52,7 @@ const line = {
 };
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+const COUNTER_GATE_DENIED = 'You do not have permission for this action.';
 
 function callerFor(permissions: Permission[], permissionOverrides: Permission[] = []) {
   const credential = vi.fn();
@@ -60,7 +61,12 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranch: {
+      findMany: async () => [{ id: 'branch-1' }],
+      findFirst: async () => ({ id: 'branch-1' }),
+    },
+    // DEV-607: addLine admits only an active member assigned to the branch.
+    pharmacyBranchAssignment: { findMany: async () => [{ branchId: 'branch-1' }] },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -94,6 +100,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides,
       }),
@@ -176,7 +183,8 @@ describe('pharmacySales.addLine controlled actor', () => {
     );
     await expect(caller.addLine(line)).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'You do not have permission to dispense a controlled medicine.',
+      // DEV-607: an explicit DENY on a counter alias is refused by the counter gate first.
+      message: COUNTER_GATE_DENIED,
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
@@ -192,7 +200,8 @@ describe('pharmacySales.addLine controlled actor', () => {
       );
       await expect(caller.addLine(line)).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'You do not have permission to dispense a controlled medicine.',
+        // DEV-607: the DENY covers a counter alias, so the counter gate refuses first.
+        message: COUNTER_GATE_DENIED,
       });
       expect(lock).not.toHaveBeenCalled();
       expect(credential).not.toHaveBeenCalled();

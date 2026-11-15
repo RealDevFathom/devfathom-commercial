@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   checkFindings: [] as Array<{ kind: string; severity: string; explanation: string }>,
   /** The error the cash-close check query returns, if any. */
   checkError: null as { message: string; data?: { code: string } } | null,
+  /** Drawers beyond the one every fixture has, e.g. a second open counter. */
+  extraDrawers: [] as Array<Record<string, unknown>>,
 }));
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
@@ -77,6 +79,7 @@ vi.mock('@/lib/trpc', () => ({
                   expectedMinor: 12500,
                   countedMinor: null,
                 },
+                ...mocks.extraDrawers,
               ],
             },
           };
@@ -122,6 +125,7 @@ beforeEach(() => {
   mocks.close = null;
   mocks.checkFindings = [];
   mocks.checkError = null;
+  mocks.extraDrawers = [];
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
@@ -340,6 +344,78 @@ describe('day-close console', () => {
         varianceNote: 'Short by one dollar',
       })
     );
+  });
+  it('warns that locking the day is permanent and cannot be reopened, before and after the close', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    const warning = screen.getByRole('note', { name: 'Locking is permanent' });
+    expect(warning).toHaveTextContent('Locking this day cannot be undone.');
+    expect(warning).toHaveTextContent(/nobody, including the owner, can reopen/);
+    // A superseding close report is a correction, not a reopen: the day stays locked.
+    expect(warning).toHaveTextContent(
+      /re-record the close report with a reason, but that never reopens the day/
+    );
+    expect(screen.getByLabelText(/locking this day is permanent/)).toBeInTheDocument();
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+    };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
+    ).toHaveTextContent(/re-record this close report with a reason, but that never reopens the day/);
+  });
+  it('totals counted cash live from the drawers entered so far', () => {
+    mocks.extraDrawers = [
+      {
+        id: 'd2',
+        deviceId: 'counter-2',
+        status: 'OPEN',
+        openedAt: new Date('2026-09-29T05:00:00Z'),
+        openedBy: 'Bilal Ahmed',
+        expectedMinor: 0,
+        countedMinor: null,
+      },
+    ];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByTestId('Counted cash')).toHaveTextContent('Awaiting count');
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '100.00' },
+    });
+    expect(screen.getByTestId('Counted cash')).toHaveTextContent('100.00');
+    expect(screen.getByText(/1 of 2 open drawers counted/)).toBeInTheDocument();
+    // The variance waits for every drawer: a partial count is not a shortfall.
+    expect(screen.getByTestId('Variance')).toHaveTextContent('Awaiting count');
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 2 (USD)'), {
+      target: { value: '25.50' },
+    });
+    expect(screen.getByTestId('Counted cash')).toHaveTextContent('125.50');
+    expect(screen.getByTestId('Variance')).toHaveTextContent('0.50');
+    expect(screen.queryByText(/open drawers counted/)).not.toBeInTheDocument();
+  });
+  it('says inline why the close button is disabled, and clears the reason once it is not', () => {
+    render(<PharmacyDayCloseConsole />);
+    const submit = screen.getByRole('button', { name: 'Close and lock day' });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveAttribute('aria-describedby', 'day-close-blocked');
+    const reasons = () => document.getElementById('day-close-blocked');
+    expect(reasons()).toHaveTextContent('Enter the counted cash for drawer 1.');
+    expect(reasons()).toHaveTextContent('Tick the confirmation');
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '124.00' },
+    });
+    expect(reasons()).toHaveTextContent('Add a variance note');
+    expect(reasons()).not.toHaveTextContent('Enter the counted cash');
+    fireEvent.change(screen.getByLabelText(/Variance note/), { target: { value: 'Short' } });
+    expect(reasons()).not.toHaveTextContent('Add a variance note');
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(submit).toBeEnabled();
+    expect(reasons()).toBeNull();
+    expect(submit).not.toHaveAttribute('aria-describedby');
   });
   it('shows the read-only cash-close check only once the day is closed', () => {
     const view = render(<PharmacyDayCloseConsole />);

@@ -302,3 +302,51 @@ describe('growth current authorization', () => {
     }
   );
 });
+describe('campaign generation and approval stay owner-only (DEV-31)', () => {
+  const from = new Date('2026-10-01T00:00:00.000Z');
+  const cutoff = new Date('2026-10-31T00:00:00.000Z');
+  const insightId = '00000000-0000-4000-8000-000000000001';
+  type Router = ReturnType<typeof caller>;
+  const mutations: [string, (api: Router) => Promise<unknown>][] = [
+    [
+      'generateBaskets',
+      (api) =>
+        api.generateBaskets({
+          ...input,
+          from,
+          cutoff,
+          config: {
+            minimumPairCount: 1,
+            minimumSupport: 0.1,
+            minimumConfidence: 0.1,
+            minimumLift: 1,
+            maximumProposals: 1,
+          },
+        }),
+    ],
+    [
+      'reviewBasket',
+      (api) => api.reviewBasket({ ...input, insightId, recommendation: 0, decision: 'APPROVE' }),
+    ],
+    ['generateGrowth', (api) => api.generateGrowth({ ...input, from, cutoff })],
+    [
+      'reviewGrowth',
+      (api) => api.reviewGrowth({ ...input, insightId, recommendation: 0, decision: 'APPROVE' }),
+    ],
+    [
+      'approveTemplate',
+      (api) => api.approveTemplate({ ...input, name: 'Refill', body: 'Hello', reviewed: true }),
+    ],
+    ['approve', (api) => api.approve({ ...input, campaignId: 'campaign-a' })],
+  ];
+  it.each(
+    mutations.flatMap(([name, run]) => ['EMPLOYEE', 'HR'].map((role) => ({ name, run, role })))
+  )('$name refuses a $role member before reading data', async ({ run, role }) => {
+    await expect(run(caller(role))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.organization).not.toHaveBeenCalled();
+    expect(mocks.growthBuild).not.toHaveBeenCalled();
+    expect(mocks.growthGenerate).not.toHaveBeenCalled();
+    expect(mocks.growthReview).not.toHaveBeenCalled();
+    expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
+});

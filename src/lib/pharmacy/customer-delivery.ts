@@ -30,6 +30,11 @@ export const deliveryCommandInput = z
     deviceId: z.string().min(1).max(128).optional(),
     businessDate: z.date().optional(),
     quarantineLocationId: z.string().min(1).max(128).optional(),
+    // DEV-647: a physical return that refunds cash needs the manager's or owner's own PIN.
+    managerPin: z
+      .string()
+      .regex(/^\d{4,8}$/)
+      .optional(),
   })
   .strict();
 type Evidence = { action: string; amountMinor: number | null };
@@ -126,7 +131,9 @@ export function validateDeliveryCommand(
 export async function recordDeliveryCommand(
   db: ScopedDb,
   scope: LedgerScope,
-  input: z.infer<typeof deliveryCommandInput>
+  input: z.infer<typeof deliveryCommandInput>,
+  /** DEV-647: refunds need a manager or owner. Without an authorizer, no refund runs. */
+  options: { authorizeRefund?: () => Promise<void> } = {}
 ) {
   deliveryCommandInput.parse(input);
   if (input.branchId !== scope.branchId) throw new PharmacyDeliveryError('ORDER_NOT_FOUND');
@@ -155,7 +162,8 @@ export async function recordDeliveryCommand(
   });
   if (!order) throw new PharmacyDeliveryError('ORDER_NOT_FOUND');
   const fingerprint = createHash('sha256')
-    .update(JSON.stringify({ ...input, actorId: scope.actorId }))
+    // The PIN is a credential, not part of the command: replays need not repeat it.
+    .update(JSON.stringify({ ...input, managerPin: undefined, actorId: scope.actorId }))
     .digest('hex');
   const prior = order.deliveryEvidence.find((row) => row.requestKey === input.requestKey);
   if (prior) {
@@ -203,6 +211,15 @@ export async function recordDeliveryCommand(
           throw new PharmacyDeliveryError('PAYMENT_RECONCILIATION_REQUIRED');
         if (!input.deviceId || !input.businessDate)
           throw new PharmacyDeliveryError('DRAWER_REQUIRED');
+        const refundDue = sale.tenders.some(
+          (tender) =>
+            tender.amountMinor > tender.refunds.reduce((n, refund) => n + refund.amountMinor, 0)
+        );
+        if (refundDue) {
+          if (!options.authorizeRefund)
+            throw new PharmacyDeliveryError('REFUND_AUTHORIZATION_REQUIRED');
+          await options.authorizeRefund();
+        }
         for (const tender of sale.tenders) {
           const remaining =
             tender.amountMinor - tender.refunds.reduce((n, refund) => n + refund.amountMinor, 0);
