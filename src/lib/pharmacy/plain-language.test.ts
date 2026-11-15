@@ -1,0 +1,24 @@
+import { describe, expect, it } from 'vitest';
+import { describeCashVariance, formatDateRange, formatPktTime } from './plain-language';
+
+describe('plain-language helpers', () => {
+  const now = new Date('2026-11-03T14:00:00Z'); // 7:00 PM PKT
+  it('formats times in Pakistan time', () => {
+    expect(formatPktTime('2026-11-03T13:20:00Z', now)).toBe('Today 6:20 PM');
+    expect(formatPktTime('2026-11-02T04:05:00Z', now)).toBe('Yesterday 9:05 AM');
+    expect(formatPktTime('2026-10-28T04:05:00Z', now)).toBe('28 Oct 9:05 AM');
+    expect(formatPktTime('nope', now)).toBe('');
+    expect(formatPktTime(null, now)).toBe('');
+  });
+  it('formats ranges', () => {
+    expect(formatDateRange('2026-10-28', '2026-11-03')).toBe('28 Oct – 3 Nov');
+    expect(formatDateRange('2026-11-03', '2026-11-03')).toBe('3 Nov');
+  });
+  it('describes cash variance', () => {
+    const f = (m: number) => `PKR ${m / 100}`;
+    expect(describeCashVariance(-400, f)).toEqual({ text: 'PKR 4 short', tone: 'short' });
+    expect(describeCashVariance(400, f)).toEqual({ text: 'PKR 4 over', tone: 'over' });
+    expect(describeCashVariance(0, f).text).toBe('Balanced');
+    expect(describeCashVariance(null, f).tone).toBe('unknown');
+  });
+});

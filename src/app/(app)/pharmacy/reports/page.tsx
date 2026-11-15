@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Suspense } from 'react';
+import { Suspense, type ReactNode } from 'react';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
+import { copy, describeCashVariance, formatDateRange, formatPktTime } from '@/lib/pharmacy/plain-language';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
@@ -310,12 +311,19 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
-  const cards = metrics
+  const variance = describeCashVariance(metrics?.cashVarianceMinor, (minor) => money(minor));
+  const cashVariance =
+    variance.tone === 'short' ? (
+      <span className="text-destructive">{variance.text}</span>
+    ) : (
+      variance.text
+    );
+  const cards: [string, ReactNode][] = metrics
     ? [
         ['Sales', money(metrics.salesMinor)],
         ['Gross margin', money(metrics.marginMinor)],
         ['Cash', money(metrics.cashMinor)],
-        ['Cash variance', money(metrics.cashVarianceMinor)],
+        ['Cash variance', cashVariance],
         ['Refunds', money(metrics.refundsMinor)],
         ['Open stock signals', metrics.openStockSignals],
         ['Recommended orders', metrics.recommendedOrders],
@@ -328,7 +336,7 @@ export default async function PharmacyReportsPage({
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        description="Your pharmacy figures for the dates and branch you choose."
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
@@ -485,12 +493,12 @@ export default async function PharmacyReportsPage({
       ) : result ? (
         <>
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            <StatusPill
-              status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
-              tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
-            />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
-            <span>Source: {result.freshness.source}</span>
+            {result.freshness.status === 'CURRENT' ? null : (
+              <StatusPill status="Out of date" tone="warning" />
+            )}
+            <span>
+              {copy('overview.updated')} {formatPktTime(result.freshness.asOf)}
+            </span>
           </div>
           <SectionCard
             eyebrow="Owner command centre"
@@ -498,25 +506,22 @@ export default async function PharmacyReportsPage({
             titleLevel={2}
           >
             <p className="mb-4 text-sm text-text-muted">
-              Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+              {formatDateRange(from, to)} ·{' '}
               {branch
                 ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
-                : 'All available branches'}
-              .{' '}
-              {currency
-                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-              Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
-              unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
-              selected period. Stock signals, recommended orders and expiry exposure are current
-              snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
-              margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+                : copy('overview.allBranches')}
             </p>
+            <details className="mb-4 text-sm text-text-muted">
+              <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-2 focus-visible:outline-ring">
+                {copy('overview.details')}
+              </summary>
+              <p>
+                {currency
+                  ? `Amounts are in ${currency}, your pharmacy's current currency setting.`
+                  : 'Amounts have no currency because your pharmacy has not set one.'}{' '}
+                {copy('overview.detailsBody')}
+              </p>
+            </details>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
                 <Stat
@@ -525,11 +530,6 @@ export default async function PharmacyReportsPage({
                   value={figure}
                   className="min-w-0"
                   valueClassName="break-words"
-                  sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
-                  }
                 />
               ))}
             </div>

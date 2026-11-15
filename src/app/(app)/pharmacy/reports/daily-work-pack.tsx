@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { copy, formatDateRange, formatPktTime } from '@/lib/pharmacy/plain-language';
 import type { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 
 type Reader = ReturnType<typeof pharmacyReportsRouter.createCaller>['dailyWorkPack'];
@@ -38,7 +39,7 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
         <input key={name} type="hidden" name={name} value={value} />
       ))}
       <Button variant="outline" className="min-h-11" type="submit">
-        {retry ? 'Retry daily work pack' : 'Refresh daily work pack'}
+        {retry ? 'Try again' : copy('workPack.refresh')}
       </Button>
     </form>
   );
@@ -48,10 +49,10 @@ export function DailyWorkPackLoading() {
   return (
     <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2} aria-busy="true">
       <p role="status" className="mb-4 text-sm text-text-muted">
-        Reading permitted work-pack sources. Other reports remain available.
+        Getting your daily work pack. Other reports are still available.
       </p>
       <Button variant="outline" className="min-h-11" disabled>
-        Refresh daily work pack
+        {copy('workPack.refresh')}
       </Button>
     </SectionCard>
   );
@@ -75,8 +76,8 @@ export async function DailyWorkPack({
     return (
       <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2}>
         <p role="alert" className="mb-4 text-sm text-text-muted">
-          Daily work pack could not load. Source data or report access may be unavailable. Retry
-          this read, or ask your workspace administrator to check access. No data was changed.
+          The daily work pack could not load. Try again, or ask your administrator to check your
+          access. Nothing was changed.
         </p>
         <Refresh fields={refreshFields} retry />
       </SectionCard>
@@ -87,36 +88,35 @@ export async function DailyWorkPack({
   return (
     <SectionCard
       id="daily-work-pack"
-      eyebrow="Read-only preparation"
+      eyebrow="Today"
       title="Daily work pack"
       titleLevel={2}
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <StatusPill status={`${pack.completeness.status} coverage`} tone="warning" />
+        <StatusPill status={copy(pack.completeness.status === 'partial' ? 'workPack.badge.partial' : 'workPack.badge.unknown')} tone="warning" />
         <Refresh fields={refreshFields} />
       </div>
-      <div className="space-y-2 text-sm text-text-muted">
-        <p>
-          Requested period: {pack.period.from} to {pack.period.to}. Branch scope:{' '}
-          {pack.scope.branchIds.map(branchName).join(', ')}.
-        </p>
-        <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
-        </p>
-        <p>
-          Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
-          apply to this pack. Current records are not a historical snapshot.
-        </p>
-        <p>{pack.completeness.definition}</p>
-        <p>
-          Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
-          money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
-        </p>
-        {!pack.permissions.financial ? (
-          <p>Operational evidence only. Financial sources were not queried for your role.</p>
-        ) : null}
-      </div>
+      <p className="text-sm text-text-muted">
+        {formatDateRange(pack.period.from, pack.period.to)} ·{' '}
+        {pack.scope.branchIds.map(branchName).join(', ')} · Updated {formatPktTime(pack.readAt)}
+      </p>
+      <details className="mt-2 text-sm text-text-muted">
+        <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-2 focus-visible:outline-ring">
+          {copy('workPack.details')}
+        </summary>
+        <div className="space-y-2">
+          <p>
+            Each source below keeps its own dates. Supplier, ingredient and batch filters do not
+            apply here. These are current records, not a past snapshot.
+          </p>
+          <p>{pack.completeness.definition}</p>
+          <p>{copy('workPack.refreshNote')}</p>
+          <p>{copy('workPack.amountNote')}</p>
+          {!pack.permissions.financial ? (
+            <p>Money sources were not read for your role.</p>
+          ) : null}
+        </div>
+      </details>
       {tasks.length ? (
         <ol className="mt-5 divide-y divide-border-subtle">
           {tasks.map((task) => (
@@ -125,7 +125,7 @@ export async function DailyWorkPack({
                 {task.title} · {branchName(task.branchId)}
               </h3>
               <div className="flex flex-wrap gap-x-4">
-                {task.nextActions.map((action) => (
+                {task.nextActions.slice(0, 1).map((action) => (
                   <Link key={action.href} href={action.href} prefetch={false} className={linkClass}>
                     {action.label}
                   </Link>
@@ -133,7 +133,7 @@ export async function DailyWorkPack({
               </div>
               <details className="mt-2">
                 <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                  Evidence and missing inputs
+                  Details
                 </summary>
                 <ul className="space-y-4 text-sm text-text-body">
                   {task.evidence.map((evidence) => (
@@ -170,7 +170,7 @@ export async function DailyWorkPack({
                             <dt className="break-all">{fieldLabel(amount.key)}</dt>
                             <dd className="break-words font-mono tabular-nums">
                               {Number.isSafeInteger(amount.value)
-                                ? `${formatMinor(amount.value)} (currency unknown)`
+                                ? `${formatMinor(amount.value)} (no currency set)`
                                 : '—'}
                             </dd>
                             <dd className="text-text-muted">{amount.definition}</dd>
@@ -178,10 +178,9 @@ export async function DailyWorkPack({
                         ))}
                       </dl>
                       <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
-                        {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
+                        Seen: {formatPktTime(evidence.observedAt) || 'Not available'}. Worked out:{' '}
+                        {formatPktTime(evidence.computedAt) || 'Not available'}. Due or expires:{' '}
+                        {formatPktTime(evidence.dueAt) || 'Not available'}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -202,11 +201,13 @@ export async function DailyWorkPack({
         </ol>
       ) : (
         <p role="status" className="mt-5 text-sm text-text-muted">
-          No review evidence returned from available sources. This is not an all-clear result; check
-          source coverage and unavailable inputs below.
+          {copy('workPack.noResult')}
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">Source coverage and freshness</h3>
+      <details className="mt-6" open>
+      <summary className="min-h-11 cursor-pointer py-3 font-semibold text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
+        {copy('workPack.sourcesHeading')}
+      </summary>
       <ul className="mt-3 divide-y divide-border-subtle">
         {pack.sources.map((source) => (
           <li
@@ -232,7 +233,7 @@ export async function DailyWorkPack({
                 }
                 tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
               />
-              <StatusPill status={`${source.coverage} coverage`} tone="warning" />
+              <StatusPill status={copy(source.coverage === 'partial' ? 'workPack.badge.partial' : 'workPack.badge.unknown')} tone="warning" />
             </div>
             {source.kind === 'expiry' && source.status === 'available' && source.returnedRows === 0 ? (
               <p role="status" className="text-text-muted">
@@ -243,21 +244,14 @@ export async function DailyWorkPack({
             ) : null}
             <p className="text-text-muted">{source.timeBasis}</p>
             <p className="text-text-muted">
-              Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-              {source.rowLimit ?? 'Not established'}.{' '}
-              {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
+              Records read: {source.returnedRows ?? 'Not available'}.{' '}
+              {source.limitReached ? 'Only the first records were read; some may be left out.' : ''}
             </p>
             <p className="break-words text-text-muted">
-              Window:{' '}
-              {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
-              Freshness:{' '}
+              Checked {formatPktTime(source.readAt)}.{' '}
               {source.freshness === 'persisted-unverified'
-                ? 'Persisted; freshness unverified'
-                : 'Live inputs; not historical'}
-              .
+                ? 'Saved records; may be out of date.'
+                : 'Current records.'}
             </p>
             {Array.from(
               new Set([
@@ -278,6 +272,7 @@ export async function DailyWorkPack({
           </li>
         ))}
       </ul>
+      </details>
     </SectionCard>
   );
 }

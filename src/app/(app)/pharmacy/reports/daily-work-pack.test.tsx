@@ -22,7 +22,7 @@ function pack(status: 'available' | 'unavailable', returnedRows: number | null):
       allClear: false,
       uniqueProblemCount: null,
       additiveSavings: false,
-      definition: 'Empty persisted reads do not prove all clear.',
+      definition: 'An empty list does not prove everything is fine.',
     },
     sources: [{
       id: 'branch_1:expiry',
@@ -72,8 +72,8 @@ it('explains failed expiry reads, retains partial coverage and offers a scoped r
   const { source } = await show(pack('unavailable', null));
   expect(source.getByText('Could not load')).toBeVisible();
   expect(source.getByRole('alert')).toHaveTextContent(failure);
-  expect(source.getByText('partial coverage')).toBeVisible();
-  expect(source.getByText(/Returned rows: Unavailable/)).toBeVisible();
+  expect(source.getByText('Some information is missing')).toBeVisible();
+  expect(source.getByText(/Records read: Not available/)).toBeVisible();
   expect(source.queryByText('No eligible stock')).not.toBeInTheDocument();
   expect(source.queryByText('unavailable', { exact: true })).not.toBeInTheDocument();
   const form = screen.getByRole('button', { name: 'Refresh daily work pack' }).closest('form')!;
@@ -90,7 +90,7 @@ it('keeps actual expiry advice visible when the reader returns evidence', async 
     tasks: [{
       id: 'branch_1:inventory-review',
       branchId: 'branch_1',
-      title: 'Review related inventory signals',
+      title: 'Review stock alerts',
       evidence: [{
         id: 'expiry:lot_1',
         sourceId: 'branch_1:expiry',
@@ -112,4 +112,40 @@ it('keeps actual expiry advice visible when the reader returns evidence', async 
   expect(source.queryByText('No eligible stock')).not.toBeInTheDocument();
   expect(screen.getByText('AT_RISK')).toBeInTheDocument();
   expect(screen.getByText('Projected Unsold Units')).toBeInTheDocument();
+});
+
+it('uses plain wording, readable times and one action per card', async () => {
+  const value = pack('available', 1);
+  value.groups = [{
+    key: 'inventory-review',
+    section: 'inventory-expiry',
+    tasks: [{
+      id: 'branch_1:inventory-review',
+      branchId: 'branch_1',
+      title: 'Review stock alerts',
+      evidence: [{
+        id: 'expiry:lot_1',
+        sourceId: 'branch_1:expiry',
+        reference: { kind: 'lot', id: 'lot_1' },
+        state: 'AT_RISK',
+        counts: {},
+        observedAt: null,
+        computedAt: null,
+        freshnessSeconds: null,
+        dueAt: null,
+        missingInputs: [],
+      }],
+      missingInputs: [],
+      nextActions: [
+        { label: 'Open stock', href: '/pharmacy/inventory' },
+        { label: 'Open expiry', href: '/pharmacy/expiry' },
+      ],
+    }],
+  }] as never;
+  await show(value);
+  expect(screen.getByText(/1 Nov – 7 Nov/)).toBeInTheDocument();
+  expect(screen.getByText('Open stock')).toBeInTheDocument();
+  expect(screen.queryByText('Open expiry')).not.toBeInTheDocument();
+  expect(screen.queryByText(/coverage/i)).not.toBeInTheDocument();
+  expect(document.body.textContent).not.toMatch(/minor units|Row limit|persisted|freshness seconds/i);
 });

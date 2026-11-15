@@ -114,9 +114,9 @@ const groupSections: Record<Group, Section> = {
   'supplier-credit-review': 'procurement-suppliers',
 };
 const titles: Record<Group, string> = {
-  'inventory-review': 'Review related inventory signals',
-  'anomaly-review': 'Review recorded financial exceptions',
-  'supplier-credit-review': 'Review supplier claims and dispatch evidence',
+  'inventory-review': 'Review stock alerts',
+  'anomaly-review': 'Review unusual money records',
+  'supplier-credit-review': 'Review supplier claims and deliveries',
 };
 const anomalyAmounts: Record<string, Record<string, string>> = {
   DISCOUNT_OVERRIDE: {
@@ -159,7 +159,7 @@ export async function readPharmacyDailyWorkPack(
       uniqueProblemCount: null,
       additiveSavings: false,
       definition:
-        'Review groups are not distinct problems. Signals may overlap across sources. Amounts are source observations or exposure, never additive savings. Empty persisted reads do not prove all clear or detector coverage.',
+        'These groups are not separate problems; the same item can appear in more than one. Amounts are what was recorded, not savings you can add up. An empty list does not prove everything is fine.',
     },
     sources: [],
     groups: [],
@@ -266,8 +266,8 @@ export async function readPharmacyDailyWorkPack(
             : 'live-inputs-not-historical',
         missingInputs: [
           kind.startsWith('stock') || kind === 'anomalies'
-            ? 'Detector coverage and current source freshness are not established by a persisted read.'
-            : 'Current records are not a historical snapshot at the requested as-of instant.',
+            ? 'These are saved records and may not be fully up to date.'
+            : 'These are current records, not a snapshot of the past.',
         ],
       };
       result.sources.push(source);
@@ -277,13 +277,13 @@ export async function readPharmacyDailyWorkPack(
           source.limitReached = (source.returnedRows ?? 0) >= source.rowLimit;
           source.missingInputs.push(
             source.limitReached
-              ? '200-row source cap reached; further records may be omitted.'
-              : 'Anomaly reader caps at 200 before scope-payload filtering; completeness remains unknown.'
+              ? 'Only the first 200 records were read; some may be left out.'
+              : 'Only the first 200 records are read, so the list may be incomplete.'
           );
           if (source.limitReached) source.coverage = 'partial';
         }
         if (source.returnedRows === 0)
-          source.missingInputs.push('No returned evidence; this is not an all-clear result.');
+          source.missingInputs.push('Nothing was returned; this is not an all-clear result.');
       } catch {
         // Never expose provider/database messages, raw payloads, or partly projected source rows.
         for (const bucket of result.groups)
@@ -307,7 +307,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'stock-dashboard',
       'inventory-review',
-      'Current live persisted signals across owners; overdue evaluated at as-of. Requested period is not applied.',
+      'Current stock alerts across all owners. The chosen dates do not apply.',
       async (source) => {
         const rows = await roleDashboard(db, scope, asOf);
         source.returnedRows = rows.length;
@@ -324,7 +324,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'stock-digest',
       'inventory-review',
-      'Current persisted signals for the session actor only; overdue, next 24 hours, stale and resuming at as-of. Requested period is not applied.',
+      'Current stock alerts assigned to you only. The chosen dates do not apply.',
       async (source) => {
         const digest = await ownerDigest(db, scope, input.actorId, asOf);
         if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
@@ -369,10 +369,10 @@ export async function readPharmacyDailyWorkPack(
           item.computedAt = row.computedAt.toISOString();
           item.freshnessSeconds = row.freshnessSeconds;
           if (row.status === 'STALE')
-            item.missingInputs.push('Persisted anomaly is stale; verify its source facts.');
+            item.missingInputs.push('This saved record is out of date; check the original facts.');
           if (row.computedAt > asOf || row.sourceObservedAt > asOf)
             item.missingInputs.push(
-              'Record contains evidence observed or computed after requested as-of.'
+              'This record was updated after the time you are viewing.'
             );
           const numbers =
             row.exactNumbers &&
