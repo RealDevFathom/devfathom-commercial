@@ -54,7 +54,14 @@ import {
   updateMarketingSendPolicy,
 } from '@/lib/pharmacy/marketing-send-policy';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
-import { issueVoucher, listVouchers, voucherIssueInput } from '@/lib/pharmacy/vouchers';
+import {
+  authorizeVoucherIssue,
+  issueVoucher,
+  listVouchers,
+  revokeVoucher,
+  voucherIssueInput,
+  voucherRevokeInput,
+} from '@/lib/pharmacy/vouchers';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -114,10 +121,13 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
 async function execute<T>(
   ctx: TRPCContext,
   branchId: string,
-  fn: (db: ScopedDb, scope: MarketingScope) => Promise<T>
+  fn: (db: ScopedDb, scope: MarketingScope) => Promise<T>,
+  /** Runs after the owner and branch checks, before the transaction opens (PIN checks). */
+  prepare?: (scope: MarketingScope) => Promise<void>
 ) {
   const resolved = await scope(ctx, branchId);
   try {
+    await prepare?.(resolved);
     return await ctx.db.$transaction((db) => fn(db as ScopedDb, resolved));
   } catch (error) {
     if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
@@ -302,10 +312,24 @@ export const pharmacyMarketingRouter = router({
   vouchers: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => execute(ctx, input.branchId, listVouchers)),
-  issueVoucher: protectedProcedure
-    .input(voucherIssueInput)
+  // DEV-819: above the value cap a second approver's PIN (or the solo owner's own fresh PIN)
+  // is verified before the issue transaction; `issueVoucher` re-checks it inside.
+  issueVoucher: protectedProcedure.input(voucherIssueInput).mutation(({ ctx, input }) => {
+    let approval: Awaited<ReturnType<typeof authorizeVoucherIssue>> = null;
+    return execute(
+      ctx,
+      input.branchId,
+      (db, scope) => issueVoucher(db, scope, input, approval),
+      async (scope) => {
+        approval = await authorizeVoucherIssue(ctx.db as unknown as ScopedDb, scope, input);
+      }
+    );
+  }),
+  // DEV-819: a revoked voucher never redeems again.
+  revokeVoucher: protectedProcedure
+    .input(voucherRevokeInput)
     .mutation(({ ctx, input }) =>
-      execute(ctx, input.branchId, (db, scope) => issueVoucher(db, scope, input))
+      execute(ctx, input.branchId, (db, scope) => revokeVoucher(db, scope, input))
     ),
   createDraft: protectedProcedure
     .input(marketingDraftInput)
