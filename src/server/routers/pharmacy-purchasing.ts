@@ -77,6 +77,7 @@ import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
   receiptLineQuantities,
+  receiptLineAllocatedChargeMinor,
   receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
@@ -1466,6 +1467,7 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          let orderCharges = { freightMinor: 0, otherChargesMinor: 0 };
           if (input.purchaseOrderId) {
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
@@ -1473,6 +1475,10 @@ const purchasingRouter = router({
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
             });
+            orderCharges = {
+              freightMinor: order.freightMinor,
+              otherChargesMinor: order.otherChargesMinor,
+            };
             // An organization-wide order raised from a branch requisition is
             // still that branch's demand: receiving against it needs reach
             // there too, as every other order-scoped procedure does (#979).
@@ -1542,11 +1548,42 @@ const purchasingRouter = router({
               ? (
                   await db.pharmacyPurchaseOrderLine.findMany({
                     where: { purchaseOrderId: input.purchaseOrderId },
-                    select: { id: true, medicineId: true, packLevelId: true },
+                    orderBy: { lineNumber: 'asc' },
+                    select: {
+                      id: true,
+                      medicineId: true,
+                      packLevelId: true,
+                      orderedPacks: true,
+                      bonusPacks: true,
+                      canonicalUnitsPerPack: true,
+                      listPricePerPackMinor: true,
+                      discountBps: true,
+                      rebateBps: true,
+                      taxBps: true,
+                      taxCreditable: true,
+                    },
                   })
                 ).map((line) => [line.id, line] as const)
               : []
           );
+          // PUR-03: the order's freight and other charges are allocated across
+          // its lines exactly as the order's landed cost shows them, so the lot
+          // carries the same landed cost the order was approved at.
+          const orderLineCharges = new Map<string, number>();
+          if (
+            ownOrderLines.size > 0 &&
+            orderCharges.freightMinor + orderCharges.otherChargesMinor > 0
+          ) {
+            const orderLines = [...ownOrderLines.values()];
+            const costed = landedCost({
+              lines: orderLines,
+              freightMinor: orderCharges.freightMinor,
+              otherChargesMinor: orderCharges.otherChargesMinor,
+            });
+            orderLines.forEach((orderLine, index) =>
+              orderLineCharges.set(orderLine.id, costed.lines[index]!.allocatedChargeMinor)
+            );
+          }
 
           const lines = [];
           const seenSerials = new Set<string>();
@@ -1558,8 +1595,10 @@ const purchasingRouter = router({
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
+            const orderLine = line.purchaseOrderLineId
+              ? ownOrderLines.get(line.purchaseOrderLineId)
+              : undefined;
             if (line.purchaseOrderLineId) {
-              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
               if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
               // The referenced order line is the authority for item identity. Without
               // this check, unrelated goods could inherit its price and quantity terms,
@@ -1572,6 +1611,7 @@ const purchasingRouter = router({
               }
             }
 
+            const orderLineCharge = orderLine ? orderLineCharges.get(orderLine.id) : undefined;
             const quantities = receiptLineQuantities({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
@@ -1647,15 +1687,26 @@ const purchasingRouter = router({
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
               // PUR-03: bonus units divide the same money over more units, so a
-              // scheme lowers the landed cost and never adds revenue.
+              // scheme lowers the landed cost and never adds revenue. The order
+              // line's rebate and its share of the order's freight and other
+              // charges are part of that landed cost.
               unitCostMinor: receiptLineUnitCostMinor({
                 receivedPacks: line.receivedPacks,
                 bonusPacks: line.bonusPacks,
                 canonicalUnitsPerPack: line.canonicalUnitsPerPack,
                 invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
                 discountBps: line.discountBps,
+                rebateBps: orderLine?.rebateBps ?? 0,
                 taxBps: line.taxBps,
                 taxCreditable: line.taxCreditable,
+                allocatedChargeMinor:
+                  orderLine && orderLineCharge !== undefined
+                    ? receiptLineAllocatedChargeMinor({
+                        orderLineAllocatedChargeMinor: orderLineCharge,
+                        orderedPacks: orderLine.orderedPacks,
+                        receivedPacks: line.receivedPacks,
+                      })
+                    : 0,
               }),
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,

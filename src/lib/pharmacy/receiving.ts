@@ -247,17 +247,23 @@ export type ReceiptLineCostInput = {
   canonicalUnitsPerPack: number;
   invoicedPricePerPackMinor: number;
   discountBps?: number;
+  /** The ordered line's supplier rebate off the discounted net (PUR-03). */
+  rebateBps?: number;
   taxBps?: number;
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
+  /** This line's share of the order's freight and other charges, in minor units. */
+  allocatedChargeMinor?: number;
 };
 
 /**
  * PUR-03 on the receiving side: the cost of one canonical unit, as it is
- * stamped onto the inventory lot.
+ * stamped onto the inventory lot. The money terms apply in the same order as
+ * the purchase order's landed cost — invoice → discount → rebate → tax — and
+ * the line's allocated share of freight and other charges is added last.
  *
  * Bonus packs appear only in the divisor, so free goods always lower the unit
- * cost and never add money — an all-bonus line costs nothing per unit rather
+ * cost and never add money — an all-bonus line carries no invoiced money rather
  * than dividing by a quantity it did not pay for.
  */
 export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
@@ -267,17 +273,23 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
     canonicalUnitsPerPack,
     invoicedPricePerPackMinor,
     discountBps = 0,
+    rebateBps = 0,
     taxBps = 0,
     taxCreditable = false,
+    allocatedChargeMinor = 0,
   } = input;
 
   assertUnits(receivedPacks);
   assertUnits(bonusPacks);
   assertMoney(invoicedPricePerPackMinor);
+  assertMoney(allocatedChargeMinor);
   if (
     !Number.isSafeInteger(discountBps) ||
     discountBps < 0 ||
     discountBps > BPS ||
+    !Number.isSafeInteger(rebateBps) ||
+    rebateBps < 0 ||
+    rebateBps > BPS ||
     !Number.isSafeInteger(taxBps) ||
     taxBps < 0 ||
     taxBps > BPS
@@ -290,15 +302,42 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
 
   const canonicalUnits = (receivedPacks + bonusPacks) * canonicalUnitsPerPack;
   if (canonicalUnits === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
-  // A delivery that is entirely free costs nothing per unit. There is no
-  // paid quantity to spread, so there is nothing to divide.
-  if (receivedPacks === 0) return 0;
+  // A delivery that is entirely free carries no invoiced money: only an
+  // allocated charge, if any, is spread over its units.
+  if (receivedPacks === 0) return divideRoundHalfUp(allocatedChargeMinor, canonicalUnits);
 
   const grossMinor = receivedPacks * invoicedPricePerPackMinor;
   assertMoney(grossMinor);
   const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
-  const taxMinor = divideRoundHalfUp(netMinor * taxBps, BPS);
-  return divideRoundHalfUp(netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits);
+  const taxableMinor = netMinor - divideRoundHalfUp(netMinor * rebateBps, BPS);
+  const taxMinor = divideRoundHalfUp(taxableMinor * taxBps, BPS);
+  return divideRoundHalfUp(
+    taxableMinor + (taxCreditable ? 0 : taxMinor) + allocatedChargeMinor,
+    canonicalUnits
+  );
+}
+
+/**
+ * PUR-03: the share of an order line's allocated freight and other charges that
+ * one receipt carries, prorated by the paid packs it delivers. An over-delivery
+ * never carries more than the whole allocation, since the charge was agreed for
+ * the ordered quantity.
+ */
+export function receiptLineAllocatedChargeMinor(input: {
+  orderLineAllocatedChargeMinor: number;
+  orderedPacks: number;
+  receivedPacks: number;
+}): number {
+  const { orderLineAllocatedChargeMinor, orderedPacks, receivedPacks } = input;
+  assertMoney(orderLineAllocatedChargeMinor);
+  assertUnits(receivedPacks);
+  if (!Number.isSafeInteger(orderedPacks) || orderedPacks <= 0) {
+    throw new PharmacyReceivingError('INVALID_QUANTITY');
+  }
+  return divideRoundHalfUp(
+    orderLineAllocatedChargeMinor * Math.min(receivedPacks, orderedPacks),
+    orderedPacks
+  );
 }
 
 // ---------------------------------------------------------------------------
