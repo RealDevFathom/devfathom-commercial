@@ -55,7 +55,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // `PharmacySettlementError` can raise, because these are the failures a
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
-    'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+    'This business day is closed. New payments and drawer changes are blocked. The owner can reopen today for trading on Day close.',
+  // DEV-631: the owner's reopen-for-trading action on Day close.
+  DAY_NOT_CLOSED: 'This business day is not closed, so there is nothing to reopen.',
+  REOPEN_NOT_TODAY: "Only today's business day can be reopened for trading.",
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
@@ -81,7 +84,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
-  REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  REOPEN_REASON_REQUIRED: 'Reopening a closed day needs a recorded reason.',
   // Khata repayments (K4, DEV-731).
   PAYMENT_EXCEEDS_BALANCE:
     'That payment is more than the khata balance still owed. Enter the amount owed or less.',

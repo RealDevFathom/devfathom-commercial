@@ -49,6 +49,8 @@ export class PharmacySettlementError extends Error {
       | 'OPEN_DRAWER'
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
+      | 'DAY_NOT_CLOSED'
+      | 'REOPEN_NOT_TODAY'
   ) {
     super(reason);
   }
@@ -263,13 +265,24 @@ export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Da
   );
 }
 
-export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
-  await lockPharmacyDay(db, scope, date);
+/**
+ * DEV-631: a day is closed for trading while its latest close stands. An owner's
+ * reopen of that close opens the day again until the next close supersedes it.
+ * Reads without the day lock: callers that write take it first.
+ */
+export async function pharmacyDayClosedForTrading(db: ScopedDb, scope: LedgerScope, date: Date) {
   const close = await db.pharmacyDailyClose.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: date },
-    select: { id: true },
+    orderBy: { sequence: 'desc' },
+    select: { id: true, reopen: { select: { id: true } } },
   });
-  if (close) throw new PharmacySettlementError('DAY_CLOSED');
+  return Boolean(close && !close.reopen);
+}
+
+export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
+  await lockPharmacyDay(db, scope, date);
+  if (await pharmacyDayClosedForTrading(db, scope, date))
+    throw new PharmacySettlementError('DAY_CLOSED');
 }
 
 async function lockDrawerDay(db: ScopedDb, scope: LedgerScope, drawerSessionId: string) {
@@ -950,8 +963,11 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
     },
     orderBy: { sequence: 'desc' },
+    include: { reopen: { select: { id: true } } },
   });
-  if (prior && !input.reopenReason?.trim())
+  // DEV-631: closing a day the owner reopened for trading is a normal close; the
+  // reopen already carries its reason. Re-cutting a standing close still needs one.
+  if (prior && !prior.reopen && !input.reopenReason?.trim())
     throw new PharmacySettlementError('REOPEN_REASON_REQUIRED');
   const [sales, refunds, drawers, tenders] = await Promise.all([
     db.pharmacySale.findMany({

@@ -902,15 +902,23 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
-  await page.getByLabel('Opening cash', { exact: true }).fill('0');
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
-  await expect(
-    page.getByRole('alert').filter({ hasText: /This business day is closed/ })
-  ).toBeVisible();
-  // DEV-725: with the day closed no drawer opens, so no bill can be started that
-  // payment would then refuse: the opening step stays and scan/search is not offered.
-  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  // DEV-631: the counter says the day is closed before a bill is built; no drawer
+  // step or scan/search is offered, so nothing is added that payment would refuse.
+  await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
+    'The owner can reopen today for trading on Day close'
+  );
+  await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
+  // The owner reopens today for trading with a reason; the counter can open a drawer again.
+  await page.goto('/pharmacy/counter/close');
+  const reopen = page.getByRole('form', { name: 'Reopen today for trading' });
+  await reopen.getByLabel('Reason for reopening').fill('Closed early by mistake');
+  await pressControl(reopen.getByRole('button', { name: 'Reopen day for trading' }));
+  await expect(page.getByText(/Reopened for trading at .*: Closed early by mistake/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close and lock day' })).toBeVisible();
+  await page.goto('/pharmacy/counter');
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Business day closed' })).toHaveCount(0);
 });
 
 test('this spec drives the counter without a pointer', async () => {

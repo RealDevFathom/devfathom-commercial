@@ -49,7 +49,11 @@ import {
   clearLockout,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
-import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import {
+  closePharmacyDay,
+  readPharmacyClose,
+  reopenPharmacyDayForTrading,
+} from '@/lib/pharmacy/day-close';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
@@ -141,6 +145,7 @@ import {
   cutPharmacyDailyClose,
   lockOpenPharmacyDrawer,
   openPharmacyDrawer,
+  pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
@@ -997,6 +1002,34 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // DEV-631: the owner reopens today's closed business day for trading, with a
+  // reason. Owner-only: a delegated admin or a manager who may close the day may
+  // not reopen it. The reopen row records who, when and why; the request is audited.
+  reopenDay: adminProcedure
+    .input(
+      z
+        .object({ branchId, businessDate: closeDate, reason: z.string().trim().min(1).max(1000) })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.session?.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
+      await requireCloseAccess(ctx, input.branchId);
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        const reopen = await ctx.db.$transaction(async (tx) =>
+          reopenPharmacyDayForTrading(txDb(tx), scope, input)
+        );
+        annotateAudit(ctx, {
+          targetType: 'PharmacyDailyClose',
+          targetId: reopen.closeId,
+          metadata: { reopenId: reopen.id, businessDate: input.businessDate.toISOString().slice(0, 10) },
+        });
+        return reopen;
+      } catch (error) {
+        fail(error);
+      }
+    }),
   // #728: the owner's read-only cash-close anomaly check (close variance, refunds,
   // voids) with its narrative. Owner-only like the anomaly signals it sits beside;
   // a query that takes no day lock and writes nothing, so a flag never blocks or
@@ -1104,14 +1137,26 @@ export const pharmacySalesRouter = router({
     }),
   /** The OPEN drawer for this counter device, so the counter never offers a second open. */
   drawerStatus: protectedProcedure
-    .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
-    .query(async ({ ctx, input }) => ({
-      openDrawer: await readOpenPharmacyDrawer(
-        ctx.db,
-        await scopeFor(ctx, input.branchId),
-        input.deviceId
-      ),
-    })),
+    .input(
+      z
+        .object({
+          branchId,
+          deviceId: z.string().min(1),
+          // DEV-631: the counter's business day, so it can say the day is closed
+          // before a bill is built rather than only when payment is refused.
+          businessDate: closeDate.optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      return {
+        openDrawer: await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId),
+        ...(input.businessDate
+          ? { dayClosed: await pharmacyDayClosedForTrading(ctx.db, scope, input.businessDate) }
+          : {}),
+      };
+    }),
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
   // tRPC errors the counter can word, instead of a 500 with the raw reason.

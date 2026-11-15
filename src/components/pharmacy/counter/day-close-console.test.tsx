@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
+  reopenMutate: vi.fn(),
+  /** Whether the recorded close superseded an owner's reopen for trading. */
+  closeFollowsReopen: false,
   previewInput: vi.fn(),
   printZReport: vi.fn(),
   /** The zone the workspace has stored. */
@@ -65,6 +68,7 @@ vi.mock('@/lib/trpc', () => ({
               branchName: 'Main',
               timezone: mocks.zone,
               close: mocks.close,
+              closeFollowsReopen: mocks.closeFollowsReopen,
               totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
               tenderTotals: [
                 { type: 'CASH', amountMinor: 13000, refundMinor: 500, netMinor: 12500 },
@@ -86,6 +90,9 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
       closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      reopenDay: {
+        useMutation: () => ({ mutate: mocks.reopenMutate, reset: vi.fn(), isPending: false }),
+      },
       closeAnomalyCheck: {
         useQuery: () => ({
           isLoading: false,
@@ -123,10 +130,12 @@ beforeEach(() => {
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
+  mocks.closeFollowsReopen = false;
   mocks.checkFindings = [];
   mocks.checkError = null;
   mocks.extraDrawers = [];
   mocks.mutate.mockReset();
+  mocks.reopenMutate.mockReset();
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
 });
@@ -389,16 +398,18 @@ describe('day-close console', () => {
       })
     );
   });
-  it('warns that locking the day is permanent and cannot be reopened, before and after the close', () => {
+  it('warns that locking stops trading and only the owner can reopen today, before and after the close', () => {
     const view = render(<PharmacyDayCloseConsole />);
-    const warning = screen.getByRole('note', { name: 'Locking is permanent' });
-    expect(warning).toHaveTextContent('Locking this day cannot be undone.');
-    expect(warning).toHaveTextContent(/nobody, including the owner, can reopen/);
+    const warning = screen.getByRole('note', { name: 'Locking stops trading' });
+    expect(warning).toHaveTextContent('Locking this day stops trading on it.');
+    expect(warning).toHaveTextContent(
+      /Only the owner can reopen today.s business day for trading, with a reason; earlier days stay locked/
+    );
     // A superseding close report is a correction, not a reopen: the day stays locked.
     expect(warning).toHaveTextContent(
-      /re-record the close report with a reason, but that never reopens the day/
+      /re-record the close report with a reason, but that alone never reopens the day/
     );
-    expect(screen.getByLabelText(/locking this day is permanent/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/locking this day stops trading on it/)).toBeInTheDocument();
     mocks.close = {
       id: 'c1',
       sequence: 1,
@@ -410,8 +421,86 @@ describe('day-close console', () => {
     };
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
-      screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
-    ).toHaveTextContent(/re-record this close report with a reason, but that never reopens the day/);
+      screen.getByText(/The owner can reopen today for trading with a reason/)
+    ).toHaveTextContent(/re-record this close report with a reason, but that alone never reopens the day/);
+  });
+  it('lets the owner reopen today for trading with a reason (DEV-631)', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    const form = screen.getByRole('form', { name: 'Reopen today for trading' });
+    const submit = within(form).getByRole('button', { name: 'Reopen day for trading' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(form).getByLabelText('Reason for reopening'), {
+      target: { value: 'Closed early by mistake' },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    const today = workspaceToday(WORKSPACE_ZONE);
+    expect(mocks.reopenMutate).toHaveBeenCalledWith(
+      {
+        branchId: 'b',
+        businessDate: new Date(`${today}T00:00:00.000Z`),
+        reason: 'Closed early by mistake',
+      },
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+  it('offers no reopen for a past business day', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole initial={{ date: '2026-09-20' }} />);
+    expect(screen.getByText(/Only today.s business day can be reopened for trading/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reopen day for trading' })).toBeNull();
+  });
+  it('offers the next close once the day is reopened for trading', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: { reason: 'Closed early by mistake', actorId: 'owner', createdAt: new Date() },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Reopened for trading')).toBeInTheDocument();
+    expect(screen.getByText(/Reopened for trading at .*: Closed early by mistake/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Day closed\./)).not.toBeInTheDocument();
+  });
+  it('labels the reason of a close that followed a reopen as the variance note', () => {
+    mocks.close = {
+      id: 'c2',
+      sequence: 2,
+      supersedesCloseId: 'c1',
+      reason: 'Short by one',
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12400,
+      isFinal: true,
+      reopen: null,
+    };
+    mocks.closeFollowsReopen = true;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Variance note: Short by one')).toBeInTheDocument();
+    expect(screen.queryByText(/^Reopen reason:/)).not.toBeInTheDocument();
   });
   it('totals counted cash live from the drawers entered so far', () => {
     mocks.extraDrawers = [
@@ -489,7 +578,10 @@ describe('day-close console', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
     // Read-only: the panel offers no action beyond the existing close controls.
-    expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+    const panel = screen.getByText('Cash-close check').closest('[data-slot="section-card"]');
+    expect(
+      within(panel as HTMLElement).queryByRole('button', { name: /acknowledge|resolve|reopen/i })
+    ).toBeNull();
   });
   it('says a refused cash-close check is not permitted instead of offering a retry', () => {
     mocks.close = {

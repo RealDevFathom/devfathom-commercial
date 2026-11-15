@@ -1757,6 +1757,27 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByText('Drawer open')).toBeInTheDocument();
   });
 
+  it('DEV-631: says the business day is closed before a bill is built, with no scan or drawer step', () => {
+    const drawerStatus = query({ openDrawer, dayClosed: true });
+    mocks.queries.drawerStatus = drawerStatus;
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.getByRole('status', { name: 'Business day closed' })).toHaveTextContent(
+      /New bills, payments and drawer changes are blocked\. The owner can reopen today for trading on Day close/
+    );
+    expect(screen.getByText('Day closed')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV-631: an open business day keeps the scan field', () => {
+    mocks.queries.drawerStatus = query({ openDrawer, dayClosed: false });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByRole('status', { name: 'Business day closed' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Scan or search')).toBeInTheDocument();
+  });
+
   it('withholds the button until the drawer status is known', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
