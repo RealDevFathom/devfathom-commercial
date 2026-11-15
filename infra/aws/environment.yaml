@@ -3,7 +3,6 @@ Description: >-
   One DevFathom environment on AWS: network, PostgreSQL, uploads bucket,
   generated secrets, ECS Fargate web service behind an Application Load
   Balancer, the migration task, DNS records and the platform-jobs schedule.
-  Mirrors infra/environment.bicep (the Azure environment it replaces).
 
 Parameters:
   EnvironmentName:
@@ -110,7 +109,7 @@ Parameters:
   # AI providers (docs/ai-providers.md). The Anthropic and OpenAI keys live in
   # existing Secrets Manager secrets that this template neither creates nor
   # injects: the app reads them at runtime through the web task role. Bedrock
-  # uses the same role and no static keys. Azure is never configured here.
+  # uses the same role and no static keys.
   AiProvider:
     Type: String
     Default: ''

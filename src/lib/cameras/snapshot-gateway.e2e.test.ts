@@ -38,8 +38,6 @@ vi.mock('node:fs/promises', () => ({
     files.delete(name);
   }),
 }));
-vi.mock('@azure/identity', () => ({ DefaultAzureCredential: vi.fn() }));
-vi.mock('@azure/storage-blob', () => ({ BlobServiceClient: vi.fn() }));
 
 import {
   createGatewayServer,

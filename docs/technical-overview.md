@@ -12,17 +12,17 @@ Evidence: [`README.md`](../README.md), [`src/app/(app)/`](../src/app/(app)/), [`
 
 ```text
 Browser
-  -> Azure Container App (Next.js 16 App Router)
+  -> AWS ECS Fargate (Next.js 16 App Router)
        -> NextAuth / tenant and platform session handling
        -> tRPC routers + REST routes + SCIM/SSO routes
-       -> Prisma 7 -> PostgreSQL Flexible Server
-       -> Azure Blob (when configured; private filesystem locally)
-       -> Azure OpenAI / other provider adapters (Ask Fathom)
+       -> Prisma 7 -> RDS PostgreSQL
+       -> S3 uploads (when configured; private filesystem locally)
+       -> routed AI providers: Anthropic -> OpenAI -> Bedrock (Ask Fathom)
        -> Ably when configured (realtime fallback exists)
        -> self-hosted LiveKit/TURN (future media topology; not live)
 ```
 
-Azure staging is live and the latest reported run passed immutable build, migration/seed, deployment, and smoke in 7m40s. Isolated production resources are provisioned with the approved `ffec57b4` build; bootstrap, migrations, minimum replica, and dark-host health checks passed. Production is not publicly cut over: `www.devfathom.com` remains the existing marketing site, `admin.devfathom.com` is DNS-unconfigured, and no public custom domain is attached. See [`azure-deployment.md`](azure-deployment.md) and the [status ledger](status-ledger.md).
+Staging runs on AWS (ECS Fargate, RDS PostgreSQL and S3 in `ap-southeast-1`); see [`deploy/aws.md`](deploy/aws.md). The AWS production environment is not created yet. `www.devfathom.com` remains the existing marketing site and no public custom domain is attached. See the [status ledger](status-ledger.md).
 
 ## Tenancy and security boundary
 
@@ -47,7 +47,7 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 | Manual platform activation, contracts, entitlements, support access, audit | **IMPLEMENTED** | `src/app/platform/`, `src/lib/platform/`, `admin-platform/` docs |
 | Tenant RLS and isolation checks | **IMPLEMENTED** | Prisma migrations, `src/lib/tenancy/`, `scripts/verify-tenant-isolation.ts` |
 | OIDC/SAML, JIT, SCIM | **PARTIAL** | Routes and contract/build evidence exist; real customer IdP rollout remains required |
-| Ask Fathom provider adapter and credits | **PARTIAL** | `src/lib/ai/provider.ts`, assistant routes/tools, Azure staging evidence; provider and quota operations remain environment-dependent |
+| Ask Fathom provider adapter and credits | **PARTIAL** | `src/lib/ai/provider.ts`, assistant routes/tools; provider and quota operations remain environment-dependent |
 | Email | **PARTIAL** | Templates and delivery abstraction exist; staging is capture-only and production sender verification is pending |
 | Realtime chat | **PARTIAL** | Ably integration with graceful fallback; in-house realtime is planned |
 | Meetings schema/reconciliation | **IMPLEMENTED** | PR #23 merged to `main`; staging migration/backfill, seed, deploy, and smoke passed |
@@ -61,6 +61,6 @@ Evidence: [`admin-platform/api.md`](admin-platform/api.md), [`src/app/api/`](../
 - No `@devfathom.com` mailbox is provided; connected Gmail, Outlook, and generic IMAP/SMTP are the planned email direction.
 - No pricing, SLA, compliance certification, customer, savings, or benchmark claim is publishable without an owner-approved evidence source.
 - Production and staging databases must remain separate.
-- Planned production hosts are `www.devfathom.com` and `admin.devfathom.com` on one Container App. Currently `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent; the apex remains marketing.
+- Planned production hosts are `www.devfathom.com` and `admin.devfathom.com` on one deployment. Currently `www.devfathom.com` remains the GoDaddy marketing site and `admin.devfathom.com` is absent; the apex remains marketing.
 - `meet.devfathom.com` and `turn.devfathom.com` are future endpoints, not live services.
-- Azure is the platform of record. Legacy Vercel SDK/blob code is a partial migration dependency, not deployment guidance.
+- AWS is the deployment platform; see [`deploy/aws.md`](deploy/aws.md). Legacy Vercel SDK/blob code is a partial migration dependency, not deployment guidance.

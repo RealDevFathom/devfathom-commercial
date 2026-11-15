@@ -231,11 +231,18 @@ async function event(
   });
 }
 
-export async function createSale(db: ScopedDb, scope: LedgerScope, quotation = false) {
+export async function createSale(
+  db: ScopedDb,
+  scope: LedgerScope,
+  quotation = false,
+  /** A caller-specific precondition, checked after the shared gate and before the insert. */
+  beforeCreate?: () => Promise<void>
+) {
   // Every creation path (counter, offline replay, customer orders) shares this gate.
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.create',
   });
+  await beforeCreate?.();
   const sale = await db.pharmacySale.create({
     data: {
       organizationId: scope.organizationId,
@@ -287,6 +294,12 @@ async function addSaleLineWithAllocation(
   input: AddSaleLineInput,
   reservation?: ReservedSaleAllocation
 ) {
+  // #414: a sale opened while the licence was valid must not keep dispensing after it
+  // lapses. Every line path (counter, controlled, offline replay, customer orders)
+  // re-checks the persisted gate at dispense time, before any stock is allocated.
+  await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+    name: 'pharmacy.sale.dispense',
+  });
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
   // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
@@ -456,6 +469,12 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  // #414: re-opening a held sale or a quotation for selling is a sale-time act, so it
+  // needs a licence valid now. Hold and void stay available to wind a sale down.
+  if (to === 'OPEN')
+    await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+      name: `pharmacy.sale.${action}`,
+    });
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)

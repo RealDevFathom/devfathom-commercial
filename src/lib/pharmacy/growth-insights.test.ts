@@ -3,7 +3,10 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({ report: vi.fn(), draft: vi.fn() }));
-vi.mock('./marketing-report', () => ({ readPharmacyMarketingReport: mocks.report }));
+vi.mock('./marketing-report', () => ({
+  readPharmacyMarketingReport: mocks.report,
+  readPharmacyMarketingReportWindow: mocks.report,
+}));
 vi.mock('./marketing-service', async () => {
   const { z } = await import('zod');
   return {
@@ -12,7 +15,7 @@ vi.mock('./marketing-service', async () => {
     createMarketingDraft: mocks.draft,
   };
 });
-import { buildPharmacyGrowthInput, reviewGrowthInsight } from './growth-insights';
+import { buildPharmacyGrowthInput, growthPeriods, reviewGrowthInsight } from './growth-insights';
 
 const scope = {
   organizationId: 'org-synthetic',
@@ -219,5 +222,76 @@ describe('pharmacy loyalty and inventory-cost review guardrails', () => {
     ).resolves.toEqual({ decision: 'REJECT', campaignId: null, replay: false });
     expect($executeRaw).toHaveBeenCalledTimes(1);
     expect(mocks.draft).not.toHaveBeenCalled();
+  });
+});
+
+describe('workspace-local growth periods', () => {
+  const report = {
+    contradictory: 0,
+    delivered: 0,
+    attribution: { excludedUnverifiedLinks: 0, recoveredSalesMinor: 0 },
+  };
+
+  it('reads Meta campaign evidence over exact Pakistan-time day bounds', async () => {
+    mocks.report.mockResolvedValue(report);
+    const { db } = fakeDb({});
+    await buildPharmacyGrowthInput(
+      db,
+      { ...scope, timezone: 'Asia/Karachi' },
+      new Date('2026-08-31T19:00:00Z'),
+      new Date('2026-09-30T19:00:00Z'),
+      now
+    );
+    expect(mocks.report).toHaveBeenCalledWith(db, scope.organizationId, [scope.branchId], {
+      gte: new Date('2026-08-31T19:00:00Z'),
+      lt: new Date('2026-09-30T19:00:00Z'),
+    });
+    expect(mocks.report).toHaveBeenCalledWith(db, scope.organizationId, [scope.branchId], {
+      gte: new Date('2026-08-01T19:00:00Z'),
+      lt: new Date('2026-08-31T19:00:00Z'),
+    });
+  });
+
+  it('still skips the Meta report for sub-day bounds in the workspace zone', async () => {
+    const { db } = fakeDb({});
+    await buildPharmacyGrowthInput(db, { ...scope, timezone: 'Asia/Karachi' }, from, cutoff, now);
+    expect(mocks.report).not.toHaveBeenCalled();
+  });
+
+  it('counts calendar days across daylight-saving changes and keeps elapsed limits otherwise', () => {
+    const later = new Date('2027-01-01T00:00:00Z');
+    // 8 March 2026 in New York lasts 23 hours.
+    const shortDay = [new Date('2026-03-08T05:00:00Z'), new Date('2026-03-09T04:00:00Z')] as const;
+    expect(growthPeriods(...shortDay, later, 'America/New_York')).toEqual({
+      current: { from: '2026-03-08T05:00:00.000Z', cutoff: '2026-03-09T04:00:00.000Z' },
+      comparison: { from: '2026-03-07T05:00:00.000Z', cutoff: '2026-03-08T05:00:00.000Z' },
+    });
+    expect(() => growthPeriods(...shortDay, later)).toThrow('one to ninety days');
+    // 90 calendar days spanning the November fall-back last 90 days and one hour.
+    expect(() =>
+      growthPeriods(
+        new Date('2026-09-01T04:00:00Z'),
+        new Date('2026-11-30T05:00:00Z'),
+        later,
+        'America/New_York'
+      )
+    ).not.toThrow();
+    expect(() =>
+      growthPeriods(
+        new Date('2026-09-01T04:00:00Z'),
+        new Date('2026-12-01T05:00:00Z'),
+        later,
+        'America/New_York'
+      )
+    ).toThrow('one to ninety days');
+    // A 23-hour window that is not local midnights stays too short.
+    expect(() =>
+      growthPeriods(
+        new Date('2026-10-01T01:00:00Z'),
+        new Date('2026-10-02T00:00:00Z'),
+        later,
+        'Asia/Karachi'
+      )
+    ).toThrow('one to ninety days');
   });
 });

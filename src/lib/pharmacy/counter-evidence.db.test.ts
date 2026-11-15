@@ -62,7 +62,6 @@ beforeAll(async () => {
   directory = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), 'counter-evidence-')
   );
-  vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
   // Integrated tip: storage fails closed unless an adapter is named explicitly.
   vi.stubEnv('STORAGE_ADAPTER', 'local');
   // storage.ts resolves its local root on every call, so pin it to scratch

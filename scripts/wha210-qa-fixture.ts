@@ -25,7 +25,7 @@ import { RESTAURANT_MODULES } from '../src/lib/vertical-catalog';
 const ORG = 'org_devfathom';
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-/** In-memory object store: the real driver is Azure, which QA has no use for. */
+/** In-memory object store: the real driver is S3, which QA has no use for. */
 const objects = new Map<string, Buffer>();
 const runtime: MenuImportRuntime = {
   resolveAdapter: () => createFixtureMenuExtractionAdapter(),
