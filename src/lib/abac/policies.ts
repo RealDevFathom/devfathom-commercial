@@ -37,6 +37,7 @@ export const ALL_ACTIONS = [
   // station reads gate on. L2 owns this additive entry; declared here too so the
   // L3 lane compiles and tests standalone. Supervisor dedups at merge (the
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
+  'orders:take', // restaurant sign-in: explicit order-taking grant, no coarse-role fallback
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
   'orders:void', // restaurant: back-office order cancel / item void gate (org-role driven)
@@ -171,6 +172,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // evaluated by the DB `customDecision` path in `can()`; no static agency-role
   // policy, so a subject without an explicit grant is denied by default.
   'floor:manage': [],
+  'orders:take': [],
   'orders:read': [],
   'orders:manage': [],
   // Back-office order cancellation and item voids gate on the same `orders:void`
