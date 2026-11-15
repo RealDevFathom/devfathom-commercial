@@ -40,6 +40,7 @@ import {
   ruleSetOptions,
   rulesNotPublishedMessage,
   sameProvince,
+  rulesPendingLegalReview,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import {
@@ -261,10 +262,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       // Provisional anywhere is provisional everywhere: the regulatory guard
       // refuses the branch if *any* of the three fields it reads is unconfirmed,
       // so the surface must report the same thing rather than a rosier subset.
-      provisional:
-        categories.provisional ||
-        schedules.provisional ||
-        ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      provisional: rulesPendingLegalReview(ruleSet),
     };
   });
 }
@@ -526,6 +524,7 @@ export const pharmacyOnboardingRouter = router({
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
+            pendingLegalReview: rulesPendingLegalReview(jurisdictionRuleSet),
             ...status,
             // Legacy placeholders cannot be in force until a bound successor exists.
             premisesCompletionDue: status.inForce && isLegacyPlaceholderProfile(version),

@@ -586,10 +586,12 @@ export const pharmacyReportsRouter = router({
           },
           orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
           include: {
-            patient: true,
+            // DEV-832: the safety export names the patient and keeps age context;
+            // CNIC, phone and address stay behind the audited patient-record read.
+            patient: { select: { id: true, displayName: true, dateOfBirth: true } },
             medicine: true,
             lot: { include: { batch: true } },
-            prescriber: true,
+            prescriber: { select: { id: true, name: true, registrationNumber: true } },
           },
         });
       });

@@ -1,10 +1,14 @@
 import { SAML, ValidateInResponseTo } from '@node-saml/node-saml';
+import { NextResponse } from 'next/server';
 import { publicRequestUrl } from '@/lib/http-origin';
 import {
   callbackUrl,
   createAuthorizationState,
+  createSsoBrowserBinding,
   PrismaSamlCache,
   requireIdentityConnection,
+  SSO_BROWSER_BINDING_COOKIE,
+  ssoBrowserBindingCookieOptions,
 } from '@/lib/sso';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -19,12 +23,14 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
         { status: 409 }
       );
     }
+    // F10: bind the RelayState and the AuthnRequest ID to this browser.
+    const binding = createSsoBrowserBinding();
     const redirect = await withTenantDb(connection.organizationId, async (db) => {
       const relayState = await createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
         kind: 'SAML_RELAY',
-        payload: { returnTo: '/dashboard' },
+        payload: { returnTo: '/dashboard', browserBindingHash: binding.hash },
       });
       const saml = new SAML({
         callbackUrl: callbackUrl(request, 'saml', connection.id),
@@ -38,11 +44,19 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
         validateInResponseTo: ValidateInResponseTo.always,
         requestIdExpirationPeriodMs: 10 * 60_000,
         acceptedClockSkewMs: 120_000,
-        cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id),
+        cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id, {
+          hash: binding.hash,
+        }),
       });
       return saml.getAuthorizeUrlAsync(relayState, publicUrl.host, {});
     });
-    return Response.redirect(redirect);
+    const response = NextResponse.redirect(redirect, 302);
+    response.cookies.set(
+      SSO_BROWSER_BINDING_COOKIE,
+      binding.value,
+      ssoBrowserBindingCookieOptions()
+    );
+    return response;
   } catch (error) {
     console.error('[sso:saml:start]', error);
     return Response.json({ error: 'SAML sign-in could not be started.' }, { status: 400 });

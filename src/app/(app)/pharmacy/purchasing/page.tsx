@@ -131,7 +131,7 @@ export default async function PharmacyPurchasingPage({
       return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
     }
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
         <PurchasingTabs active={PURCHASING_ROUTE} />
         <SectionCard title="This surface could not load" titleLevel={2}>
@@ -140,7 +140,7 @@ export default async function PharmacyPurchasingPage({
           </p>
           <ReadRetry branchId={requestedBranch} />
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -238,7 +238,7 @@ export default async function PharmacyPurchasingPage({
   const advice = await readPharmacyAdviceAccess(ctx);
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={PURCHASING_ROUTE} />
       <NoticeBanner notice={notice} />
@@ -420,6 +420,6 @@ export default async function PharmacyPurchasingPage({
           />
         </SectionCard>
       ) : null}
-    </main>
+    </div>
   );
 }

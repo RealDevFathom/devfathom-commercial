@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { CacheProvider } from '@node-saml/node-saml';
 import type { OrganizationIdentityConnection } from '@/generated/prisma/client';
 import { resolveProvisionedDepartmentKey } from '@/lib/department-provisioning';
@@ -13,6 +13,63 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export const SSO_TICKET_COOKIE = 'df_sso_ticket';
+
+/**
+ * F10 / DEV-833 — login CSRF. Every SSO start sets an unpredictable value in
+ * this cookie and stores only its hash with the server-side transaction (the
+ * OIDC state, the SAML RelayState and the SAML AuthnRequest ID). A callback is
+ * honored only in the browser holding the matching value, so an unused IdP
+ * response transferred to another browser can no longer sign that browser into
+ * the sender's account.
+ */
+export const SSO_BROWSER_BINDING_COOKIE = 'df_sso_binding';
+const SSO_TRANSACTION_TTL_MS = 10 * 60_000;
+
+export function createSsoBrowserBinding() {
+  const value = randomBytes(32).toString('base64url');
+  return { value, hash: hashSsoBrowserBinding(value) };
+}
+
+export function hashSsoBrowserBinding(value: string) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * The SAML response is a cross-site form POST from the IdP, which a
+ * `SameSite=Lax` cookie never accompanies, so in production the binding cookie
+ * is `SameSite=None; Secure`. It is scoped to the SSO routes only.
+ */
+export function ssoBrowserBindingCookieOptions() {
+  const production = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: production,
+    sameSite: production ? ('none' as const) : ('lax' as const),
+    path: '/api/sso',
+    maxAge: SSO_TRANSACTION_TTL_MS / 1000,
+  };
+}
+
+/** The binding value this browser presented, or null when it holds none. */
+export function readSsoBrowserBinding(request: Request): string | null {
+  const header = request.headers.get('cookie');
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0) continue;
+    if (part.slice(0, index).trim() !== SSO_BROWSER_BINDING_COOKIE) continue;
+    const value = part.slice(index + 1).trim();
+    return value || null;
+  }
+  return null;
+}
+
+function matchesBrowserBinding(expectedHash: unknown, presented: string | null): boolean {
+  if (typeof expectedHash !== 'string' || !expectedHash || !presented) return false;
+  const actual = Buffer.from(hashSsoBrowserBinding(presented));
+  const expected = Buffer.from(expectedHash);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
 
 export type ActiveIdentityConnection = OrganizationIdentityConnection & {
   organization: { id: string; slug: string; status: string };
@@ -208,7 +265,7 @@ export async function createAuthorizationState(
       key,
       kind: input.kind,
       payload: JSON.parse(JSON.stringify(input.payload)),
-      expiresAt: new Date(Date.now() + (input.ttlMs ?? 10 * 60_000)),
+      expiresAt: new Date(Date.now() + (input.ttlMs ?? SSO_TRANSACTION_TTL_MS)),
     },
   });
   return key;
@@ -218,7 +275,8 @@ export async function consumeAuthorizationState(
   db: ScopedDb,
   connectionId: string,
   key: string,
-  kind: string
+  kind: string,
+  browserBinding: string | null
 ): Promise<Record<string, unknown>> {
   const state = await db.organizationSsoState.findFirst({
     where: {
@@ -230,12 +288,18 @@ export async function consumeAuthorizationState(
     },
   });
   if (!state) throw new Error('The identity authorization state is invalid or expired.');
+  const payload = state.payload as Record<string, unknown>;
+  // F10: the transaction must belong to the browser that started it. Checked
+  // before the state is consumed so a transferred callback changes nothing.
+  if (!matchesBrowserBinding(payload.browserBindingHash, browserBinding)) {
+    throw new Error('The identity authorization state was started in a different browser.');
+  }
   const consumed = await db.organizationSsoState.updateMany({
     where: { id: state.id, usedAt: null },
     data: { usedAt: new Date() },
   });
   if (consumed.count !== 1) throw new Error('The identity authorization state was already used.');
-  return state.payload as Record<string, unknown>;
+  return payload;
 }
 
 export function oidcClientSecret(connection: OrganizationIdentityConnection): string | undefined {
@@ -244,22 +308,33 @@ export function oidcClientSecret(connection: OrganizationIdentityConnection): st
     : undefined;
 }
 
+/**
+ * node-saml's InResponseTo cache. `browserBinding` (F10) is the start
+ * browser's binding hash when saving, and the callback browser's presented
+ * binding value when reading: an AuthnRequest ID is only "known" to the browser
+ * that issued it, so a response transferred to another browser fails
+ * InResponseTo validation.
+ */
 export class PrismaSamlCache implements CacheProvider {
   constructor(
     private readonly db: ScopedDb,
     private readonly organizationId: string,
-    private readonly connectionId: string
+    private readonly connectionId: string,
+    private readonly browserBinding: { hash: string } | { presented: string | null } | null = null
   ) {}
 
   async saveAsync(key: string, value: string) {
+    if (!this.browserBinding || !('hash' in this.browserBinding)) {
+      throw new Error('A SAML request must be bound to the browser that starts it.');
+    }
     await this.db.organizationSsoState.create({
       data: {
         organizationId: this.organizationId,
         identityConnectionId: this.connectionId,
         key,
         kind: 'SAML_REQUEST',
-        payload: { value },
-        expiresAt: new Date(Date.now() + 10 * 60_000),
+        payload: { value, browserBindingHash: this.browserBinding.hash },
+        expiresAt: new Date(Date.now() + SSO_TRANSACTION_TTL_MS),
       },
     });
     return { value, createdAt: Date.now() };
@@ -275,12 +350,21 @@ export class PrismaSamlCache implements CacheProvider {
         expiresAt: { gt: new Date() },
       },
     });
-    return state ? claimString((state.payload as Record<string, unknown>).value) : null;
+    if (!state) return null;
+    const payload = state.payload as Record<string, unknown>;
+    const presented =
+      this.browserBinding && 'presented' in this.browserBinding
+        ? this.browserBinding.presented
+        : null;
+    if (!matchesBrowserBinding(payload.browserBindingHash, presented)) return null;
+    return claimString(payload.value);
   }
 
   async removeAsync(key: string | null) {
     if (!key) return null;
     const value = await this.getAsync(key);
+    // A request this browser cannot see is left untouched.
+    if (value === null) return null;
     await this.db.organizationSsoState.updateMany({
       where: { key, identityConnectionId: this.connectionId, usedAt: null },
       data: { usedAt: new Date() },

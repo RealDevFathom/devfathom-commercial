@@ -21,7 +21,7 @@ export default async function PharmacyBranchAssignmentsPage() {
     initial = await caller.list();
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy"
           heading="Branch assignments"
@@ -32,12 +32,12 @@ export default async function PharmacyBranchAssignmentsPage() {
             A workspace administrator assigns cashiers and pharmacists to branches.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Branch assignments"
@@ -46,6 +46,6 @@ export default async function PharmacyBranchAssignmentsPage() {
       <SectionCard title="Who works at which branch" titleLevel={2}>
         <BranchAssignmentsConsole initial={initial} />
       </SectionCard>
-    </main>
+    </div>
   );
 }

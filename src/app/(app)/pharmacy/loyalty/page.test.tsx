@@ -217,8 +217,9 @@ describe('ordinary loyalty history page', () => {
     expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
   });
   it('has a textual loading state without motion', () => {
-    render(<LoyaltyLoading />);
-    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    const { container } = render(<LoyaltyLoading />);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Loading customer selection');
   });
 });
