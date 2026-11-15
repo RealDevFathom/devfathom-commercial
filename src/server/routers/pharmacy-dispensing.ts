@@ -5,6 +5,11 @@ import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
 
+// DEV-832: dispensing queues show who the prescription is for, nothing more.
+// CNIC, phone, address and date of birth stay behind the audited, masked
+// patient-read route (`pharmacyPrescriptions.readPatient`).
+const queuePatient = { select: { id: true, displayName: true } } as const;
+
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
   // a verification task never grants permission to credit AVAILABLE inventory.
@@ -39,7 +44,9 @@ export const pharmacyDispensingRouter = router({
           include: {
             medicine: true,
             presentation: true,
-            prescription: { include: { patient: true, prescriber: true } },
+            prescription: {
+              include: { patient: queuePatient, prescriber: { select: { id: true, name: true } } },
+            },
           },
         },
         decisions: { orderBy: { createdAt: 'asc' } },
@@ -50,9 +57,9 @@ export const pharmacyDispensingRouter = router({
   // Pharmacy Safety holder (the same pair the rail offers it to). Only a
   // dispensing pharmacist may record evidence (`recordSubstitution`), so the
   // read says which of the two this caller is.
-  // QA-7: patient records are a separate permission. Patient names are read and
-  // returned only for a caller holding `pharmacy:prescriptions` (the patient-
-  // record permission `readPatient` enforces); everyone else gets `patient: null`.
+  // QA-7: patient records are a separate permission. The patient (id and name
+  // only, per DEV-832) is read and returned only for a caller holding
+  // `pharmacy:prescriptions`, the patient-record permission `readPatient` enforces.
   substitutionWorkspace: auditedProtectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session!.user;
     const subject = subjectFromSession(user);
@@ -69,41 +76,33 @@ export const pharmacyDispensingRouter = router({
       });
     }
     const canViewPatients = await can(subject, 'pharmacy:prescriptions', undefined, options);
-    const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
-      orderBy: { requestedAt: 'desc' },
-      include: {
-        line: {
+    const orderBy = { requestedAt: 'desc' } as const;
+    const medicine = { include: { presentations: { orderBy: { presentation: 'asc' } } } } as const;
+    // Without that permission the patient relation is never read and every line
+    // carries `patient: null`.
+    const lines = canViewPatients
+      ? await ctx.db.pharmacyPharmacistReviewItem.findMany({
+          orderBy,
           include: {
-            medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
-            presentation: true,
-            prescription: true,
+            line: {
+              include: {
+                medicine,
+                presentation: true,
+                prescription: { include: { patient: queuePatient } },
+              },
+            },
           },
-        },
-      },
-    });
-    const patientIds = [...new Set(items.map((item) => item.line.prescription.patientId))];
-    const patients =
-      canViewPatients && patientIds.length > 0
-        ? await ctx.db.pharmacyPatient.findMany({
-            where: { id: { in: patientIds } },
-            select: { id: true, displayName: true },
+        })
+      : (
+          await ctx.db.pharmacyPharmacistReviewItem.findMany({
+            orderBy,
+            include: { line: { include: { medicine, presentation: true, prescription: true } } },
           })
-        : [];
-    const patientById = new Map(patients.map((patient) => [patient.id, patient]));
-    return {
-      canRecord,
-      canViewPatients,
-      lines: items.map((item) => ({
-        ...item,
-        line: {
-          ...item.line,
-          prescription: {
-            ...item.line.prescription,
-            patient: patientById.get(item.line.prescription.patientId) ?? null,
-          },
-        },
-      })),
-    };
+        ).map((item) => ({
+          ...item,
+          line: { ...item.line, prescription: { ...item.line.prescription, patient: null } },
+        }));
+    return { canRecord, canViewPatients, lines };
   }),
   enqueueReview: dispense
     .input(

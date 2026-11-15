@@ -116,6 +116,7 @@ function props(overrides: Partial<CounterRxPanelProps> = {}): CounterRxPanelProp
     onSearch: vi.fn(),
     onSelectPatient: vi.fn(),
     onClearPatient: vi.fn(),
+    canCapturePrescription: true,
     ...overrides,
   };
 }
@@ -253,6 +254,25 @@ describe('CounterRxPanel checks', () => {
     rerender(<CounterRxPanel {...props({ patient, state: 'denied' })} />);
     expect(screen.getByText(/a prescription-only line will stay blocked/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /prescription/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Capture prescription/ })).not.toBeInTheDocument();
+  });
+
+  it('withholds capture and photo upload, with an explanation, without prescription access', () => {
+    const { rerender } = render(
+      <CounterRxPanel
+        {...props({ patient, canCapturePrescription: false, onCapturePrescription: vi.fn() })}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /Capture prescription/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Photograph prescription/ })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Prescription capture needs a pharmacist or administrator/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Detach patient' })).toBeEnabled();
+
+    rerender(<CounterRxPanel {...props({ patient, canCapturePrescription: false })} />);
     expect(screen.queryByRole('link', { name: /Capture prescription/ })).not.toBeInTheDocument();
   });
 

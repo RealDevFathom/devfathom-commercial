@@ -177,6 +177,56 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     expect(postBookkeepingTransaction).not.toHaveBeenCalled();
   });
 
+  // DEV-821: the device id is client-sent. It only ever resolves the open drawer of that
+  // device on the caller's own branch (the router has already required an active branch
+  // assignment with counter access), whoever opened the till.
+  describe('drawer resolution from the client-sent device (DEV-821)', () => {
+    const tills = [
+      { id: 'drawer_1', branchId: 'branch_k', deviceId: 'device_1', openedByActorId: 'manager_1' },
+      { id: 'drawer_9', branchId: 'branch_other', deviceId: 'device_9', openedByActorId: 'x' },
+    ];
+    function withTills() {
+      const db = fixture();
+      db.pharmacyDrawerSession.findFirst.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          // By device for the lookup, by id for the cash movement's re-check.
+          const till = tills.find(
+            (row) =>
+              row.branchId === where.branchId &&
+              (where.id ? row.id === where.id : row.deviceId === where.deviceId) &&
+              where.organizationId === 'org_k' &&
+              (where.status === undefined || where.status === 'OPEN')
+          );
+          return till ? { id: till.id, businessDate } : null;
+        }
+      );
+      return db;
+    }
+
+    it('lets a cashier take cash on a till a manager opened', async () => {
+      const db = withTills();
+      await expect(recordKhataRepayment(db as never, scope, cashInput)).resolves.toMatchObject({
+        replayed: false,
+      });
+      expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ drawerSessionId: 'drawer_1', actorId: 'cashier_1' }),
+      });
+    });
+
+    it.each([
+      ['a device whose open drawer is on another branch', 'device_9'],
+      ['a forged device id', 'forged-device'],
+    ])('refuses %s before writing anything', async (_case, deviceId) => {
+      const db = withTills();
+      await expect(
+        recordKhataRepayment(db as never, scope, { ...cashInput, deviceId })
+      ).rejects.toMatchObject({ reason: 'DRAWER_NOT_OPEN' });
+      expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+    });
+  });
+
   it('refuses a payment larger than the balance owed', async () => {
     const db = fixture();
     await expect(

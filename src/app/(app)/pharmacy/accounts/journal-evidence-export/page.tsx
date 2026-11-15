@@ -54,7 +54,7 @@ export default async function JournalEvidenceExportPage({
     }
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy / accounts"
           heading="Journal evidence export"
@@ -64,7 +64,7 @@ export default async function JournalEvidenceExportPage({
           Access could not be verified. No CSV is available; retry or ask your workspace
           administrator.
         </State>
-      </main>
+      </div>
     );
   }
   const authzOptions = ctx ? { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip } : {};
@@ -82,7 +82,7 @@ export default async function JournalEvidenceExportPage({
     ).every(Boolean);
   if (!allowed || !ctx) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy / accounts"
           heading="Journal evidence export"
@@ -92,7 +92,7 @@ export default async function JournalEvidenceExportPage({
           Owner financial-report permission and Pharmacy Reports access are required. No CSV is
           available.
         </State>
-      </main>
+      </div>
     );
   }
 
@@ -152,7 +152,7 @@ export default async function JournalEvidenceExportPage({
 
   const coverage = evidence ? journalEvidenceCoverage(evidence) : null;
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy / accounts"
         heading="Journal evidence export"
@@ -232,6 +232,6 @@ export default async function JournalEvidenceExportPage({
           </div>
         </SectionCard>
       ) : null}
-    </main>
+    </div>
   );
 }

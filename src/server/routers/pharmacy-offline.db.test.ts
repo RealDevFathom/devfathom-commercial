@@ -234,6 +234,15 @@ beforeAll(async () => {
         role: 'ADMIN',
       },
     });
+    // DEV-831: the counter operator gate reads the live counter-family grant.
+    await db.userPermissionOverride.create({
+      data: {
+        userId: ACTOR,
+        capability: 'pharmacy:counter',
+        effect: 'ALLOW',
+        reason: 'Offline counter test operator',
+      },
+    });
   });
 }, 180_000);
 
@@ -805,6 +814,46 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(vi.mocked(can).mock.calls.at(-1)?.[1]).toBe('admin:access');
     expect((await f.call('snapshot', {}, { origin: 'https://other.test' })).status).toBe(403);
     expect((await f.call('snapshot', {}, { 'x-terminal-session': 'bad' })).status).toBe(401);
+  });
+  it('DEV-831 denies establishment, snapshots and replay once branch access is lost', async () => {
+    const f = await setup();
+    const before = await f.counts();
+    const { resolveTenantActor } = await import('@/lib/tenancy/tenant-actor');
+    const cashier = {
+      organization: { id: ORG_A },
+      session: { user: { id: ACTOR, role: 'EMPLOYEE' } },
+    } as unknown as Awaited<ReturnType<typeof resolveTenantActor>>;
+    const asCashier = () => vi.mocked(resolveTenantActor).mockResolvedValueOnce(cashier);
+    await inOrg(ORG_A, (db) =>
+      db.pharmacyBranchAssignment.create({
+        data: { branchId: f.fixture.branchId, userId: ACTOR, active: true },
+      })
+    );
+    try {
+      asCashier();
+      expect((await f.call('snapshot')).status).toBe(200);
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyBranchAssignment.updateMany({
+          where: { branchId: f.fixture.branchId, userId: ACTOR },
+          data: { active: false },
+        })
+      );
+      asCashier();
+      expect((await f.call('establish')).status).toBe(403);
+      asCashier();
+      expect((await f.call('snapshot')).status).toBe(403);
+      asCashier();
+      const replay = await f.replay();
+      expect(replay.status).toBe(403);
+      expect(await replay.json()).toEqual({ error: 'branch_forbidden' });
+      expect(await f.counts()).toEqual(before);
+    } finally {
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyBranchAssignment.deleteMany({
+          where: { branchId: f.fixture.branchId, userId: ACTOR },
+        })
+      );
+    }
   });
   it('refuses changed payload under an accepted key without another sale', async () => {
     const f = await setup();

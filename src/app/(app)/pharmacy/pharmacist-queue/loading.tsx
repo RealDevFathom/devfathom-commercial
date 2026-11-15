@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function Loading() {
   return (
-    <main className="space-y-6" aria-busy="true">
+    <div className="space-y-6" aria-busy="true">
       <PageHeader
         eyebrow="Pharmacy · Pharmacist review"
         heading="Pharmacist queue"
@@ -12,6 +12,6 @@ export default function Loading() {
       <SectionCard title="Loading review queue" titleLevel={2}>
         <div className="h-28 animate-pulse rounded-[var(--radius-sm)] bg-surface-sunken motion-reduce:animate-none" />
       </SectionCard>
-    </main>
+    </div>
   );
 }

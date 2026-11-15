@@ -1,5 +1,5 @@
 import * as Ably from 'ably';
-import { channelRoom, userRoom, typingRoom, PRESENCE_CHANNEL } from '@/lib/chat/contract';
+import { channelRoom, userRoom, typingRoom, presenceRoom } from '@/lib/chat/contract';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -15,7 +15,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
  *      • `channel:{id}` → subscribe   (server publishes; clients never do)
  *      • `typing:{id}`  → publish+subscribe (clients exchange typing pings)
  *      • `user:{id}`    → subscribe   (personal notifications)
- *      • `presence:global` → subscribe+presence (online roster)
+ *      • `presence:org:{orgId}` → subscribe+presence (online roster of the
+ *        verified organization only — never a cross-tenant room)
  *    Channels are derived from ChannelMember, so a user can't subscribe to a
  *    private channel / DM they don't belong to.
  *
@@ -60,7 +61,7 @@ export const GET = async (request: Request) => {
 
   const capability: Record<string, string[]> = {
     [userRoom(userId)]: ['subscribe'],
-    [PRESENCE_CHANNEL]: ['subscribe', 'presence'],
+    [presenceRoom(organization.id)]: ['subscribe', 'presence'],
   };
   for (const { channelId } of memberships) {
     capability[channelRoom(channelId)] = ['subscribe'];
