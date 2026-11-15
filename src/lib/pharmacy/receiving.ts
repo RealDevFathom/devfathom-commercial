@@ -319,42 +319,34 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
 
 /**
  * PUR-03: the share of an order line's allocated freight and other charges that
- * one delivery carries. It is prorated by paid canonical units, so a delivery in
- * a different pack size than ordered still carries the share of what arrived,
- * and it is cumulative: the charge already capitalised by earlier receipts and
- * earlier lots of the same order line is subtracted, and the running total is
- * capped at the ordered quantity. However the order line is split or
- * over-delivered, its lots together never carry more than the whole allocation.
+ * one receipt carries, prorated by the paid packs it delivers. The charge is
+ * spread over the cumulative packs received against the order line: this
+ * receipt carries only the increment between the packs already received
+ * (`priorReceivedPacks`) and the packs it adds. Both cumulative positions are
+ * capped at the ordered quantity, so an over-delivery never carries more than
+ * the whole allocation, and successive receipts never capitalize it twice.
  */
 export function receiptLineAllocatedChargeMinor(input: {
   orderLineAllocatedChargeMinor: number;
-  /** Paid (non-bonus) canonical units the order line was placed for. */
-  orderedPaidCanonicalUnits: number;
-  /** Paid canonical units already received against the order line elsewhere. */
-  previouslyReceivedPaidCanonicalUnits: number;
-  /** Paid canonical units this delivery brings. */
-  receivedPaidCanonicalUnits: number;
+  orderedPacks: number;
+  receivedPacks: number;
+  priorReceivedPacks?: number;
 }): number {
-  const {
-    orderLineAllocatedChargeMinor,
-    orderedPaidCanonicalUnits,
-    previouslyReceivedPaidCanonicalUnits,
-    receivedPaidCanonicalUnits,
-  } = input;
+  const { orderLineAllocatedChargeMinor, orderedPacks, receivedPacks } = input;
+  const priorReceivedPacks = input.priorReceivedPacks ?? 0;
   assertMoney(orderLineAllocatedChargeMinor);
-  assertUnits(previouslyReceivedPaidCanonicalUnits);
-  assertUnits(receivedPaidCanonicalUnits);
-  if (!Number.isSafeInteger(orderedPaidCanonicalUnits) || orderedPaidCanonicalUnits <= 0) {
+  assertUnits(receivedPacks);
+  assertUnits(priorReceivedPacks);
+  if (!Number.isSafeInteger(orderedPacks) || orderedPacks <= 0) {
     throw new PharmacyReceivingError('INVALID_QUANTITY');
   }
-  const allocatedThrough = (units: number) =>
+  const chargeUpTo = (packs: number) =>
     divideRoundHalfUp(
-      orderLineAllocatedChargeMinor * Math.min(units, orderedPaidCanonicalUnits),
-      orderedPaidCanonicalUnits
+      orderLineAllocatedChargeMinor * Math.min(packs, orderedPacks),
+      orderedPacks
     );
   return (
-    allocatedThrough(previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits) -
-    allocatedThrough(previouslyReceivedPaidCanonicalUnits)
+    chargeUpTo(priorReceivedPacks + receivedPacks) - chargeUpTo(priorReceivedPacks)
   );
 }
 
