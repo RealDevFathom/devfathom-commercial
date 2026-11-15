@@ -28,6 +28,7 @@ vi.mock('@/lib/pharmacy/customer-delivery', async (original) => ({
 vi.mock('@/lib/pharmacy/customer-ordering', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/customer-ordering')>()),
   listStaffCustomerOrders: vi.fn(async () => []),
+  placeCustomerOrder: vi.fn(async () => ({ id: 'order-1' })),
   transitionCustomerOrder: vi.fn(async () => ({ id: 'order-1' })),
   startCustomerOrderCheckout: vi.fn(async () => ({ id: 'order-1' })),
   completeCustomerOrder: vi.fn(async () => ({ id: 'order-1' })),
@@ -51,6 +52,7 @@ import { recordDeliveryCommand } from '@/lib/pharmacy/customer-delivery';
 import {
   completeCustomerOrder,
   listStaffCustomerOrders,
+  placeCustomerOrder,
   startCustomerOrderCheckout,
   transitionCustomerOrder,
 } from '@/lib/pharmacy/customer-ordering';
@@ -77,6 +79,7 @@ type Member = {
   role: 'EMPLOYEE' | 'ADMIN';
   rules: Rule[];
   systemRole?: { key: string; isSystem: boolean };
+  overrides?: Rule[];
   assigned: string[];
 };
 
@@ -87,7 +90,7 @@ function fixture(member: Member) {
     role: member.role,
     status: 'ACTIVE',
     organizationRole: { ...(member.systemRole ?? {}), permissions: member.rules },
-    permissionOverrides: [],
+    permissionOverrides: member.overrides ?? [],
   };
   const db = {
     user: {
@@ -97,6 +100,12 @@ function fixture(member: Member) {
           ? stored
           : null
       ),
+      findMany: vi.fn(async () => [{ id: 'runner-1', name: 'Runner' }]),
+    },
+    pharmacyCustomer: {
+      findMany: vi.fn(async () => [
+        { id: 'customer-1', displayName: 'Customer', phoneLast4: '4567' },
+      ]),
     },
     pharmacyBranch: {
       findMany: vi.fn(async (args: { where: { id: { in: string[] } } }) =>
@@ -108,6 +117,9 @@ function fixture(member: Member) {
         args.where.userId === 'user-a' && member.assigned.includes(args.where.branchId)
           ? { id: `assignment-${args.where.branchId}` }
           : null
+      ),
+      findMany: vi.fn(async (args: { where: { userId: string } }) =>
+        args.where.userId === 'user-a' ? member.assigned.map((branchId) => ({ branchId })) : []
       ),
     },
     $transaction: vi.fn(),
@@ -321,5 +333,150 @@ describe('DEV-845 pharmacyOrdering staff procedures: branch assignment', () => {
     });
     await expect(caller.staffQueue({ branchId: 'branch-a' })).rejects.toMatchObject(OUTSIDE);
     expect(listStaffCustomerOrders).not.toHaveBeenCalled();
+  });
+});
+
+const ORDER_LINE = {
+  medicineId: 'medicine-1',
+  presentationId: 'presentation-1',
+  packLevelId: 'pack-1',
+  saleUnit: 'PACK' as const,
+  quantity: 1,
+};
+const placeFor = (caller: Caller, customerId?: string) =>
+  caller.place({
+    branchId: 'branch-a',
+    ...(customerId ? { customerId } : {}),
+    fulfillment: 'COLLECT',
+    intendedPaymentMethod: 'CASH',
+    lines: [ORDER_LINE],
+  });
+
+describe('DEV-845 pharmacyOrdering.place on behalf of a customer', () => {
+  it('refuses a staff member ordering for a customer at a branch they are not assigned to', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: [ORDERS], assigned: ['branch-b'] });
+    await expect(placeFor(caller, 'customer-1')).rejects.toMatchObject(OUTSIDE);
+    expect(placeCustomerOrder).not.toHaveBeenCalled();
+  });
+
+  it('admits a staff member ordering for a customer at their assigned branch', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: [ORDERS], assigned: ['branch-a'] });
+    await expect(placeFor(caller, 'customer-1')).resolves.toEqual({ id: 'order-1' });
+    expect(placeCustomerOrder).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ customerId: 'customer-1', staff: true })
+    );
+  });
+
+  it('keeps a customer ordering for themselves free of the staff boundary', async () => {
+    const { caller, db } = fixture({ role: 'EMPLOYEE', rules: [], assigned: [] });
+    await expect(placeFor(caller)).resolves.toEqual({ id: 'order-1' });
+    expect(placeCustomerOrder).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ branchId: 'branch-a' }),
+      expect.objectContaining({ staff: false })
+    );
+    expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-845 tenant-wide access yields to an explicit DENY', () => {
+  it.each([
+    {
+      label: 'a user override',
+      overrides: [{ capability: 'reports:financial', effect: 'DENY' as const }],
+      rules: [ORDERS],
+    },
+    {
+      label: 'a role rule',
+      overrides: [],
+      rules: [ORDERS, { capability: 'pharmacy:refund', effect: 'DENY' as const }],
+    },
+  ])('refuses an unassigned tenant admin with a DENY on $label', async ({ overrides, rules }) => {
+    const { caller } = fixture({ role: 'ADMIN', rules, overrides, assigned: [] });
+    await expect(caller.staffQueue({ branchId: 'branch-a' })).rejects.toMatchObject(OUTSIDE);
+    expect(listStaffCustomerOrders).not.toHaveBeenCalled();
+    expect(annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('still admits a tenant admin with a DENY at a branch they are assigned to', async () => {
+    const { caller } = fixture({
+      role: 'ADMIN',
+      rules: [ORDERS],
+      overrides: [{ capability: 'reports:financial', effect: 'DENY' }],
+      assigned: ['branch-a'],
+    });
+    await caller.staffQueue({ branchId: 'branch-a' });
+    expect(listStaffCustomerOrders).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-845 runners and customers are scoped to assigned branches', () => {
+  it('returns nothing to an orders member with no active assignment', async () => {
+    const { caller, db } = fixture({ role: 'EMPLOYEE', rules: [ORDERS], assigned: [] });
+    await expect(caller.runners()).resolves.toEqual([]);
+    await expect(caller.customers()).resolves.toEqual([]);
+    expect(db.user.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyCustomer.findMany).not.toHaveBeenCalled();
+  });
+
+  it('limits an assigned member to runners and customers of their branches', async () => {
+    const { caller, db } = fixture({ role: 'EMPLOYEE', rules: [ORDERS], assigned: ['branch-a'] });
+    await caller.runners();
+    await caller.customers();
+    const atBranch = { some: { organizationId: 'org-a', branchId: { in: ['branch-a'] } } };
+    expect(db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          pharmacyBranchAssignments: {
+            some: { organizationId: 'org-a', active: true, branchId: { in: ['branch-a'] } },
+          },
+        }),
+      })
+    );
+    expect(db.pharmacyCustomer.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          active: true,
+          OR: [{ orders: atBranch }, { sales: atBranch }, { refillSubscriptions: atBranch }],
+        },
+      })
+    );
+  });
+
+  it.each([
+    { label: 'a tenant admin', role: 'ADMIN' as const, rules: [ORDERS] },
+    {
+      label: 'the system owner',
+      role: 'EMPLOYEE' as const,
+      rules: [{ capability: '*', effect: 'ALLOW' as const }],
+      systemRole: { key: 'owner', isSystem: true },
+    },
+  ])('gives $label the whole organization', async ({ role, rules, systemRole }) => {
+    const { caller, db } = fixture({ role, rules, systemRole, assigned: [] });
+    await caller.runners();
+    await caller.customers();
+    expect(db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', organizationRoleId: { not: null }, status: 'ACTIVE' },
+      })
+    );
+    expect(db.pharmacyCustomer.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', active: true } })
+    );
+  });
+
+  it('scopes a tenant admin with an explicit DENY to their assigned branches', async () => {
+    const { caller, db } = fixture({
+      role: 'ADMIN',
+      rules: [ORDERS],
+      overrides: [{ capability: 'reports:financial', effect: 'DENY' }],
+      assigned: [],
+    });
+    await expect(caller.customers()).resolves.toEqual([]);
+    expect(db.pharmacyCustomer.findMany).not.toHaveBeenCalled();
   });
 });

@@ -67,27 +67,17 @@ const outsideScope = () =>
   new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 
 /**
- * DEV-845: `pharmacy:orders` says what a staff member may do; this says where.
- * A staff procedure acts only at a branch the session user holds an active
- * assignment to. A live tenant admin or owner keeps every active branch, and
- * that exception is written to the audit entry. A solo owner assigned to the
- * branch passes on the assignment alone.
+ * DEV-845: a live tenant admin or owner reaches every active branch without an
+ * assignment. The user record decides, not the session role, and any explicit
+ * DENY rule (override or role) withdraws the exception, as in owner-access.
  */
-async function staffScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
-  const scope = await scopeFor(ctx, branch);
-  if (ctx.session?.user?.organizationId !== scope.organizationId) throw outsideScope();
-  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: branch,
-      userId: scope.actorId,
-      active: true,
-    },
-    select: { id: true },
-  });
-  if (assignment) return scope;
+async function hasTenantWideOrdersAccess(
+  ctx: TRPCContext,
+  organizationId: string,
+  actorId: string
+): Promise<boolean> {
   const member = await ctx.db.user.findFirst({
-    where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
+    where: { id: actorId, organizationId, status: 'ACTIVE' },
     select: {
       role: true,
       status: true,
@@ -104,7 +94,42 @@ async function staffScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerSc
       },
     },
   });
-  if (member && (member.role === 'ADMIN' || hasAllCapabilityAccess(member))) {
+  if (!member) return false;
+  const rules = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])];
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  return member.role === 'ADMIN' || hasAllCapabilityAccess(member);
+}
+
+/** The session tenant and actor, or UNAUTHORIZED / FORBIDDEN. */
+function staffActor(ctx: TRPCContext) {
+  const organizationId = ctx.entitlements?.organizationId;
+  const actorId = ctx.session?.user?.id;
+  if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (ctx.session?.user?.organizationId !== organizationId) throw outsideScope();
+  return { organizationId, actorId };
+}
+
+/**
+ * DEV-845: `pharmacy:orders` says what a staff member may do; this says where.
+ * A staff procedure acts only at a branch the session user holds an active
+ * assignment to. A live tenant admin or owner keeps every active branch, and
+ * that exception is written to the audit entry. A solo owner assigned to the
+ * branch passes on the assignment alone.
+ */
+async function staffScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  staffActor(ctx);
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: branch,
+      userId: scope.actorId,
+      active: true,
+    },
+    select: { id: true },
+  });
+  if (assignment) return scope;
+  if (await hasTenantWideOrdersAccess(ctx, scope.organizationId, scope.actorId)) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
       targetId: branch,
@@ -116,6 +141,25 @@ async function staffScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerSc
     return scope;
   }
   throw outsideScope();
+}
+
+/**
+ * DEV-845: the branches a branch-less staff read covers: `null` for a tenant
+ * admin or owner (every branch), otherwise the caller's active assignments.
+ */
+async function staffBranchIds(ctx: TRPCContext): Promise<string[] | null> {
+  const { organizationId, actorId } = staffActor(ctx);
+  if (await hasTenantWideOrdersAccess(ctx, organizationId, actorId)) return null;
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId,
+      userId: actorId,
+      active: true,
+      branch: { organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return rows.map((row) => row.branchId);
 }
 
 async function isStaff(ctx: TRPCContext) {
@@ -257,8 +301,17 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const staff = await isStaff(ctx);
+        // DEV-845: ordering for another customer is staff-only, so it takes the
+        // staff branch boundary; a customer ordering for themselves does not.
+        const onBehalf = staff && input.customerId !== undefined;
         return await ctx.db.$transaction(async (tx) =>
-          placeCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), { ...input, staff })
+          placeCustomerOrder(
+            txDb(tx),
+            onBehalf
+              ? await staffScopeFor(ctx, input.branchId)
+              : await scopeFor(ctx, input.branchId),
+            { ...input, staff }
+          )
         );
       } catch (error) {
         fail(error);
@@ -285,26 +338,49 @@ export const pharmacyOrderingRouter = router({
       )
     ),
 
-  runners: staffProcedure.query(({ ctx }) =>
-    ctx.db.user.findMany({
+  // DEV-845: runners at the caller's assigned branches (every branch for a tenant admin or owner).
+  runners: staffProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const branchIds = await staffBranchIds(ctx);
+    if (branchIds?.length === 0) return [];
+    return ctx.db.user.findMany({
       where: {
-        organizationId: ctx.entitlements.organizationId,
+        organizationId,
         organizationRoleId: { not: null },
         status: 'ACTIVE',
+        ...(branchIds
+          ? {
+              pharmacyBranchAssignments: {
+                some: { organizationId, active: true, branchId: { in: branchIds } },
+              },
+            }
+          : {}),
       },
       select: { id: true, name: true },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
-    })
-  ),
+    });
+  }),
 
-  customers: staffProcedure.query(({ ctx }) =>
-    ctx.db.pharmacyCustomer.findMany({
-      where: { organizationId: ctx.entitlements.organizationId, active: true },
+  // DEV-845: customers seen at the caller's assigned branches (an order, a sale
+  // or a refill subscription there); every customer for a tenant admin or owner.
+  customers: staffProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const branchIds = await staffBranchIds(ctx);
+    if (branchIds?.length === 0) return [];
+    const atBranch = branchIds ? { some: { organizationId, branchId: { in: branchIds } } } : null;
+    return ctx.db.pharmacyCustomer.findMany({
+      where: {
+        organizationId,
+        active: true,
+        ...(atBranch
+          ? { OR: [{ orders: atBranch }, { sales: atBranch }, { refillSubscriptions: atBranch }] }
+          : {}),
+      },
       select: { id: true, displayName: true, phoneLast4: true },
       orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
       take: 200,
-    })
-  ),
+    });
+  }),
 
   transition: staffProcedure
     .input(
