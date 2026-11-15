@@ -483,10 +483,13 @@ async function assertBranch(db: ScopedDb, scope: LedgerScope) {
 /**
  * Lock the lot row so two operators acting on the same lot serialize: the
  * second one re-reads the first one's draft or movement instead of racing it.
+ * FOR NO KEY UPDATE (DEV-825, stock-lock-order.ts): a sale that already holds a
+ * balance of this lot takes FOR KEY SHARE on it when it inserts its movement,
+ * and a FOR UPDATE here would make that wait the inverse of this path's order.
  */
 async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId: string) {
   await db.$queryRaw(
-    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId} FOR UPDATE`
+    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId} FOR NO KEY UPDATE`
   );
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },

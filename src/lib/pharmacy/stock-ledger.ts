@@ -19,6 +19,8 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { balanceLockOrderBy, lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
+
 import {
   arrangementFor,
   assertArrangementReconciles,
@@ -129,8 +131,8 @@ const CANDIDATE_JOINS = Prisma.sql`
  * refusal to name its reason, and a query that never returns recalled stock
  * cannot report that recalled stock was why nothing could be sold.
  *
- * @param lock take a row lock on each candidate balance, in FEFO order, for the
- * remainder of the caller's transaction.
+ * @param lock take a row lock on each candidate balance, in the global balance
+ * key order (stock-lock-order.ts), for the remainder of the caller's transaction.
  */
 async function loadCandidates(
   db: ScopedDb,
@@ -164,7 +166,9 @@ async function loadCandidates(
 
   // The lock covers the projection rows only. The joined lot and batch rows are
   // read-only here, and locking a batch would serialize every other branch
-  // holding the same batch.
+  // holding the same batch. DEV-825: the balances are locked in the global
+  // in-class key order (stock-lock-order.ts), not FEFO order, so a void, a
+  // reversal or a goods-in correction locking the same rows cannot invert it.
   if (!lock) return db.$queryRaw<CandidateRow[]>(query);
   // Lock first, then read availability in a SEPARATE statement. Under READ
   // COMMITTED a locking SELECT that waits keeps its original statement
@@ -178,8 +182,7 @@ async function loadCandidates(
       AND balance."branchId" = ${scope.branchId}
       AND batch."medicineId" = ${medicineId}
       AND balance."onHandUnits" > 0
-    ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
-             balance."inventoryLotId" ASC, balance."stockLocationId" ASC
+    ${balanceLockOrderBy('balance')}
     FOR UPDATE OF balance`;
   return db.$queryRaw<CandidateRow[]>(query);
 }
@@ -393,7 +396,7 @@ export async function reverseMovements(
   scope: LedgerScope,
   input: ReverseMovementsInput
 ) {
-  const reversals = [];
+  const originals = [];
   for (const movementId of input.movementIds) {
     const original = await db.pharmacyStockMovement.findFirst({
       where: {
@@ -403,7 +406,15 @@ export async function reverseMovements(
       },
     });
     if (!original) throw new PharmacyInventoryError('NOT_FOUND');
+    originals.push(original);
+  }
+  // DEV-825: lock every balance the reversals will write, in the global key
+  // order, before the first write. Writing them in movement order instead would
+  // lock them in an order a concurrent sale allocation can invert.
+  await lockStockBalances(db, scope, originals);
 
+  const reversals = [];
+  for (const original of originals) {
     reversals.push(
       await db.pharmacyStockMovement.create({
         data: {
@@ -567,9 +578,7 @@ export async function allocateReservedForSale(
   ) {
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   }
-  const query = Prisma.sql`
-    /* reserved_sale_buckets */
-    SELECT ${CANDIDATE_COLUMNS}
+  const reservedBuckets = Prisma.sql`
     ${CANDIDATE_JOINS}
     JOIN "pharmacy_medicines" medicine
       ON medicine.id = batch."medicineId" AND medicine."organizationId" = batch."organizationId"
@@ -588,11 +597,24 @@ export async function allocateReservedForSale(
       `
         ),
         ' OR '
-      )})
-    ORDER BY batch.id, lot.id, balance."stockLocationId"
-  `;
-  await db.$queryRaw(Prisma.sql`${query} FOR UPDATE OF batch, medicine, lot, balance`);
-  const rows = await db.$queryRaw<CandidateRow[]>(query);
+      )})`;
+  // DEV-825: batch, medicine, lot, then balance, each class in key order. One
+  // joined FOR UPDATE OF statement would lock them row by row instead.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    /* reserved_sale_buckets */
+    SELECT batch.id AS "batchId", medicine.id AS "medicineId", balance."branchId",
+           balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
+    ${reservedBuckets}`
+  );
+  const rows = await db.$queryRaw<CandidateRow[]>(Prisma.sql`
+    /* reserved_sale_buckets */
+    SELECT ${CANDIDATE_COLUMNS}
+    ${reservedBuckets}
+    ORDER BY batch.id, lot.id, balance."stockLocationId"`);
   const byBucket = new Map(
     rows.map((row) => [`${row.inventoryLotId}:${row.stockLocationId}`, row])
   );

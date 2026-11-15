@@ -28,7 +28,7 @@ import {
   authorizeControlledRestoration,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
-import { appendControlledRestorations } from './controlled-register';
+import { appendControlledRestorations, lockRegister } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
@@ -634,6 +634,9 @@ export async function changeSaleStatus(
       orderBy: { createdAt: 'asc' },
       select: { stockMovementId: true },
     });
+    // DEV-825: a controlled void writes the register, so it takes the register
+    // lock before the reversals lock any balance (stock-lock-order.ts).
+    if (witness) await lockRegister(db, scope.organizationId, scope.branchId);
     const reversals = await reverseMovements(db, scope, {
       movementIds: allocations.map((allocation) => allocation.stockMovementId),
       reason: reason ?? 'Sale voided',
@@ -1017,6 +1020,9 @@ export async function returnSaleLine(
   for (const row of line.returnLines)
     consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
   const moneyByAllocation = new Map(saleAllocationMoney(line).map((row) => [row.id, row]));
+  // DEV-825: a controlled return writes the register, so it takes the register
+  // lock before the batch and balance rows below (stock-lock-order.ts).
+  if (witness) await lockRegister(db, scope.organizationId, scope.branchId);
   for (const allocation of allocations) {
     const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
     consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
@@ -1026,7 +1032,7 @@ export async function returnSaleLine(
       // Batch lock shares the recall boundary; never restore unsafe stock as available.
       await db.$queryRaw(Prisma.sql`SELECT b.id FROM pharmacy_manufacturing_batches b
         JOIN pharmacy_inventory_lots l ON l."manufacturingBatchId"=b.id AND l."organizationId"=b."organizationId"
-        WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId} FOR UPDATE OF b`);
+        WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId} FOR NO KEY UPDATE OF b`);
       const lot = await db.pharmacyInventoryLot.findFirst({
         where: {
           id: allocation.inventoryLotId,

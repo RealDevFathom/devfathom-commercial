@@ -388,4 +388,25 @@ describe('pharmacySales.addLine controlled actor', () => {
       expect(addSaleLine).not.toHaveBeenCalled();
     }
   );
+
+  it('locks the sale row before the register lock, then dispenses (DEV-825)', async () => {
+    const { caller, lock, consent } = emergencyCallerFor(null);
+    consent.mockResolvedValue({ granted: true, revokedAt: null });
+    vi.mocked(addSaleLine).mockRejectedValue(new Error('stop after the lock order'));
+
+    await expect(caller.addLine(line)).rejects.toBeDefined();
+    const sql = lock.mock.calls.map(([strings]) => (strings as string[]).join('?'));
+    const saleLock = sql.findIndex((text) => text.includes('FROM pharmacy_sales'));
+    const registerLock = sql.findIndex(
+      (text, index) =>
+        text.includes('pg_advisory_xact_lock') &&
+        lock.mock.calls[index]!.slice(1).join('') === 'org-1:branch-1'
+    );
+    expect(saleLock).toBeGreaterThanOrEqual(0);
+    expect(lock.mock.calls[saleLock]!.slice(1)).toEqual(['sale-1', 'org-1', 'branch-1']);
+    expect(registerLock).toBeGreaterThan(saleLock);
+    expect(lock.mock.invocationCallOrder[registerLock]).toBeLessThan(
+      vi.mocked(addSaleLine).mock.invocationCallOrder[0]!
+    );
+  });
 });
