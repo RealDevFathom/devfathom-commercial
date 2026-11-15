@@ -10,6 +10,9 @@ import { PageHeader } from '@/components/ui/page-header';
 vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
   ManualPaymentSettingsPanel: () => null,
 }));
+vi.mock('@/components/pharmacy/counter/khata-reminder-settings-panel', () => ({
+  KhataReminderSettingsPanel: () => null,
+}));
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
