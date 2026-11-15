@@ -20,7 +20,7 @@ const entry = {
   ],
 };
 
-async function renderJournal(change: Record<string, unknown> = {}) {
+async function renderJournal(change: Record<string, unknown> = {}, journalLabels?: unknown) {
   const journalEntry = { ...entry, ...change };
   const html = renderToStaticMarkup(
     await FinancialStatements({
@@ -37,6 +37,7 @@ async function renderJournal(change: Record<string, unknown> = {}) {
           freshness: { retrievedAt: entry.occurredAt },
           definition: 'Posted journal',
           journal: [journalEntry],
+          journalLabels,
         }),
       } as never,
     })
@@ -85,6 +86,21 @@ describe('accounting journal presentation', () => {
     expect(summary.textContent).toContain('reversal');
     expect(summary.textContent).not.toContain('internal-user');
   });
+
+  it.each([
+    ['PHARMACY_TENDER', 'Pharmacy tender cmvzinternaltender', 'Payment received · Cash'],
+    ['PHARMACY_REFUND', 'Refund of tender cmvzinternaltender', 'Refund · Cash'],
+  ])(
+    'names the tender of %s entries, not its internal ID',
+    async (sourceKind, description, label) => {
+      const container = await renderJournal(
+        { sourceKind, description },
+        { paymentMethods: { 'internal-entry': 'Cash' }, lots: {} }
+      );
+      expect(container.querySelector('summary')!.textContent).toContain(label);
+      expect(container.textContent).not.toContain('cmvz');
+    }
+  );
 
   it('retains raw audit fields and exact amounts in the evidence export', () => {
     const csv = journalEvidenceCsv({

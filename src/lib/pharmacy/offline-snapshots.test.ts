@@ -33,6 +33,7 @@ const SAFETY_LEASE = {
   recallVersion: 0,
   licenceVersion: 1,
   ruleVersion: 1,
+  recalledBatchIds: [],
 };
 
 const PAYLOAD = { medicines: [{ id: 'med_1', priceMinor: 25_000 }], version: 4 };

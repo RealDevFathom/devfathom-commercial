@@ -27,6 +27,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { workspaceToday } from '@/lib/timezone';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 // `@/lib/db` reads DATABASE_URL on first use; everything that reaches it is
@@ -53,7 +54,8 @@ const FOREIGN = `harden_branch_foreign_${suffix}`;
 const UNKNOWN = `harden_branch_unknown_${suffix}`;
 const ACTOR = `harden_actor_${suffix}`;
 const DEVICE = 'counter-device-1';
-const businessDate = new Date('2026-10-20T00:00:00.000Z');
+// DEV-630: drawers and tenders book on the workspace's current business day, in its zone.
+const businessDate = new Date(`${workspaceToday('America/Chicago')}T00:00:00.000Z`);
 type Refusal = { code: string; message: string };
 /** `scopeFor`'s refusal. */
 const NOT_IN_WORKSPACE: Refusal = {
@@ -351,8 +353,9 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
   });
 
   it('answers the daily close’s typed refusals as typed errors, not as a 500', async () => {
-    // A later business day on the active branch, with a drawer still open.
-    const day = new Date('2026-10-21T00:00:00.000Z');
+    // The business day on the active branch, with a fresh drawer still open (the
+    // earlier one is counted and closed). DEV-630: only today takes a new drawer.
+    const day = businessDate;
     const drawer = await asAdmin((c) =>
       c.openDrawer({ branchId: ACTIVE, deviceId: DEVICE, businessDate: day, openingFloatMinor: 0 })
     );

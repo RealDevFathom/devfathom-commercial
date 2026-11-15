@@ -25,6 +25,7 @@ describe('AI-05 counter suggestions', () => {
         proposals={[proposal]}
         state="ready"
         prescriptionOnly
+        canOpenSubstitution
         disabled={false}
         onChoose={vi.fn()}
         onDecline={vi.fn()}
@@ -40,6 +41,24 @@ describe('AI-05 counter suggestions', () => {
     expect(screen.queryByRole('button', { name: 'Review option' })).not.toBeInTheDocument();
   });
 
+  it('does not link a member without dispense or safety to the substitution workspace (DEV-35)', () => {
+    render(
+      <CounterSubstituteProposals
+        proposals={[proposal]}
+        state="ready"
+        prescriptionOnly
+        canOpenSubstitution={false}
+        disabled={false}
+        onChoose={vi.fn()}
+        onDecline={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('link', { name: 'Pharmacist review' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review option' })).not.toBeInTheDocument();
+    expect(screen.getByText('Ask a pharmacist to review')).toBeInTheDocument();
+  });
+
   it('exposes an explicit decline action', () => {
     const onDecline = vi.fn();
     render(
@@ -47,6 +66,7 @@ describe('AI-05 counter suggestions', () => {
         proposals={[proposal]}
         state="ready"
         prescriptionOnly={false}
+        canOpenSubstitution={false}
         disabled={false}
         onChoose={vi.fn()}
         onDecline={onDecline}

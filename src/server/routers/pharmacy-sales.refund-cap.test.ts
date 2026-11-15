@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Integrated tip: refunds also post finance entries and request counter evidence; this suite is
 // about the returned-value cap, so those collaborators are stubbed.
@@ -116,6 +116,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
     pharmacyDrawerSession: { findFirst: vi.fn().mockResolvedValue({ id: 'drawer-1' }) },
     // F3: the business day is open.
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     pharmacyRefund: { create: vi.fn(async ({ data }) => ({ id: 'refund-1', ...data })) },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
@@ -136,6 +137,16 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   } as unknown as TRPCContext;
   return { db, caller: app.createCaller(context).pharmacySales };
 }
+
+// DEV-630: the API refunds on the branch's current business day, so the clock is
+// pinned to the fixture's day (14:00 in Karachi).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-29T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 for (const boundary of ['service', 'API'] as const) {
   describe(`${boundary} mandatory returned-value cap`, () => {

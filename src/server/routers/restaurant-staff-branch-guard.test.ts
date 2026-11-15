@@ -10,6 +10,8 @@ describe('Restaurant staff branch guard coverage', () => {
     'listDirectory',
     'list',
     'create',
+    'listInviteRoles',
+    'invite',
     'update',
     'setStatus',
     'listCredentials',

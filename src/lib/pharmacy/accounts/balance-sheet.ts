@@ -21,6 +21,7 @@ const CLASSIFICATIONS: Record<string, Classification> = {
   SALES_CLEARING: { section: 'assets', normalSide: 'DEBIT' },
   ACCOUNTS_PAYABLE: { section: 'liabilities', normalSide: 'CREDIT' },
   GOODS_RECEIVED_ACCRUAL: { section: 'liabilities', normalSide: 'CREDIT' },
+  MANUAL_NONTRADE_ACCRUAL: { section: 'liabilities', normalSide: 'CREDIT' },
   OPENING_BALANCE_EQUITY: { section: 'openingEquity', normalSide: 'CREDIT' },
   SALES_REVENUE: { section: 'currentResult', normalSide: 'CREDIT' },
   COST_OF_GOODS_SOLD: { section: 'currentResult', normalSide: 'DEBIT' },

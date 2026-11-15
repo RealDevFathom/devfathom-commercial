@@ -1,6 +1,25 @@
 import { ALL_VERTICALS } from '@/lib/vertical-catalog';
 import { workspaceToday } from '@/lib/timezone';
 
+export type AssistantReplyLocale = 'en' | 'ur';
+
+const URDU_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g;
+
+/** Urdu when the user's own text is mostly Arabic-script; English otherwise. */
+export function detectReplyLocale(text: string | null | undefined): AssistantReplyLocale {
+  const letters = (text ?? '').replace(/[^\p{L}]/gu, '');
+  if (!letters) return 'en';
+  const urdu = letters.match(URDU_SCRIPT)?.length ?? 0;
+  return urdu / letters.length >= 0.3 ? 'ur' : 'en';
+}
+
+/** Applies to every tool (finance, work packs, marketing, insights), not one tool. */
+export function localeInstruction(locale: AssistantReplyLocale): string {
+  return locale === 'ur'
+    ? '- The user is writing in Urdu. Write every sentence of the reply, including summaries of finance, work-pack, marketing and insight tool results, in Urdu (Nastaliq script, right-to-left). Keep figures, currency, dates, ids, names, links and tool-returned labels exactly as returned. Do not answer in English unless the user asks.'
+    : '- Reply in the language of the user’s latest message (English or Roman Urdu); if they switch to Urdu script, reply in Urdu. Keep figures, ids and links exactly as returned.';
+}
+
 export function assistantSystemPrompt(
   ctx: {
     name?: string | null;
@@ -8,7 +27,8 @@ export function assistantSystemPrompt(
     department?: string | null;
     vertical?: string | null;
   },
-  exposedToolNames: readonly string[] = []
+  exposedToolNames: readonly string[] = [],
+  locale: AssistantReplyLocale = 'en'
 ) {
   const vertical = ALL_VERTICALS.find((value) => value === ctx.vertical);
   const today = workspaceToday('Asia/Karachi');
@@ -42,5 +62,6 @@ AUTHORIZATION AND ACTIONS
 - Check the target and details before high-impact actions. If approval is denied, acknowledge and stop. After execution, state the actual success or refusal; never imply success from approval alone.
 
 VOICE
+${localeInstruction(locale)}
 Be concise, precise and understated. Lead with the answer. Use short Markdown when helpful. No filler or hype.`;
 }

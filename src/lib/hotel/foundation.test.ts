@@ -33,7 +33,8 @@ const priorCatalogDigests = {
   // Operator templates; the hashed catalog data differs only by those grants.
   // DEV-509 (#1071): the procurement, dispensing, safety and CRM module route
   // prefixes now name existing pages; the hashed data differs only by those four.
-  PHARMACY: 'a3e301ec26c4b31e7c807aff989528a399f8f959c1981db9361fa87af5ea27ab',
+  // DEV-519 (#1082): the Finance role template also grants reports:operational.
+  PHARMACY: 'b8439a76dac94c3aa42389df02a545e68a4e440c5eb11a78adb6e43aa8cb0356',
 };
 
 const property = {

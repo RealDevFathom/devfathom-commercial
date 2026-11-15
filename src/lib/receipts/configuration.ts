@@ -23,6 +23,12 @@ export const ReceiptLayoutSchema = z
     footerText: text(500),
     showOrderNumber: z.boolean(),
     showChannel: z.boolean(),
+    /**
+     * Pharmacy: the paper the browser/OS print route opens on by default. Absent
+     * means the thermal roll at `paperWidth`; 'A4' is an ordinary sheet printer.
+     * The ESC/POS job always uses `paperWidth` and ignores this preference.
+     */
+    browserPaper: z.enum(['THERMAL', 'A4']).optional(),
   })
   .strict();
 

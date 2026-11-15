@@ -316,6 +316,27 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
   });
 
+  it('DEV-641: says a queued payment waits for the connection', async () => {
+    let resolve!: (value: CounterTenderResult) => void;
+    const onTender = vi.fn(
+      () =>
+        new Promise<CounterTenderResult>((done) => {
+          resolve = done;
+        })
+    );
+    const { props, rerender } = setup({ onTender, queued: true });
+    expect(screen.getByRole('status')).not.toHaveTextContent(/Offline/);
+    enterCash();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Offline — this payment will be sent when the connection returns. Keep this bill open and do not take the money again.'
+    );
+    rerender(<CounterTenderPanel {...props} onTender={onTender} queued={false} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Taking payment… Keep this bill open.');
+    await act(async () => resolve({ status: 'accepted', message: 'Payment recorded.' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
+  });
+
   it('keeps cash change prominent after acceptance until the next bill mounts', async () => {
     const { rerender, props } = setup({ balanceMinor: 5000 });
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '100.00' } });
@@ -853,5 +874,77 @@ describe('DEV-716 inline Khata signup', () => {
     await screen.findByText('Payer: Sana');
     expect(consent()).not.toBeChecked();
     expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeDisabled();
+  });
+});
+
+describe('#722 split tender rows', () => {
+  it('takes Rs 600 cash, then offers the Rs 400 remainder to a Khata account within its limit', async () => {
+    const loadKhataAccounts = vi
+      .fn()
+      .mockResolvedValue([
+        { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 40000 },
+      ]);
+    const { props, rerender } = setup({ balanceMinor: 100000, loadKhataAccounts });
+    expect(screen.queryByLabelText('Recorded tenders')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '600' } });
+    expect(screen.getByText(/Remaining after this tender/)).toHaveTextContent('400.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment recorded.');
+    expect(props.onTender).toHaveBeenNthCalledWith(
+      1,
+      { type: 'CASH', amountMinor: 60000 },
+      { amount: '600', cashReceived: '' }
+    );
+
+    const cash = { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 };
+    rerender(<CounterTenderPanel {...props} balanceMinor={40000} tenders={[cash]} />);
+    const rows = within(screen.getByRole('list', { name: 'Recorded tenders' }));
+    expect(rows.getByRole('listitem')).toHaveTextContent(/1\. Cash · Recorded\s*600\.00/);
+    chooseTender('KHATA');
+    await screen.findByText(/Ledger balance/);
+    // The limit is checked against this row's remainder, not the whole bill.
+    expect(screen.queryByText(/exceeds the family credit limit/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '300' } });
+    expect(screen.getByText(/Tender 2\. Remaining after this/)).toHaveTextContent('100.00');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '' } });
+    expect(screen.queryByText(/Remaining after this tender/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(props.onTender).toHaveBeenCalledTimes(2));
+    expect(props.onTender).toHaveBeenLastCalledWith(
+      { type: 'KHATA', amountMinor: 40000, familyAccountId: 'family-a', ownerOverride: false },
+      { amount: '', cashReceived: '' }
+    );
+
+    rerender(
+      <CounterTenderPanel
+        {...props}
+        state="settled"
+        balanceMinor={0}
+        tenders={[cash, { tenderId: 'credit-a', type: 'CREDIT', amountMinor: 40000 }]}
+      />
+    );
+    expect(screen.getByText('Settled')).toBeInTheDocument();
+    const settled = within(screen.getByRole('list', { name: 'Recorded tenders' }));
+    expect(settled.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
+      '1. Cash · Recorded600.00',
+      '2. Khata · Recorded400.00',
+    ]);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+
+  it('blocks a Khata remainder over the account limit without an owner override', async () => {
+    const { props } = setup({
+      balanceMinor: 40000,
+      tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 }],
+      loadKhataAccounts: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'family-a', displayName: 'Family A', balanceMinor: 1, creditLimitMinor: 40000 },
+        ]),
+    });
+    chooseTender('KHATA');
+    await screen.findByText(/exceeds the family credit limit/);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
   });
 });
