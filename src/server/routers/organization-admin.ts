@@ -41,6 +41,18 @@ const departmentKey = z
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
 const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 
+/** DEV-848: SCIM token columns safe to return; `tokenHash` never leaves the server. */
+const SCIM_TOKEN_FIELDS = {
+  id: true,
+  organizationId: true,
+  name: true,
+  prefix: true,
+  expiresAt: true,
+  lastUsedAt: true,
+  revokedAt: true,
+  createdAt: true,
+} as const;
+
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
 }
@@ -831,6 +843,7 @@ export const organizationAdminRouter = router({
           tokenHash: createHash('sha256').update(token).digest('hex'),
           expiresAt: input.expiresAt,
         },
+        select: SCIM_TOKEN_FIELDS,
       });
       annotateAudit(ctx, {
         targetType: 'OrganizationScimToken',
@@ -839,7 +852,7 @@ export const organizationAdminRouter = router({
         description: 'Created SCIM provisioning token',
         metadata: { prefix: saved.prefix, expiresAt: saved.expiresAt },
       });
-      return { ...saved, tokenHash: undefined, token };
+      return { ...saved, token };
     }),
 
   revokeScimToken: adminProcedure
@@ -848,11 +861,13 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const token = await ctx.db.organizationScimToken.findFirst({
         where: { id: input.id, organizationId: id },
+        select: { id: true },
       });
       if (!token) throw new TRPCError({ code: 'NOT_FOUND', message: 'Token not found.' });
       const saved = await ctx.db.organizationScimToken.update({
         where: { id: token.id },
         data: { revokedAt: new Date() },
+        select: SCIM_TOKEN_FIELDS,
       });
       annotateAudit(ctx, {
         targetType: 'OrganizationScimToken',
