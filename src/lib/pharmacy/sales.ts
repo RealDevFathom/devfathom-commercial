@@ -388,7 +388,12 @@ async function voucherForRedemption(
   }
   let approverUserId: string;
   try {
-    approverUserId = await assertVoucherIssuerRights(db, scope.organizationId, voucher);
+    approverUserId = await assertVoucherIssuerRights(
+      db,
+      scope.organizationId,
+      scope.branchId,
+      voucher
+    );
   } catch (error) {
     if (error instanceof VoucherIssuerRevoked) throw new PharmacySaleError('VOUCHER_INVALID');
     throw error;
@@ -628,8 +633,7 @@ async function addSaleLineWithAllocation(
  * delivery path has already authorized voids its own order sale.
  */
 export type SaleTransitionAuthority =
-  | { kind: 'COUNTER'; actorIsManager: boolean }
-  | { kind: 'FAILED_DELIVERY_RETURN' };
+  { kind: 'COUNTER'; actorIsManager: boolean } | { kind: 'FAILED_DELIVERY_RETURN' };
 
 function mayVoidSale(
   authority: SaleTransitionAuthority | undefined,

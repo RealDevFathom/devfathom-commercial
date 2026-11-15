@@ -18,6 +18,13 @@ vi.mock('./regulatory', async () => ({
   ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
   assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
+// DEV-842: the CRM licence is resolved per test through `crmLicensed`.
+const crmLicensed = vi.hoisted(() => ({ value: true }));
+vi.mock('@/lib/entitlements', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements')),
+  resolveOrganizationEntitlements: vi.fn(async () => ({})),
+  hasModule: vi.fn(() => crmLicensed.value),
+}));
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
@@ -453,7 +460,11 @@ describe('DEV-27 voucher scoping at the POS', () => {
   function voucherDb(
     medicine: Record<string, unknown>,
     voucher: typeof storedVoucher | null = storedVoucher,
-    options: { issuer?: Record<string, unknown> | null; taken?: number } = {}
+    options: {
+      issuer?: Record<string, unknown> | null;
+      taken?: number;
+      branchActive?: boolean;
+    } = {}
   ) {
     const state = {
       allocations: 0,
@@ -469,6 +480,9 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      pharmacyBranch: {
+        findFirst: async () => (options.branchActive === false ? null : { id: 'branch-a' }),
+      },
       user: {
         findFirst: async () => issuerRow,
         findUnique: async () =>
@@ -580,6 +594,25 @@ describe('DEV-27 voucher scoping at the POS', () => {
       );
       expect(db.state.useWhere).toBeUndefined();
       expect(db.state.allocations).toBe(0);
+    }
+  });
+
+  it('DEV-842: refuses redemption once the branch is inactive or the CRM module is unlicensed', async () => {
+    const inactive = voucherDb(frontShop, storedVoucher, { branchActive: false });
+    await expect(addSaleLine(inactive as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_INVALID')
+    );
+    expect(inactive.state.useWhere).toBeUndefined();
+    crmLicensed.value = false;
+    try {
+      const unlicensed = voucherDb(frontShop);
+      await expect(addSaleLine(unlicensed as never, scope, line)).rejects.toThrow(
+        new PharmacySaleError('VOUCHER_INVALID')
+      );
+      expect(unlicensed.state.useWhere).toBeUndefined();
+      expect(unlicensed.state.allocations).toBe(0);
+    } finally {
+      crmLicensed.value = true;
     }
   });
 
