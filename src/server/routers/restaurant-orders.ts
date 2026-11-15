@@ -129,6 +129,32 @@ type ApproverInput = {
 };
 
 /**
+ * Require the acting staff profile to hold `orders:void` at the order's branch.
+ * An organization-wide administrator (`restaurant:configure`) is eligible on every
+ * branch, matching the staff-branch authorization model.
+ */
+async function assertActorCanVoidAtBranch(
+  ctx: TRPCContext,
+  actingStaffProfileId: string,
+  branchId: string
+): Promise<void> {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const organizationWide = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+  if (organizationWide) return;
+  if (!(await staffHasCapability(ctx.db, actingStaffProfileId, branchId, 'orders:void'))) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You are not authorized to void or cancel orders at this branch.',
+    });
+  }
+}
+
+/**
  * Back-office maker-checker for a void / cancel (H5 / C6). The acting staff is
  * the caller's own session staff profile — the `actor.staffProfileId` in the
  * input is ignored, so a caller cannot attribute the action to someone else.
@@ -154,6 +180,9 @@ async function withApprovedOrderCommand<T>(
   const actingStaffProfileId = await requireSessionStaffProfileId(ctx, {
     branchId: order?.branchId,
   });
+  // The acting profile must itself hold `orders:void` at the order's branch; the
+  // org-level route gate alone would let a manager void another branch's order.
+  if (order) await assertActorCanVoidAtBranch(ctx, actingStaffProfileId, order.branchId);
   const actor: CommandActor = {
     staffProfileId: actingStaffProfileId,
     deviceId: input.actor.deviceId,
