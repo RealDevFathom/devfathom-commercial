@@ -8,6 +8,7 @@ import {
 } from '@/components/restaurant/restaurant-staff-select';
 
 import { Button } from '@/components/ui/button';
+import { billLineOptionLabels } from '@/lib/restaurant/bill-line-option-label';
 import {
   Dialog,
   DialogContent,
@@ -109,6 +110,7 @@ function CompControl({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
+  const optionLabels = billLineOptionLabels(lines, eligibleLines);
   const managers = operators.filter(
     (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
   );
@@ -202,7 +204,7 @@ function CompControl({
                 <option value="">Select an item</option>
                 {eligibleLines.map((line) => (
                   <option key={line.id} value={line.id}>
-                    {line.quantity} × {line.name} — {line.lineSubtotal}
+                    {optionLabels.get(line.id)}
                   </option>
                 ))}
               </select>

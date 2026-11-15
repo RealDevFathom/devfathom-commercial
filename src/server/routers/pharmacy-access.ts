@@ -1,7 +1,7 @@
 import { can, subjectFromSession } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
 import { protectedProcedure, router } from '../trpc';
-import { canAccessPharmacyCounter } from './pharmacy-sales';
+import { canAccessPharmacyCounter, canClosePharmacyDay } from './pharmacy-sales';
 
 /**
  * The capabilities the pharmacy rail asks about, each exactly as the page
@@ -12,6 +12,9 @@ import { canAccessPharmacyCounter } from './pharmacy-sales';
  * - `pharmacy:dispense` — the pharmacist queue and substitution evidence.
  * - `reports:operational` — the pharmacy reports command centre.
  * - `pharmacy:counter` — the counter's capability family and active branch scope.
+ * - `pharmacy:close` — the day-close console, answered by the procedures' own
+ *   close gate for some branch (an administrator, a member granted
+ *   `pharmacy:close`, or a manager actively assigned to a branch).
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
@@ -19,6 +22,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:dispense',
   'reports:operational',
   'pharmacy:counter',
+  'pharmacy:close',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];
@@ -39,7 +43,9 @@ export const pharmacyAccessRouter = router({
         const allowed =
           capability === 'pharmacy:counter'
             ? await canAccessPharmacyCounter(ctx)
-            : await can(subject, capability, undefined, options);
+            : capability === 'pharmacy:close'
+              ? await canClosePharmacyDay(ctx)
+              : await can(subject, capability, undefined, options);
         return allowed ? capability : null;
       })
     );

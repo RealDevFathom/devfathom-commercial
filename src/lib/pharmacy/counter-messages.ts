@@ -59,6 +59,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-631: the owner's reopen-for-trading action on Day close.
   DAY_NOT_CLOSED: 'This business day is not closed, so there is nothing to reopen.',
   REOPEN_NOT_TODAY: "Only today's business day can be reopened for trading.",
+  // DEV-630: the server books money on today in the workspace zone only.
+  BUSINESS_DATE_NOT_CURRENT:
+    'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:

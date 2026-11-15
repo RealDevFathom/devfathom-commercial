@@ -114,6 +114,8 @@ import {
   declineSubstitute,
   findSubstituteProposals,
   PharmacySubstituteError,
+  rankSameSaltBrandsByMargin,
+  suggestHigherMarginBrandMix,
 } from '@/lib/pharmacy/substitute-finder';
 import { findUpsellSuggestions, UPSELL_MAX_TRIGGERS } from '@/lib/pharmacy/upsell-suggestions';
 import {
@@ -151,6 +153,7 @@ import {
   readPharmacyTenderOutcome,
   recordPharmacyCashMovement,
   refundPharmacyTender,
+  requireCurrentPharmacyBusinessDate,
 } from '@/lib/pharmacy/settlement';
 import {
   actorMayRefund,
@@ -227,6 +230,50 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+/**
+ * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
+ * (for the purchasing view) or a manager/owner may read brand margins.
+ */
+async function marginScopeFor(
+  ctx: TRPCContext,
+  branch: string,
+  actions: readonly ('pharmacy:dispense' | 'pharmacy:procurement' | 'pharmacy:manage')[]
+): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  let permitted = false;
+  for (const action of actions) {
+    if (await can(subject, action, undefined, { db: ctx.db, source: 'TRPC' })) {
+      permitted = true;
+      break;
+    }
+  }
+  if (!permitted) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacist or manager permission is required to view brand margins.',
+    });
+  }
+  // Branch stock, cost and margin stay inside the caller's active branch assignment.
+  // Only a session ADMIN of this organization may read any of its active branches.
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignment.some((row) => row.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
@@ -707,17 +754,19 @@ function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<L
   );
 }
 
-async function requireCloseAccess(ctx: TRPCContext, branch: string) {
+/**
+ * The day-close decision shared by the close procedures and the pharmacy rail.
+ * With `branch`, it is the procedures' gate for that branch. Without one, it
+ * answers whether the member may close at some branch, so the rail and the
+ * day-close console (DEV-127) never hide a close the procedures would allow.
+ */
+async function closeAccessDecision(ctx: TRPCContext, branch?: string): Promise<boolean> {
   const user = ctx.session?.user;
-  if (!user)
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Day-close permission is required to reconcile and close a day.',
-    });
-  if (user.role === 'ADMIN') return;
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
-  if (await can(subject, 'pharmacy:close', undefined, options)) return;
+  if (await can(subject, 'pharmacy:close', undefined, options)) return true;
   // DEV-31: a manager may close the day too, but only on a branch they are
   // actively assigned to. An explicit `pharmacy:close` DENY, from the role or a
   // user override, still wins over the manager grant.
@@ -758,18 +807,28 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
             where: {
               organizationId,
               userId: user.id,
-              branchId: branch,
+              ...(branch === undefined ? {} : { branchId: branch }),
               active: true,
               branch: { organizationId, active: true },
             },
             select: { branchId: true },
           });
-    if (member && assignment) return;
+    if (member && assignment) return true;
   }
-  throw new TRPCError({
-    code: 'FORBIDDEN',
-    message: 'Day-close permission is required to reconcile and close a day.',
-  });
+  return false;
+}
+
+/** Whether the signed-in member may close the day at some branch (rail and console). */
+export function canClosePharmacyDay(ctx: TRPCContext): Promise<boolean> {
+  return closeAccessDecision(ctx);
+}
+
+async function requireCloseAccess(ctx: TRPCContext, branch: string) {
+  if (!(await closeAccessDecision(ctx, branch)))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    });
 }
 
 export const pharmacySalesRouter = router({
@@ -913,6 +972,8 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
+          // DEV-630: money taken now books on today, never a client-chosen day.
+          await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
           return recordKhataRepayment(db, scope, input);
         });
       } catch (error) {
@@ -1128,9 +1189,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // DEV-630: a points tender settles the sale, so it books on today too.
+          await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
+          return redeemSalePoints(db, scope, input);
+        });
       } catch (error) {
         fail(error);
       }
@@ -1182,7 +1247,10 @@ export const pharmacySalesRouter = router({
           input.openingFloatMinor > 0
             ? await requireDrawerManagerAccess(ctx, input.branchId)
             : await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
+        // DEV-630: a drawer opens on the branch's current business day only.
+        return await ctx.db.$transaction(async (tx) =>
+          openPharmacyDrawer(txDb(tx), scope, input, { requireCurrentBusinessDate: true })
+        );
       } catch (error) {
         fail(error);
       }
@@ -1273,8 +1341,11 @@ export const pharmacySalesRouter = router({
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
+        // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
+          applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
+            requireCurrentBusinessDate: true,
+          })
         );
       }
       const scope = await khataScope(ctx, input.branchId, 'write');
@@ -1308,7 +1379,9 @@ export const pharmacySalesRouter = router({
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
-        const result = await applyPharmacyTender(db, scope, normalized);
+        const result = await applyPharmacyTender(db, scope, normalized, undefined, {
+          requireCurrentBusinessDate: true,
+        });
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
         await db.pharmacyKhataEvent.create({
@@ -1395,7 +1468,7 @@ export const pharmacySalesRouter = router({
                 code: 'FORBIDDEN',
                 message: 'You do not have permission for this action.',
               });
-            return refundPharmacyTender(db, scope, refund);
+            return refundPharmacyTender(db, scope, refund, { requireCurrentBusinessDate: true });
           }
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
@@ -1411,7 +1484,9 @@ export const pharmacySalesRouter = router({
               Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
             );
           }
-          const result = await refundPharmacyTender(db, scope, refund);
+          const result = await refundPharmacyTender(db, scope, refund, {
+            requireCurrentBusinessDate: true,
+          });
           if (charge && 'refundId' in result && typeof result.refundId === 'string') {
             const id = `khata-refund:${result.refundId}`;
             const prior = await db.pharmacyKhataEvent.findFirst({
@@ -2093,6 +2168,53 @@ export const pharmacySalesRouter = router({
         }
         throw error;
       }
+    }),
+  /** #745: pharmacist-facing same-salt/strength brand ranking by branch margin. */
+  sameSaltMarginRanking: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          limit: z.number().int().min(1).max(50).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      try {
+        return await rankSameSaltBrandsByMargin(ctx.db, scope, input);
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  /** #745: purchasing view; suggests a higher-margin brand mix within exact equivalents. */
+  higherMarginBrandMix: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          minUnitMarginGainMinor: z.number().int().nonnegative().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:procurement',
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return suggestHigherMarginBrandMix(ctx.db, scope, {
+        minUnitMarginGainMinor: input.minUnitMarginGainMinor,
+      });
     }),
   /**
    * #730: rule-based complementary-item suggestions for the bill. Read-only;

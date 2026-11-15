@@ -166,6 +166,7 @@ export async function issueOfflineSnapshot(
     recallVersion: 0,
     licenceVersion: 0,
     ruleVersion: 0,
+    recalledBatchIds: [],
   };
   if (
     input.expiresAt.getTime() <= input.issuedAt.getTime() ||
