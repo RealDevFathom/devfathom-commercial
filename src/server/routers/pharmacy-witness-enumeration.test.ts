@@ -32,6 +32,7 @@ function fixture(capability: string) {
         },
         permissionOverrides: [],
       }),
+      findMany: vi.fn().mockResolvedValue([]),
     },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch' }) },
@@ -133,6 +134,48 @@ describe('purchasing reversal witness enumeration', () => {
         }),
       })
     );
+  });
+  it('offers the sole pharmacist their own PIN profile, marked self', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy:safety', effect: 'ALLOW' },
+          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+          { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    });
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ id: 'receipt' });
+    f.db.restaurantStaffProfile.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'own-profile',
+        displayName: 'Owner',
+        user: { id: 'actor', organizationId: 'org', status: 'ACTIVE' },
+      },
+    ]);
+    await expect(query(f)).resolves.toEqual([{ id: 'own-profile', name: 'Owner', self: true }]);
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'actor' }) })
+    );
+  });
+  it('offers no self-witness while another pharmacist exists without a PIN', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy:safety', effect: 'ALLOW' },
+          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+          { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    });
+    f.db.user.findMany.mockResolvedValue([{ id: 'second-pharmacist', status: 'ACTIVE' }]);
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ id: 'receipt' });
+    await expect(query(f)).resolves.toEqual([]);
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledTimes(1);
   });
   it('offers nobody when the receipt is not posted in this branch', async () => {
     const f = fixture('pharmacy:safety');

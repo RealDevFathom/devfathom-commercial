@@ -1405,7 +1405,7 @@ function ReceiptDetail({
   notice: Notice | null;
   onPost: (form: FormData) => Promise<string>;
   onReverse: (form: FormData) => Promise<string>;
-  witnesses: ReadonlyArray<{ id: string; name: string }>;
+  witnesses: ReadonlyArray<{ id: string; name: string; self?: boolean }>;
   witnessLoadFailed: boolean;
 }) {
   return (
@@ -1579,7 +1579,11 @@ function ReceiptDetail({
                       ? 'Witness choices could not load. Check your pharmacy safety access and reload before reversing controlled stock.'
                       : 'No other active user with a dispensing PIN can witness this reversal.'
                   }
-                  hint="A different pharmacist must approve this controlled stock reversal."
+                  hint={
+                    witnesses.some((witness) => witness.self)
+                      ? 'You are the only pharmacist, so you witness this reversal with your own PIN. It is recorded in the audit log.'
+                      : 'A different pharmacist must approve this controlled stock reversal.'
+                  }
                   label="Reversal witness"
                   name="witnessStaffProfileId"
                   notice={notice}
