@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const sql = readFileSync(
   join(
     process.cwd(),
-    'prisma/migrations/20261116100400_pharmacy_drap_recall_review_queue/migration.sql'
+    'prisma/migrations/20261116120700_pharmacy_drap_recall_review_queue/migration.sql'
   ),
   'utf8'
 );
