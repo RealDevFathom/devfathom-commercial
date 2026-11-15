@@ -7,7 +7,7 @@ import { platformAuthentication } from './platform-control-plane';
  * admitted only with PHARMACY_E2E=1 and a disposable loopback database/origins.
  * Synthetic jurisdiction/evidence and the MFA fixture are never staging attestations.
  */
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import AxeBuilder from '@axe-core/playwright';
@@ -262,7 +262,8 @@ export async function freshPharmacyFirstSale(
   const colleaguePassword = `Wha1203!${randomUUID()}`;
   const branchName = `Test branch ${suffix}`;
   const medicineName = `Synthetic OTC ${suffix}`;
-  const barcode = `TEST${suffix}`;
+  // Digits only: the counter treats a code of six or more digits as a scan (scan-to-add).
+  const barcode = `8964${randomInt(100_000_000, 1_000_000_000)}`;
   const expiry = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
   const orderReference = `PO-${suffix}`;
   const click = async (target: Locator) => {
