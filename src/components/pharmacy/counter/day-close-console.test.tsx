@@ -283,6 +283,7 @@ describe('day-close console', () => {
   it('shows permission denial for a non-administrator', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Day close' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(
       'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.'
     );
