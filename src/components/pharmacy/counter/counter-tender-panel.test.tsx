@@ -27,22 +27,29 @@ function enterCash() {
 
 describe('DEV-618 payment panel', () => {
   it('shows the balance, split-payment guidance, and every tender option', () => {
-    setup();
+    setup({ manualSettings: {} });
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('250.00');
     expect(screen.getByText('PKR')).toBeVisible();
     expect(screen.getByLabelText('Amount')).toHaveAccessibleDescription(
       /Leave blank to pay the balance due. Enter a smaller amount to split payment across tenders./
     );
+    // DEV-713: no generic Wallet or legacy Credit; wallets appear once enabled.
     expect(screen.getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
       'CASH',
       'CARD',
       'BANK_TRANSFER',
-      'WALLET',
       'KHATA',
-      'CREDIT',
-      'RAAST',
-      'JAZZCASH',
-      'EASYPAISA',
+    ]);
+  });
+
+  it('DEV-713 offers only the wallets this branch has enabled', () => {
+    setup({ manualSettings: { JAZZCASH: { destination: '', allowReferenceSkip: false } } });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Cash',
+      'Card',
+      'Bank transfer',
+      'Khata / credit',
+      'JazzCash',
     ]);
   });
 
@@ -127,6 +134,26 @@ describe('#710 Raast / wallet counter controls', () => {
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
         { type: 'RAAST', amountMinor: 25000, payerName: 'Ayesha', referenceSkipped: true },
+        expect.anything()
+      )
+    );
+  });
+  it('DEV-713 takes an enabled wallet with no merchant details on file', async () => {
+    const { props } = setup({
+      manualSettings: { EASYPAISA: { destination: '', allowReferenceSkip: false } },
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'EASYPAISA' } });
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/you are recorded as the person who confirmed it/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Bilal' } });
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      target: { value: '9876' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'EASYPAISA', amountMinor: 25000, payerName: 'Bilal', providerRef: '9876' },
         expect.anything()
       )
     );
@@ -217,7 +244,7 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['CARD', 'WALLET', 'BANK_TRANSFER'])(
+  it.each(['BANK_TRANSFER'])(
     'keeps rejected %s selection and amount',
     async (type) => {
       const onTender = vi
@@ -236,6 +263,59 @@ describe('CounterTenderPanel acknowledgement', () => {
       );
     }
   );
+});
+
+describe('DEV-713 manual card tender', () => {
+  it('takes a terminal card with reference and approval code, no provider wording', async () => {
+    const { props } = setup();
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'CARD' } });
+    expect(screen.queryByText(/certified payment provider/)).not.toBeInTheDocument();
+    expect(screen.getByText(/recorded as the person who confirmed this payment/)).toBeVisible();
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: '4242' },
+    });
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A' } });
+    expect(screen.getByLabelText('Approval code')).toHaveAttribute('aria-invalid', 'true');
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'CARD', amountMinor: 25000, providerRef: '4242', approvalCode: 'A1B2C3' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+    await screen.findByText('Payment recorded.');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
+  });
+
+  it('keeps a rejected card selection, amount and slip details', async () => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'CARD' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: 'RRN123456' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '0042' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(screen.getByLabelText('Tender')).toHaveValue('CARD');
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('0042');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      { type: 'CARD', amountMinor: 12550, providerRef: 'RRN123456', approvalCode: '0042' },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
+
+  it('still shows a restored generic wallet attempt so it can be checked', () => {
+    setup({ state: 'error', initialDraft: { type: 'WALLET', amount: '10.00', cashReceived: '' } });
+    expect(screen.getByLabelText('Tender')).toHaveValue('WALLET');
+  });
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {
@@ -337,7 +417,8 @@ describe('CounterTenderPanel bill and interaction states', () => {
   it('keeps the safety block across tender types', () => {
     const { props } = setup({ blocked: true });
     enterCash();
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'CREDIT' } });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    expect(screen.getByLabelText('Tender')).toHaveValue('KHATA');
     expect(screen.getByText('Payment locked')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent('unresolved safety block');
     const button = screen.getByRole('button', { name: 'Take payment' });

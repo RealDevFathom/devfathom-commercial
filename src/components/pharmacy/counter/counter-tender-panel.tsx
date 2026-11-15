@@ -11,24 +11,34 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
+  manualCardCaptureSchema,
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
 
-/** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
+/**
+ * The tenders POS-05 recognises. DEV-713: Card is a payment received on a
+ * standalone terminal; JazzCash, Easypaisa and Raast are offered once the
+ * branch enables them. Generic Wallet and legacy Credit are not offered, and
+ * appear only so a restored attempt of that type can still be checked.
+ */
 const TENDER_TYPES = [
-  { value: 'CASH', label: 'Cash', requiresAdapter: false },
-  { value: 'CARD', label: 'Card', requiresAdapter: true },
-  { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
-  { value: 'WALLET', label: 'Wallet', requiresAdapter: true },
-  { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
-  { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false },
-  { value: 'RAAST', label: 'Raast / Wallet — Raast', requiresAdapter: false },
-  { value: 'JAZZCASH', label: 'Raast / Wallet — JazzCash', requiresAdapter: false },
-  { value: 'EASYPAISA', label: 'Raast / Wallet — Easypaisa', requiresAdapter: false },
+  { value: 'CASH', label: 'Cash', offered: true },
+  { value: 'CARD', label: 'Card', offered: true },
+  { value: 'BANK_TRANSFER', label: 'Bank transfer', offered: true },
+  { value: 'KHATA', label: 'Khata / credit', offered: true },
+  { value: 'JAZZCASH', label: 'JazzCash', offered: true },
+  { value: 'EASYPAISA', label: 'Easypaisa', offered: true },
+  { value: 'RAAST', label: 'Raast', offered: true },
+  { value: 'WALLET', label: 'Wallet', offered: false },
+  { value: 'CREDIT', label: 'Credit (legacy)', offered: false },
 ] as const;
 
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
+
+function isCounterTenderType(value: string): value is CounterTenderType {
+  return TENDER_TYPES.some((entry) => entry.value === value);
+}
 
 export type CounterTenderResult = {
   status: 'accepted' | 'rejected' | 'unknown';
@@ -68,6 +78,7 @@ export type CounterTenderPanelProps = {
     payerName?: string;
     providerRef?: string;
     referenceSkipped?: boolean;
+    approvalCode?: string;
   };
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
@@ -83,6 +94,7 @@ export type CounterTenderPanelProps = {
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
+      approvalCode?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -148,6 +160,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
     );
+    const [approvalCode, setApprovalCode] = useState(initialDraft?.approvalCode ?? '');
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
@@ -180,9 +193,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       type === 'CASH' && cashReceivedMinor !== null && amountMinor !== null && !cashShort
         ? cashReceivedMinor - amountMinor
         : null;
-    const selected = TENDER_TYPES.find((entry) => entry.value === type)!;
+    // Unknown settings (loading or failed) keep wallets visible but fail closed;
+    // known settings offer only the wallets this branch has enabled.
+    const options = TENDER_TYPES.filter(
+      (entry) =>
+        entry.value === type ||
+        (entry.offered &&
+          (!isManualTender(entry.value) || !manualSettings || Boolean(manualSettings[entry.value])))
+    );
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
+    const manualCard = type === 'CARD';
+    const cardCapture = manualCard
+      ? manualCardCaptureSchema.safeParse({ providerRef, approvalCode })
+      : null;
     const merchant = manual ? manualSettings?.[type] : undefined;
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
@@ -235,6 +259,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           Boolean(merchant) &&
           capture?.success === true &&
           (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
+      (!manualCard || cardCapture?.success === true) &&
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
@@ -276,6 +301,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     : { providerRef: capture.data.providerRef }),
                 }
               : {}),
+            ...(manualCard && cardCapture?.success ? cardCapture.data : {}),
           },
           { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
         );
@@ -287,6 +313,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setProviderRef('');
           setPayerName('');
           setReferenceSkipped(false);
+          setApprovalCode('');
           if (isKhata && loadKhataAccounts) {
             try {
               setAccounts(await loadKhataAccounts());
@@ -419,25 +446,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             value={type}
             disabled={!editable}
             onChange={(event) => {
-              setType(event.target.value as CounterTenderType);
+              if (!isCounterTenderType(event.target.value)) return;
+              setType(event.target.value);
               setProviderRef('');
               setPayerName('');
               setReferenceSkipped(false);
+              setApprovalCode('');
             }}
             className="h-11 w-full rounded-sm border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            {TENDER_TYPES.map((entry) => (
+            {options.map((entry) => (
               <option key={entry.value} value={entry.value}>
                 {entry.label}
               </option>
             ))}
           </select>
-          {selected.requiresAdapter ? (
-            <p className="text-sm text-text-muted">
-              Requires a certified payment provider. Without one configured, the server refuses this
-              tender rather than simulating an approval.
-            </p>
-          ) : null}
         </div>
 
         <div className="space-y-1.5">
@@ -465,14 +488,49 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
         </div>
 
+        {manualCard ? (
+          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+            <p className="text-sm text-text-muted">
+              Take the card on the shop’s terminal first. Enter the details from the approved slip;
+              you are recorded as the person who confirmed this payment.
+            </p>
+            <Label htmlFor="manual-card-reference">Card last 4 digits or terminal reference</Label>
+            <Input
+              id="manual-card-reference"
+              className="min-h-11 font-mono"
+              autoComplete="off"
+              value={providerRef}
+              maxLength={24}
+              disabled={!editable}
+              aria-invalid={providerRef !== '' && !/^[A-Za-z0-9]{4,24}$/.test(providerRef.trim())}
+              aria-describedby="manual-card-help"
+              onChange={(event) => setProviderRef(event.target.value)}
+            />
+            <Label htmlFor="manual-card-approval">Approval code</Label>
+            <Input
+              id="manual-card-approval"
+              className="min-h-11 font-mono"
+              autoComplete="off"
+              value={approvalCode}
+              maxLength={12}
+              disabled={!editable}
+              aria-invalid={approvalCode !== '' && !/^[A-Za-z0-9]{2,12}$/.test(approvalCode.trim())}
+              aria-describedby="manual-card-help"
+              onChange={(event) => setApprovalCode(event.target.value)}
+            />
+            <p id="manual-card-help" className="text-sm text-text-muted">
+              Letters and digits only: 4–24 for the reference, 2–12 for the approval code.
+            </p>
+          </div>
+        ) : null}
+
         {manual ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
             {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
             {!manualSettingsLoading && !manualSettingsError && !merchant ? (
               <p role="alert">
-                This branch has no merchant details for {type}. Ask an administrator to configure
-                them in Finance.
+                {type} is not enabled at this branch. Ask an administrator to enable it in Finance.
               </p>
             ) : null}
             {onReloadManualSettings ? (
@@ -505,8 +563,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   </>
                 ) : null}
                 <p className="text-sm text-text-muted">
-                  Confirm receipt in the merchant bank or wallet account before taking payment. This
-                  QR is static; the payer enters the amount shown.
+                  Confirm receipt in the merchant bank or wallet account before taking payment; you
+                  are recorded as the person who confirmed it.
+                  {merchant.qrImageDataUrl ? ' This QR is static; the payer enters the amount shown.' : ''}
                 </p>
                 <Label htmlFor="manual-payer-name">Payer’s name</Label>
                 <Input

@@ -162,12 +162,19 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
+    // reference. Each tender's exact shape is enforced in settlement.
     providerRef: z
       .string()
-      .regex(/^\d{4,6}$/)
+      .regex(/^[A-Za-z0-9]{4,24}$/)
       .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
+    /** DEV-713: approval code from a standalone card terminal slip. */
+    approvalCode: z
+      .string()
+      .regex(/^[A-Za-z0-9]{2,12}$/)
+      .optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -950,7 +957,8 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (isManualTender(input.type) || input.approvalCode !== undefined)
+      annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
@@ -960,7 +968,8 @@ export const pharmacySalesRouter = router({
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (isManualTender(input.type) || input.approvalCode !== undefined)
+      annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
         if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)

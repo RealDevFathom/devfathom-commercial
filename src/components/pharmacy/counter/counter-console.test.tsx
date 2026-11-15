@@ -376,6 +376,12 @@ function enterPayment(type = 'CASH') {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+  if (type === 'CARD') {
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: '4242' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+  }
   fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
 }
 
@@ -600,7 +606,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     ['BAD_REQUEST', 'DRAWER_NOT_OPEN', 'CASH'],
     ['FORBIDDEN', 'Access refused.', 'CASH'],
     ['UNAUTHORIZED', 'Sign in required.', 'CASH'],
-    ['BAD_REQUEST', 'UNCERTIFIED_PROVIDER', 'CARD'],
+    ['BAD_REQUEST', 'INVALID_MANUAL_CAPTURE', 'CARD'],
     ['BAD_REQUEST', 'CONSENT_REQUIRED', 'BANK_TRANSFER'],
   ])('retains a %s / %s rejection on the same bill', async (code, message, type) => {
     mocks.mutations.tender!.mockRejectedValue(refused(code!, message));
@@ -616,7 +622,12 @@ describe('PharmacyCounterConsole tender recovery', () => {
         saleId: 'sale-a',
         amountMinor: 12550,
         type,
-        idempotencyKey: `counter-tender:sale-a:${type}:12550`,
+        // DEV-713: a manual card attempt carries a fresh key, like other manual tenders.
+        idempotencyKey:
+          type === 'CARD'
+            ? expect.stringMatching(/^counter-tender:sale-a:CARD:[0-9a-f-]{36}$/)
+            : `counter-tender:sale-a:${type}:12550`,
+        ...(type === 'CARD' ? { providerRef: '4242', approvalCode: 'A1B2C3' } : {}),
       })
     );
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();

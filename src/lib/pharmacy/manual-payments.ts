@@ -10,13 +10,13 @@ export function isManualTender(type: string): type is ManualTenderType {
 // Embedded raster only: no remote tracking URLs, SVG, or executable uploads.
 export const merchantQrSchema = z.string().max(350_000)
   .regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/);
+// Enabling a wallet is the branch's decision to accept it. Merchant details are
+// optional: the counter shows an IBAN, till number or QR only when configured.
 const destinationSchema = z.object({
-  destination: z.string().trim().max(120),
+  destination: z.string().trim().max(120).default(''),
   qrImageDataUrl: merchantQrSchema.optional(),
   allowReferenceSkip: z.boolean().default(false),
-}).strict().refine((value) => Boolean(value.destination || value.qrImageDataUrl), {
-  message: 'Upload a merchant QR or enter an IBAN or till number.',
-});
+}).strict();
 export const manualPaymentSettingsSchema = z.object({
   RAAST: destinationSchema.optional(),
   JAZZCASH: destinationSchema.optional(),
@@ -55,31 +55,67 @@ export function validateManualTender(settings: unknown, capture: unknown) {
 export function validateManualTenderPolicy(policies: unknown, capture: unknown) {
   const parsed = manualTenderCaptureSchema.parse(capture);
   const destination = manualMerchantPoliciesSchema.parse(policies ?? {})[parsed.type];
-  if (!destination) throw new Error('This branch has no merchant details for this tender.');
+  if (!destination) throw new Error('This tender is not enabled at this branch.');
   if (parsed.referenceSkipped && !destination.allowReferenceSkip)
     throw new Error('This branch requires a transaction reference.');
   return parsed;
 }
 
+/**
+ * A card payment taken on a standalone terminal and confirmed by the cashier:
+ * the card's last 4 digits or the terminal reference, plus the approval code
+ * printed on the terminal slip. No provider API approves it.
+ */
+export const MANUAL_CARD_PROVIDER = 'MANUAL_TERMINAL';
+export const manualCardCaptureSchema = z.object({
+  providerRef: z.string().trim().regex(/^[A-Za-z0-9]{4,24}$/),
+  approvalCode: z.string().trim().regex(/^[A-Za-z0-9]{2,12}$/),
+}).strict();
+
+const confirmerSchema = z.object({
+  name: z.string().min(1),
+  count: z.number().int().positive().safe(),
+  amountMinor: z.number().int().nonnegative().safe(),
+}).strict();
 export const tenderTotalsSchema = z.array(z.object({
   type: z.string().min(1),
   amountMinor: z.number().int().nonnegative().safe(),
   refundMinor: z.number().int().nonnegative().safe(),
   netMinor: z.number().int().safe(),
+  /** Manually confirmed tenders (card terminal, wallets) by the person who confirmed them. */
+  confirmers: z.array(confirmerSchema).optional(),
 }).strict());
 
 export function aggregateTenderTotals(
-  tenders: readonly { type: string; amountMinor: number }[],
-  refunds: readonly { amountMinor: number; drawerSessionId: string | null; originalTender: { type: string } }[]
+  tenders: readonly { type: string; amountMinor: number; confirmedById?: string | null }[],
+  refunds: readonly { amountMinor: number; drawerSessionId: string | null; originalTender: { type: string } }[],
+  confirmerNames: ReadonlyMap<string, string> = new Map()
 ) {
-  const totals = new Map<string, { type: string; amountMinor: number; refundMinor: number; netMinor: number }>();
+  type Confirmer = z.infer<typeof confirmerSchema>;
+  const totals = new Map<string, { type: string; amountMinor: number; refundMinor: number; netMinor: number;
+    confirmers?: Map<string, Confirmer> }>();
   const row = (type: string) => {
     if (!totals.has(type)) totals.set(type, { type, amountMinor: 0, refundMinor: 0, netMinor: 0 });
     return totals.get(type)!;
   };
-  for (const tender of tenders) row(tender.type).amountMinor += tender.amountMinor;
+  for (const tender of tenders) {
+    const entry = row(tender.type);
+    entry.amountMinor += tender.amountMinor;
+    if (!tender.confirmedById) continue;
+    entry.confirmers ??= new Map();
+    const name = confirmerNames.get(tender.confirmedById) ?? 'Unknown user';
+    const confirmer = entry.confirmers.get(tender.confirmedById) ?? { name, count: 0, amountMinor: 0 };
+    confirmer.count += 1;
+    confirmer.amountMinor += tender.amountMinor;
+    entry.confirmers.set(tender.confirmedById, confirmer);
+  }
   for (const refund of refunds)
     row(refund.drawerSessionId ? 'CASH' : refund.originalTender.type).refundMinor += refund.amountMinor;
   return tenderTotalsSchema.parse([...totals.values()].sort((a, b) => a.type.localeCompare(b.type))
-    .map((value) => ({ ...value, netMinor: value.amountMinor - value.refundMinor })));
+    .map(({ confirmers, ...value }) => ({
+      ...value,
+      netMinor: value.amountMinor - value.refundMinor,
+      ...(confirmers ? { confirmers: [...confirmers.values()]
+        .sort((a, b) => a.name.localeCompare(b.name)) } : {}),
+    })));
 }

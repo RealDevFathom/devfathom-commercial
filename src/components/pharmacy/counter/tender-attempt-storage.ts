@@ -1,7 +1,11 @@
 import { z } from '@/lib/zod-csp';
 import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
-import { isManualTender, manualTenderCaptureSchema } from '@/lib/pharmacy/manual-payments';
+import {
+  isManualTender,
+  manualCardCaptureSchema,
+  manualTenderCaptureSchema,
+} from '@/lib/pharmacy/manual-payments';
 
 export type TenderAttemptInput = inferRouterInputs<AppRouter>['pharmacySales']['tenderOutcome'];
 export type TenderAttemptScope = { organizationId: string; accountId: string; branchId: string };
@@ -36,9 +40,10 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
-        providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+        providerRef: z.string().regex(/^[A-Za-z0-9]{4,24}$/).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
+        approvalCode: z.string().regex(/^[A-Za-z0-9]{2,12}$/).optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
@@ -80,9 +85,14 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const input = stored.input;
   const date = new Date(input.businessDate);
   if (isManualTender(input.type)) {
+    if (input.approvalCode !== undefined) throw new Error(TENDER_STORAGE_MESSAGE);
     manualTenderCaptureSchema.parse({ type: input.type, providerRef: input.providerRef,
       payerName: input.payerName, referenceSkipped: input.referenceSkipped });
-  } else if (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
+  } else if (input.type === 'CARD' && input.approvalCode !== undefined) {
+    if (input.payerName !== undefined || input.referenceSkipped !== undefined)
+      throw new Error(TENDER_STORAGE_MESSAGE);
+    manualCardCaptureSchema.parse({ providerRef: input.providerRef, approvalCode: input.approvalCode });
+  } else if (input.approvalCode !== undefined || input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   if (
