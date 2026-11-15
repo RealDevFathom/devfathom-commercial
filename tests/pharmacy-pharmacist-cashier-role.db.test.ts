@@ -14,7 +14,7 @@ const org = `qa622_${suffix}`;
 const taken = `${org}_taken`;
 const restaurant = `${org}_restaurant`;
 const migration = readFileSync(
-  'prisma/migrations/20261115230000_pharmacy_pharmacist_cashier_role/migration.sql',
+  'prisma/migrations/20261116100200_pharmacy_pharmacist_cashier_role/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
