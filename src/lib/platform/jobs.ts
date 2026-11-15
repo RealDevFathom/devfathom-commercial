@@ -25,6 +25,9 @@ type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
 
 const STALE_JOB_MS = 15 * 60_000;
+
+/** A failure that no retry can cure: the job is marked FAILED at once. */
+class PermanentJobError extends Error {}
 const RETRY_BASE_MS = 30_000;
 const CONTROL_PLANE_TABLES = new Set([
   'organizations',
@@ -651,7 +654,7 @@ async function recordAuditLogPurge(
   job: PlatformJob,
   organizationId: string,
   actorPlatformUserId: string
-): Promise<void> {
+): Promise<number> {
   const [summary] = await db.$queryRaw<
     Array<{ rows: number; earliest: Date | null; latest: Date | null; digest: string | null }>
   >(Prisma.sql`
@@ -685,13 +688,16 @@ async function recordAuditLogPurge(
     select: { id: true },
   });
   await db.$queryRaw`SELECT set_config('app.audit_purge_record_id', ${record.id}, true)`;
+  return summary?.rows ?? 0;
 }
 
 async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult> {
   const organizationId = requiredOrganization(job);
   const actorPlatformUserId = job.requestedById;
   if (!actorPlatformUserId) {
-    throw new Error('A purge requires the platform actor who requested it.');
+    throw new PermanentJobError(
+      'A purge requires the platform actor who requested it: this job names no requesting platform administrator. Schedule the purge again from the platform console.'
+    );
   }
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
@@ -735,7 +741,7 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   // have no vanished parent row to recognise it by. Transaction-local, and
   // scoped to the organization this job names.
   await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
-  await recordAuditLogPurge(db, job, organizationId, actorPlatformUserId);
+  const recordedAuditRows = await recordAuditLogPurge(db, job, organizationId, actorPlatformUserId);
   // The customer and message rows below are about to be destroyed. Keep only
   // pseudonymous consent state and its effective date, never contact details or
   // message content, so a later complaint can be answered without retaining the
@@ -756,6 +762,15 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
       organizationId
     );
     if (count) counts[table] = count;
+  }
+  // Audit rows are only ever added, so the DELETE saw every row the record
+  // summarised; an equal count means it saw no others either. A row written
+  // in between (a failed sign-in, say) would make the permanent record
+  // understate the purge: roll everything back and let the job retry.
+  if ((counts.audit_logs ?? 0) !== recordedAuditRows) {
+    throw new Error(
+      `Audit rows changed during the purge: recorded ${recordedAuditRows}, deleted ${counts.audit_logs ?? 0}.`
+    );
   }
   await db.organization.update({
     where: { id: organizationId },
@@ -857,7 +872,7 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  const retry = job.attempts < job.maxAttempts;
+  const retry = !(error instanceof PermanentJobError) && job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({
       where: { id: job.id },

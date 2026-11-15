@@ -59,7 +59,18 @@ function job(type: string, extra = {}) {
     ...extra,
   };
 }
-function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
+const AUDIT_SUMMARY = {
+  rows: 2,
+  earliest: new Date('2026-01-02T03:04:05.000Z'),
+  latest: new Date('2026-09-10T11:12:13.000Z'),
+  digest: 'abc123',
+};
+const NO_AUDIT = { rows: 0, earliest: null, latest: null, digest: null };
+function queue(
+  item: ReturnType<typeof job>,
+  dependencies: unknown[] = [],
+  auditSummary: unknown = NO_AUDIT
+) {
   let claimed = false;
   m.query.mockImplementation(async (sql: { text?: string; strings?: string[] }) => {
     const text = sql.text ?? sql.strings?.join('') ?? '';
@@ -69,15 +80,7 @@ function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
       return [{ id: item.id }];
     }
     if (text.includes('WITH tenant_tables')) return dependencies;
-    if (text.includes('FROM "audit_logs"'))
-      return [
-        {
-          rows: 2,
-          earliest: new Date('2026-01-02T03:04:05.000Z'),
-          latest: new Date('2026-09-10T11:12:13.000Z'),
-          digest: 'abc123',
-        },
-      ];
+    if (text.includes('FROM "audit_logs"')) return [auditSummary];
     return [];
   });
   m.update.mockImplementation(async ({ data }) => (data.status === 'RUNNING' ? item : data));
@@ -320,9 +323,12 @@ describe('composed platform worker boundaries', () => {
     }
   );
   it('writes the permanent platform record of the audit purge before deleting any tenant row', async () => {
-    queue(job('PURGE_DATA', { payload: { reason: 'Contract ended; retention elapsed.' } }), [
-      { tableName: 'audit_logs', parentTable: null, nullableColumns: [] },
-    ]);
+    queue(
+      job('PURGE_DATA', { payload: { reason: 'Contract ended; retention elapsed.' } }),
+      [{ tableName: 'audit_logs', parentTable: null, nullableColumns: [] }],
+      AUDIT_SUMMARY
+    );
+    m.execute.mockResolvedValue(2);
     await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
     expect(m.platformAudit).toHaveBeenCalledWith({
       data: {
@@ -374,18 +380,46 @@ describe('composed platform worker boundaries', () => {
       })
     );
   });
-  it('refuses a purge with no platform actor before recording or deleting anything', async () => {
-    queue(job('PURGE_DATA', { attempts: 3, requestedById: null }), [
+  it('fails a purge with no platform actor at once, before recording or deleting anything', async () => {
+    // First attempt of three: no retry can supply the missing actor.
+    queue(job('PURGE_DATA', { attempts: 1, requestedById: null }), [
       { tableName: 'audit_logs', parentTable: null, nullableColumns: [] },
     ]);
-    await expect(processPlatformJobs(1)).resolves.toMatchObject({ failed: 1, succeeded: 0 });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({
+      failed: 1,
+      retried: 0,
+      succeeded: 0,
+    });
     expect(m.platformAudit).not.toHaveBeenCalled();
     expect(m.execute).not.toHaveBeenCalled();
     expect(m.organizationUpdate).not.toHaveBeenCalled();
     expect(m.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          error: 'A purge requires the platform actor who requested it.',
+          status: 'FAILED',
+          error: expect.stringContaining(
+            'A purge requires the platform actor who requested it: this job names no requesting platform administrator.'
+          ),
+        }),
+      })
+    );
+  });
+  it('rolls the purge back when audit rows arrive between the record and the delete', async () => {
+    queue(
+      job('PURGE_DATA', { attempts: 1 }),
+      [{ tableName: 'audit_logs', parentTable: null, nullableColumns: [] }],
+      AUDIT_SUMMARY
+    );
+    // The record summarised two rows; a third was written before the DELETE.
+    m.execute.mockResolvedValue(3);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ retried: 1, succeeded: 0 });
+    expect(m.organizationUpdate).not.toHaveBeenCalled();
+    expect(m.lifecycle).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'QUEUED',
+          error: 'Audit rows changed during the purge: recorded 2, deleted 3.',
         }),
       })
     );
