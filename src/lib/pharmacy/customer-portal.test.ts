@@ -16,6 +16,7 @@ import {
   maskPhone,
   mintPortalLink,
   PharmacyPortalError,
+  portalCodeSender,
   portalCodeMessage,
   portalOtpMatches,
   readPortalSession,
@@ -23,6 +24,7 @@ import {
   verifyPortalSignIn,
 } from './customer-portal';
 import { portalManifest } from './customer-portal-manifest';
+import { MetaWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 import { recordKhataRepayment } from './khata-repayment';
 import { isNonDrugOfferCopy } from './rfm-winback';
 
@@ -361,5 +363,81 @@ describe('DEV-15 installable manifest', () => {
     expect(manifest.icons.map((icon) => icon.sizes)).toEqual(
       expect.arrayContaining(['192x192', '512x512'])
     );
+  });
+});
+
+describe('DEV-15 sign-in code delivery', () => {
+  const message = {
+    to: '923001234567',
+    otp: '123456',
+    body: 'Model Town: your sign-in code is 123456.',
+  };
+  const provider = () => ({
+    sendText: vi.fn(async () => ({ providerMessageId: 't' })),
+    sendTemplate: vi.fn(async () => ({ providerMessageId: 'm' })),
+  });
+  const meta = (overrides: Record<string, unknown> = {}) => ({
+    provider: 'meta' as const,
+    organizationId: ORG,
+    templates: { refillReminder: null, khataReminder: null, portalSignInCode: 'portal_code' },
+    ...overrides,
+  });
+
+  it('sends live codes through the approved authentication template, not free text', async () => {
+    const sender = provider();
+    await portalCodeSender(meta(), sender, ORG)(message);
+    expect(sender.sendTemplate).toHaveBeenCalledWith({
+      to: '923001234567',
+      template: 'portalSignInCode',
+      parameters: ['123456'],
+    });
+    expect(sender.sendText).not.toHaveBeenCalled();
+  });
+
+  it('never sends another tenant’s customer a code from the configured sender', async () => {
+    const sender = provider();
+    await expect(portalCodeSender(meta(), sender, 'org-2')(message)).rejects.toMatchObject({
+      reason: 'SEND_FAILED',
+    });
+    await expect(
+      portalCodeSender(
+        meta({ templates: { refillReminder: null, khataReminder: null, portalSignInCode: null } }),
+        sender,
+        ORG
+      )(message)
+    ).rejects.toMatchObject({ reason: 'SEND_FAILED' });
+    expect(sender.sendTemplate).not.toHaveBeenCalled();
+    expect(sender.sendText).not.toHaveBeenCalled();
+  });
+
+  it('puts the code on the authentication template body and copy-code button', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ messages: [{ id: 'wamid.1' }] }), { status: 200 })
+    );
+    const config = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'token',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: '1',
+      PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE: 'portal_code',
+    });
+    expect(config.templates.portalSignInCode).toBe('portal_code');
+    await new MetaWhatsAppProvider(config, fetchImpl as unknown as typeof fetch).sendTemplate({
+      to: '923001234567',
+      template: 'portalSignInCode',
+      parameters: ['123456'],
+    });
+    const sent = JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, { body: string }])[1].body
+    );
+    expect(sent.template.name).toBe('portal_code');
+    expect(sent.template.components).toEqual([
+      { type: 'body', parameters: [{ type: 'text', text: '123456' }] },
+      {
+        type: 'button',
+        sub_type: 'url',
+        index: '0',
+        parameters: [{ type: 'text', text: '123456' }],
+      },
+    ]);
   });
 });

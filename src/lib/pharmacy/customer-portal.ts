@@ -11,6 +11,7 @@ import { manualPaymentSettingsSchema } from './manual-payments';
 import { isNonDrugOfferCopy } from './rfm-winback';
 import type { LedgerScope } from './stock-ledger';
 import { normalizeWhatsAppNumber } from './whatsapp/messages';
+import type { WhatsAppConfig, WhatsAppProvider } from './whatsapp/provider';
 
 /**
  * DEV-15 (#762): customer PWA ("My pharmacy"). A staff member mints a link for
@@ -175,7 +176,7 @@ export async function startPortalSignIn(
   db: ScopedDb,
   organizationId: string,
   token: string,
-  sendCode: (input: { to: string; body: string }) => Promise<unknown>
+  sendCode: (input: { to: string; otp: string; body: string }) => Promise<unknown>
 ) {
   const link = await resolvePortalLink(db, organizationId, token);
   if (!link) throw new PharmacyPortalError('LINK_INVALID');
@@ -191,11 +192,34 @@ export async function startPortalSignIn(
     },
   });
   try {
-    await sendCode({ to: phone, body: portalCodeMessage(link.branch.name, otp) });
+    await sendCode({ to: phone, otp, body: portalCodeMessage(link.branch.name, otp) });
   } catch {
     throw new PharmacyPortalError('SEND_FAILED');
   }
   return { sentTo: maskPhone(phone) };
+}
+
+/**
+ * Chooses how a sign-in code is sent. The configured live sender belongs to one
+ * organization: another tenant's customers are never sent codes from it. Live
+ * Meta delivery uses an approved authentication template, because free text
+ * only reaches customers inside a 24-hour conversation window.
+ */
+export function portalCodeSender(
+  config: Pick<WhatsAppConfig, 'provider' | 'organizationId' | 'templates'>,
+  provider: Pick<WhatsAppProvider, 'sendText' | 'sendTemplate'>,
+  organizationId: string
+) {
+  return async (input: { to: string; otp: string; body: string }) => {
+    if (config.provider !== 'meta') return provider.sendText({ to: input.to, body: input.body });
+    if (config.organizationId !== organizationId || !config.templates.portalSignInCode)
+      throw new PharmacyPortalError('SEND_FAILED');
+    return provider.sendTemplate({
+      to: input.to,
+      template: 'portalSignInCode',
+      parameters: [input.otp],
+    });
+  };
 }
 
 export type PortalVerifyResult =

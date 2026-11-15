@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'portalSignInCode';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 export type WhatsAppConfig = {
@@ -125,6 +125,8 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
       khataReminder:
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN') ??
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      // DEV-15: an approved Meta AUTHENTICATION template (one code parameter, copy-code button).
+      portalSignInCode: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE'),
     },
     khataTemplates: {
       en:
@@ -269,6 +271,17 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
             type: 'body',
             parameters: input.parameters.map((text) => ({ type: 'text', text })),
           },
+          // Authentication templates carry the code again on their copy-code button.
+          ...(input.template === 'portalSignInCode'
+            ? [
+                {
+                  type: 'button',
+                  sub_type: 'url',
+                  index: '0',
+                  parameters: [{ type: 'text', text: input.parameters[0] ?? '' }],
+                },
+              ]
+            : []),
         ],
       },
     });

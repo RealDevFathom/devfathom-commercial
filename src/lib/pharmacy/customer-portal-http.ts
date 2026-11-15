@@ -14,6 +14,7 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
   cancelPortalRequest,
+  portalCodeSender,
   createPortalRequest,
   hashPortalSecret,
   PharmacyPortalError,
@@ -27,7 +28,7 @@ import {
   type PortalSession,
 } from './customer-portal';
 import { persistPrescriptionFile } from './prescription-files';
-import { createWhatsAppProvider } from './whatsapp/provider';
+import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 
 const MAX_BODY_CHARS = 7_500_000;
 const TEN_MINUTES = 10 * 60_000;
@@ -159,11 +160,10 @@ export async function portalContext(request: Request) {
           [`start:${fingerprint}`, 5],
         ]);
         if (blocked) return portalResponse.limited(blocked);
-        const provider = createWhatsAppProvider();
+        const config = readWhatsAppConfig();
+        const send = portalCodeSender(config, createWhatsAppProvider(config), organizationId);
         const sent = await inTenant((db) =>
-          startPortalSignIn(db, organizationId, parsed.data.token, (message) =>
-            provider.sendText(message)
-          )
+          startPortalSignIn(db, organizationId, parsed.data.token, send)
         );
         return json({ ok: true, sentTo: sent.sentTo });
       }
