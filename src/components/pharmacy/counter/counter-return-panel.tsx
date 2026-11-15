@@ -76,6 +76,8 @@ type Props = {
   accountId: string;
   deviceId: () => string;
   businessDate: () => Date;
+  /** False when the signed-in manager/owner has no staff PIN yet; first-time setup is offered. */
+  refundPinReady?: boolean;
 };
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
@@ -122,7 +124,14 @@ function subscribeConnection(changed: () => void) {
   };
 }
 
-export function ReturnForm({ branchId, organizationId, accountId, deviceId, businessDate }: Props) {
+export function ReturnForm({
+  branchId,
+  organizationId,
+  accountId,
+  deviceId,
+  businessDate,
+  refundPinReady = true,
+}: Props) {
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -166,6 +175,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   // The approving manager/owner's own PIN. Single-use and never saved on this device.
   const [approvalPin, setApprovalPin] = useState('');
   const approvalReady = witnessPinPattern.test(approvalPin);
+  const [pinSet, setPinSet] = useState(refundPinReady);
+  const [newPin, setNewPin] = useState('');
+  const [newPinRepeat, setNewPinRepeat] = useState('');
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -190,6 +202,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   );
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
   const refund = trpc.pharmacySales.refundTender.useMutation();
+  const provisionPin = trpc.pharmacySales.provisionMyRefundPin.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
@@ -377,6 +390,78 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     </div>
   );
 
+  async function setUpPin() {
+    if (latch.current || !online) return;
+    latch.current = true;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    const pin = newPin;
+    setNewPin('');
+    setNewPinRepeat('');
+    try {
+      await provisionPin.mutateAsync({ pin });
+      setPinSet(true);
+      setMessage('PIN set. Enter it below to approve each refund.');
+    } catch (cause) {
+      // An existing PIN means the approval field is the right next step.
+      if ((cause as { data?: { code?: string } })?.data?.code === 'CONFLICT') setPinSet(true);
+      setError(counterErrorMessage(cause));
+    } finally {
+      latch.current = false;
+      setBusy(false);
+    }
+  }
+
+  const pinSetup = (
+    <section
+      aria-label="Set up your refund PIN"
+      className="space-y-3 rounded-md border border-border-subtle p-3"
+    >
+      <p className="text-sm text-text-muted">
+        You have no staff PIN yet, and every refund needs one. Choose 4–8 digits. It is never saved
+        on this device; ask your administrator to change it later.
+      </p>
+      <Label htmlFor="refund-new-pin">New PIN</Label>
+      <Input
+        id="refund-new-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="new-password"
+        maxLength={8}
+        className="h-11"
+        disabled={busy || !online}
+        value={newPin}
+        onChange={(event) => setNewPin(event.target.value.replace(/\D/g, ''))}
+      />
+      <Label htmlFor="refund-new-pin-repeat">Repeat new PIN</Label>
+      <Input
+        id="refund-new-pin-repeat"
+        type="password"
+        inputMode="numeric"
+        autoComplete="new-password"
+        maxLength={8}
+        className="h-11"
+        disabled={busy || !online}
+        value={newPinRepeat}
+        aria-invalid={!!newPinRepeat && newPinRepeat !== newPin}
+        onChange={(event) => setNewPinRepeat(event.target.value.replace(/\D/g, ''))}
+      />
+      {!!newPinRepeat && newPinRepeat !== newPin && (
+        <p className="text-sm text-destructive">The two PINs do not match.</p>
+      )}
+      <Button
+        variant="outline"
+        className="h-11"
+        disabled={busy || !online || !witnessPinPattern.test(newPin) || newPin !== newPinRepeat}
+        onClick={() => void setUpPin()}
+      >
+        Set PIN
+      </Button>
+    </section>
+  );
+  const refundApproval = pinSet ? approvalField : pinSetup;
+
   function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
@@ -422,7 +507,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {attempt?.kind === 'refund' && approvalField}
+      {attempt?.kind === 'refund' && refundApproval}
       {attempt && (
         <Button
           className="h-11"
@@ -766,7 +851,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 reversal required. I will reconcile the original provider separately.
               </label>
             )}
-            {!attempt && approvalField}
+            {!attempt && refundApproval}
             <Button
               variant="destructive"
               className="h-11"

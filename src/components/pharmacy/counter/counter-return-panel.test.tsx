@@ -4,6 +4,7 @@ import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-re
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   refund: vi.fn(),
+  provisionPin: vi.fn(),
   refetch: vi.fn(),
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
@@ -17,6 +18,7 @@ vi.mock('@/lib/trpc', () => ({
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
+      provisionMyRefundPin: { useMutation: () => ({ mutateAsync: mocks.provisionPin }) },
     },
     pharmacySafety: {
       controlledPharmacists: { useQuery: () => mocks.pharmacists },
@@ -505,5 +507,50 @@ describe('DEV-645 manager/owner refund approval', () => {
     expect(mocks.refund.mock.calls[1][0].idempotencyKey).toBe(
       mocks.refund.mock.calls[0][0].idempotencyKey
     );
+  });
+
+  it('offers first-time PIN setup to a manager without a PIN, then asks for it', async () => {
+    mocks.provisionPin.mockResolvedValue({ id: 'cred', staffProfileId: 'staff' });
+    render(<ReturnForm {...props} refundPinReady={false} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+    const setPin = screen.getByRole('button', { name: 'Set PIN' });
+    fireEvent.change(screen.getByLabelText('New PIN'), { target: { value: '7351' } });
+    fireEvent.change(screen.getByLabelText('Repeat new PIN'), { target: { value: '7352' } });
+    expect(screen.getByText('The two PINs do not match.')).toBeVisible();
+    expect(setPin).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Repeat new PIN'), { target: { value: '7351' } });
+    fireEvent.click(setPin);
+    await waitFor(() => expect(mocks.provisionPin).toHaveBeenCalledWith({ pin: '7351' }));
+    await screen.findByText(/PIN set\./);
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+    enterApprovalPin('7351');
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() =>
+      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ approvalPin: '7351' }))
+    );
+  });
+
+  it('moves to the PIN field when the server reports a PIN already exists', async () => {
+    mocks.provisionPin.mockRejectedValue(
+      Object.assign(
+        new Error('You already have a staff PIN. Ask your administrator to change it.'),
+        {
+          data: { code: 'CONFLICT' },
+        }
+      )
+    );
+    render(<ReturnForm {...props} refundPinReady={false} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('New PIN'), { target: { value: '7351' } });
+    fireEvent.change(screen.getByLabelText('Repeat new PIN'), { target: { value: '7351' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set PIN' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('already have a staff PIN')
+    );
+    expect(screen.getByLabelText('Your manager or owner PIN')).toBeVisible();
   });
 });

@@ -2246,6 +2246,7 @@ function ScopedPharmacyCounterConsole({
           >
             <CounterReturnPanel
               refundsAuthorized={branchesQuery.data?.refundsAuthorized === true}
+              refundPinReady={branchesQuery.data?.refundPinReady !== false}
               branchId={branchId}
               organizationId={organizationId}
               accountId={accountId}

@@ -3,15 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 const tx = vi.hoisted(() => ({
   $queryRaw: vi.fn(),
-  restaurantOperatorCredential: { findFirst: vi.fn(), update: vi.fn() },
+  restaurantOperatorCredential: { findFirst: vi.fn(), update: vi.fn(), create: vi.fn() },
+  restaurantStaffProfile: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => unknown) => run(tx)),
 }));
 
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
-import { verifyRefundApproverPin } from './refund-approval';
+import {
+  hashOperatorCredential,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  hasRefundApprovalPin,
+  provisionRefundApprovalPin,
+  RefundPinProvisionError,
+  verifyRefundApproverPin,
+} from './refund-approval';
 
 const now = new Date('2026-11-14T08:30:00Z');
 let credentialHash = '';
@@ -86,5 +96,58 @@ describe('verifyRefundApproverPin (DEV-645)', () => {
   it('refuses a malformed PIN without reading credentials', async () => {
     await expect(verifyRefundApproverPin('org-a', 'actor-a', '12', now)).resolves.toBeNull();
     expect(tx.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('provisionRefundApprovalPin (DEV-645)', () => {
+  const db = tx as unknown as ScopedDb;
+  const input = { organizationId: 'org-a', userId: 'actor-a', displayName: 'Owner', pin: '7351' };
+
+  beforeEach(() => {
+    tx.restaurantOperatorCredential.findFirst.mockResolvedValue(null);
+    tx.restaurantStaffProfile.findFirst.mockResolvedValue(null);
+    tx.restaurantStaffProfile.create.mockResolvedValue({ id: 'staff-new', status: 'ACTIVE' });
+    tx.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'staff-new', status: 'ACTIVE' });
+    tx.restaurantOperatorCredential.create.mockImplementation(async ({ data }) => ({
+      id: 'cred-new',
+      ...data,
+    }));
+  });
+
+  it('creates a staff profile and a hashed organization-wide PIN for a first-time owner', async () => {
+    await expect(provisionRefundApprovalPin(db, input)).resolves.toEqual({
+      id: 'cred-new',
+      staffProfileId: 'staff-new',
+    });
+    expect(tx.restaurantStaffProfile.create).toHaveBeenCalledWith({
+      data: { organizationId: 'org-a', userId: 'actor-a', displayName: 'Owner' },
+    });
+    const data = tx.restaurantOperatorCredential.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ staffProfileId: 'staff-new', type: 'PIN', deviceId: null });
+    expect(data.credentialHash).not.toContain('7351');
+    expect(await verifyOperatorCredential('PIN', '7351', data.credentialHash)).toBe(true);
+  });
+
+  it('never replaces an existing PIN', async () => {
+    tx.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'cred-a' });
+    await expect(provisionRefundApprovalPin(db, input)).rejects.toBeInstanceOf(
+      RefundPinProvisionError
+    );
+    expect(tx.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a suspended staff profile', async () => {
+    tx.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'staff-a', status: 'SUSPENDED' });
+    await expect(provisionRefundApprovalPin(db, input)).rejects.toMatchObject({
+      reason: 'PROFILE_INACTIVE',
+    });
+    expect(tx.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+
+  it('reports whether the actor already has an active PIN', async () => {
+    tx.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'cred-a' });
+    await expect(hasRefundApprovalPin(db, 'org-a', 'actor-a')).resolves.toBe(true);
+    tx.restaurantOperatorCredential.findFirst.mockResolvedValue(null);
+    await expect(hasRefundApprovalPin(db, 'org-a', 'actor-a')).resolves.toBe(false);
   });
 });

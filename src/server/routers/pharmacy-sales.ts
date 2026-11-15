@@ -127,7 +127,14 @@ import {
   recordPharmacyCashMovement,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
-import { REFUND_APPROVAL_POLICY, verifyRefundApproverPin } from '@/lib/pharmacy/refund-approval';
+import {
+  hasRefundApprovalPin,
+  provisionRefundApprovalPin,
+  REFUND_APPROVAL_POLICY,
+  RefundPinProvisionError,
+  verifyRefundApproverPin,
+} from '@/lib/pharmacy/refund-approval';
+import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 
 import { assertInOrganization } from '../org-refs';
 import {
@@ -1980,7 +1987,7 @@ export const pharmacySalesRouter = router({
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const [branches, organization] = await Promise.all([
+    const [branches, organization, refundsAuthorized] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true, city: true },
@@ -1990,6 +1997,7 @@ export const pharmacySalesRouter = router({
         where: { id: organizationId },
         select: { currency: true, timezone: true },
       }),
+      can(subjectFromSession(ctx.session.user), 'pharmacy:manage', undefined, { db: ctx.db }),
     ]);
     return {
       branches,
@@ -1999,14 +2007,49 @@ export const pharmacySalesRouter = router({
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
       // DEV-645: only managers and owners see Returns & refunds; refundTender enforces it.
-      refundsAuthorized: await can(
-        subjectFromSession(ctx.session.user),
-        'pharmacy:manage',
-        undefined,
-        { db: ctx.db }
-      ),
+      refundsAuthorized,
+      // A manager or owner without a staff PIN is offered first-time PIN setup.
+      refundPinReady:
+        refundsAuthorized &&
+        (await hasRefundApprovalPin(ctx.db, organizationId, ctx.session.user.id)),
     };
   }),
+
+  /**
+   * DEV-645: a manager or owner with no staff PIN sets one here, so a counter-only
+   * pharmacy can approve refunds without procurement or restaurant staff modules.
+   * First-time only; changing an existing PIN stays with the administrator.
+   */
+  provisionMyRefundPin: protectedProcedure
+    .input(z.object({ pin: z.string().regex(/^\d{4,8}$/) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      ctx.audit.detail.skipInput = true;
+      const organizationId = ctx.entitlements?.organizationId;
+      const user = ctx.session.user;
+      if (!organizationId || user.organizationId !== organizationId)
+        throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!(await can(subjectFromSession(user), 'pharmacy:manage', undefined, { db: ctx.db })))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only a manager or owner can refund.' });
+      try {
+        return await ctx.db.$transaction((tx) =>
+          provisionRefundApprovalPin(txDb(tx), {
+            organizationId,
+            userId: user.id,
+            displayName: user.name ?? user.email ?? 'Pharmacy manager',
+            pin: input.pin,
+          })
+        );
+      } catch (error) {
+        if (error instanceof RefundPinProvisionError)
+          throw new TRPCError({
+            code: error.reason === 'ALREADY_EXISTS' ? 'CONFLICT' : 'FORBIDDEN',
+            message: error.message,
+          });
+        if (error instanceof CredentialPolicyError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
+    }),
 
   /** POS-02: one search across brand, generic, ingredient, form, barcode and alias. */
   counterSearch: protectedProcedure
