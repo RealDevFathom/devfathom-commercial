@@ -279,11 +279,18 @@ export async function applyKhataLimitDecision(
 export async function readKhataBalance(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  familyAccountId: string
+  familyAccountId: string,
+  /** Balance as it stood at this instant; omitted means the whole ledger. */
+  asOf?: Date
 ) {
   const totals = await db.pharmacyKhataEvent.groupBy({
     by: ['kind'],
-    where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId,
+      ...(asOf ? { occurredAt: { lte: asOf } } : {}),
+    },
     _sum: { amountMinor: true },
   });
   return totals.reduce(

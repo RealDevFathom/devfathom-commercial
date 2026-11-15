@@ -32,8 +32,8 @@ export type KhataRepaymentInput = {
   familyAccountId: string;
   amountMinor: number;
   tender: KhataRepaymentTender;
-  /** Required for CASH: the counter's open drawer receives the money. */
-  drawerSessionId?: string;
+  /** Required for CASH: this counter device's open drawer for the business date gets the money. */
+  deviceId?: string;
   /** Required for non-cash tenders: the payer's transfer/wallet reference. */
   payerReference?: string;
   businessDate: Date;
@@ -124,7 +124,7 @@ export async function recordKhataRepayment(
     throw new FamilyKhataError('INVALID_AMOUNT');
   const payerReference = input.payerReference?.trim() || null;
   if (input.tender === 'CASH') {
-    if (!input.drawerSessionId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
   } else if (!payerReference) {
     throw new FamilyKhataError('REFERENCE_REQUIRED');
   }
@@ -151,28 +151,41 @@ export async function recordKhataRepayment(
   // The journal stores a closed currency set; the counter itself defaults to PKR.
   const currency: Currency = organization?.currency === 'USD' ? 'USD' : 'PKR';
   const memo = `${MEMO_PREFIX}${input.tender}`;
+  const drawerReason = `Khata payment ${identity.receiptReference}`;
 
   const prior = await db.pharmacyBookkeepingTransaction.findFirst({
     where: { organizationId: scope.organizationId, idempotencyKey: identity.idempotencyKey },
     include: { allocations: true },
   });
   if (prior) {
+    // A retry must repeat the original request exactly: same account, amount, tender,
+    // payer reference and (for cash) the same counter device's drawer.
+    const priorDrawer =
+      input.tender === 'CASH'
+        ? await db.pharmacyDrawerMovement.findFirst({
+            where: { organizationId: scope.organizationId, kind: 'PAID_IN', reason: drawerReason },
+            select: { drawerSession: { select: { deviceId: true } } },
+          })
+        : null;
     if (
       prior.kind !== 'CUSTOMER_RECEIPT' ||
       prior.branchId !== scope.branchId ||
       prior.amountMinor !== input.amountMinor ||
       prior.memo !== memo ||
-      prior.allocations[0]?.sourceId !== account.id
+      prior.allocations[0]?.sourceId !== account.id ||
+      (prior.bankReference ?? null) !== payerReference ||
+      (input.tender === 'CASH' && priorDrawer?.drawerSession.deviceId !== input.deviceId)
     )
       throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
+    // Rebuild the original slip: the name it was recorded under and the balance just after.
     return {
       receiptReference: prior.reference,
       familyAccountId: account.id,
-      accountName: account.displayName,
+      accountName: prior.counterpartyName ?? account.displayName,
       amountMinor: prior.amountMinor,
       tender: input.tender,
       payerReference: prior.bankReference ?? null,
-      balanceAfterMinor: await readKhataBalance(db, scope, account.id),
+      balanceAfterMinor: await readKhataBalance(db, scope, account.id, prior.occurredAt),
       recordedAt: prior.occurredAt,
       currency: prior.currency,
       replayed: true,
@@ -183,12 +196,25 @@ export async function recordKhataRepayment(
   if (!account.active) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
 
   if (input.tender === 'CASH') {
+    // As for a cash sale tender: the server resolves this device's open drawer for the
+    // business date, so cash cannot be credited to another counter's drawer.
+    const drawer = await db.pharmacyDrawerSession.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId: input.deviceId!,
+        businessDate: input.businessDate,
+        status: 'OPEN',
+      },
+      select: { id: true },
+    });
+    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
     // Takes the day lock and refuses a closed day or a drawer that is not open.
     await recordPharmacyCashMovement(db, scope, {
-      drawerSessionId: input.drawerSessionId!,
+      drawerSessionId: drawer.id,
       kind: 'PAID_IN',
       amountMinor: input.amountMinor,
-      reason: `Khata payment ${identity.receiptReference}`,
+      reason: drawerReason,
     });
   } else {
     await requirePharmacyDayOpen(db, scope, input.businessDate);
@@ -199,7 +225,7 @@ export async function recordKhataRepayment(
     familyAccountId: account.id,
     amountMinor: input.amountMinor,
     occurredAt: recordedAt,
-    note: `Khata payment ${identity.receiptReference}`,
+    note: drawerReason,
   });
   await postBookkeepingTransaction(db, scope, {
     reference: identity.receiptReference,

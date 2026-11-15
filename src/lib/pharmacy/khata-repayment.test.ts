@@ -20,7 +20,7 @@ const cashInput: KhataRepaymentInput = {
   familyAccountId: 'family_1',
   amountMinor: 3_000,
   tender: 'CASH',
-  drawerSessionId: 'drawer_1',
+  deviceId: 'device_1',
   businessDate,
   idempotencyKey: 'attempt-1',
 };
@@ -72,7 +72,10 @@ function fixture(options: { prior?: Record<string, unknown>; closed?: boolean } 
     pharmacyDailyClose: {
       findFirst: vi.fn().mockResolvedValue(options.closed ? { id: 'close_1' } : null),
     },
-    pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
+    pharmacyDrawerMovement: {
+      create: vi.fn().mockResolvedValue({ id: 'movement_1' }),
+      findFirst: vi.fn().mockResolvedValue({ drawerSession: { deviceId: 'device_1' } }),
+    },
   };
   return db;
 }
@@ -87,6 +90,16 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     const db = fixture();
     const slip = await recordKhataRepayment(db as never, scope, cashInput);
 
+    expect(db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_k',
+        branchId: 'branch_k',
+        deviceId: 'device_1',
+        businessDate,
+        status: 'OPEN',
+      },
+      select: { id: true },
+    });
     expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         organizationId: 'org_k',
@@ -135,7 +148,7 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await recordKhataRepayment(db as never, scope, {
       ...cashInput,
       tender: 'RAAST',
-      drawerSessionId: undefined,
+      deviceId: undefined,
       payerReference: 'TXN-88231',
     });
     expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
@@ -149,13 +162,13 @@ describe('K4 counter khata repayment (DEV-731)', () => {
   it('refuses cash without an open drawer and non-cash without a payer reference before writing', async () => {
     const db = fixture();
     await expect(
-      recordKhataRepayment(db as never, scope, { ...cashInput, drawerSessionId: undefined })
+      recordKhataRepayment(db as never, scope, { ...cashInput, deviceId: undefined })
     ).rejects.toMatchObject({ reason: 'DRAWER_NOT_OPEN' });
     await expect(
       recordKhataRepayment(db as never, scope, {
         ...cashInput,
         tender: 'BANK_TRANSFER',
-        drawerSessionId: undefined,
+        deviceId: undefined,
         payerReference: '  ',
       })
     ).rejects.toMatchObject({ reason: 'REFERENCE_REQUIRED' });
@@ -230,6 +243,7 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     const prior = {
       kind: 'CUSTOMER_RECEIPT',
       branchId: 'branch_k',
+      counterpartyName: 'Khan family',
       reference: posted.reference,
       amountMinor: 3_000,
       memo: posted.memo,
@@ -253,6 +267,70 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await expect(
       recordKhataRepayment(fixture({ prior }) as never, scope, { ...cashInput, amountMinor: 100 })
     ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      recordKhataRepayment(fixture({ prior }) as never, scope, {
+        ...cashInput,
+        deviceId: 'device_2',
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('refuses a replay whose payer reference changed', async () => {
+    const prior = {
+      kind: 'CUSTOMER_RECEIPT',
+      branchId: 'branch_k',
+      counterpartyName: 'Khan family',
+      reference: 'KP-0000000000',
+      amountMinor: 3_000,
+      memo: 'Khata payment · RAAST',
+      bankReference: 'TXN-1',
+      occurredAt: new Date('2026-11-15T06:00:00.000Z'),
+      currency: 'PKR',
+      allocations: [{ sourceId: 'family_1' }],
+    };
+    const nonCash = { ...cashInput, tender: 'RAAST' as const, deviceId: undefined };
+    await expect(
+      recordKhataRepayment(fixture({ prior }) as never, scope, {
+        ...nonCash,
+        payerReference: 'TXN-2',
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      recordKhataRepayment(fixture({ prior }) as never, scope, {
+        ...nonCash,
+        payerReference: 'TXN-1',
+      })
+    ).resolves.toMatchObject({ receiptReference: 'KP-0000000000', replayed: true });
+  });
+
+  it('replays the slip as recorded, not with a later name or balance', async () => {
+    const occurredAt = new Date('2026-11-15T06:00:00.000Z');
+    const db = fixture({
+      prior: {
+        kind: 'CUSTOMER_RECEIPT',
+        branchId: 'branch_k',
+        counterpartyName: 'Khan family',
+        reference: 'KP-0000000000',
+        amountMinor: 3_000,
+        memo: 'Khata payment · CASH',
+        bankReference: null,
+        occurredAt,
+        currency: 'PKR',
+        allocations: [{ sourceId: 'family_1' }],
+      },
+    });
+    db.pharmacyFamilyAccount.findFirst.mockResolvedValue({
+      id: 'family_1',
+      displayName: 'Renamed family',
+      active: true,
+    });
+    const slip = await recordKhataRepayment(db as never, scope, cashInput);
+    expect(slip.accountName).toBe('Khan family');
+    expect(db.pharmacyKhataEvent.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ occurredAt: { lte: occurredAt } }),
+      })
+    );
   });
 
   it('lists active branch accounts with their full-ledger balance', async () => {

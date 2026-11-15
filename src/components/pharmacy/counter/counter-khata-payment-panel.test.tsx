@@ -48,6 +48,7 @@ function enterAmount(value: string) {
 const submit = () => screen.getByRole('button', { name: 'Record payment' });
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   mocks.refetch.mockResolvedValue({});
   mocks.record.mockResolvedValue(slip);
@@ -86,7 +87,7 @@ describe('counter khata payment (DEV-731)', () => {
       familyAccountId: 'family-1',
       amountMinor: 1_500,
       tender: 'CASH',
-      drawerSessionId: 'drawer-1',
+      deviceId: 'device-1',
       businessDate: new Date('2026-11-15'),
       idempotencyKey: expect.stringMatching(/^khata-payment:/),
     });
@@ -128,7 +129,7 @@ describe('counter khata payment (DEV-731)', () => {
     await waitFor(() => expect(mocks.record).toHaveBeenCalledTimes(1));
     const call = mocks.record.mock.calls[0]![0];
     expect(call).toMatchObject({ tender: 'RAAST', payerReference: 'TXN-881', amountMinor: 500 });
-    expect(call).not.toHaveProperty('drawerSessionId');
+    expect(call).not.toHaveProperty('deviceId');
   });
 
   it('retries a failed submit with the same idempotency key', async () => {
@@ -181,5 +182,26 @@ describe('counter khata payment (DEV-731)', () => {
     expect(mocks.record.mock.calls[1]![0].idempotencyKey).toBe(
       mocks.record.mock.calls[0]![0].idempotencyKey
     );
+  });
+
+  it('replays an unresolved attempt after a page reload instead of taking a new payment', async () => {
+    mocks.record.mockRejectedValueOnce(new Error('Network down'));
+    const first = render(<KhataPaymentForm {...props} />);
+    chooseAccount();
+    enterAmount('15');
+    fireEvent.click(submit());
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    first.unmount();
+
+    render(<KhataPaymentForm {...props} />);
+    chooseAccount();
+    enterAmount('15');
+    fireEvent.click(submit());
+    await waitFor(() => expect(mocks.record).toHaveBeenCalledTimes(2));
+    expect(mocks.record.mock.calls[1]![0].idempotencyKey).toBe(
+      mocks.record.mock.calls[0]![0].idempotencyKey
+    );
+    expect(await screen.findByText(/Reference KP-0123456789/)).toBeTruthy();
+    expect(localStorage.getItem('pharmacy-khata-payment:o:a:b')).toBeNull();
   });
 });

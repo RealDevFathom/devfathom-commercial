@@ -46,6 +46,37 @@ function useKhataPaymentSession(): KhataPaymentSession {
   return { attemptRef, slip, setSlip, pending, setPending };
 }
 
+type StoredAttempt = { fingerprint: string; key: string };
+
+/**
+ * An unresolved attempt also survives a page reload: if the server committed but the
+ * response was lost, re-entering the same payment must replay it, not take it again.
+ */
+function readStoredAttempt(storageKey: string): StoredAttempt | null {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as StoredAttempt).fingerprint === 'string' &&
+      typeof (parsed as StoredAttempt).key === 'string'
+    )
+      return parsed as StoredAttempt;
+  } catch {
+    // Storage may be unavailable; the in-memory attempt still covers this page.
+  }
+  return null;
+}
+
+function writeStoredAttempt(storageKey: string, attempt: StoredAttempt | null) {
+  try {
+    if (attempt) localStorage.setItem(storageKey, JSON.stringify(attempt));
+    else localStorage.removeItem(storageKey);
+  } catch {
+    // Best effort, as above.
+  }
+}
+
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
@@ -86,6 +117,8 @@ export function CounterKhataPaymentPanel(props: Props) {
 
 export function KhataPaymentForm({
   branchId,
+  organizationId,
+  accountId,
   deviceId,
   businessDate,
   session: parentSession,
@@ -101,6 +134,7 @@ export function KhataPaymentForm({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // A retried submit with unchanged details reuses its key, so money is taken once.
+  const storageKey = `pharmacy-khata-payment:${organizationId}:${accountId}:${branchId}`;
 
   const accounts = trpc.pharmacySales.khataPaymentAccounts.useQuery({
     branchId,
@@ -138,11 +172,16 @@ export function KhataPaymentForm({
       familyAccountId: selected.id,
       amountMinor,
       tender,
-      ...(cash ? { drawerSessionId: openDrawerId! } : { payerReference: payerReference.trim() }),
+      ...(cash ? { deviceId: deviceId() } : { payerReference: payerReference.trim() }),
     };
     const fingerprint = JSON.stringify(payload);
-    if (attemptRef.current?.fingerprint !== fingerprint)
+    const unresolved = attemptRef.current ?? readStoredAttempt(storageKey);
+    if (unresolved?.fingerprint === fingerprint) {
+      attemptRef.current = unresolved;
+    } else {
       attemptRef.current = { fingerprint, key: `khata-payment:${browserUuid()}` };
+      writeStoredAttempt(storageKey, attemptRef.current);
+    }
     setPending(true);
     setError(null);
     setNotice(null);
@@ -153,6 +192,7 @@ export function KhataPaymentForm({
         idempotencyKey: attemptRef.current.key,
       });
       attemptRef.current = null;
+      writeStoredAttempt(storageKey, null);
       setSlip(result);
       setAmount('');
       setPayerReference('');

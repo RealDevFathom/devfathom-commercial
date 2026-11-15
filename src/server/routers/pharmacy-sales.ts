@@ -721,7 +721,7 @@ export const pharmacySalesRouter = router({
       });
     }),
   // K4 (DEV-731): receive a khata repayment at the counter. Counter (write) access only;
-  // cash is paid into this counter's open drawer, and a retried key returns the same slip.
+  // cash is paid into this device's open drawer, and a retried key returns the same slip.
   recordKhataPayment: protectedProcedure
     .input(
       z
@@ -730,7 +730,7 @@ export const pharmacySalesRouter = router({
           familyAccountId: z.string().trim().min(1).max(128),
           amountMinor: z.number().int().positive().max(2147483647),
           tender: z.enum(KHATA_REPAYMENT_TENDERS),
-          drawerSessionId: z.string().min(1).optional(),
+          deviceId: z.string().min(1).optional(),
           payerReference: z.string().trim().min(4).max(40).optional(),
           businessDate: z.date(),
           idempotencyKey: z.string().trim().min(1).max(160),

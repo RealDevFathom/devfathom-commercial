@@ -851,7 +851,7 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     familyAccountId: 'family-a',
     amountMinor: 500,
     tender: 'CASH' as const,
-    drawerSessionId: 'drawer-a',
+    deviceId: 'device-a',
     businessDate: input.businessDate,
     idempotencyKey: 'khata-payment:1',
   };
