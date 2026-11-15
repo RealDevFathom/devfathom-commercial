@@ -1,8 +1,17 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import {
+  branchUnknownLossProbability,
+  estimateLossMinor,
+  lossProbability,
+  notifyCapture,
+  resolveVisit,
+  serverUnitPriceMinor,
+} from './lost-sales';
+import type { LostSaleOutcome } from './lost-sales';
 import {
   apportionDiscount,
   saleAllocationMoney,
@@ -21,10 +30,12 @@ import {
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
+import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -275,8 +286,17 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
-export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
-  return addSaleLineWithAllocation(db, scope, input);
+/**
+ * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
+ * reserved customer orders keep the price they quoted, so they never opt in.
+ */
+export async function addSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  options: { applyCounterPromotions?: boolean } = {}
+) {
+  return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
 }
 
 /** Internal customer-order path; never accepted by the counter's public input schema.
@@ -345,7 +365,8 @@ async function addSaleLineWithAllocation(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
-  reservation?: ReservedSaleAllocation
+  reservation?: ReservedSaleAllocation,
+  applyCounterPromotions = false
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -444,14 +465,38 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
+  const regulated = medicine.rx || medicine.restricted || medicine.controlled;
+  // #727: priced after allocation has finished waiting for its stock locks. A voucher,
+  // manual discount or complimentary line is never combined with an automatic promotion.
+  const promotionEvaluatedAt = new Date();
+  const promotion =
+    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor
+      ? await priceCounterPromotion(db, scope, {
+          medicineId: input.medicineId,
+          regulated,
+          grossMinor,
+          costMinor,
+          at: promotionEvaluatedAt,
+        })
+      : null;
   const discountMinor = voucher
     ? Math.min(voucher.discountMinor, grossMinor)
-    : (input.discountMinor ?? 0);
-  const discountKind = voucher ? ('VOUCHER' as const) : input.discountKind;
-  const approvedByUserId = voucher ? voucher.issuedByUserId : input.approvedByUserId;
-  const approvalPolicy = voucher ? `voucher:${voucher.id}` : input.approvalPolicy;
+    : (promotion?.discountMinor ?? input.discountMinor ?? 0);
+  const discountKind = voucher
+    ? ('VOUCHER' as const)
+    : promotion
+      ? ('PROMOTION' as const)
+      : input.discountKind;
+  const approvedByUserId = voucher
+    ? voucher.issuedByUserId
+    : (promotion?.promotion.createdByUserId ?? input.approvedByUserId);
+  const approvalPolicy = voucher
+    ? `voucher:${voucher.id}`
+    : promotion
+      ? promotionApprovalPolicy(promotion.promotion.id)
+      : input.approvalPolicy;
   validateDiscount({
-    regulated: medicine.rx || medicine.restricted || medicine.controlled,
+    regulated,
     discountMinor,
     grossMinor,
     costMinor,
@@ -479,6 +524,8 @@ async function addSaleLineWithAllocation(
       voucherId: voucher?.id ?? null,
       approvalPolicy,
       approvedByUserId,
+      promotionId: promotion?.promotion.id,
+      promotionName: promotion?.promotion.name,
       idempotencyKey: input.idempotencyKey,
     },
   });
@@ -500,7 +547,22 @@ async function addSaleLineWithAllocation(
       })
     )
   );
-  await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+  await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
+    saleLineId: line.id,
+    ...(promotion
+      ? {
+          promotionId: promotion.promotion.id,
+          promotionName: promotion.promotion.name,
+          discountMinor,
+          approvedByUserId: promotion.promotion.createdByUserId,
+          effectiveFrom: promotion.promotion.effectiveFrom.toISOString(),
+          effectiveTo: promotion.promotion.effectiveTo.toISOString(),
+          benefitBasisPoints: promotion.promotion.benefitBasisPoints,
+          benefitMinor: promotion.promotion.benefitMinor,
+          evaluatedAt: promotionEvaluatedAt.toISOString(),
+        }
+      : {}),
+  });
   return { line, allocation };
 }
 
@@ -1085,18 +1147,77 @@ export async function captureDemand(
     estimatedMarginMinor?: number;
     customerId?: string;
     consentRecorded?: boolean;
-  }
+    /** DEV-81: the counter device; lines from one terminal group into a visit. */
+    terminalId?: string;
+    /** DEV-81: the full quantity asked for; `quantity` stays the unmet part. */
+    requestedQty?: number;
+    outcome?: LostSaleOutcome;
+    notifyOptIn?: boolean;
+    notifyPhone?: string;
+    freeText?: string;
+    matchedProductId?: string;
+    matchConfidence?: number;
+  },
+  now: Date = new Date()
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
   if (input.customerId && !input.consentRecorded) throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.requestedQty !== undefined && input.requestedQty < input.quantity)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  let notify: ReturnType<typeof notifyCapture>;
+  try {
+    notify = notifyCapture(input);
+  } catch {
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+  }
+  const outcome = input.outcome ?? 'UNKNOWN';
+  // DEV-81: visit, price and loss are derived here, never taken from the client.
+  const { visitId, visitType } = await resolveVisit(db, scope, {
+    terminalId: input.terminalId,
+    customerId: input.customerId,
+    saleId: input.saleId,
+    now,
+    newId: randomUUID,
+  });
+  const unitPricePkrMinor = await serverUnitPriceMinor(
+    db,
+    scope,
+    input.requestedMedicineId,
+    input.saleUnit
+  );
+  const unknown =
+    outcome === 'UNKNOWN' && visitType !== 'WALK_OUT'
+      ? (await branchUnknownLossProbability(db, scope, now)).probability
+      : 0;
+  const probability = lossProbability({
+    outcome,
+    visitType,
+    createdAt: now,
+    now,
+    unknownProbability: unknown,
+  });
   return db.unfulfilledDemandEvent.create({
     data: {
       ...input,
+      ...notify,
+      outcome,
+      freeText: input.freeText?.trim() || null,
+      requestedQty: input.requestedQty ?? input.quantity,
+      visitId,
+      visitType,
+      unitPricePkrMinor,
+      lossProbability: probability,
+      estLossPkrMinor: estimateLossMinor({
+        quantity: input.quantity,
+        unitPriceMinor: unitPricePkrMinor,
+        probability,
+      }),
       inventoryRuleSnapshot: input.inventoryRuleSnapshot as Prisma.InputJsonValue,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       capturedByUserId: scope.actorId,
+      createdAt: now,
     },
   });
 }
@@ -1301,7 +1422,9 @@ export async function optOutRestockInterest(db: ScopedDb, scope: LedgerScope, in
     where: { id: interestId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!interest || interest.status === 'RECOVERED') throw new PharmacySaleError('NOT_FOUND');
-  if (interest.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  // Order and refill-subscription holds are settled only by their own lifecycle.
+  if (interest.orderLineId || isRefillCycleCampaignKey(interest.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const at = new Date();
   await db.pharmacyRestockNotification.updateMany({
     where: {
@@ -1341,7 +1464,8 @@ export async function recoverRestockInterest(
     },
     include: { demandEvent: true },
   });
-  if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { sale: true },

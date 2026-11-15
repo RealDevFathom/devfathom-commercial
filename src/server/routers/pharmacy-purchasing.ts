@@ -1,3 +1,4 @@
+import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
 import {
   SOLO_OWNER_POLICY,
   APPROVAL_BLOCKED,
@@ -1503,6 +1504,17 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          // DEV-679: one supplier bill, one receipt. Checked before any PIN is
+          // spent, and case-insensitively, so a re-typed or photo-read invoice
+          // number cannot file the same bill twice.
+          const duplicate = await findDuplicateSupplierInvoice(db, {
+            organizationId: scope.organizationId,
+            supplierId: input.supplierId,
+            supplierInvoiceRef: input.supplierInvoiceRef,
+          });
+          if (duplicate) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+          }
           let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
             null;
           if (input.purchaseOrderId) {

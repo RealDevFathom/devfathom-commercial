@@ -12,11 +12,15 @@ export const marketingScopeInput = z.object({ branchId: id }).strict();
 export const marketingCampaignInput = marketingScopeInput.extend({ campaignId: id }).strict();
 const rule = z
   .object({
-    field: z.enum(['receiptCount', 'daysSinceLastReceipt']),
+    field: z.enum(['receiptCount', 'daysSinceLastReceipt', 'churnScore']),
     operator: z.enum(['eq', 'gte', 'lte']),
     value: z.number().int().min(0).max(100000),
   })
-  .strict();
+  .strict()
+  .refine((r) => r.field !== 'churnScore' || r.value <= 100, {
+    message: 'Churn score rules use a value from 0 to 100.',
+    path: ['value'],
+  });
 const definition = z.object({ version: z.literal(1), all: z.array(rule).min(1).max(10) }).strict();
 const quietHours = z
   .object({ startHour: z.number().int().min(0).max(23), endHour: z.number().int().min(0).max(23) })
@@ -322,22 +326,37 @@ async function evaluateCampaign(
     throw new MarketingWorkflowError(
       'Audience exceeds the 500-customer sandbox limit. Narrow the branch audience before capture.'
     );
+  // Nightly churn scores (DEV-83). A customer without a stored score never
+  // matches a churn rule, so a missing nightly run narrows, never widens.
+  const churnScores = new Map<string, number>();
+  if (rules.all.some((r) => r.field === 'churnScore')) {
+    const customerIds = sales.flatMap((sale) => (sale.customerId ? [sale.customerId] : []));
+    if (customerIds.length)
+      for (const row of await db.pharmacyCustomerChurnScore.findMany({
+        where: { ...whereScope(scope), customerId: { in: customerIds } },
+        select: { customerId: true, score: true },
+      }))
+        churnScores.set(row.customerId, row.score);
+  }
   let prepared = 0;
   const exclusions: Record<string, number> = {};
   for (const sale of sales) {
     if (!sale.customerId || !sale._max.completedAt) continue;
-    const values = {
+    const values: Record<'receiptCount' | 'daysSinceLastReceipt' | 'churnScore', number | null> = {
       receiptCount: sale._count._all,
       daysSinceLastReceipt: Math.floor((now.getTime() - sale._max.completedAt.getTime()) / DAY),
+      churnScore: churnScores.get(sale.customerId) ?? null,
     };
     if (
-      !rules.all.every((r) =>
-        r.operator === 'eq'
-          ? values[r.field] === r.value
+      !rules.all.every((r) => {
+        const value = values[r.field];
+        if (value === null) return false;
+        return r.operator === 'eq'
+          ? value === r.value
           : r.operator === 'gte'
-            ? values[r.field] >= r.value
-            : values[r.field] <= r.value
-      )
+            ? value >= r.value
+            : value <= r.value;
+      })
     )
       continue;
     // A shared row lock serializes captures across campaigns AND branches.

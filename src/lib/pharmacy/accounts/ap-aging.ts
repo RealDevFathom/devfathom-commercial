@@ -1,0 +1,262 @@
+/**
+ * DEV-103: bounded, native-only accounts-payable aging.
+ *
+ * Only native AP invoices and their native settlements are read. A generic
+ * bookkeeping transaction, a purchase invoice or a manual allocation is never
+ * counted, so the view cannot be inflated or settled from outside the AP
+ * commands.
+ *
+ * Historical eligibility uses two business clocks and an inclusive as-of day:
+ *   - the invoice clock: an invoice counts once its invoice date is on or
+ *     before the as-of day, and stops counting once its reversal date is;
+ *   - the payment clock: a settlement reduces the balance once its payment
+ *     instant is on or before the as-of day, and stops once its reversal is.
+ * Days past due are measured from the due date to the as-of day.
+ *
+ * The read is bounded: at most AP_AGING_MAX_INVOICES eligible invoices are
+ * scanned (oldest due first). A larger branch is reported as an incomplete
+ * view, never as complete totals. The page and its CSV render the same view.
+ */
+import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { PharmacyApInvoiceError } from './ap-invoices';
+
+export const AP_AGING_MAX_INVOICES = 1_000;
+const DAY_MS = 86_400_000;
+const EARLIEST = new Date('2000-01-01T00:00:00.000Z');
+
+export const AP_AGING_BUCKETS = [
+  'CURRENT',
+  'DAYS_1_30',
+  'DAYS_31_60',
+  'DAYS_61_90',
+  'DAYS_OVER_90',
+] as const;
+export type ApAgingBucket = (typeof AP_AGING_BUCKETS)[number];
+
+export const AP_AGING_BUCKET_LABELS: Record<ApAgingBucket, string> = {
+  CURRENT: 'Not yet due',
+  DAYS_1_30: '1–30 days',
+  DAYS_31_60: '31–60 days',
+  DAYS_61_90: '61–90 days',
+  DAYS_OVER_90: 'Over 90 days',
+};
+
+export function agingBucket(daysPastDue: number): ApAgingBucket {
+  if (daysPastDue <= 0) return 'CURRENT';
+  if (daysPastDue <= 30) return 'DAYS_1_30';
+  if (daysPastDue <= 60) return 'DAYS_31_60';
+  if (daysPastDue <= 90) return 'DAYS_61_90';
+  return 'DAYS_OVER_90';
+}
+
+/** The as-of calendar day (UTC midnight) and its exclusive end instant. */
+export function apAgingWindow(asOf: string, now: Date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new PharmacyApInvoiceError('INVALID_DATE');
+  const day = new Date(`${asOf}T00:00:00.000Z`);
+  if (Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== asOf) {
+    throw new PharmacyApInvoiceError('INVALID_DATE');
+  }
+  const today = new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000Z`);
+  if (day < EARLIEST || day > today) throw new PharmacyApInvoiceError('INVALID_DATE');
+  return { day, cutoff: new Date(day.getTime() + DAY_MS) };
+}
+
+export type ApAgingInvoiceInput = {
+  id: string;
+  reference: string;
+  payeeName: string;
+  supplierInvoiceRef: string;
+  invoiceDate: Date;
+  dueDate: Date;
+  amountMinor: number;
+  currency: string;
+  status: string;
+  reversedAt: Date | null;
+  settlements: ReadonlyArray<{
+    amountMinor: number;
+    paidAt: Date;
+    status: string;
+    reversedAt: Date | null;
+  }>;
+};
+
+export type ApAgingRow = {
+  invoiceId: string;
+  reference: string;
+  payeeName: string;
+  supplierInvoiceRef: string;
+  invoiceDate: string;
+  dueDate: string;
+  currency: string;
+  amountMinor: number;
+  paidMinor: number;
+  outstandingMinor: number;
+  daysPastDue: number;
+  bucket: ApAgingBucket;
+};
+
+export type ApAgingTotals = { currency: string } & Record<ApAgingBucket | 'TOTAL', number>;
+
+export type ApAgingView = {
+  asOf: string;
+  complete: boolean;
+  scannedInvoices: number;
+  rows: ApAgingRow[];
+  totals: ApAgingTotals[];
+};
+
+const before = (value: Date | null, cutoff: Date) => value !== null && value < cutoff;
+
+/** Pure aging of already-read native invoices as of one inclusive day. */
+export function computeApAging(
+  invoices: readonly ApAgingInvoiceInput[],
+  window: { day: Date; cutoff: Date },
+  complete: boolean
+): ApAgingView {
+  const rows: ApAgingRow[] = [];
+  for (const invoice of invoices) {
+    if (!(invoice.invoiceDate < window.cutoff)) continue;
+    if (invoice.status === 'REVERSED' && before(invoice.reversedAt, window.cutoff)) continue;
+    const paidMinor = invoice.settlements
+      .filter(
+        (settlement) =>
+          settlement.paidAt < window.cutoff &&
+          !(settlement.status === 'REVERSED' && before(settlement.reversedAt, window.cutoff))
+      )
+      .reduce((sum, settlement) => sum + settlement.amountMinor, 0);
+    const outstandingMinor = invoice.amountMinor - paidMinor;
+    if (outstandingMinor <= 0) continue;
+    const daysPastDue = Math.floor((window.day.getTime() - invoice.dueDate.getTime()) / DAY_MS);
+    rows.push({
+      invoiceId: invoice.id,
+      reference: invoice.reference,
+      payeeName: invoice.payeeName,
+      supplierInvoiceRef: invoice.supplierInvoiceRef,
+      invoiceDate: invoice.invoiceDate.toISOString().slice(0, 10),
+      dueDate: invoice.dueDate.toISOString().slice(0, 10),
+      currency: invoice.currency,
+      amountMinor: invoice.amountMinor,
+      paidMinor,
+      outstandingMinor,
+      daysPastDue,
+      bucket: agingBucket(daysPastDue),
+    });
+  }
+  rows.sort(
+    (a, b) =>
+      a.dueDate.localeCompare(b.dueDate) ||
+      a.reference.localeCompare(b.reference) ||
+      a.invoiceId.localeCompare(b.invoiceId)
+  );
+  const totals = new Map<string, ApAgingTotals>();
+  for (const row of rows) {
+    const total =
+      totals.get(row.currency) ??
+      ({
+        currency: row.currency,
+        CURRENT: 0,
+        DAYS_1_30: 0,
+        DAYS_31_60: 0,
+        DAYS_61_90: 0,
+        DAYS_OVER_90: 0,
+        TOTAL: 0,
+      } satisfies ApAgingTotals);
+    total[row.bucket] += row.outstandingMinor;
+    total.TOTAL += row.outstandingMinor;
+    totals.set(row.currency, total);
+  }
+  return {
+    asOf: window.day.toISOString().slice(0, 10),
+    complete,
+    scannedInvoices: invoices.length,
+    rows,
+    totals: [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency)),
+  };
+}
+
+/** Reads at most AP_AGING_MAX_INVOICES eligible native invoices and ages them. */
+export async function readApAging(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  asOf: string,
+  now: Date = new Date()
+): Promise<ApAgingView> {
+  const window = apAgingWindow(asOf, now);
+  const invoices = await db.pharmacyApInvoice.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      invoiceDate: { lt: window.cutoff },
+      OR: [{ status: 'POSTED' }, { reversedAt: { gte: window.cutoff } }],
+    },
+    select: {
+      id: true,
+      reference: true,
+      payeeName: true,
+      supplierInvoiceRef: true,
+      invoiceDate: true,
+      dueDate: true,
+      amountMinor: true,
+      currency: true,
+      status: true,
+      reversedAt: true,
+      settlements: {
+        where: { paidAt: { lt: window.cutoff } },
+        select: { amountMinor: true, paidAt: true, status: true, reversedAt: true },
+      },
+    },
+    orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+    take: AP_AGING_MAX_INVOICES + 1,
+  });
+  const complete = invoices.length <= AP_AGING_MAX_INVOICES;
+  return computeApAging(invoices.slice(0, AP_AGING_MAX_INVOICES), window, complete);
+}
+
+function csvCell(value: unknown) {
+  const normalized = String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .trimStart();
+  return `"${formulaSafeCell(normalized).replaceAll('"', '""')}"`;
+}
+
+/** The CSV of exactly the rows the page shows, with the view's completeness. */
+export function apAgingCsv(view: ApAgingView, branchId: string) {
+  const header = [
+    'branch_id',
+    'as_of_date',
+    'view_complete',
+    'reference',
+    'payee',
+    'supplier_invoice_ref',
+    'invoice_date',
+    'due_date',
+    'days_past_due',
+    'bucket',
+    'currency',
+    'invoice_amount_minor',
+    'paid_minor',
+    'outstanding_minor',
+  ];
+  return [
+    header,
+    ...view.rows.map((row) => [
+      branchId,
+      view.asOf,
+      view.complete ? 'true' : 'false',
+      row.reference,
+      row.payeeName,
+      row.supplierInvoiceRef,
+      row.invoiceDate,
+      row.dueDate,
+      row.daysPastDue,
+      row.bucket,
+      row.currency,
+      row.amountMinor,
+      row.paidMinor,
+      row.outstandingMinor,
+    ]),
+  ]
+    .map((line) => line.map(csvCell).join(','))
+    .join('\r\n');
+}

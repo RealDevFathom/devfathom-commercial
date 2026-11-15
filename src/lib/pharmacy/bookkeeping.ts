@@ -51,6 +51,7 @@ export class PharmacyBookkeepingError extends Error {
       | 'RECONCILIATION_MISMATCH'
       | 'INVALID_CHEQUE'
       | 'COUNTER_KHATA_RECEIPT'
+      | 'NATIVE_AP_SETTLEMENT'
   ) {
     super(reason);
     this.name = 'PharmacyBookkeepingError';
@@ -130,11 +131,29 @@ export function bookkeepingJournalLines(input: PostBookkeepingInput): JournalLin
   }
 }
 
+/**
+ * DEV-103: a supplier payment made against a native AP invoice is a canonical
+ * SUPPLIER_PAYMENT transaction whose idempotency key carries this prefix. Only
+ * the AP settlement commands may create or reverse it, so its native link and
+ * the ledger can never disagree.
+ */
+export const NATIVE_AP_PAYMENT_KEY_PREFIX = 'ap-invoice-payment:';
+
+export function isNativeApSettlementTransaction(transaction: { idempotencyKey: string }) {
+  return transaction.idempotencyKey.startsWith(NATIVE_AP_PAYMENT_KEY_PREFIX);
+}
+
+/** Internal capability passed only by the native AP settlement commands. */
+export type NativeApSettlementCapability = { nativeApSettlement?: true };
+
 export async function postBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
-  input: PostBookkeepingInput
+  input: PostBookkeepingInput,
+  options: NativeApSettlementCapability = {}
 ) {
+  if (isNativeApSettlementTransaction(input) && !options.nativeApSettlement)
+    throw new PharmacyBookkeepingError('NATIVE_AP_SETTLEMENT');
   positiveMinor(input.amountMinor);
   await lockPharmacyLedgerScope(db, scope);
   await assertPeriodOpen(db, scope, input.occurredAt);
@@ -210,7 +229,8 @@ export function isCounterKhataRepayment(transaction: { idempotencyKey: string })
 export async function reverseBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
-  input: { transactionId: string; at: Date; reason: string; idempotencyKey: string }
+  input: { transactionId: string; at: Date; reason: string; idempotencyKey: string },
+  options: NativeApSettlementCapability = {}
 ) {
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
   await lockPharmacyLedgerScope(db, scope);
@@ -224,6 +244,10 @@ export async function reverseBookkeepingTransaction(
     include: { bankMatches: { where: { reversedAt: null } } },
   });
   if (!transaction?.journalEntryId) throw new PharmacyBookkeepingError('NOT_FOUND');
+  // DEV-103: the native AP interlock runs before the status/replay shortcut, so
+  // a generic reverse can neither reverse nor appear to replay an AP payment.
+  if (isNativeApSettlementTransaction(transaction) && !options.nativeApSettlement)
+    throw new PharmacyBookkeepingError('NATIVE_AP_SETTLEMENT');
   if (transaction.status === 'REVERSED') return transaction;
   if (transaction.status !== 'POSTED') throw new PharmacyBookkeepingError('INVALID_STATE');
   if (isCounterKhataRepayment(transaction))
