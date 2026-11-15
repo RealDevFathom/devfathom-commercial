@@ -21,18 +21,32 @@ export function readList(file: string): string[] {
   return parseList(readFileSync(file, 'utf8'));
 }
 
-/** The ledger on origin/develop, or [] when absent or git is unavailable. */
-export function readBaseLedger(): string[] {
+/** A list on origin/develop; unavailable bases fail CI and are skipped locally. */
+export function readBaseList(file: string): string[] | null {
   try {
     return parseList(
-      execFileSync('git', ['show', `origin/develop:${LEDGER_FILE}`], {
+      execFileSync('git', ['show', `origin/develop:${file}`], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       })
     );
   } catch {
-    return [];
+    if (process.env.CI) {
+      throw new Error(
+        `Cannot read origin/develop:${file}. Fetch origin develop before checking migrations.`
+      );
+    }
+    return null;
   }
+}
+
+export function readBaseLedger(): string[] | null {
+  return readBaseList(LEDGER_FILE);
+}
+
+/** Frozen lists cannot be extended, shortened, or reordered. */
+export function isUnchanged(base: string[], current: string[]): boolean {
+  return base.length === current.length && isAppendOnly(base, current);
 }
 
 /** True when `base` is an unchanged leading prefix of `current` (append-only). */

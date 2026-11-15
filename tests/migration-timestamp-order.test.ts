@@ -6,9 +6,11 @@ import { describe, expect, it } from 'vitest';
 import {
   HOW_TO_FIX,
   isAppendOnly,
+  isUnchanged,
   LEDGER_FILE,
   LEGACY_FILE,
   readBaseLedger,
+  readBaseList,
   readList,
 } from '../scripts/qa/migration-rules';
 
@@ -35,6 +37,15 @@ const all = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
 const added = all.filter((n) => !legacySet.has(n));
 
 describe('migration timestamp order and wrapping rules', () => {
+  it('keeps the legacy list identical to origin/develop (no additions, removal or reorder)', (ctx) => {
+    const base = readBaseList(LEGACY_FILE);
+    if (base === null) {
+      ctx.skip('origin/develop legacy list is unavailable locally; fetch origin develop');
+      return;
+    }
+    expect(isUnchanged(base, legacy), `legacy list changed. ${HOW_TO_FIX}`).toBe(true);
+  });
+
   it('keeps every legacy migration in place (no rename or re-stamp)', () => {
     expect(all.filter((n) => legacySet.has(n))).toEqual(legacy.slice().sort());
   });
@@ -48,10 +59,13 @@ describe('migration timestamp order and wrapping rules', () => {
     expect(ledger.slice().sort(), `ledger and directory disagree. ${HOW_TO_FIX}`).toEqual(added);
   });
 
-  it('only appends to the ledger on origin/develop (no insert, reorder or removal)', () => {
-    expect(isAppendOnly(readBaseLedger(), ledger), `ledger is not append-only. ${HOW_TO_FIX}`).toBe(
-      true
-    );
+  it('only appends to the ledger on origin/develop (no insert, reorder or removal)', (ctx) => {
+    const base = readBaseLedger();
+    if (base === null) {
+      ctx.skip('origin/develop ledger is unavailable locally; fetch origin develop');
+      return;
+    }
+    expect(isAppendOnly(base, ledger), `ledger is not append-only. ${HOW_TO_FIX}`).toBe(true);
   });
 
   it('detects a middle insertion, reorder or removal as not append-only', () => {
