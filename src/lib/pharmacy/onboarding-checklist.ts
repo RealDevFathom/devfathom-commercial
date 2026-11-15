@@ -116,10 +116,10 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
     linkLabel: 'Set up medicines and packs',
   },
   OPENING_STOCK_READINESS: {
-    todo: 'Receive opening stock against at least one lot, so the ledger starts from a counted position.',
+    todo: 'Import your opening count, review the dry-run diff, and commit it so the ledger starts from a counted position.',
     done: 'Opening stock has been received into the ledger.',
-    href: '/pharmacy/purchasing/receiving',
-    linkLabel: 'Receive opening stock',
+    href: '/pharmacy/inventory/import',
+    linkLabel: 'Import opening stock',
   },
   PARTIES_AND_BALANCES: {
     todo: 'Add at least one authorized, active supplier so purchasing and returns have a counterparty.',
