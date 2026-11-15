@@ -236,6 +236,14 @@ export const restaurantShiftsRouter = router({
         await managerAuthorization(ctx, await branchForShift(ctx, input.id));
         const shift = await ctx.db.$transaction(async (tx) => {
           await managerShift(tx, ctx.entitlements.organizationId, input.id);
+          // Take the same shift row lock that clock corrections take, before
+          // cancelShift reads attendance. Otherwise a correction committing
+          // mid-cancel can leave a cancelled shift with open attendance.
+          await tx.$queryRaw(
+            Prisma.sql`SELECT "id" FROM "restaurant_shifts"
+              WHERE "id" = ${input.id} AND "organizationId" = ${ctx.entitlements.organizationId}
+              FOR UPDATE`
+          );
           const cancelled = await cancelShift(
             tx as unknown as ScopedDb,
             input.id,
