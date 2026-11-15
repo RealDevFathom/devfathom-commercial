@@ -338,6 +338,7 @@ describe('DEV-716 inline Khata signup', () => {
       '3001234567',
       '923001234567',
       '0092 300 1234567',
+      '۰۳۰۰ ۱۲۳۴۵۶۷',
     ])
       expect(normalizeKhataPhone(phone)).toBe('+923001234567');
     expect(normalizeKhataPhone('042-3576 1234')).toBe('04235761234');

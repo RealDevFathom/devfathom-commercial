@@ -6,6 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { writePatientConsent } from './consent-writer';
 import { linkCustomerToSale } from './customer-loyalty';
 import { auditPatientRead } from './patient-prescriptions';
+import { normalizeWhatsAppNumber } from './whatsapp/messages';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -424,24 +425,16 @@ export async function authorizeKhataCharge(
 
 /**
  * One canonical form per number, so the same phone always finds the same patient.
- * Pakistani mobiles (03xx…, 3xx…, 923xx…, 00923xx…, +92 3xx…) become `+923xxxxxxxxx`;
- * any other number keeps its digits, with `00` read as an international `+`.
+ * Reuses the WhatsApp normalizer (03xx…, 3xx…, 0092…, +92…, Urdu digits → `+92…`);
+ * numbers it rejects, such as local landlines, keep their digits, with `00` read as `+`.
  */
 export function normalizeKhataPhone(phone: string) {
+  const international = normalizeWhatsAppNumber(phone);
+  if (international) return `+${international}`;
   const trimmed = phone.trim();
   const digits = trimmed.replace(/\D/g, '');
-  const international = trimmed.startsWith('+') || digits.startsWith('00');
-  const national = international && digits.startsWith('00') ? digits.slice(2) : digits;
-  const mobile =
-    /^923\d{9}$/.test(national) && (international || national.length === 12)
-      ? national.slice(2)
-      : /^03\d{9}$/.test(national) && !international
-        ? national.slice(1)
-        : /^3\d{9}$/.test(national) && !international
-          ? national
-          : null;
-  if (mobile) return `+92${mobile}`;
-  return `${international ? '+' : ''}${national}`;
+  if (digits.startsWith('00')) return `+${digits.slice(2)}`;
+  return `${trimmed.startsWith('+') ? '+' : ''}${digits}`;
 }
 
 /**
