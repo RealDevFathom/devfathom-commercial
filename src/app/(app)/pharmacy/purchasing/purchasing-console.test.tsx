@@ -192,6 +192,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     purchaseOrders: vi.fn().mockResolvedValue([]),
     goodsReceipts: vi.fn().mockResolvedValue([]),
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
+    receiptDebitNotes: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
@@ -1516,5 +1517,69 @@ describe('reorder advice in context (DEV-594)', () => {
     render(await OverviewPage({ searchParams: params() }));
 
     expect(screen.queryByRole('heading', { name: 'Reorder advice' })).toBeNull();
+  });
+});
+
+describe('three-way match draft debit notes (DEV-691)', () => {
+  it('lists each draft with its computed claim and offers confirm and discard', async () => {
+    const receiptDebitNotes = vi.fn().mockResolvedValue([
+      {
+        id: 'rdn-1',
+        status: 'DRAFT',
+        totalMinor: 212_400,
+        raisedAt: new Date('2026-11-15T09:00:00.000Z'),
+        goodsReceipt: { reference: 'GRN-7', supplierInvoiceRef: 'INV-77', status: 'POSTED' },
+        supplier: { name: 'Karachi Distributors' },
+        lines: [
+          {
+            id: 'rdnl-1',
+            reason: 'BILLED_SHORTAGE',
+            detail: '2 packs billed but not delivered.',
+            packs: 2,
+            amountMinor: 212_400,
+            receivingException: {
+              kind: 'BILLED_SHORTAGE',
+              goodsReceiptLine: {
+                batchNumber: 'AB-12',
+                medicine: { productName: 'Amoxicillin 500mg' },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+    mocks.createCaller.mockReturnValue(callerStub({ receiptDebitNotes }));
+
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+
+    expect(receiptDebitNotes).toHaveBeenCalledWith({ branchId: 'branch-1', status: 'DRAFT' });
+    expect(screen.getByRole('heading', { name: 'Draft debit notes (1)' })).toBeDefined();
+    expect(screen.getByText('Billed, not delivered')).toBeDefined();
+    expect(screen.getByText('2 packs billed but not delivered.')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Confirm debit note' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeDefined();
+  });
+
+  it('offers only discard once the receipt behind the draft is reversed', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        receiptDebitNotes: vi.fn().mockResolvedValue([
+          {
+            id: 'rdn-2',
+            status: 'DRAFT',
+            totalMinor: 1_000,
+            raisedAt: new Date('2026-11-15T09:00:00.000Z'),
+            goodsReceipt: { reference: 'GRN-8', supplierInvoiceRef: 'INV-78', status: 'REVERSED' },
+            supplier: { name: 'Karachi Distributors' },
+            lines: [],
+          },
+        ]),
+      })
+    );
+
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+
+    expect(screen.queryByRole('button', { name: 'Confirm debit note' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeDefined();
   });
 });

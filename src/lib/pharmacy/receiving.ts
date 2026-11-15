@@ -371,7 +371,10 @@ export type ReceivingExceptionKind =
   | 'PRICE_CONFLICT'
   | 'PACK_CONFLICT'
   | 'BONUS_SHORTAGE'
-  | 'SCHEME_EXPIRED';
+  | 'SCHEME_EXPIRED'
+  | 'BILLED_SHORTAGE'
+  | 'BATCH_CONFLICT'
+  | 'EXPIRY_CONFLICT';
 
 export type MatchException = {
   kind: ReceivingExceptionKind;
@@ -398,6 +401,21 @@ export type OrderedTerms = {
   previouslyReceivedBonusUnits?: number;
   /** DEV-690: last day the distributor's scheme on this order line is honoured. */
   schemeValidUntil?: Date | null;
+  /** DEV-691: shortest shelf life, in days from arrival, the order accepts. */
+  minimumExpiryDays?: number | null;
+};
+
+/**
+ * DEV-691: the distributor bill's own line, as captured from the paper or the
+ * scanned invoice. Each field is optional because an older receipt, or a bill
+ * that does not print it, has nothing to compare; a missing field is never a
+ * mismatch.
+ */
+export type BilledTerms = {
+  /** Paid packs the bill charges for. Bonus packs are quantity only. */
+  paidPacks: number | null;
+  batchNumber: string | null;
+  printedExpiry: Date | null;
 };
 
 /** The goods-and-invoice side of the match. */
@@ -411,7 +429,26 @@ export type ReceivedTerms = {
   bonusCanonicalUnits?: number;
   /** DEV-690: when the goods arrived, judged against the scheme's validity. */
   receivedAt?: Date;
+  /** DEV-691: paid packs that physically arrived on this line. */
+  receivedPacks?: number;
+  /** DEV-691: the batch and expiry printed on the packs that arrived. */
+  batchNumber?: string;
+  printedExpiry?: Date;
+  /** DEV-691: the captured distributor bill line, when there is one. */
+  billed?: BilledTerms | null;
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Batch numbers compare without case or spacing: `ab 12` on a bill is `AB12` on the pack. */
+function normalizedBatch(value: string): string {
+  return value.replace(/\s+/g, '').toUpperCase();
+}
+
+/** Distributor bills print a month; two expiries agree when their month agrees. */
+function expiryMonth(value: Date): string {
+  return value.toISOString().slice(0, 7);
+}
 
 /**
  * PUR-04: compare the purchase order, the supplier invoice and the goods, and
@@ -531,6 +568,76 @@ export function matchReceiptLine(input: {
     });
   }
 
+  // DEV-691: the bill leg. The order says what was wanted and the goods say
+  // what came; the distributor's bill says what is being charged for, and the
+  // packs must be the batch and expiry the bill names.
+  const billed = received.billed ?? null;
+  if (billed?.paidPacks != null && received.receivedPacks !== undefined) {
+    assertUnits(billed.paidPacks);
+    assertUnits(received.receivedPacks);
+    if (billed.paidPacks > received.receivedPacks) {
+      const short = billed.paidPacks - received.receivedPacks;
+      exceptions.push({
+        kind: 'BILLED_SHORTAGE',
+        detail: `Bill charges for ${billed.paidPacks} packs; ${received.receivedPacks} arrived, short by ${short}.`,
+        expectedUnits: billed.paidPacks * received.canonicalUnitsPerPack,
+        observedUnits: received.receivedPacks * received.canonicalUnitsPerPack,
+        expectedMinor: null,
+        observedMinor: null,
+      });
+    }
+  }
+
+  if (
+    billed?.batchNumber &&
+    received.batchNumber !== undefined &&
+    normalizedBatch(billed.batchNumber) !== normalizedBatch(received.batchNumber)
+  ) {
+    exceptions.push({
+      kind: 'BATCH_CONFLICT',
+      detail: `Bill names batch ${billed.batchNumber}; the packs are batch ${received.batchNumber}.`,
+      expectedUnits: null,
+      observedUnits: null,
+      expectedMinor: null,
+      observedMinor: null,
+    });
+  }
+
+  if (received.printedExpiry) {
+    const reasons: string[] = [];
+    if (
+      billed?.printedExpiry &&
+      expiryMonth(billed.printedExpiry) !== expiryMonth(received.printedExpiry)
+    ) {
+      reasons.push(
+        `Bill prints expiry ${expiryMonth(billed.printedExpiry)}; the packs print ${expiryMonth(received.printedExpiry)}.`
+      );
+    }
+    if (
+      ordered?.minimumExpiryDays != null &&
+      ordered.minimumExpiryDays > 0 &&
+      received.receivedAt
+    ) {
+      const earliest = new Date(received.receivedAt.getTime() + ordered.minimumExpiryDays * DAY_MS);
+      if (received.printedExpiry.getTime() < earliest.getTime()) {
+        reasons.push(
+          `Order asks for at least ${ordered.minimumExpiryDays} days of shelf life; the packs expire ` +
+            `${received.printedExpiry.toISOString().slice(0, 10)}.`
+        );
+      }
+    }
+    if (reasons.length > 0) {
+      exceptions.push({
+        kind: 'EXPIRY_CONFLICT',
+        detail: reasons.join(' '),
+        expectedUnits: null,
+        observedUnits: null,
+        expectedMinor: null,
+        observedMinor: null,
+      });
+    }
+  }
+
   if (ordered && received.canonicalUnitsPerPack !== ordered.canonicalUnitsPerPack) {
     exceptions.push({
       kind: 'PACK_CONFLICT',
@@ -543,6 +650,138 @@ export function matchReceiptLine(input: {
   }
 
   return exceptions;
+}
+
+// ---------------------------------------------------------------------------
+// DEV-691 — the draft debit note a three-way match proposes
+// ---------------------------------------------------------------------------
+
+export type ReceiptDebitNoteReason = 'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE' | 'WRONG_ITEM';
+
+export type ReceiptDebitNoteLineDraft = {
+  reason: ReceiptDebitNoteReason;
+  /** The exception this claim answers; the caller links it to the stored row. */
+  sourceKind: ReceivingExceptionKind;
+  detail: string;
+  packs: number;
+  pricePerPackMinor: number;
+  /** What the bill charged for these packs: net of discount, with its tax. */
+  amountMinor: number;
+};
+
+/** The exception kinds a receipt debit note can claim against. */
+const CLAIMABLE_KINDS: readonly ReceivingExceptionKind[] = [
+  'BILLED_SHORTAGE',
+  'BATCH_CONFLICT',
+  'EXPIRY_CONFLICT',
+  'PRICE_CONFLICT',
+];
+
+/** The billed money for `packs` at `pricePerPackMinor`, rounded as receiving rounds it. */
+function billedAmountMinor(
+  packs: number,
+  pricePerPackMinor: number,
+  discountBps: number,
+  taxBps: number
+): number {
+  const grossMinor = packs * pricePerPackMinor;
+  assertMoney(grossMinor);
+  const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
+  return netMinor + divideRoundHalfUp(netMinor * taxBps, BPS);
+}
+
+/**
+ * DEV-691: turn one receipt line's match exceptions into the lines of a draft
+ * debit note. Deterministic arithmetic over recorded numbers only; nothing is
+ * estimated, and the result is a proposal a person confirms or discards.
+ *
+ * - Packs billed but not delivered are claimed in full at the invoiced price.
+ * - Packs that arrived with a batch or expiry the bill (or the order) does not
+ *   accept are claimed in full: they are the wrong items.
+ * - Otherwise, packs invoiced above the ordered price are claimed for the
+ *   difference only.
+ *
+ * Rejected (damaged) units are not claimed here: they leave through a purchase
+ * return, which raises its own debit note, and claiming them twice would
+ * overstate what the supplier owes. Nothing here ever changes a price.
+ */
+export function receiptDebitNoteLines(input: {
+  exceptions: readonly MatchException[];
+  line: {
+    receivedPacks: number;
+    billedPacks: number | null;
+    invoicedPricePerPackMinor: number;
+    discountBps: number;
+    taxBps: number;
+  };
+}): readonly ReceiptDebitNoteLineDraft[] {
+  const { exceptions, line } = input;
+  const byKind = new Map(exceptions.map((exception) => [exception.kind, exception]));
+  if (!CLAIMABLE_KINDS.some((kind) => byKind.has(kind))) return [];
+  assertUnits(line.receivedPacks);
+  assertMoney(line.invoicedPricePerPackMinor);
+  const drafts: ReceiptDebitNoteLineDraft[] = [];
+
+  const shortage = byKind.get('BILLED_SHORTAGE');
+  if (shortage && line.billedPacks != null && line.billedPacks > line.receivedPacks) {
+    const packs = line.billedPacks - line.receivedPacks;
+    drafts.push({
+      reason: 'BILLED_SHORTAGE',
+      sourceKind: 'BILLED_SHORTAGE',
+      detail: `${packs} packs billed but not delivered.`,
+      packs,
+      pricePerPackMinor: line.invoicedPricePerPackMinor,
+      amountMinor: billedAmountMinor(
+        packs,
+        line.invoicedPricePerPackMinor,
+        line.discountBps,
+        line.taxBps
+      ),
+    });
+  }
+
+  const wrong = byKind.get('BATCH_CONFLICT') ?? byKind.get('EXPIRY_CONFLICT');
+  if (wrong && line.receivedPacks > 0) {
+    drafts.push({
+      reason: 'WRONG_ITEM',
+      sourceKind: wrong.kind,
+      detail: `${line.receivedPacks} packs do not match the bill or order: ${wrong.detail}`,
+      packs: line.receivedPacks,
+      pricePerPackMinor: line.invoicedPricePerPackMinor,
+      amountMinor: billedAmountMinor(
+        line.receivedPacks,
+        line.invoicedPricePerPackMinor,
+        line.discountBps,
+        line.taxBps
+      ),
+    });
+  } else {
+    const price = byKind.get('PRICE_CONFLICT');
+    if (
+      price &&
+      price.expectedMinor != null &&
+      price.observedMinor != null &&
+      price.observedMinor > price.expectedMinor &&
+      line.receivedPacks > 0
+    ) {
+      const overPerPack = price.observedMinor - price.expectedMinor;
+      drafts.push({
+        reason: 'PRICE_OVERCHARGE',
+        sourceKind: 'PRICE_CONFLICT',
+        detail: `${line.receivedPacks} packs invoiced ${overPerPack} above the ordered price per pack.`,
+        packs: line.receivedPacks,
+        pricePerPackMinor: overPerPack,
+        amountMinor: billedAmountMinor(
+          line.receivedPacks,
+          overPerPack,
+          line.discountBps,
+          line.taxBps
+        ),
+      });
+    }
+  }
+
+  return drafts.filter((draft) => draft.amountMinor > 0);
 }
 
 /** DRAFT → POSTED → REVERSED; a posted receipt is corrected by reversal only. */

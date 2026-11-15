@@ -49,6 +49,10 @@ type LotInput = {
   rejected?: number;
   unitsPerPack?: number;
   invoicedPricePerPackMinor?: number;
+  /** DEV-691: the captured distributor bill line. */
+  billedPacks?: number;
+  billedBatchNumber?: string;
+  billedPrintedExpiry?: Date;
 };
 
 type PriorReceiptLine = {
@@ -96,6 +100,12 @@ function receiptLine(lot: LotInput) {
     rejectionReason: rejected > 0 ? 'Crushed carton' : null,
     invoicedPricePerPackMinor: lot.invoicedPricePerPackMinor ?? LIST_PRICE,
     gs1Warnings: [] as string[],
+    receivedPacks: Math.floor(lot.received / (lot.unitsPerPack ?? 10)),
+    discountBps: 0,
+    taxBps: 0,
+    billedPacks: lot.billedPacks ?? null,
+    billedBatchNumber: lot.billedBatchNumber ?? null,
+    billedPrintedExpiry: lot.billedPrintedExpiry ?? null,
   };
 }
 
@@ -211,6 +221,10 @@ function receiptDb(input: {
       create: vi.fn(() => Promise.resolve({ id: `ex_${++exceptionSeq}` })),
     },
     pharmacyPurchaseOrder: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    pharmacyReceiptDebitNote: {
+      create: vi.fn(({ data }: { data: object }) => Promise.resolve({ id: 'rdn_1', ...data })),
+    },
+    pharmacyReceiptDebitNoteLine: { createMany: vi.fn().mockResolvedValue({ count: 0 }) },
   };
 
   return { db: db as unknown as ScopedDb, mocks: db };
@@ -656,5 +670,120 @@ describe('postGoodsReceipt — several lots of one order line (DEV-752)', () => 
         kind: 'DAMAGE',
       }),
     ]);
+  });
+});
+
+describe('postGoodsReceipt — bill leg and draft debit note (DEV-691)', () => {
+  it('proposes nothing when goods, order and bill agree', async () => {
+    const { db, mocks } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [
+        {
+          id: 'grl_1',
+          lineNumber: 1,
+          purchaseOrderLineId: 'pol_a',
+          received: 100,
+          billedPacks: 10,
+          billedBatchNumber: 'batch-grl_1',
+          billedPrintedExpiry: new Date('2028-12-01T00:00:00.000Z'),
+        },
+      ],
+    });
+
+    const result = await post(db);
+
+    expect(mocks.pharmacyReceivingException.create).not.toHaveBeenCalled();
+    expect(mocks.pharmacyReceiptDebitNote.create).not.toHaveBeenCalled();
+    expect(result.debitNoteDraft).toBeNull();
+  });
+
+  it('drafts a debit note for packs billed but not delivered and a wrong batch', async () => {
+    const { db, mocks } = receiptDb({
+      orderLines: [orderLine('pol_a', 10), orderLine('pol_b', 5)],
+      lots: [
+        {
+          id: 'grl_1',
+          lineNumber: 1,
+          purchaseOrderLineId: 'pol_a',
+          received: 80,
+          billedPacks: 10,
+        },
+        {
+          id: 'grl_2',
+          lineNumber: 2,
+          purchaseOrderLineId: 'pol_b',
+          received: 50,
+          billedBatchNumber: 'OTHER-BATCH',
+        },
+      ],
+    });
+
+    const result = await post(db);
+
+    expect(created(mocks).map((ex) => [ex.goodsReceiptLineId, ex.kind])).toEqual([
+      ['grl_1', 'SHORTAGE'],
+      ['grl_1', 'BILLED_SHORTAGE'],
+      ['grl_2', 'BATCH_CONFLICT'],
+    ]);
+    expect(mocks.pharmacyReceiptDebitNote.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: SCOPE.organizationId,
+        branchId: SCOPE.branchId,
+        goodsReceiptId: 'gr_current',
+        supplierId: 'supplier_a',
+        totalMinor: 2 * LIST_PRICE + 5 * LIST_PRICE,
+        raisedAt: AT,
+      },
+    });
+    expect(mocks.pharmacyReceiptDebitNoteLine.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          debitNoteId: 'rdn_1',
+          receivingExceptionId: 'ex_2',
+          lineNumber: 1,
+          reason: 'BILLED_SHORTAGE',
+          packs: 2,
+          amountMinor: 2 * LIST_PRICE,
+        }),
+        expect.objectContaining({
+          debitNoteId: 'rdn_1',
+          receivingExceptionId: 'ex_3',
+          lineNumber: 2,
+          reason: 'WRONG_ITEM',
+          packs: 5,
+          amountMinor: 5 * LIST_PRICE,
+        }),
+      ],
+    });
+    expect(result.debitNoteDraft).toEqual({ id: 'rdn_1', totalMinor: 7 * LIST_PRICE });
+  });
+
+  it('drafts only the overcharge when the invoice price is above the order', async () => {
+    const { db, mocks } = receiptDb({
+      orderLines: [orderLine('pol_a', 10)],
+      lots: [
+        {
+          id: 'grl_1',
+          lineNumber: 1,
+          purchaseOrderLineId: 'pol_a',
+          received: 100,
+          invoicedPricePerPackMinor: 1_100,
+        },
+      ],
+    });
+
+    const result = await post(db);
+
+    expect(result.debitNoteDraft).toEqual({ id: 'rdn_1', totalMinor: 1_000 });
+    expect(mocks.pharmacyReceiptDebitNoteLine.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          reason: 'PRICE_OVERCHARGE',
+          packs: 10,
+          pricePerPackMinor: 100,
+          receivingExceptionId: 'ex_1',
+        }),
+      ],
+    });
   });
 });

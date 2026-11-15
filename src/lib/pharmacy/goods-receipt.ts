@@ -50,8 +50,10 @@ import {
   assertSaleableOnReceipt,
   matchReceiptLine,
   PharmacyReceivingError,
+  receiptDebitNoteLines,
   type MatchException,
   type OrderedTerms,
+  type ReceiptDebitNoteLineDraft,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
 import { assertSupplierEligible } from './purchasing';
@@ -87,6 +89,8 @@ export type PostGoodsReceiptResult = {
   }>;
   /** Raised by this posting and OPEN until a human resolves them (PUR-04). */
   exceptions: ReadonlyArray<{ id: string; kind: MatchException['kind']; detail: string }>;
+  /** DEV-691: the DRAFT debit note this posting proposed, if it found anything to claim. */
+  debitNoteDraft: { id: string; totalMinor: number } | null;
 };
 
 /**
@@ -321,6 +325,7 @@ export async function postGoodsReceipt(
 
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
+  const debitNoteLines: Array<ReceiptDebitNoteLineDraft & { receivingExceptionId: string }> = [];
 
   for (const line of receipt.lines) {
     const batch = await resolveManufacturingBatch(db, scope, {
@@ -396,7 +401,7 @@ export async function postGoodsReceipt(
       .reduce((total, other) => total + other.bonusCanonicalUnits, 0);
     const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
     const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
-    for (const exception of matchReceiptLine({
+    const lineExceptions = matchReceiptLine({
       ordered: terms
         ? {
             ...terms,
@@ -413,6 +418,14 @@ export async function postGoodsReceipt(
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
         bonusCanonicalUnits: line.bonusCanonicalUnits,
         receivedAt: receipt.receivedAt,
+        receivedPacks: line.receivedPacks,
+        batchNumber: line.batchNumber,
+        printedExpiry: line.printedExpiry,
+        billed: {
+          paidPacks: line.billedPacks,
+          batchNumber: line.billedBatchNumber,
+          printedExpiry: line.billedPrintedExpiry,
+        },
       },
     }).filter(
       (exception) =>
@@ -421,7 +434,9 @@ export async function postGoodsReceipt(
           exception.kind !== 'OVERAGE' &&
           exception.kind !== 'BONUS_SHORTAGE' &&
           exception.kind !== 'SCHEME_EXPIRED')
-    )) {
+    );
+    const raisedOnLine = new Map<MatchException['kind'], string>();
+    for (const exception of lineExceptions) {
       const created = await db.pharmacyReceivingException.create({
         data: {
           organizationId: scope.organizationId,
@@ -438,7 +453,56 @@ export async function postGoodsReceipt(
         },
       });
       exceptions.push({ id: created.id, kind: exception.kind, detail: exception.detail });
+      raisedOnLine.set(exception.kind, created.id);
     }
+
+    // DEV-691: what this line's exceptions entitle the pharmacy to claim back.
+    for (const draft of receiptDebitNoteLines({
+      exceptions: lineExceptions,
+      line: {
+        receivedPacks: line.receivedPacks,
+        billedPacks: line.billedPacks,
+        invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+        discountBps: line.discountBps,
+        taxBps: line.taxBps,
+      },
+    })) {
+      const receivingExceptionId = raisedOnLine.get(draft.sourceKind);
+      if (receivingExceptionId) debitNoteLines.push({ ...draft, receivingExceptionId });
+    }
+  }
+
+  // DEV-691: the claims become one DRAFT debit note. It is a proposal: nothing
+  // is owed, sent or settled until a person confirms it.
+  let debitNoteDraft: PostGoodsReceiptResult['debitNoteDraft'] = null;
+  if (debitNoteLines.length > 0) {
+    const totalMinor = debitNoteLines.reduce((total, draft) => total + draft.amountMinor, 0);
+    if (!Number.isSafeInteger(totalMinor)) throw new PharmacyReceivingError('INVALID_MONEY');
+    const note = await db.pharmacyReceiptDebitNote.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        goodsReceiptId: receipt.id,
+        supplierId: receipt.supplierId,
+        totalMinor,
+        raisedAt: input.at,
+      },
+    });
+    await db.pharmacyReceiptDebitNoteLine.createMany({
+      data: debitNoteLines.map((draft, index) => ({
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        debitNoteId: note.id,
+        receivingExceptionId: draft.receivingExceptionId,
+        lineNumber: index + 1,
+        reason: draft.reason,
+        detail: draft.detail,
+        packs: draft.packs,
+        pricePerPackMinor: draft.pricePerPackMinor,
+        amountMinor: draft.amountMinor,
+      })),
+    });
+    debitNoteDraft = { id: note.id, totalMinor };
   }
 
   if (needsRegister && witness.pharmacistId) {
@@ -500,7 +564,7 @@ export async function postGoodsReceipt(
     }
   }
 
-  return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };
+  return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions, debitNoteDraft };
 }
 
 /**
@@ -594,6 +658,7 @@ async function orderedTermsFor(
     ),
     // The scheme comes from the distributor quote the order was raised from.
     schemeValidUntil: orderLine.purchaseOrder?.quote?.validUntil ?? null,
+    minimumExpiryDays: orderLine.minimumExpiryDays,
   };
 }
 
@@ -924,5 +989,89 @@ export function listReceivingExceptions(
       ...(filter.goodsReceiptId ? { goodsReceiptId: filter.goodsReceiptId } : {}),
     },
     orderBy: [{ raisedAt: 'asc' }, { id: 'asc' }],
+  });
+}
+
+/**
+ * DEV-691: a person decides a draft receipt debit note. CONFIRMED records that
+ * the pharmacy will claim it from the distributor; DISCARDED records that it
+ * will not. Either way the amount, its lines and the exceptions behind them are
+ * unchanged, and the decision names who made it.
+ */
+export async function decideReceiptDebitNote(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: {
+    debitNoteId: string;
+    decision: 'CONFIRMED' | 'DISCARDED';
+    note?: string;
+    at: Date;
+  }
+) {
+  const note = input.note?.trim() || null;
+  if (input.decision === 'DISCARDED' && !note) {
+    throw new PharmacyReceivingError('BYPASS_EVIDENCE_MISSING');
+  }
+  await db.$queryRaw`SELECT id FROM pharmacy_receipt_debit_notes WHERE id=${input.debitNoteId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+  const draft = await db.pharmacyReceiptDebitNote.findFirst({
+    where: { id: input.debitNoteId, organizationId: scope.organizationId },
+    include: { goodsReceipt: { select: { status: true } } },
+  });
+  if (!draft) throw new PharmacyReceivingError('NOT_FOUND');
+  if (draft.branchId !== scope.branchId) {
+    throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+  }
+  if (draft.status !== 'DRAFT') throw new PharmacyReceivingError('INVALID_TRANSITION');
+  // A reversed receipt no longer stands behind the claim; it can only be discarded.
+  if (input.decision === 'CONFIRMED' && draft.goodsReceipt.status !== 'POSTED') {
+    throw new PharmacyReceivingError('INVALID_TRANSITION');
+  }
+
+  const updated = await db.pharmacyReceiptDebitNote.updateMany({
+    where: { id: draft.id, organizationId: scope.organizationId, status: 'DRAFT' },
+    data: {
+      status: input.decision,
+      decidedAt: input.at,
+      decidedByUserId: scope.actorId,
+      decisionNote: note,
+    },
+  });
+  if (updated.count !== 1) throw new PharmacyReceivingError('INVALID_TRANSITION');
+  return { id: draft.id, status: input.decision, totalMinor: draft.totalMinor };
+}
+
+/** DEV-691: the branch's receipt debit notes, drafts first by default. */
+export function listReceiptDebitNotes(
+  db: ScopedDb,
+  scope: Pick<ReceivingScope, 'organizationId' | 'branchId'>,
+  filter: { status?: 'DRAFT' | 'CONFIRMED' | 'DISCARDED' } = {}
+) {
+  return db.pharmacyReceiptDebitNote.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: filter.status ?? 'DRAFT',
+    },
+    include: {
+      goodsReceipt: {
+        select: { reference: true, supplierInvoiceRef: true, status: true },
+      },
+      supplier: { select: { name: true } },
+      lines: {
+        orderBy: { lineNumber: 'asc' },
+        include: {
+          receivingException: {
+            select: {
+              kind: true,
+              goodsReceiptLine: {
+                select: { batchNumber: true, medicine: { select: { productName: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
+    orderBy: [{ raisedAt: 'asc' }, { id: 'asc' }],
+    take: 100,
   });
 }

@@ -352,6 +352,13 @@ const CALLS = {
       receivingExceptionId: 'exc_a',
       resolutionNote: 'Checked',
     }),
+  receiptDebitNotes: (c: Caller) => c.receiptDebitNotes({ branchId: 'branch_a' }),
+  decideReceiptDebitNote: (c: Caller) =>
+    c.decideReceiptDebitNote({
+      branchId: 'branch_a',
+      debitNoteId: 'rdn_a',
+      decision: 'CONFIRMED',
+    }),
   createPurchaseReturn: (c: Caller) =>
     c.createPurchaseReturn({
       branchId: 'branch_a',
@@ -470,6 +477,8 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   reverseGoodsReceipt: PROCUREMENT,
   receivingExceptions: PROCUREMENT,
   resolveReceivingException: PROCUREMENT,
+  receiptDebitNotes: PROCUREMENT,
+  decideReceiptDebitNote: PROCUREMENT_AND_FINANCE,
   createPurchaseReturn: PROCUREMENT_AND_FINANCE,
   submitPurchaseReturn: PROCUREMENT_AND_FINANCE,
   dispatchPurchaseReturn: PROCUREMENT_AND_FINANCE,
@@ -506,6 +515,8 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'reverseGoodsReceipt',
   'receivingExceptions',
   'resolveReceivingException',
+  'receiptDebitNotes',
+  'decideReceiptDebitNote',
   'createPurchaseReturn',
   'submitPurchaseReturn',
   'dispatchPurchaseReturn',

@@ -14,6 +14,7 @@ import {
   assertSaleableOnReceipt,
   matchReceiptLine,
   PharmacyReceivingError,
+  receiptDebitNoteLines,
   receiptLineQuantities,
   receiptLineUnitCostMinor,
   type SaleableEvidence,
@@ -538,5 +539,185 @@ describe('PUR-04 — a posted receipt is corrected by reversal, never by an edit
     ['DRAFT', 'REVERSED'],
   ] as const)('refuses %s → %s', (from, to) => {
     expect(reasonOf(() => assertGoodsReceiptTransition(from, to))).toBe('INVALID_TRANSITION');
+  });
+});
+
+describe('DEV-691 — GRN, purchase order and distributor bill three-way match', () => {
+  // 10 packs of 10 ordered at 1,000 with 120 days' minimum shelf life.
+  const ORDERED = {
+    canonicalUnitsPerPack: 10,
+    orderedCanonicalUnits: 100,
+    bonusCanonicalUnits: 0,
+    listPricePerPackMinor: 1_000,
+    previouslyReceivedUnits: 0,
+    minimumExpiryDays: 120,
+  };
+  const RECEIVED = {
+    canonicalUnitsPerPack: 10,
+    arrivedCanonicalUnits: 100,
+    rejectedCanonicalUnits: 0,
+    rejectionReason: null,
+    invoicedPricePerPackMinor: 1_000,
+    receivedAt: new Date('2026-11-15T10:00:00Z'),
+    receivedPacks: 10,
+    batchNumber: 'AB-12',
+    printedExpiry: new Date('2027-06-01T00:00:00Z'),
+    billed: {
+      paidPacks: 10,
+      batchNumber: 'ab -12',
+      printedExpiry: new Date('2027-06-30T00:00:00Z'),
+    },
+  };
+  const LINE = {
+    receivedPacks: 10,
+    billedPacks: 10,
+    invoicedPricePerPackMinor: 1_000,
+    discountBps: 0,
+    taxBps: 0,
+  };
+
+  it('raises nothing when goods, order and bill agree (batch case, spacing and day ignored)', () => {
+    expect(matchReceiptLine({ ordered: ORDERED, received: RECEIVED })).toEqual([]);
+  });
+
+  it('treats a bill that was not captured as nothing to compare', () => {
+    expect(
+      matchReceiptLine({
+        ordered: ORDERED,
+        received: {
+          ...RECEIVED,
+          billed: { paidPacks: null, batchNumber: null, printedExpiry: null },
+        },
+      })
+    ).toEqual([]);
+    expect(matchReceiptLine({ ordered: ORDERED, received: { ...RECEIVED, billed: null } })).toEqual(
+      []
+    );
+  });
+
+  it('flags packs billed but not delivered', () => {
+    const exceptions = matchReceiptLine({
+      ordered: { ...ORDERED, orderedCanonicalUnits: 80 },
+      received: {
+        ...RECEIVED,
+        arrivedCanonicalUnits: 80,
+        receivedPacks: 8,
+        billed: { ...RECEIVED.billed, paidPacks: 10 },
+      },
+    });
+    expect(exceptions).toEqual([
+      expect.objectContaining({ kind: 'BILLED_SHORTAGE', expectedUnits: 100, observedUnits: 80 }),
+    ]);
+  });
+
+  it('flags a batch that differs from the bill', () => {
+    expect(
+      matchReceiptLine({
+        ordered: ORDERED,
+        received: { ...RECEIVED, batchNumber: 'XY-99' },
+      }).map((exception) => exception.kind)
+    ).toEqual(['BATCH_CONFLICT']);
+  });
+
+  it('flags an expiry that differs from the bill or is shorter than the order accepts', () => {
+    const [billMismatch] = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, printedExpiry: new Date('2027-05-01T00:00:00Z') },
+    });
+    expect(billMismatch?.kind).toBe('EXPIRY_CONFLICT');
+    expect(billMismatch?.detail).toContain('2027-06');
+
+    const shortDated = matchReceiptLine({
+      ordered: ORDERED,
+      received: {
+        ...RECEIVED,
+        printedExpiry: new Date('2027-01-31T00:00:00Z'),
+        billed: { ...RECEIVED.billed, printedExpiry: new Date('2027-01-01T00:00:00Z') },
+      },
+    });
+    expect(shortDated.map((exception) => exception.kind)).toEqual(['EXPIRY_CONFLICT']);
+    expect(shortDated[0]?.detail).toContain('120 days');
+  });
+
+  it('drafts a full claim for packs billed but not delivered, with discount and tax', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: {
+        ...RECEIVED,
+        arrivedCanonicalUnits: 80,
+        receivedPacks: 8,
+      },
+    });
+    const lines = receiptDebitNoteLines({
+      exceptions,
+      line: { ...LINE, receivedPacks: 8, discountBps: 1_000, taxBps: 1_800 },
+    });
+    // 2 packs x 1,000 = 2,000, less 10% = 1,800, plus 18% tax = 2,124.
+    expect(lines).toEqual([
+      expect.objectContaining({
+        reason: 'BILLED_SHORTAGE',
+        sourceKind: 'BILLED_SHORTAGE',
+        packs: 2,
+        pricePerPackMinor: 1_000,
+        amountMinor: 2_124,
+      }),
+    ]);
+  });
+
+  it('drafts a full claim for the wrong batch and does not also claim its overcharge', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, batchNumber: 'XY-99', invoicedPricePerPackMinor: 1_200 },
+    });
+    expect(exceptions.map((exception) => exception.kind)).toEqual([
+      'PRICE_CONFLICT',
+      'BATCH_CONFLICT',
+    ]);
+    const lines = receiptDebitNoteLines({
+      exceptions,
+      line: { ...LINE, invoicedPricePerPackMinor: 1_200 },
+    });
+    expect(lines).toEqual([
+      expect.objectContaining({ reason: 'WRONG_ITEM', packs: 10, amountMinor: 12_000 }),
+    ]);
+  });
+
+  it('drafts only the difference for an overcharge, and nothing for an undercharge', () => {
+    const over = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, invoicedPricePerPackMinor: 1_150 },
+    });
+    expect(
+      receiptDebitNoteLines({
+        exceptions: over,
+        line: { ...LINE, invoicedPricePerPackMinor: 1_150 },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        reason: 'PRICE_OVERCHARGE',
+        packs: 10,
+        pricePerPackMinor: 150,
+        amountMinor: 1_500,
+      }),
+    ]);
+    const under = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, invoicedPricePerPackMinor: 900 },
+    });
+    expect(
+      receiptDebitNoteLines({
+        exceptions: under,
+        line: { ...LINE, invoicedPricePerPackMinor: 900 },
+      })
+    ).toEqual([]);
+  });
+
+  it('claims nothing for damage, which leaves through a purchase return', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, rejectedCanonicalUnits: 20, rejectionReason: 'Crushed' },
+    });
+    expect(exceptions.map((exception) => exception.kind)).toEqual(['DAMAGE']);
+    expect(receiptDebitNoteLines({ exceptions, line: LINE })).toEqual([]);
   });
 });
