@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function PharmacyRegulatoryLoading() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Branch regulatory profile"
@@ -20,6 +20,6 @@ export default function PharmacyRegulatoryLoading() {
         </div>
         <p className="sr-only">Loading this branch’s regulatory profile.</p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

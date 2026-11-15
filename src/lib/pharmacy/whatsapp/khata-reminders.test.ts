@@ -475,7 +475,7 @@ describe('processDueWhatsAppKhataReminders', () => {
       config,
       provider,
     });
-    expect(result).toMatchObject({ skippedNoConsent: 1, prepared: 0 });
+    expect(result).toMatchObject({ skippedQuietHours: 1, skippedNoConsent: 0, prepared: 0 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
   });

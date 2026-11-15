@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 export default function ErrorPage({ reset }: { reset: () => void }) {
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Finance"
@@ -19,6 +19,6 @@ export default function ErrorPage({ reset }: { reset: () => void }) {
           Try again
         </Button>
       </SectionCard>
-    </main>
+    </div>
   );
 }

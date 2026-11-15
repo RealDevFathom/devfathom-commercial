@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   settings: vi.fn(),
   assist: vi.fn(),
+  reviewReply: vi.fn(),
   capture: vi.fn(),
   audit: vi.fn(),
   freshTransaction: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (organizationId: string, run: (db: unknown) => unknown) =>
     mocks.freshTransaction(organizationId, run),
 }));
+vi.mock('@/lib/pharmacy/review-reply-drafts', () => ({ draftReviewReply: mocks.reviewReply }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -427,5 +429,54 @@ describe('marketing send policy procedures (DEV-24)', () => {
   it('rejects a weekly cap above the monthly cap before any transaction', async () => {
     await expect(caller().updateSendPolicy({ ...settings, weeklyMax: 3 })).rejects.toThrow();
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('Google Business Profile health and review replies (DEV-13)', () => {
+  const facts = {
+    primaryCategoryIsPharmacy: true,
+    phoneListed: true,
+    websiteOrOrderLinkListed: false,
+    descriptionPresent: true,
+    holidayHoursSet: false,
+    hoursConfirmedDaysAgo: 30,
+    photoCount: 4,
+    unansweredReviews: 2,
+  };
+  const config = { maximumHoursAgeDays: 90, minimumPhotos: 10, maximumUnansweredReviews: 0 };
+  it.each(['STAFF', 'MANAGER', 'PHARMACIST'])('denies nonowner %s', async (role) => {
+    await expect(caller(role).profileHealth({ ...input, facts, config })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller(role).reviewReply({ ...input, rating: 5, tone: 'FRIENDLY' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reviewReply).not.toHaveBeenCalled();
+  });
+  it('evaluates owner-entered facts against the configured thresholds', async () => {
+    const result = await caller().profileHealth({ ...input, facts, config });
+    expect(result).toMatchObject({ passed: 4, total: 8, config });
+  });
+  it('drafts with the current AI policy and exposes no posting procedure', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: false });
+    mocks.reviewReply.mockResolvedValue({ body: 'x', source: 'TEMPLATE', posted: false });
+    await caller().reviewReply({ ...input, rating: 2, tone: 'FORMAL', reviewerFirstName: 'Sara' });
+    expect(mocks.reviewReply).toHaveBeenCalledWith(
+      { rating: 2, tone: 'FORMAL', reviewerFirstName: 'Sara' },
+      { organizationId: 'org-a', branchId: 'branch-a', aiEnabled: false }
+    );
+    expect(Object.keys(pharmacyMarketingRouter._def.procedures)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/post|publish/i)])
+    );
+  });
+  it('rejects review text or a foreign branch before drafting', async () => {
+    await expect(
+      caller().reviewReply({ ...input, rating: 5, tone: 'FRIENDLY', text: 'private' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mocks.branch.mockResolvedValue(null);
+    await expect(
+      caller().reviewReply({ ...input, rating: 5, tone: 'FRIENDLY' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reviewReply).not.toHaveBeenCalled();
   });
 });

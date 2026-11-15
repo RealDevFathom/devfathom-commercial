@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function LoyaltyLoading() {
   return (
-    <main className="min-w-0 space-y-6" aria-busy="true">
+    <div className="min-w-0 space-y-6" aria-busy="true">
       <PageHeader
         eyebrow="Pharmacy / customers"
         heading="Loyalty points"
@@ -12,6 +12,6 @@ export default function LoyaltyLoading() {
       <SectionCard title="Loading loyalty accounts" titleLevel={2}>
         <p role="status">Loading customer selection and branch ledger. Please wait.</p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
