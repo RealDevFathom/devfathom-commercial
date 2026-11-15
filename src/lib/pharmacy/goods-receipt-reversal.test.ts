@@ -32,6 +32,17 @@ const input = {
   controlledWitness: { staffProfileId: 'staff', pin: '1234' },
 };
 
+function shelfBalance(onHandUnits: number, sealedPacks: number, looseUnits: number) {
+  return {
+    inventoryLotId: 'lot',
+    stockLocationId: 'shelf',
+    disposition: 'AVAILABLE',
+    onHandUnits,
+    sealedPacks,
+    looseUnits,
+  };
+}
+
 function fixture() {
   const purchase = {
     id: 'purchase',
@@ -79,7 +90,17 @@ function fixture() {
       create: vi.fn(),
     },
     pharmacyStockMovement: {
-      findMany: vi.fn().mockResolvedValue([{ id: 'receipt-movement' }]),
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'receipt-movement',
+          inventoryLotId: 'lot',
+          stockLocationId: 'shelf',
+          disposition: 'AVAILABLE',
+          quantityUnits: 2,
+          sealedPackDelta: 2,
+          looseUnitDelta: 0,
+        },
+      ]),
       findFirst: vi.fn().mockImplementation(async ({ where }) =>
         where.reversesMovementId
           ? { id: 'reversal', quantityUnits: -2 }
@@ -93,7 +114,10 @@ function fixture() {
       ),
       create: vi.fn().mockResolvedValue({ id: 'reversal' }),
     },
-    pharmacyStockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }) },
+    pharmacyStockBalance: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      findMany: vi.fn().mockResolvedValue([shelfBalance(2, 2, 0)]),
+    },
   };
   vi.mocked(withTenantDb).mockImplementation(async (_organizationId, run) => run(db as never));
   return {
@@ -219,7 +243,17 @@ describe('controlled goods receipt reversal authorization', () => {
     let onHand = 5;
     let running = 5;
     const reversed: Record<string, number> = {};
-    db.pharmacyStockMovement.findMany.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
+    const posted = (id: string, units: number) => ({
+      id,
+      inventoryLotId: 'lot',
+      stockLocationId: 'shelf',
+      disposition: 'AVAILABLE',
+      quantityUnits: units,
+      sealedPackDelta: units,
+      looseUnitDelta: 0,
+    });
+    db.pharmacyStockMovement.findMany.mockResolvedValue([posted('m1', 2), posted('m2', 3)]);
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(5, 5, 0)]);
     db.pharmacyStockMovement.findFirst.mockImplementation(async ({ where }) =>
       where.reversesMovementId
         ? reversed[where.reversesMovementId] === undefined
@@ -270,5 +304,103 @@ describe('controlled goods receipt reversal authorization', () => {
     db.pharmacyStockBalance.aggregate.mockResolvedValue({ _sum: { onHandUnits: 1 } });
     await expect(run()).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
     expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-610: reversing a receipt whose stock has moved on', () => {
+  beforeEach(() => {
+    vi.mocked(can).mockResolvedValue(true);
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+  });
+
+  function expectNothingWritten(db: ReturnType<typeof fixture>['db']) {
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+  }
+
+  function ordinary() {
+    const harness = fixture();
+    harness.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue(null as never);
+    return harness;
+  }
+
+  it('refuses with REVERSAL_STOCK_MOVED once received units were sold or transferred', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(1, 0, 1)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses with REVERSAL_STOCK_MOVED when the receiving location holds nothing', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses with REVERSAL_PACKS_OPENED when the units remain only as loose units', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(2, 0, 2)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_PACKS_OPENED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('adds up every posted line that landed in the same lot and location', async () => {
+    const { db, run } = ordinary();
+    const line = {
+      inventoryLotId: 'lot',
+      stockLocationId: 'shelf',
+      disposition: 'AVAILABLE',
+      quantityUnits: 2,
+      sealedPackDelta: 2,
+      looseUnitDelta: 0,
+    };
+    // Each line alone (2) fits the shelf (3); together (4) they do not.
+    db.pharmacyStockMovement.findMany.mockResolvedValue([
+      { ...line, id: 'm1' },
+      { ...line, id: 'm2' },
+    ]);
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(3, 3, 0)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses a controlled receipt the same way, after the register lock', async () => {
+    const { db, run } = fixture();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(0, 0, 0)]);
+    await expect(run()).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
+    expectNothingWritten(db);
+    const sql = db.$queryRaw.mock.calls.map(([strings]) => String(strings));
+    const registerLock = sql.findIndex((text) => text.includes('pg_advisory_xact_lock'));
+    const balanceLock = sql.findIndex((text) => text.includes('pharmacy_stock_balances'));
+    expect(registerLock).toBeGreaterThanOrEqual(0);
+    expect(balanceLock).toBeGreaterThan(registerLock);
+  });
+
+  it('locks the balance row before reading it', async () => {
+    const { db, run } = fixture();
+    await run();
+    const balanceLock = db.$queryRaw.mock.calls.findIndex(([strings]) =>
+      String(strings).includes('pharmacy_stock_balances')
+    );
+    expect(balanceLock).toBeGreaterThanOrEqual(0);
+    expect(db.$queryRaw.mock.calls[balanceLock]!.slice(1)).toEqual([
+      'org',
+      'lot',
+      'shelf',
+      'AVAILABLE',
+    ]);
+    expect(db.$queryRaw.mock.invocationCallOrder[balanceLock]).toBeLessThan(
+      db.pharmacyStockBalance.findMany.mock.invocationCallOrder[0]!
+    );
   });
 });
