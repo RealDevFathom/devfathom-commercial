@@ -321,3 +321,22 @@ describe('Delimited text parsing', () => {
     expect(table.rows).toEqual([['Panadol', 'B1', '']]);
   });
 });
+
+describe('Quantity column meaning is chosen in the column mapping', () => {
+  const table = () => parseDelimitedText('Product,Pack,Qty\nExample Tablet,30,29\nNo Pack,,5\n');
+  it('defaults to base units', () => {
+    const { rows } = profileTable(excelCsvProfiler, table());
+    expect(rows[0]!.quantityCanonical).toBe(BigInt(29));
+    expect(rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
+  });
+  it('converts packs to units: 29 packs of 30 is 870', () => {
+    const { rows, exceptions } = profileTable(excelCsvProfiler, table(), {
+      quantityUnit: 'PACKS',
+    });
+    expect(rows[0]!.quantityCanonical).toBe(BigInt(870));
+    expect(rows[0]!.rawPayload.__quantity_unit).toBe('PACKS');
+    // No pack factor: never assume 1; flagged instead.
+    expect(rows[1]!.quantityCanonical).toBeNull();
+    expect(exceptions.some((e) => e.rowIndex === 1 && e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
+  });
+});

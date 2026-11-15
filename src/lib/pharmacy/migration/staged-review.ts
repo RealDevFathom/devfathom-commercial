@@ -33,6 +33,7 @@ export type ReviewRow = {
   rowNumber: number;
   productName: string | null;
   packLabel: string | null;
+  packFactor?: bigint | null;
   quantityCanonical: bigint | null;
   rawPayload: Prisma.JsonValue;
   exceptions: { bucket: ExceptionBucket; status: string; severity: string }[];
@@ -54,6 +55,25 @@ export function stagedReference(
   ) as Record<(typeof SOURCE_REFERENCE_COLUMNS)[number], string | null>;
   const sourceHash = cell('__source_sha256');
   const sourceRow = cell('__source_row');
+  const quantityUnit: 'PACKS' | 'UNITS' = cell('__quantity_unit') === 'PACKS' ? 'PACKS' : 'UNITS';
+  const canonical = row.quantityCanonical;
+  const packFactor = row.packFactor;
+  const quantityReview = {
+    unit: quantityUnit,
+    // Packs are only claimed when the mapping says so and the factor is known.
+    packs:
+      quantityUnit === 'PACKS' && canonical !== null && packFactor
+        ? (canonical / packFactor).toString()
+        : null,
+    units: canonical?.toString() ?? null,
+    unitsPerPack: packFactor?.toString() ?? null,
+    label:
+      canonical === null
+        ? null
+        : quantityUnit === 'PACKS' && packFactor
+          ? `${canonical / packFactor} packs × ${packFactor} = ${canonical} units`
+          : `${canonical} units`,
+  };
   const flags = cell('__review_flags')?.split(';').filter(Boolean) ?? [];
   const lineage =
     sourceHash === null
@@ -82,6 +102,7 @@ export function stagedReference(
       ? naturalKey(MIGRATION_TARGET_KEYS.PRODUCT, row.productName)
       : null,
     canonicalQuantity: row.quantityCanonical?.toString() ?? null,
+    quantityReview,
     status: 'Staged — unverified' as const,
     catalogueStatus: 'Identity / pack review required' as const,
     draftStatus: 'No linked draft established' as const,

@@ -127,4 +127,23 @@ describe('staged medicine evidence', () => {
     expect(csv).toContain(hash);
     expect(csv).not.toContain('never exposed');
   });
+  it('shows 29 packs of 30 as 870 units when the mapping says packs', () => {
+    const row: ReviewRow = {
+      ...fixture(),
+      packFactor: BigInt(30),
+      quantityCanonical: BigInt(870),
+      rawPayload: { QTY: '29', __quantity_unit: 'PACKS' },
+    };
+    const view = stagedReference(row, source, 'batch_1');
+    expect(view.quantityReview).toMatchObject({ unit: 'PACKS', packs: '29', units: '870' });
+    expect(view.quantityReview.label).toBe('29 packs × 30 = 870 units');
+  });
+  it('shows base units without inventing packs', () => {
+    const view = stagedReference(
+      { ...fixture(), quantityCanonical: BigInt(29), rawPayload: { QTY: '29' } },
+      source,
+      'batch_1'
+    );
+    expect(view.quantityReview).toMatchObject({ unit: 'UNITS', packs: null, units: '29' });
+  });
 });

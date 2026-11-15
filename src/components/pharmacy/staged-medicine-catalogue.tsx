@@ -278,6 +278,7 @@ export async function StagedMedicineCatalogue({
                     'Source purprice',
                     'Source UnitPrice',
                     'Source PackUnits',
+                    'Staged quantity',
                     'Review',
                   ].map((label) => (
                     <th className="px-3 py-3 text-left" key={label} scope="col">
@@ -308,6 +309,9 @@ export async function StagedMedicineCatalogue({
                         </td>
                       )
                     )}
+                    <td className="px-3 py-3 text-right font-mono tabular-nums">
+                      {row.quantityReview.label ?? 'Not supplied'}
+                    </td>
                     <td className="px-3 py-3">
                       <StatusPill status="pending" label={row.status} />
                     </td>
@@ -352,7 +356,9 @@ export async function StagedMedicineCatalogue({
               'Lineage check': detail.lineage,
               'Normalized name preview': detail.normalizedNamePreview,
               'Natural key preview — never applied': detail.naturalKeyPreview,
-              'Staged canonical quantity — not stock': detail.canonicalQuantity,
+              'Quantity column counts': detail.quantityReview.unit === 'PACKS' ? 'Packs' : 'Units',
+              'Staged quantity — not stock': detail.quantityReview.label,
+              'Staged canonical quantity (units) — not stock': detail.canonicalQuantity,
             }).map(([key, value]) => (
               <div key={key} className="min-w-0">
                 <dt className="text-text-muted">{key}</dt>
