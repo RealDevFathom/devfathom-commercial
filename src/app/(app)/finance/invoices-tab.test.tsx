@@ -131,3 +131,45 @@ describe('CreateInvoiceForm', () => {
     expect(screen.getByRole('button', { name: 'Remove line item' })).toBeDisabled();
   });
 });
+
+describe('invoice create adjustments', () => {
+  beforeEach(() => mocks.mutate.mockClear());
+  function fillForm() {
+    const { container } = render(<CreateInvoiceForm onClose={vi.fn()} />);
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'client-1' } });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
+      target: { value: '2026-12-01' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Description'), {
+      target: { value: 'Consulting' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Rate'), { target: { value: '1.005' } });
+  }
+  it('previews and submits nonzero tax and discount with rounded amounts', () => {
+    fillForm();
+    fireEvent.change(screen.getByLabelText('Tax (USD)'), { target: { value: '0.005' } });
+    fireEvent.change(screen.getByLabelText('Discount (USD)'), { target: { value: '0.005' } });
+    expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('$1.01');
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subtotal: 1.01,
+        tax: 0.01,
+        discount: 0.01,
+        total: 1.01,
+        items: [{ description: 'Consulting', quantity: 1, rate: 1.005, amount: 1.01 }],
+      })
+    );
+  });
+  it.each(['-1', '1.02', '10000000000'])(
+    'blocks invalid discount %s and preserves its value',
+    (discount) => {
+      fillForm();
+      fireEvent.change(screen.getByLabelText('Discount (USD)'), { target: { value: discount } });
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByLabelText('Discount (USD)')).toHaveValue(Number(discount));
+      expect(screen.getByRole('button', { name: 'Create Invoice' })).toBeDisabled();
+      expect(mocks.mutate).not.toHaveBeenCalled();
+    }
+  );
+});
