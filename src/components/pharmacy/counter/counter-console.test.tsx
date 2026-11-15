@@ -2117,6 +2117,32 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     );
   });
 
+  it('shows where the drawer opens and fills a quick amount without opening it (DEV-508)', async () => {
+    closeDrawer();
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const details = screen.getByLabelText('Drawer details');
+    expect(within(details).getByText('Synthetic branch · MT1')).toBeInTheDocument();
+    expect(within(details).getByText(/^Counter [A-Z0-9]{4}$/)).toBeInTheDocument();
+    expect(within(details).getByText('Business day')).toBeInTheDocument();
+
+    const quick = screen.getByRole('group', { name: 'Quick amounts' });
+    fireEvent.click(within(quick).getByRole('button', { name: 'PKR 2,000' }));
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('2000');
+    expect(within(quick).getByRole('button', { name: 'PKR 2,000' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    // Choosing an amount is not the confirmation: nothing is written yet.
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'branch-a', openingFloatMinor: 200000 })
+    );
+  });
+
   it.each(['', 'abc', '-5', '1.234'])(
     'refuses to open the drawer without a valid opening cash amount: %j (DEV-725)',
     (value) => {
@@ -2499,10 +2525,68 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
 
     search.focus();
     fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    // DEV-508: the chord only opens the void dialog; nothing is voided until confirmed.
+    const voidDialog = await screen.findByRole('dialog', { name: 'Void this bill?' });
+    expect(mocks.mutations.transition).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'void' })
+    );
+    const confirm = within(voidDialog).getByRole('button', { name: 'Void bill' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(within(voidDialog).getByRole('radio', { name: 'Wrong items scanned' }));
+    fireEvent.click(confirm);
     await waitFor(() =>
       expect(mocks.mutations.transition).toHaveBeenCalledWith(
-        expect.objectContaining({ saleId: 'sale-a', action: 'void' })
+        expect.objectContaining({
+          saleId: 'sale-a',
+          action: 'void',
+          voidReason: { code: 'WRONG_ITEMS' },
+        })
       )
+    );
+  });
+
+  it("shows the server's refusal when a cashier voids another cashier's bill (DEV-508, DEV-821)", async () => {
+    openTheDrawer();
+    mocks.mutations.transition!.mockRejectedValue(refused('FORBIDDEN', 'NOT_BILL_OWNER'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    const voidDialog = await screen.findByRole('dialog', { name: 'Void this bill?' });
+    fireEvent.click(within(voidDialog).getByRole('radio', { name: 'Duplicate bill' }));
+    fireEvent.click(within(voidDialog).getByRole('button', { name: 'Void bill' }));
+    expect(
+      await screen.findByText(
+        'Another cashier opened this bill. Only that cashier or a manager or owner can void it.'
+      )
+    ).toBeInTheDocument();
+    expect(mocks.mutations.transition).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'void', voidReason: { code: 'DUPLICATE_BILL' } })
+    );
+    expect(screen.queryByText('Bill voided.')).not.toBeInTheDocument();
+  });
+
+  it('cancels a Shift+F4 void without changing the bill (DEV-508)', async () => {
+    openTheDrawer();
+    mocks.mutations.transition!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    const voidDialog = await screen.findByRole('dialog', { name: 'Void this bill?' });
+    fireEvent.click(within(voidDialog).getByRole('radio', { name: 'Other' }));
+    const confirm = within(voidDialog).getByRole('button', { name: 'Void bill' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(voidDialog).getByLabelText('Describe the reason'), {
+      target: { value: '   ' },
+    });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(within(voidDialog).getByRole('button', { name: 'Keep bill' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Void this bill?' })).not.toBeInTheDocument()
+    );
+    expect(mocks.mutations.transition).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'void' })
     );
   });
 });
@@ -3905,9 +3989,19 @@ describe('DEV-618 counter composition', () => {
     );
     await waitFor(() => expect(within(rail).getByRole('button', { name: 'Void' })).toBeEnabled());
     fireEvent.click(within(rail).getByRole('button', { name: 'Void' }));
+    const voidDialog = await screen.findByRole('dialog', { name: 'Void this bill?' });
+    expect(mocks.mutations.transition).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: 'void' })
+    );
+    fireEvent.click(within(voidDialog).getByRole('radio', { name: 'Duplicate bill' }));
+    fireEvent.click(within(voidDialog).getByRole('button', { name: 'Void bill' }));
     await waitFor(() =>
       expect(mocks.mutations.transition).toHaveBeenLastCalledWith(
-        expect.objectContaining({ action: 'void', saleId: 'sale-a' })
+        expect.objectContaining({
+          action: 'void',
+          saleId: 'sale-a',
+          voidReason: { code: 'DUPLICATE_BILL' },
+        })
       )
     );
   });
@@ -4631,7 +4725,7 @@ describe('PharmacyCounterConsole open bills (DEV-623)', () => {
       'Payment was taken on this bill. A manager or owner must refund it before the bill can be voided.'
     );
     fireEvent.click(voidButton);
-    expect(within(list).queryByRole('button', { name: 'Confirm void' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Void this bill?' })).not.toBeInTheDocument();
     expect(mocks.mutations.transition).not.toHaveBeenCalled();
   });
 
@@ -4645,14 +4739,21 @@ describe('PharmacyCounterConsole open bills (DEV-623)', () => {
     await waitFor(() => expect(within(list).getByRole('button', { name: 'Void' })).toBeEnabled());
     fireEvent.click(within(list).getByRole('button', { name: 'Void' }));
     expect(mocks.mutations.transition).not.toHaveBeenCalled();
-    fireEvent.click(within(list).getByRole('button', { name: 'Confirm void' }));
+    // DEV-508: the void needs a reason and an explicit confirm here too.
+    const voidDialog = await screen.findByRole('dialog', { name: 'Void this bill?' });
+    const confirm = within(voidDialog).getByRole('button', { name: 'Void bill' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(
+      within(voidDialog).getByRole('radio', { name: 'Customer left without paying' })
+    );
+    fireEvent.click(confirm);
 
     await waitFor(() =>
       expect(mocks.mutations.transition).toHaveBeenCalledWith({
         branchId: 'branch-a',
         saleId: 'sale-b',
         action: 'void',
-        reason: 'Voided from open bills.',
+        voidReason: { code: 'CUSTOMER_LEFT' },
       })
     );
     expect(await screen.findByText('Bill voided. Its stock is back on sale.')).toBeInTheDocument();

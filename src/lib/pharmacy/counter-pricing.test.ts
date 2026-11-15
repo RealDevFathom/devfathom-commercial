@@ -6,6 +6,7 @@ import {
   incrementRepeatScan,
   looseSaleUnitOption,
   lotSaleUnitOptions,
+  packLevelCanonicalUnits,
   previewSaleLine,
   resolveCounterSaleUnits,
   saleUnitOptions,
@@ -719,5 +720,90 @@ describe('looseSaleUnitOption (F5 / sell loose)', () => {
         { kind: 'PACK', packLevelId: 'p', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 10 },
       ])
     ).toBeNull();
+  });
+});
+
+/**
+ * DEV-830 (security scan F05): the server derives a line's multiplier from the stored pack
+ * setup. Every unit the counter offers must be one the server derives, and a pack must
+ * never be derivable as a single unit.
+ */
+describe('packLevelCanonicalUnits (DEV-830 server-derived multiplier)', () => {
+  const at = new Date('2026-11-15T00:00:00.000Z');
+  const derive =
+    (packLevels: Parameters<typeof packLevelCanonicalUnits>[0]['packLevels']) =>
+    (packLevelId: string) =>
+      packLevelCanonicalUnits({ packLevels, packLevelId, at });
+
+  it('derives each level of a hierarchy, never one unit for a pack', () => {
+    const units = derive(THREE_LEVEL);
+    expect(units('box')).toEqual([100]);
+    expect(units('strip')).toEqual([10]);
+    expect(units('unit')).toEqual([1]);
+    expect(derive(TWO_LEVEL)('bottle')).toEqual([30]);
+  });
+
+  it('counts a standalone pack in its own canonical units', () => {
+    expect(
+      derive([{ id: 'pack', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 }])('pack')
+    ).toEqual([10]);
+  });
+
+  it('offers nothing for a level outside the setup', () => {
+    expect(derive(THREE_LEVEL)('elsewhere')).toEqual([]);
+  });
+
+  it('derives every unit the counter offers, including a revised setup', () => {
+    const revised = [
+      {
+        id: 'box',
+        level: 'BOX',
+        parentPackLevelId: null,
+        unitsPerParent: 1,
+        versionGroupId: 'g-box',
+      },
+      {
+        id: 'strip-v1',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 5,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2025-01-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'strip-v2',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 10,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        effectiveTo: null,
+      },
+      {
+        id: 'unit',
+        level: 'UNIT',
+        parentPackLevelId: 'strip-v1',
+        unitsPerParent: 10,
+        versionGroupId: 'g-unit',
+      },
+    ];
+    for (const [packLevels, lotPackLevelId] of [
+      [THREE_LEVEL, 'box'],
+      [TWO_LEVEL, 'bottle'],
+      [revised, 'box'],
+    ] as const) {
+      const { saleUnits } = resolveCounterSaleUnits({
+        packLevels,
+        lotPackLevelId,
+        lotPackLevelLabel: null,
+        lotUnitsPerPack: lotPackLevelId === 'bottle' ? 30 : 100,
+        dosageForm: 'Tablet',
+        at,
+      });
+      expect(saleUnits.length).toBeGreaterThan(0);
+      for (const option of saleUnits)
+        expect(derive(packLevels)(option.packLevelId)).toContain(option.canonicalUnitsPerSaleUnit);
+    }
   });
 });

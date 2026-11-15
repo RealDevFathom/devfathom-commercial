@@ -485,6 +485,86 @@ describe('counter receipt authorization', () => {
   });
 
   it.each([
+    { name: 'no reason', extra: {} },
+    { name: 'a free-text reason only', extra: { reason: 'Voided from the counter.' } },
+    { name: 'an unknown reason code', extra: { voidReason: { code: 'BORED' } } },
+    { name: '"Other" without a description', extra: { voidReason: { code: 'OTHER' } } },
+    {
+      name: '"Other" with a blank description',
+      extra: { voidReason: { code: 'OTHER', note: '  ' } },
+    },
+    {
+      name: 'an over-long note',
+      extra: { voidReason: { code: 'OTHER', note: 'x'.repeat(201) } },
+    },
+  ])('refuses a void with $name before any write or stock release (DEV-508)', async ({ extra }) => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().transition({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        action: 'void',
+        ...(extra as object),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a void reason on a non-void transition (DEV-508)', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().transition({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        action: 'hold',
+        voidReason: { code: 'DUPLICATE_BILL' },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      voidReason: { code: 'WRONG_ITEMS' as const },
+      reason: 'Wrong items scanned',
+      payload: { voidReasonCode: 'WRONG_ITEMS' },
+    },
+    {
+      voidReason: { code: 'OTHER' as const, note: '  Customer allergic to brand  ' },
+      reason: 'Customer allergic to brand',
+      payload: { voidReasonCode: 'OTHER', voidNote: 'Customer allergic to brand' },
+    },
+  ])(
+    'records the void reason code $voidReason.code on the void (DEV-508)',
+    async ({ voidReason, reason, payload }) => {
+      const f = fixture(dispense);
+      assign(f, ['branch-a']);
+
+      await f.caller().transition({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        action: 'void',
+        voidReason,
+      });
+      expect(changeSaleStatus).toHaveBeenCalledWith(
+        f.db,
+        expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+        'sale-a',
+        'void',
+        { kind: 'COUNTER', actorIsManager: true },
+        reason,
+        undefined,
+        payload
+      );
+    }
+  );
+
+  it.each([
     {
       source: 'role',
       permissions: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
@@ -524,20 +604,28 @@ describe('counter receipt authorization', () => {
   // DEV-821: the void carries the manager/owner decision so the bill-owner check runs.
   it("passes the void authority and refuses another cashier's bill as FORBIDDEN", async () => {
     const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
-    await f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' });
+    // DEV-508: every counter void carries a reason code.
+    const voidReason = { code: 'DUPLICATE_BILL' } as const;
+    await f.caller().transition({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      action: 'void',
+      voidReason,
+    });
     expect(changeSaleStatus).toHaveBeenLastCalledWith(
       f.db,
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       'sale-a',
       'void',
       { kind: 'COUNTER', actorIsManager: true },
+      'Duplicate bill',
       undefined,
-      undefined
+      { voidReasonCode: 'DUPLICATE_BILL' }
     );
 
     vi.mocked(changeSaleStatus).mockRejectedValueOnce(new PharmacySaleError('NOT_BILL_OWNER'));
     await expect(
-      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' })
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void', voidReason })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'NOT_BILL_OWNER' });
   });
 
