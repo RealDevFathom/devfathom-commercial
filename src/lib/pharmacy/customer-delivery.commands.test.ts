@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { recordDeliveryCommand } from './customer-delivery';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
-import { changeSaleStatus } from './sales';
+import { changeSaleStatus, returnSaleLine } from './sales';
 import { quarantinePart } from './inventory-operations';
 vi.mock('./settlement', () => ({
   applyPharmacyTender: vi.fn(),
@@ -276,4 +276,62 @@ it('DEV-825: locks every reserved balance once, sorted, before quarantining an u
       ((sql as { strings?: string[] }).strings?.join('') ?? '').includes('pharmacy_stock_balances')
     )
   ).toHaveLength(1);
+});
+function completedSaleFixture(returnedUnits = 0) {
+  const fx = fixture();
+  fx.sale.status = 'COMPLETED';
+  fx.sale.tenders = [];
+  fx.sale.lines = [
+    {
+      id: 'line-a',
+      canonicalUnits: 10,
+      allocations: [],
+      returnLines: returnedUnits ? [{ canonicalUnits: returnedUnits }] : [],
+    },
+  ] as never[];
+  return fx;
+}
+const completedReturn = { ...physicalReturn, quarantineLocationId: 'quarantine-a' };
+it('DEV-786: refuses to return a completed sale without a refund authorizer', async () => {
+  const { db } = completedSaleFixture();
+  await expect(recordDeliveryCommand(db as never, scope, completedReturn)).rejects.toThrow(
+    'REFUND_AUTHORIZATION_REQUIRED'
+  );
+  expect(returnSaleLine).not.toHaveBeenCalled();
+  expect(db.pharmacyOrderDeliveryEvidence.create).not.toHaveBeenCalled();
+  expect(db.pharmacyCustomerOrder.update).not.toHaveBeenCalled();
+});
+it('DEV-786: stops a completed-sale return when the manager PIN is refused', async () => {
+  const { db } = completedSaleFixture();
+  const authorizeRefund = vi.fn(async () => {
+    throw new Error('Only a manager or owner can refund.');
+  });
+  await expect(
+    recordDeliveryCommand(db as never, scope, completedReturn, { authorizeRefund })
+  ).rejects.toThrow('Only a manager or owner can refund.');
+  expect(authorizeRefund).toHaveBeenCalledOnce();
+  expect(returnSaleLine).not.toHaveBeenCalled();
+  expect(db.pharmacyOrderDeliveryEvidence.create).not.toHaveBeenCalled();
+});
+it('DEV-786: authorizes once before returning completed-sale lines to quarantine', async () => {
+  const { db } = completedSaleFixture();
+  const authorizeRefund = vi.fn(async () => {});
+  await recordDeliveryCommand(db as never, scope, completedReturn, { authorizeRefund });
+  expect(authorizeRefund).toHaveBeenCalledOnce();
+  expect(returnSaleLine).toHaveBeenCalledWith(
+    db,
+    scope,
+    expect.objectContaining({ saleLineId: 'line-a', canonicalUnits: 10, disposition: 'QUARANTINE' })
+  );
+  expect(authorizeRefund.mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(returnSaleLine).mock.invocationCallOrder[0]
+  );
+});
+it('DEV-786: needs no authorizer when every completed-sale line is already returned', async () => {
+  const { db } = completedSaleFixture(10);
+  await recordDeliveryCommand(db as never, scope, completedReturn);
+  expect(returnSaleLine).not.toHaveBeenCalled();
+  expect(db.pharmacyCustomerOrder.update).toHaveBeenCalledWith(
+    expect.objectContaining({ data: { status: 'RETURNED' } })
+  );
 });

@@ -710,6 +710,25 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       });
       expect(JSON.stringify(snapshot.evidencePayload)).not.toContain(firstRemake.remakeItemId);
       expect(JSON.stringify(snapshot.evidencePayload)).not.toContain(secondRemake.remakeItemId);
+      // DEV-773: fractional settlement freezes per-unit buckets and per-tender tax facts.
+      const frozenTax = await read(async (tx) => ({
+        buckets: await tx.restaurantTaxRateBucketSnapshot.findMany({
+          where: { snapshot: { billId } },
+          select: { allocationKind: true, billLineId: true, sourceOrderItemId: true },
+        }),
+        allocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+          where: { billId },
+          select: { originalTenderId: true },
+        }),
+      }));
+      expect(frozenTax.buckets).toEqual([
+        {
+          allocationKind: 'FRACTIONAL_MERCHANDISE',
+          billLineId: null,
+          sourceOrderItemId: original.itemId,
+        },
+      ]);
+      expect(frozenTax.allocations).toEqual([{ originalTenderId: tender.tenderId }]);
     }
 
     const settlement = await deps.bills.evaluateOrderSettlement(db, opened.orderId);

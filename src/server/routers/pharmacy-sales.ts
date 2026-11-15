@@ -15,6 +15,7 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -55,6 +56,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -265,6 +267,18 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
+ * DEV-817: a demand-event response never carries the customer's notify-when-back
+ * phone. The counter only learns whether a contact is on file; the notification
+ * sender reads the number on the server.
+ */
+function redactDemandContact<T extends { notifyPhone?: string | null }>(
+  row: T
+): Omit<T, 'notifyPhone'> & { hasNotifyContact: boolean } {
+  const { notifyPhone, ...rest } = row;
+  return { ...rest, hasNotifyContact: Boolean(notifyPhone) };
+}
+
+/**
  * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
  * (for the purchasing view) or a manager/owner may read brand margins.
  */
@@ -338,9 +352,11 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
 > & {
   discountApproval?: CounterApprovalPin;
+  /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
+  voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
 };
 
@@ -374,6 +390,18 @@ async function approvedLineInput(
     idempotencyKey: input.idempotencyKey,
   };
   const { override } = input;
+  // DEV-819: a voucher is redeemed only after the signed-in cashier re-enters their own PIN,
+  // verified in its own transaction so a wrong PIN's lockout strike is kept.
+  if (input.voucherId) {
+    const verified = await authenticateVoucherCashierPin({
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      pin: input.voucherPin,
+    });
+    annotateAudit(ctx, { metadata: { voucherId: input.voucherId, voucherPinVerified: verified } });
+    if (!verified) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+    lineInput.voucherCashierPinVerified = true;
+  }
   if ((input.discountMinor ?? 0) > 0) {
     const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
     approvals.push({ kind: 'DISCOUNT', approval });
@@ -484,6 +512,9 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  // DEV-629: an Rx line whose pharmacist review is not signed is a bill the counter must correct.
+  if (error instanceof PharmacyDispensingError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
     throw new TRPCError({
       code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
@@ -1755,6 +1786,11 @@ export const pharmacySalesRouter = router({
           // DEV-27: a voucher is redeemed by its stored id; the server sets the amount and
           // enforces the voucher's eligible categories. A client cannot label a voucher.
           voucherId: z.string().trim().min(1).max(128).optional(),
+          // DEV-819: the redeeming cashier's own staff PIN, required with a voucher.
+          voucherPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           discountApproval: counterApprovalPin.optional(),
           override: z
@@ -1843,6 +1879,15 @@ export const pharmacySalesRouter = router({
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
+            });
+            // DEV-629: queue the RX-03 pharmacist review; payment waits for its SIGN decision.
+            await db.pharmacyPharmacistReviewItem.create({
+              data: {
+                organizationId: scope.organizationId,
+                prescriptionLineId: reference.prescriptionLineId,
+                saleLineId: result.line.id,
+                requestedByUserId: scope.actorId,
+              },
             });
             annotateAudit(ctx, {
               metadata: {
@@ -2366,12 +2411,20 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...demand } = input;
-        return await captureDemand(ctx.db, await scopeFor(ctx, branch), demand);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return redactDemandContact(await captureDemand(ctx.db, scope, demand));
       } catch (error) {
         fail(error);
       }
     }),
-  /** DEV-81: one tap on a counter outcome chip. Optional; never gates tender. */
+  /**
+   * DEV-81: one tap on a counter outcome chip. Optional; never gates tender.
+   * DEV-817: the counter's gate (canonical `pharmacy:counter`, the deny-wins
+   * counter family and an active branch assignment) runs before the event is
+   * read, so a member without counter access cannot relabel an outcome or touch
+   * the customer's notify-when-back phone. The phone is never echoed back.
+   */
   setDemandOutcome: protectedProcedure
     .input(
       z
@@ -2389,17 +2442,23 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...outcome } = input;
-        return await setDemandOutcome(ctx.db, await scopeFor(ctx, branch), outcome);
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return redactDemandContact(await setDemandOutcome(ctx.db, scope, outcome));
       } catch (error) {
         fail(error);
       }
     }),
-  /** DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates. */
+  /**
+   * DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates.
+   * DEV-817: it rewrites the branch's lost-sales estimates, so it takes the same
+   * manager or owner gate (and active branch assignment) as `lostSalesSummary`.
+   */
   settleLostSales: protectedProcedure
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await settleLostSales(ctx.db, await scopeFor(ctx, input.branchId));
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        return await settleLostSales(ctx.db, scope);
       } catch (error) {
         fail(error);
       }
@@ -2640,13 +2699,14 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => {
           const event = await captureDemand(txDb(tx), scope, {
             ...input,
             reason: 'SUBSTITUTE_DECLINED',
           });
-          return declineSubstitute(txDb(tx), scope, event.id);
+          return redactDemandContact(await declineSubstitute(txDb(tx), scope, event.id));
         });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
@@ -2709,11 +2769,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await recoverDemandWithAlternate(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.demandId,
-          input.saleLineId
+        // DEV-817: the counter's gate, before the demand row is read.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return redactDemandContact(
+          await recoverDemandWithAlternate(ctx.db, scope, input.demandId, input.saleLineId)
         );
       } catch (error) {
         fail(error);
@@ -2721,8 +2780,14 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
+    // DEV-817: a branch report with estimated value and margin; manager or owner only.
     .query(async ({ ctx, input }) =>
-      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
+      demandAggregate(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.from,
+        input.to
+      )
     ),
   addRestockInterest: protectedProcedure
     .input(
@@ -2740,8 +2805,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          addRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2751,8 +2818,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          captureSafeRestockArrival(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2762,8 +2831,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, interestId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          optOutRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input.interestId)
+          optOutRestockInterest(txDb(tx), scope, input.interestId)
         );
       } catch (error) {
         fail(error);
@@ -2775,8 +2846,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          recoverRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recoverRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2786,8 +2859,13 @@ export const pharmacySalesRouter = router({
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
     )
+    // DEV-817: a branch report over demand events; manager or owner only.
     .query(async ({ ctx, input }) =>
-      restockRecoveryReport(ctx.db, await scopeFor(ctx, input.branchId), input.campaignKey)
+      restockRecoveryReport(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.campaignKey
+      )
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
