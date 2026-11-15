@@ -948,7 +948,7 @@ export function OrganizationAdminContent() {
               </div>
             ))}
             <form
-              className="grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-[1fr_120px_auto]"
+              className="grid grid-cols-[minmax(0,1fr)] gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-[minmax(0,1fr)_120px_auto]"
               onSubmit={(event) => {
                 event.preventDefault();
                 const values = new FormData(event.currentTarget);
@@ -1010,7 +1010,7 @@ export function OrganizationAdminContent() {
               </div>
             ) : null}
             <form
-              className="flex gap-2"
+              className="flex flex-col gap-2 sm:flex-row"
               onSubmit={(event) => {
                 event.preventDefault();
                 const values = new FormData(event.currentTarget);

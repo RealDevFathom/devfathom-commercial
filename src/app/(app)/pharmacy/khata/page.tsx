@@ -1,17 +1,14 @@
-import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { redirect, unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { createTRPCContext } from '@/server/trpc';
-import { parseMajorToMinor } from './amount';
 import { pharmacyKhataRouter } from './khata-router';
 
 export const metadata = { title: 'Khata · Pharmacy' };
@@ -22,16 +19,8 @@ const selectClass =
 const money = (minor: number) => `PKR ${formatMinor(minor)}`;
 const day = (date: Date) => date.toISOString().slice(0, 10);
 
-const methods = [
-  ['CASH', 'Cash'],
-  ['CARD', 'Card'],
-  ['BANK_TRANSFER', 'Bank transfer'],
-  ['WALLET', 'Mobile wallet'],
-] as const;
-
 /** Result codes carried on the redirect back to the list. */
 const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
-  collected: { tone: 'status', text: 'Payment recorded on the Khata ledger.' },
   'reminder-sent': { tone: 'status', text: 'WhatsApp reminder sent.' },
   'reminder-prepared': {
     tone: 'status',
@@ -56,18 +45,6 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
   'reminder-failed': {
     tone: 'alert',
     text: 'The reminder could not be confirmed by WhatsApp. Check the message log before trying again.',
-  },
-  PAYMENT_EXCEEDS_BALANCE: {
-    tone: 'alert',
-    text: 'Payment not recorded: the amount is more than the open charges on this account.',
-  },
-  INVALID_AMOUNT: {
-    tone: 'alert',
-    text: 'Payment not recorded: enter an amount greater than zero, with at most two decimals.',
-  },
-  PERIOD_CLOSED: {
-    tone: 'alert',
-    text: 'Payment not recorded: the accounting period for today is closed on this branch.',
   },
   ACCOUNT_NOT_FOUND: {
     tone: 'alert',
@@ -106,37 +83,6 @@ function failureCode(error: unknown) {
     if (error.message in notices) return error.message;
   }
   return 'error';
-}
-
-async function collectPayment(formData: FormData) {
-  'use server';
-  const branchId = String(formData.get('branchId') ?? '');
-  const familyAccountId = String(formData.get('familyAccountId') ?? '');
-  const amountMinor = parseMajorToMinor(String(formData.get('amount') ?? ''));
-  let code = 'collected';
-  if (amountMinor === null) code = 'INVALID_AMOUNT';
-  else {
-    try {
-      const caller = pharmacyKhataRouter.createCaller(await createTRPCContext());
-      await caller.collectPayment({
-        branchId,
-        familyAccountId,
-        amountMinor,
-        method: String(formData.get('method') ?? '') as 'CASH',
-        idempotencyKey: String(formData.get('idempotencyKey') ?? ''),
-      });
-    } catch (error) {
-      unstable_rethrow(error);
-      code = failureCode(error);
-    }
-  }
-  revalidatePath('/pharmacy/khata');
-  redirect(
-    back(
-      branchId,
-      code === 'collected' ? { notice: code } : { notice: code, accountId: familyAccountId }
-    )
-  );
 }
 
 async function sendReminder(formData: FormData) {
@@ -218,7 +164,6 @@ export default async function KhataPage({
   const { branches, branchId, accounts, truncated } = data;
   const branchName = branches.find((branch) => branch.id === branchId)!.name;
   const notice = notices[text('notice')];
-  const selected = accounts.find((account) => account.id === text('accountId'));
   const owing = accounts.filter((account) => account.balanceMinor > 0);
   const totalMinor = owing.reduce((sum, account) => sum + account.balanceMinor, 0);
   const overdueCount = owing.filter((account) => account.oldestOverdueAt).length;
@@ -260,49 +205,6 @@ export default async function KhataPage({
           <Stat label="Overdue accounts" value={overdueCount} />
         </div>
       </SectionCard>
-
-      {selected && (
-        <SectionCard title={`Collect payment · ${selected.displayName}`} titleLevel={2}>
-          <p className="mb-4 text-sm text-text-muted">
-            Balance {money(selected.balanceMinor)}. Payments settle the oldest open charges first
-            and cannot exceed them. Cash collected here is not added to a counter drawer; record a
-            paid-in at the counter if it goes into the till.
-          </p>
-          <form action={collectPayment} className="flex flex-wrap items-end gap-3">
-            <input type="hidden" name="branchId" value={branchId} />
-            <input type="hidden" name="familyAccountId" value={selected.id} />
-            <input type="hidden" name="idempotencyKey" value={randomUUID()} />
-            <label className="grid w-full gap-2 text-sm sm:w-auto">
-              Amount (PKR)
-              <Input
-                name="amount"
-                inputMode="decimal"
-                required
-                autoComplete="off"
-                pattern="[0-9,]+(\.[0-9]{1,2})?"
-                defaultValue={selected.balanceMinor > 0 ? formatMinor(selected.balanceMinor) : ''}
-                className="min-h-11"
-              />
-            </label>
-            <label className="grid w-full gap-2 text-sm sm:w-auto">
-              Payment method
-              <select name="method" defaultValue="CASH" className={selectClass}>
-                {methods.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button type="submit" className="min-h-11" disabled={selected.balanceMinor <= 0}>
-              Record payment
-            </Button>
-            <Link className={linkClass} href={back(branchId, {})}>
-              Cancel
-            </Link>
-          </form>
-        </SectionCard>
-      )}
 
       <SectionCard title={`Who owes what · ${branchName}`} titleLevel={2}>
         {accounts.length ? (
@@ -379,8 +281,8 @@ export default async function KhataPage({
                           <>
                             <Link
                               className={linkClass}
-                              href={back(branchId, { accountId: a.id })}
-                              aria-label={`Collect payment from ${a.displayName}`}
+                              href={`/pharmacy/counter?${new URLSearchParams({ branchId })}`}
+                              aria-label={`Collect payment from ${a.displayName} at the counter`}
                             >
                               Collect payment
                             </Link>
@@ -419,8 +321,9 @@ export default async function KhataPage({
         )}
         <p className="mt-3 text-sm text-text-muted">
           Balances include every charge, payment, refund and dishonoured cheque on the account.
-          Reminders use the approved WhatsApp template, need the payer’s opt-in, and go at most once
-          a week per account.
+          Collect payment opens the counter, where Khata payment puts cash into that counter’s open
+          drawer and records transfers with the payer’s reference. Reminders use the approved
+          WhatsApp template, need the payer’s opt-in, and go at most once a week per account.
         </p>
       </SectionCard>
       <Link className={linkClass} href="/pharmacy/counter">

@@ -4,14 +4,12 @@ import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   ledger: vi.fn(),
-  collectPayment: vi.fn(),
   sendReminder: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./khata-router', () => ({ pharmacyKhataRouter: { createCaller: () => mocks } }));
 import KhataPage from './page';
 import KhataLoading from './loading';
-import { parseMajorToMinor } from './amount';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -69,8 +67,8 @@ describe('DEV-730 Khata page', () => {
     ])
       expect(within(row).getByText(text)).toBeInTheDocument();
     expect(
-      within(row).getByRole('link', { name: 'Collect payment from Ahmed household' })
-    ).toHaveAttribute('href', '/pharmacy/khata?branchId=branch-a&accountId=fam-a');
+      within(row).getByRole('link', { name: 'Collect payment from Ahmed household at the counter' })
+    ).toHaveAttribute('href', '/pharmacy/counter?branchId=branch-a');
     expect(
       within(row).getByRole('button', { name: 'Send reminder to Ahmed household' })
     ).toHaveAttribute('type', 'submit');
@@ -81,26 +79,16 @@ describe('DEV-730 Khata page', () => {
     expect(screen.getByText('Total owed').parentElement).toHaveTextContent('PKR 2500.00');
   });
 
-  it('opens a labelled collection form for the chosen account only', async () => {
-    await show({ accountId: 'fam-a' });
-    expect(screen.getByText('Collect payment · Ahmed household')).toBeInTheDocument();
-    expect(screen.getByLabelText('Amount (PKR)')).toHaveValue('2500.00');
-    expect(screen.getByLabelText('Payment method')).toHaveValue('CASH');
-    expect(screen.getByRole('button', { name: 'Record payment' })).toBeEnabled();
-    expect(mocks.collectPayment).not.toHaveBeenCalled();
-  });
-
-  it('ignores a forged account selection', async () => {
-    await show({ accountId: 'fam-other' });
-    expect(screen.queryByLabelText('Amount (PKR)')).not.toBeInTheDocument();
-  });
-
   it('reports the action outcome carried on the redirect', async () => {
     await show({ notice: 'reminder-no-consent' });
     expect(screen.getByRole('alert')).toHaveTextContent('has not opted in');
     cleanup();
-    await show({ notice: 'collected' });
-    expect(screen.getAllByRole('status')[0]).toHaveTextContent('Payment recorded');
+    await show({ notice: 'reminder-sent' });
+    expect(screen.getAllByRole('status')[0]).toHaveTextContent('WhatsApp reminder sent');
+    cleanup();
+    // There is no in-page payment form: money is taken only at the counter.
+    await show({ accountId: 'fam-a' });
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
   it('explains an empty branch', async () => {
@@ -126,15 +114,5 @@ describe('DEV-730 Khata page', () => {
     render(<KhataLoading />);
     expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
     expect(screen.getByRole('status')).toHaveTextContent('Loading branch balances');
-  });
-});
-
-describe('parseMajorToMinor', () => {
-  it('parses rupees to paisa and refuses non-positive or malformed amounts', () => {
-    expect(parseMajorToMinor('1500')).toBe(150_000);
-    expect(parseMajorToMinor('1,500.5')).toBe(150_050);
-    expect(parseMajorToMinor(' 0.05 ')).toBe(5);
-    for (const bad of ['', '0', '0.00', '-5', '1.234', 'abc', '1e3'])
-      expect(parseMajorToMinor(bad)).toBeNull();
   });
 });

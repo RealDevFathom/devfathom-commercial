@@ -3,8 +3,10 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { postBookkeepingTransaction } from './bookkeeping';
+import { writePatientConsent } from './consent-writer';
+import { linkCustomerToSale } from './customer-loyalty';
 import { auditPatientRead } from './patient-prescriptions';
+import { normalizeWhatsAppNumber } from './whatsapp/messages';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -18,6 +20,12 @@ export class FamilyKhataError extends Error {
       | 'OWNER_ACTION_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
+      | 'PATIENT_NOT_FOUND'
+      | 'CONSENT_REQUIRED'
+      | 'PHONE_REQUIRED'
+      | 'PATIENT_AMBIGUOUS'
+      | 'SALE_REDEEMED_BY_OTHER_CUSTOMER'
+      | 'REFERENCE_REQUIRED'
   ) {
     super(reason);
   }
@@ -153,14 +161,7 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: {
-    familyAccountId: string;
-    amountMinor: number;
-    occurredAt: Date;
-    /** Deterministic allocation id prefix; makes a retried collection replay safely. */
-    idPrefix?: string;
-    note?: string;
-  }
+  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; note?: string }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -200,8 +201,6 @@ export async function settleFamilyKhata(
     allocations.push(
       await db.pharmacyKhataEvent.create({
         data: {
-          ...(input.idPrefix ? { id: `${input.idPrefix}${allocations.length}` } : {}),
-          ...(input.note ? { note: input.note } : {}),
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           familyAccountId: input.familyAccountId,
@@ -210,6 +209,7 @@ export async function settleFamilyKhata(
           occurredAt: input.occurredAt,
           settlesChargeId: item.charge.id,
           actorId: scope.actorId,
+          note: input.note,
         },
       })
     );
@@ -287,11 +287,18 @@ export async function applyKhataLimitDecision(
 export async function readKhataBalance(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  familyAccountId: string
+  familyAccountId: string,
+  /** Balance as it stood at this instant; omitted means the whole ledger. */
+  asOf?: Date
 ) {
   const totals = await db.pharmacyKhataEvent.groupBy({
     by: ['kind'],
-    where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId,
+      ...(asOf ? { occurredAt: { lte: asOf } } : {}),
+    },
     _sum: { amountMinor: true },
   });
   return totals.reduce(
@@ -425,7 +432,150 @@ export async function authorizeKhataCharge(
   return account;
 }
 
-export const KHATA_COLLECTION_ID_PREFIX = 'khata-collect:';
+/**
+ * One canonical form per number, so the same phone always finds the same patient.
+ * Reuses the WhatsApp normalizer (03xx…, 3xx…, 0092…, +92…, Urdu digits → `+92…`);
+ * numbers it rejects, such as local landlines, keep their digits, with `00` read as `+`.
+ */
+export function normalizeKhataPhone(phone: string) {
+  const international = normalizeWhatsAppNumber(phone);
+  if (international) return `+${international}`;
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.startsWith('00')) return `+${digits.slice(2)}`;
+  return `${trimmed.startsWith('+') ? '+' : ''}${digits}`;
+}
+
+/**
+ * DEV-716: inline Khata signup from the counter's Khata tender.
+ *
+ * Finds (or creates) the patient, records in-person LOYALTY consent, links the
+ * customer to the OPEN sale, then creates the family account with the customer
+ * as payer and member. The limit is always 0 here: raising it goes through the
+ * owner-authorized limit decision, never through signup.
+ */
+export async function signUpSaleKhata(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  input: {
+    saleId: string;
+    patientId?: string;
+    displayName: string;
+    phone?: string;
+    consentGranted: boolean;
+  }
+) {
+  if (input.consentGranted !== true) throw new FamilyKhataError('CONSENT_REQUIRED');
+  const displayName = input.displayName.trim();
+  const phone = input.phone ? normalizeKhataPhone(input.phone) : undefined;
+  let patient: { id: string; displayName: string; phone: string | null } | null;
+  if (input.patientId) {
+    patient = await db.pharmacyPatient.findFirst({
+      where: { id: input.patientId, organizationId: scope.organizationId },
+      select: { id: true, displayName: true, phone: true },
+    });
+    if (!patient) throw new FamilyKhataError('PATIENT_NOT_FOUND');
+  } else {
+    if (!phone || phone.replace('+', '').length < 7) throw new FamilyKhataError('PHONE_REQUIRED');
+    // Serialize find-or-create per number so two counters cannot both create the patient.
+    await db.$queryRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`khata-signup:${scope.organizationId}:${phone}`}, 0))`
+    );
+    // Same name and phone only: a shared family phone must not merge two people.
+    // Stored phones may carry spaces or dashes, so compare normalized numbers.
+    const matches = (
+      await db.pharmacyPatient.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          displayName: { equals: displayName, mode: 'insensitive' },
+          phone: { not: null },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, displayName: true, phone: true },
+      })
+    ).filter((row) => row.phone !== null && normalizeKhataPhone(row.phone) === phone);
+    // Two records with the same name and number: the operator must pick the patient.
+    if (matches.length > 1) throw new FamilyKhataError('PATIENT_AMBIGUOUS');
+    patient =
+      matches[0] ??
+      (await db.pharmacyPatient.create({
+        data: { organizationId: scope.organizationId, displayName, phone },
+        select: { id: true, displayName: true, phone: true },
+      }));
+  }
+  const consent = await db.patientConsent.findFirst({
+    where: { organizationId: scope.organizationId, patientId: patient.id, purpose: 'LOYALTY' },
+    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  if (!consent?.granted || consent.revokedAt)
+    await writePatientConsent(db, scope.organizationId, scope.actorId, {
+      patientId: patient.id,
+      purpose: 'LOYALTY',
+      channel: 'IN_PERSON',
+      granted: true,
+      source: 'COUNTER_TABLET',
+    });
+  // A selected patient keeps their stored phone; a request phone only names a new patient.
+  const phoneLast4 = ((input.patientId ? patient.phone : phone) ?? '').replace(/\D/g, '').slice(-4);
+  // A redemption belongs to the customer who redeemed: signup must not move it to someone else,
+  // or a later refund would restore those points to the new customer.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
+  const redemption = await db.pharmacyLoyaltyPointsEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      kind: 'REDEEM',
+      customer: { patientId: { not: patient.id } },
+    },
+    select: { id: true },
+  });
+  if (redemption) throw new FamilyKhataError('SALE_REDEEMED_BY_OTHER_CUSTOMER');
+  const customer = await linkCustomerToSale(db, scope, {
+    saleId: input.saleId,
+    patientId: patient.id,
+    displayName: patient.displayName,
+    ...(phoneLast4.length === 4 ? { phoneLast4 } : {}),
+  });
+  // Serialize account creation per customer and branch so two counters cannot open two ledgers.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`khata-account:${scope.organizationId}:${scope.branchId}:${customer.id}`}, 0))`
+  );
+  const existing = await db.pharmacyFamilyAccount.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      members: { some: { customerId: customer.id } },
+    },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  if (existing) return { customerId: customer.id, familyAccountId: existing.id, created: false };
+  const account = await db.pharmacyFamilyAccount.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      payerCustomerId: customer.id,
+      displayName: patient.displayName,
+      creditLimitMinor: 0,
+    },
+    select: { id: true },
+  });
+  await db.pharmacyFamilyMember.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId: account.id,
+      customerId: customer.id,
+    },
+  });
+  return { customerId: customer.id, familyAccountId: account.id, created: true };
+}
+
 const KHATA_REFUND_ID_PREFIX = 'khata-refund:';
 export const KHATA_LEDGER_LIST_LIMIT = 500;
 
@@ -529,86 +679,5 @@ export async function listKhataLedger(
         oldestOverdueAt: overdue.get(account.id) ?? null,
       }))
       .sort((a, b) => b.balanceMinor - a.balanceMinor),
-  };
-}
-
-/**
- * DEV-730 "Collect payment": one locked, append-only settlement against the oldest open
- * charges. A retried submission with the same key replays the first result instead of
- * posting a second payment.
- */
-export async function collectKhataPayment(
-  db: ScopedDb,
-  scope: FamilyKhataScope,
-  input: {
-    familyAccountId: string;
-    amountMinor: number;
-    method: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET';
-    idempotencyKey: string;
-  }
-) {
-  await db.$queryRaw(
-    Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
-  );
-  const account = await db.pharmacyFamilyAccount.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      id: input.familyAccountId,
-      active: true,
-    },
-    select: { id: true, payer: { select: { displayName: true } } },
-  });
-  if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
-  const idPrefix = `${KHATA_COLLECTION_ID_PREFIX}${account.id}:${input.idempotencyKey}:`;
-  const prior = await db.pharmacyKhataEvent.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      familyAccountId: account.id,
-      id: { startsWith: idPrefix },
-    },
-    select: { amountMinor: true },
-  });
-  if (prior.length) {
-    const paidMinor = prior.reduce((sum, row) => sum + row.amountMinor, 0);
-    return {
-      replayed: true,
-      paidMinor,
-      remainingBalanceMinor: await readKhataBalance(db, scope, account.id),
-    };
-  }
-  const occurredAt = new Date();
-  const result = await settleFamilyKhata(db, scope, {
-    familyAccountId: account.id,
-    amountMinor: input.amountMinor,
-    occurredAt,
-    idPrefix,
-    note: `Collected · ${input.method}`,
-  });
-  // The Khata sale debited ACCOUNTS_RECEIVABLE through its CREDIT tender posting. Clear it
-  // in the same transaction so financial statements agree with the Khata ledger; a closed
-  // accounting period rolls the whole collection back.
-  await postBookkeepingTransaction(db, scope, {
-    reference: `KHATA-${input.idempotencyKey}`,
-    kind: 'CUSTOMER_RECEIPT',
-    amountMinor: result.paidMinor,
-    occurredAt,
-    idempotencyKey: `${idPrefix}receipt`,
-    counterpartyName: account.payer.displayName,
-    memo: `Khata collection · ${input.method}`,
-    fundingAccount: input.method === 'CASH' ? 'CASH' : 'BANK',
-    allocations: result.allocations.map((allocation) => ({
-      sourceKind: 'CUSTOMER_KHATA' as const,
-      sourceId: allocation.settlesChargeId!,
-      sourceReference: `Khata charge ${allocation.settlesChargeId}`,
-      amountMinor: allocation.amountMinor,
-    })),
-  });
-  return {
-    replayed: false,
-    paidMinor: result.paidMinor,
-    // Full-ledger balance, matching the list (dishonoured cheques stay owed).
-    remainingBalanceMinor: await readKhataBalance(db, scope, account.id),
   };
 }

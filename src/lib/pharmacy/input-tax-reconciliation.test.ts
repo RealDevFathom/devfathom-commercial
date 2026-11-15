@@ -14,6 +14,7 @@ function bill(overrides: Partial<InputTaxBill> = {}): InputTaxBill {
     id: 'bill-1',
     reference: 'GR-001',
     supplierInvoiceRef: 'INV-001',
+    supplier: { name: 'Karachi Distributors' },
     distributorNtn: '1234567-8',
     distributorStrn: '12-34-5678-901-23',
     status: 'POSTED',
@@ -40,13 +41,74 @@ describe('purchase bill input-tax reconciliation', () => {
     ).toEqual([
       { id: 'bill-1', flagged: false, missing: [], claimMinor: 1_620 },
       { id: 'bill-2', flagged: true, missing: ['NTN'], claimMinor: 1_620 },
-      { id: 'bill-3', flagged: true, missing: ['STRN'], claimMinor: 0 },
+      { id: 'bill-3', flagged: false, missing: ['STRN'], claimMinor: 0 },
     ]);
     expect(report).toMatchObject({
-      flaggedBillCount: 2,
+      flaggedBillCount: 1,
       claimedInputTaxMinor: 3_240,
       flaggedClaimMinor: 1_620,
     });
+  });
+
+  it.each([
+    ['draft', { status: 'DRAFT' }],
+    ['reversed', { status: 'REVERSED' }],
+    ['no lines', { lines: [] }],
+    ['non-creditable', { lines: [{ ...line, taxCreditable: false }] }],
+    ['zero-rated', { lines: [{ ...line, taxBps: 0 }] }],
+    ['fully discounted', { lines: [{ ...line, discountBps: 10_000 }] }],
+    ['rounded to zero', { lines: [{ ...line, receivedPacks: 1, invoicedPricePerPackMinor: 1 }] }],
+  ] satisfies [string, Partial<InputTaxBill>][])(
+    'does not flag a %s bill with blank tax identifiers and no input-tax claim',
+    (_reason, overrides) => {
+      const report = reconcileInputTaxBills([
+        bill({ distributorNtn: null, distributorStrn: '  ', ...overrides }),
+      ]);
+
+      expect(report).toMatchObject({
+        rows: [{ missing: ['NTN', 'STRN'], flagged: false, claimMinor: 0 }],
+        flaggedBillCount: 0,
+        claimedInputTaxMinor: 0,
+        flaggedClaimMinor: 0,
+      });
+    }
+  );
+
+  it.each([
+    [null, null, ['NTN', 'STRN']],
+    ['  ', '12345', ['NTN']],
+    ['1234567-8', '', ['STRN']],
+  ])('flags a one-paisa claim with missing identifiers (%s, %s)', (ntn, strn, missing) => {
+    const report = reconcileInputTaxBills([
+      bill({
+        distributorNtn: ntn,
+        distributorStrn: strn,
+        lines: [{ ...line, receivedPacks: 1, invoicedPricePerPackMinor: 6, discountBps: 0 }],
+      }),
+    ]);
+
+    expect(report).toMatchObject({
+      rows: [{ missing, flagged: true, claimMinor: 1 }],
+      flaggedBillCount: 1,
+      claimedInputTaxMinor: 1,
+      flaggedClaimMinor: 1,
+    });
+  });
+
+  it('keeps supplier names and both references for reconciliation rows', () => {
+    const report = reconcileInputTaxBills([bill({ distributorNtn: null })]);
+
+    expect(report.rows).toEqual([
+      {
+        id: 'bill-1',
+        supplierName: 'Karachi Distributors',
+        reference: 'GR-001',
+        supplierInvoiceRef: 'INV-001',
+        missing: ['NTN'],
+        flagged: true,
+        claimMinor: 1_620,
+      },
+    ]);
   });
 
   it('does not claim tax from draft, reversed, cancelled, or non-creditable bills', () => {

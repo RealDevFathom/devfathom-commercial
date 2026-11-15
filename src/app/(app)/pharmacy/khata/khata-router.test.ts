@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   account: vi.fn(),
   queryRaw: vi.fn(),
   ledger: vi.fn(),
-  collect: vi.fn(),
   remind: vi.fn(),
   annotateAudit: vi.fn(),
 }));
@@ -32,14 +31,11 @@ vi.mock('@/lib/pharmacy/family-khata', async () => ({
     '@/lib/pharmacy/family-khata'
   )),
   listKhataLedger: mocks.ledger,
-  collectKhataPayment: mocks.collect,
 }));
 vi.mock('@/lib/pharmacy/whatsapp/khata-reminders', () => ({
   processDueWhatsAppKhataReminders: mocks.remind,
 }));
 import type { TRPCContext } from '@/server/trpc';
-import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
-import { PharmacyBookkeepingError } from '@/lib/pharmacy/bookkeeping';
 import { pharmacyKhataRouter } from './khata-router';
 
 function caller({ role = 'ADMIN', organizationId = 'org-a', vertical = 'PHARMACY' } = {}) {
@@ -63,14 +59,6 @@ function caller({ role = 'ADMIN', organizationId = 'org-a', vertical = 'PHARMACY
   } as unknown as TRPCContext);
 }
 const trusted = { organizationId: 'org-a', actorId: 'owner-a', branchId: 'branch-a' };
-const payment = {
-  branchId: 'branch-a',
-  familyAccountId: 'fam-a',
-  amountMinor: 2_500,
-  method: 'CASH' as const,
-  idempotencyKey: 'key-0001',
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
@@ -80,7 +68,6 @@ beforeEach(() => {
   mocks.account.mockResolvedValue({ id: 'fam-a' });
   mocks.queryRaw.mockResolvedValue([]);
   mocks.ledger.mockResolvedValue({ accounts: [], truncated: false });
-  mocks.collect.mockResolvedValue({ replayed: false, paidMinor: 2_500, remainingBalanceMinor: 0 });
   mocks.remind.mockResolvedValue({ configured: true, sent: 1 });
 });
 
@@ -100,11 +87,11 @@ describe('DEV-730 Khata router', () => {
     await expect(caller({ role: 'MEMBER' }).ledger({ branchId: 'branch-a' })).rejects.toMatchObject(
       { code: 'FORBIDDEN' }
     );
-    await expect(caller({ role: 'MEMBER' }).collectPayment(payment)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
+    await expect(
+      caller({ role: 'MEMBER' }).sendReminder({ branchId: 'branch-a', familyAccountId: 'fam-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.ledger).not.toHaveBeenCalled();
-    expect(mocks.collect).not.toHaveBeenCalled();
+    expect(mocks.remind).not.toHaveBeenCalled();
   });
 
   it('denies without the counter package, another tenant, or a non-pharmacy workspace', async () => {
@@ -124,44 +111,22 @@ describe('DEV-730 Khata router', () => {
 
   it('refuses an inactive or foreign branch', async () => {
     mocks.branch.mockResolvedValue(null);
-    await expect(caller().collectPayment(payment)).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    expect(mocks.collect).not.toHaveBeenCalled();
+    await expect(caller().ledger({ branchId: 'branch-x' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(
+      caller().sendReminder({ branchId: 'branch-x', familyAccountId: 'fam-a' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.ledger).not.toHaveBeenCalled();
+    expect(mocks.remind).not.toHaveBeenCalled();
   });
 
-  it('collects with server scope, validates input and audits the payment', async () => {
-    await caller().collectPayment(payment);
-    expect(mocks.collect).toHaveBeenCalledWith(expect.anything(), trusted, payment);
-    expect(mocks.annotateAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        action: 'pharmacyKhata.collectPayment',
-        targetId: 'fam-a',
-        metadata: expect.objectContaining({ amountMinor: 2_500, method: 'CASH' }),
-      })
-    );
-    await expect(caller().collectPayment({ ...payment, amountMinor: 0 })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    await expect(caller().collectPayment({ ...payment, amountMinor: 1.5 })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    expect(mocks.collect).toHaveBeenCalledTimes(1);
-  });
-
-  it('maps a refused settlement to a typed error', async () => {
-    mocks.collect.mockRejectedValue(new FamilyKhataError('PAYMENT_EXCEEDS_BALANCE'));
-    await expect(caller().collectPayment(payment)).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'PAYMENT_EXCEEDS_BALANCE',
-    });
-  });
-
-  it('maps a closed accounting period to a typed refusal', async () => {
-    mocks.collect.mockRejectedValue(new PharmacyBookkeepingError('PERIOD_CLOSED'));
-    await expect(caller().collectPayment(payment)).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'PERIOD_CLOSED',
-    });
+  it('exposes no money path: payments are taken only at the counter', () => {
+    expect(Object.keys(pharmacyKhataRouter._def.procedures).sort()).toEqual([
+      'branches',
+      'ledger',
+      'sendReminder',
+    ]);
   });
 
   it('sends a reminder for exactly the selected account through the gated job', async () => {

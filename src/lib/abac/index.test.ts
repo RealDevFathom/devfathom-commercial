@@ -432,9 +432,12 @@ describe('custom ABAC decisions', () => {
       'pharmacy:catalogue-review',
       'pharmacy:orders',
       'pharmacy:counter',
+      // #638: back-office order cancel / item void. Granted through the manager
+      // role templates' `orders:void`, never by an agency role.
+      'orders:void',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(49);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
