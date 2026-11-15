@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PharmacistHome, pharmacistLanding } from './pharmacist-home';
 
-const DISPENSING = ['pharmacy-core', 'pharmacy-dispensing'];
+const DISPENSING = ['pharmacy-core', 'pharmacy-dispensing', 'pharmacy-reports'];
 
 describe('pharmacistLanding (DEV-95)', () => {
   it('sends a pharmacist to the pharmacist queue first', () => {
@@ -12,16 +12,37 @@ describe('pharmacistLanding (DEV-95)', () => {
     expect(landing?.tools.map((tool) => tool.label)).toEqual(['Pharmacist queue', 'Prescriptions']);
   });
 
-  it('sends a prescriptions-only member to prescriptions', () => {
-    expect(pharmacistLanding(['pharmacy:prescriptions'], DISPENSING)?.home).toBe(
-      '/pharmacy/prescriptions'
-    );
+  it('does not treat prescriptions alone (a tenant administrator) as a pharmacist', () => {
+    expect(pharmacistLanding(['pharmacy:prescriptions'], DISPENSING)).toBeNull();
+    expect(
+      pharmacistLanding(['pharmacy:prescriptions'], ['pharmacy-core', 'pharmacy-dispensing'])
+    ).toBeNull();
+  });
+
+  it('lists only the tools the pharmacist holds', () => {
+    expect(pharmacistLanding(['pharmacy:dispense'], DISPENSING)?.tools.map((t) => t.href)).toEqual([
+      '/pharmacy/pharmacist-queue',
+    ]);
   });
 
   it('leaves report holders and non-pharmacists on the command centre', () => {
     expect(pharmacistLanding(['reports:operational', 'pharmacy:dispense'], DISPENSING)).toBeNull();
     expect(pharmacistLanding(['pharmacy:counter'], DISPENSING)).toBeNull();
     expect(pharmacistLanding([], DISPENSING)).toBeNull();
+  });
+
+  it('sends a report holder to their pharmacist tools when Pharmacy Reports is not licensed', () => {
+    const landing = pharmacistLanding(
+      ['reports:operational', 'pharmacy:dispense'],
+      ['pharmacy-core', 'pharmacy-dispensing']
+    );
+    expect(landing?.home).toBe('/pharmacy/pharmacist-queue');
+  });
+
+  it('keeps a report holder on the package notice when neither Reports nor Dispensing is licensed', () => {
+    expect(
+      pharmacistLanding(['reports:operational', 'pharmacy:dispense'], ['pharmacy-core'])
+    ).toBeNull();
   });
 
   it('offers no tool and no redirect without Pharmacy Dispensing', () => {

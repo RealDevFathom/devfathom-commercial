@@ -35,19 +35,29 @@ export type PharmacistTool = (typeof PHARMACIST_TOOLS)[number];
 
 /**
  * DEV-95: the owner command centre is built only from `reports:operational`
- * reads. A member who holds pharmacist capabilities but not that one (the
- * pharmacist role template) gets this home instead, so the dashboard never asks
- * Pharmacy Reports for a branch list the server will refuse. Returns null when
- * the member belongs on the command centre or is not a pharmacist.
+ * reads. A pharmacist — a member granted `pharmacy:dispense`, which is
+ * exact-grant-only and has no tenant-admin fallback — who cannot use the
+ * command centre gets this home instead, so the dashboard never asks Pharmacy
+ * Reports for a branch list the server will refuse. `pharmacy:prescriptions`
+ * alone does not make a pharmacist: tenant administrators hold it by policy.
+ * Returns null when the member belongs on the command centre.
  */
 export function pharmacistLanding(
   capabilities: readonly string[],
   enabledModules: readonly string[] | null | undefined
 ): { tools: PharmacistTool[]; home: string | null } | null {
-  if (capabilities.includes('reports:operational')) return null;
-  const held = PHARMACIST_TOOLS.filter((tool) => capabilities.includes(tool.capability));
-  if (!held.length) return null;
-  const tools = isModuleGranted('pharmacy-dispensing', enabledModules ?? []) ? held : [];
+  if (!capabilities.includes('pharmacy:dispense')) return null;
+  const modules = enabledModules ?? [];
+  const reportHolder = capabilities.includes('reports:operational');
+  // The command centre needs both the grant and the licensed module.
+  if (reportHolder && isModuleGranted('pharmacy-reports', modules)) return null;
+  const tools = isModuleGranted('pharmacy-dispensing', modules)
+    ? PHARMACIST_TOOLS.filter((tool) => capabilities.includes(tool.capability))
+    : [];
+  // A report holder without licensed Reports goes to their own licensed tools;
+  // with none of those either, the command centre's package notice is the
+  // clearer page for them.
+  if (reportHolder && !tools.length) return null;
   return { tools, home: tools[0]?.href ?? null };
 }
 

@@ -236,10 +236,22 @@ describe('PHARMACY pharmacist landing (DEV-95)', () => {
     expect(page.props.children.props.tools).toEqual([]);
   });
 
+  it('lands a pharmacist with a report grant on the queue when Pharmacy Reports is not licensed', async () => {
+    pharmacySession(
+      ['reports:operational', ...PHARMACIST],
+      ['pharmacy-core', 'pharmacy-dispensing']
+    );
+    await expect(
+      DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+    ).rejects.toThrow('redirect');
+    expect(mocks.redirect).toHaveBeenCalledWith('/pharmacy/pharmacist-queue');
+  });
+
   it.each([
     ['an owner-operator', ['reports:operational', ...PHARMACIST]],
     ['an auditor', ['reports:operational']],
     ['a member with no pharmacist capability', ['pharmacy:counter']],
+    ['an administrator holding prescriptions by tenant-admin policy', ['pharmacy:prescriptions']],
   ])('keeps the command centre for %s', async (_persona, capabilities) => {
     pharmacySession(capabilities);
     const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
