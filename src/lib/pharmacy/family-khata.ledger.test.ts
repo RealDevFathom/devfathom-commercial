@@ -255,5 +255,10 @@ describe('DEV-730 Khata ledger list', () => {
     };
     const { accounts } = await listKhataLedger(db as never, scope, NOW);
     expect(accounts.map((a) => a.oldestOverdueAt)).toEqual([null, null]);
+    // Linkage needs every charge, due or not: filtering charges by dueAt in the query would
+    // make these bounces look unlinked and flag the accounts overdue today.
+    const where = eventFind.mock.calls[0]![0].where as { OR: Array<Record<string, unknown>> };
+    expect(where.OR).toContainEqual({ kind: 'CHARGE' });
+    expect(where.OR.some((clause) => clause.kind === 'CHARGE' && 'dueAt' in clause)).toBe(false);
   });
 });
