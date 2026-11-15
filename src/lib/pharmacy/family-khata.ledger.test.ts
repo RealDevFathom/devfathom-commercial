@@ -142,4 +142,57 @@ describe('DEV-730 Khata ledger list', () => {
     });
     expect(groupBy).not.toHaveBeenCalled();
   });
+
+  it('re-opens a settled overdue charge when its payment cheque is dishonoured, and flags an unlinked bounce', async () => {
+    const accountFind = vi.fn().mockResolvedValue(
+      ['fam_x', 'fam_y'].map((id) => ({
+        id,
+        displayName: id,
+        creditLimitMinor: 0,
+        payer: { displayName: id, phoneLast4: null },
+      }))
+    );
+    const groupBy = vi.fn().mockResolvedValue([]);
+    const base = { dueAt: null, occurredAt: new Date('2026-11-10'), settlesChargeId: null };
+    const eventFind = vi.fn().mockResolvedValue([
+      {
+        ...base,
+        id: 'cx',
+        familyAccountId: 'fam_x',
+        kind: 'CHARGE',
+        amountMinor: 10_000,
+        dueAt: new Date('2026-10-01'),
+      },
+      {
+        ...base,
+        id: 'px',
+        familyAccountId: 'fam_x',
+        kind: 'PAYMENT',
+        amountMinor: 10_000,
+        settlesChargeId: 'cx',
+      },
+      {
+        ...base,
+        id: 'dx',
+        familyAccountId: 'fam_x',
+        kind: 'DISHONOURED_CHEQUE',
+        amountMinor: 10_000,
+        settlesChargeId: 'px',
+      },
+      {
+        ...base,
+        id: 'dy',
+        familyAccountId: 'fam_y',
+        kind: 'DISHONOURED_CHEQUE',
+        amountMinor: 4_000,
+      },
+    ]);
+    const db = {
+      pharmacyFamilyAccount: { findMany: accountFind },
+      pharmacyKhataEvent: { groupBy, findMany: eventFind },
+    };
+    const { accounts } = await listKhataLedger(db as never, scope, NOW);
+    expect(accounts.find((a) => a.id === 'fam_x')!.oldestOverdueAt).toEqual(new Date('2026-10-01'));
+    expect(accounts.find((a) => a.id === 'fam_y')!.oldestOverdueAt).toEqual(new Date('2026-11-10'));
+  });
 });
