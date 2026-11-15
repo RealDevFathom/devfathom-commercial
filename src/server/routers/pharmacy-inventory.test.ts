@@ -603,7 +603,7 @@ describe('PH-A5 expiry recovery integration', () => {
   }
 
   it('uses the active branch relationship and returns risk/calendar facts', async () => {
-    grant([allow('pharmacy:inventory')]);
+    grant([allow('pharmacy:inventory'), allow('reports:financial')]);
     const expiresAt = new Date(Date.now() + 45 * 86_400_000);
     db.pharmacyStockBalance.findMany.mockResolvedValueOnce([position('lot_1', expiresAt)]);
     db.pharmacySupplier.findMany.mockResolvedValue([
@@ -643,6 +643,7 @@ describe('PH-A5 expiry recovery integration', () => {
   it.each([30, 60, 90, 180] as const)(
     'keeps cumulative risk independent of the %s-day list filter and excludes expired stock',
     async (withinDays) => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
       const now = Date.now();
       const day = 86_400_000;
       const positions = [
@@ -689,6 +690,158 @@ describe('PH-A5 expiry recovery integration', () => {
       );
     }
   );
+
+  describe('DEV-627: purchase cost on the expiry board', () => {
+    /** A stored mark-down draft carries the lot's unit cost as evidence. */
+    const storedDraft = (inventoryLotId: string, unitCostMinor: number) => ({
+      inventoryLotId,
+      stockLocationId: 'location_1',
+      batchNumber: 'B-1',
+      markdownPercent: 20,
+      printedMrpMinor: 5_000,
+      proposedPackPriceMinor: 4_000,
+      unitsPerPack: 10,
+      unitCostMinor,
+      onHandUnits: 10,
+      expiresAt: new Date(Date.now() + 20 * 86_400_000).toISOString(),
+    });
+
+    function seedBoard() {
+      const now = Date.now();
+      db.pharmacyStockBalance.findMany.mockResolvedValueOnce([
+        position('lot_cheap', new Date(now + 20 * 86_400_000), 1_000),
+        position('lot_dear', new Date(now + 20 * 86_400_000), 9_000),
+      ]);
+      db.pharmacyStockSignalEvent.findMany.mockResolvedValueOnce([
+        {
+          id: 'event_dear',
+          reason: 'Near expiry',
+          detail: `DRAFT mark-down ${JSON.stringify(storedDraft('lot_dear', 9_000))}`,
+          createdAt: new Date(now - 86_400_000),
+        },
+      ]);
+    }
+
+    it('withholds unit cost, value at risk and PKR buckets from a cashier without reports:financial', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows).toHaveLength(2);
+      for (const row of board.rows) {
+        expect(row).not.toHaveProperty('unitCostMinor');
+        expect(row.valueAtRiskMinor).toBeNull();
+        expect(row).toMatchObject({ onHandUnits: 10, printedMrpMinor: 5_000 });
+      }
+      // The order must not rank positions by their hidden cost either.
+      expect(board.rows.map((row) => row.inventoryLotId)).toEqual(['lot_cheap', 'lot_dear']);
+      // The seeded mark-down draft still reaches the board, without its stored unit cost.
+      const drafted = board.rows.find((row) => row.inventoryLotId === 'lot_dear');
+      expect(drafted?.markdown).toMatchObject({
+        eventId: 'event_dear',
+        markdownPercent: 20,
+        printedMrpMinor: 5_000,
+        proposedPackPriceMinor: 4_000,
+      });
+      expect(drafted?.markdown).not.toHaveProperty('unitCostMinor');
+      expect(JSON.stringify(board)).not.toMatch(/unitCost|9000|90000/);
+    });
+
+    it('withholds cost from a tenant ADMIN whose role explicitly denies reports:financial', async () => {
+      grant([allow('pharmacy:inventory'), deny('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows.every((row) => row.valueAtRiskMinor === null)).toBe(true);
+    });
+
+    it('releases value at risk, but never the unit cost, to a reports:financial holder', async () => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(true);
+      expect(board.riskBuckets[0]).toEqual({ days: 30, valueAtRiskMinor: 100_000 });
+      expect(board.rows.map((row) => [row.inventoryLotId, row.valueAtRiskMinor])).toEqual([
+        ['lot_dear', 90_000],
+        ['lot_cheap', 10_000],
+      ]);
+      for (const row of board.rows) expect(row).not.toHaveProperty('unitCostMinor');
+      expect(board.rows[0]?.markdown).toMatchObject({ eventId: 'event_dear' });
+      expect(board.rows[0]?.markdown).not.toHaveProperty('unitCostMinor');
+    });
+
+    function seedMarkdownLot() {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+        printedMrpMinor: 5_000,
+        unitsPerPack: 10,
+        unitCostMinor: 9_000,
+        batch: {
+          batchNumber: 'B-1',
+          expiresAt: new Date(Date.now() + 20 * 86_400_000),
+          state: 'ACTIVE',
+          medicineId: 'medicine_1',
+          medicine: {
+            rx: false,
+            otc: true,
+            restricted: false,
+            controlled: false,
+            productFamily: 'PHARMACEUTICAL',
+          },
+        },
+      });
+      db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 10 });
+      db.pharmacyStockSignal.findFirst.mockResolvedValue({ id: 'signal_1' });
+    }
+    const markdownInput = {
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_dear',
+      stockLocationId: 'location_1',
+      markdownPercent: 20,
+      reason: 'Near expiry',
+    };
+
+    it('records the unit cost as evidence but returns a new mark-down draft without it', async () => {
+      seedMarkdownLot();
+
+      const result = await caller().draftExpiryMarkdown(markdownInput);
+
+      expect(result.created).toBe(true);
+      expect(result.draft).toMatchObject({ markdownPercent: 20, proposedPackPriceMinor: 4_000 });
+      expect(result.draft).not.toHaveProperty('unitCostMinor');
+      expect(JSON.stringify(result)).not.toMatch(/unitCost|9000/);
+      const stored = db.pharmacyStockSignalEvent.create.mock.calls[0]![0] as {
+        data: { detail: string };
+      };
+      expect(stored.data.detail).toContain('"unitCostMinor":9000');
+    });
+
+    it('returns a replayed mark-down draft without its stored unit cost', async () => {
+      seedMarkdownLot();
+      db.pharmacyStockSignalEvent.findMany.mockResolvedValueOnce([
+        {
+          id: 'event_dear',
+          detail: `DRAFT mark-down ${JSON.stringify(storedDraft('lot_dear', 9_000))}`,
+        },
+      ]);
+
+      const result = await caller().draftExpiryMarkdown(markdownInput);
+
+      expect(result).toMatchObject({ created: false, eventId: 'event_dear' });
+      expect(result.draft).not.toHaveProperty('unitCostMinor');
+      expect(db.pharmacyStockSignalEvent.create).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([
     ['Rx', { rx: true, restricted: false, controlled: false }],

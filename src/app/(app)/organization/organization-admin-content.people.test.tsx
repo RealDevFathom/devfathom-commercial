@@ -136,6 +136,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it('keeps the page heading when organization data is unavailable', () => {
+    overviewData.current = undefined;
+    render(<OrganizationAdminContent />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Organization administration'
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('grant you organization access');
+  });
+
   it('uses singular seat copy when the license limit is one', () => {
     const data = overviewData.current as { entitlements: { seatLimit: number } };
     data.entitlements.seatLimit = 1;
@@ -351,4 +360,10 @@ it('lets domain and SCIM controls fit narrow screens', () => {
     'sm:grid-cols-[minmax(0,1fr)_120px_auto]'
   );
   expect(scimForm).toHaveClass('flex-col', 'sm:flex-row');
+});
+
+it('names the domain host and kind inputs for assistive technology (#1233)', () => {
+  render(<OrganizationAdminContent />);
+  expect(screen.getByRole('textbox', { name: 'Domain host' })).toHaveAttribute('name', 'host');
+  expect(screen.getByRole('textbox', { name: 'Domain kind' })).toHaveValue('APP');
 });

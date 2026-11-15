@@ -352,8 +352,8 @@ export function ReturnForm({
         </p>
       ) : pharmacists.data && pharmacists.data.length === 0 ? (
         <p role="status">
-          No independent pharmacist with an active staff PIN is available. Ask your administrator
-          to configure one.
+          No independent pharmacist with an active staff PIN is available. Ask your administrator to
+          configure one.
         </p>
       ) : null}
       <Label htmlFor="return-witness-pin">Witness PIN</Label>
@@ -534,7 +534,7 @@ export function ReturnForm({
               }}
             >
               Receipt {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
-              {row.receiptDeviceId} · {row.visibilityAnchor.name}
+              {row.counterLabel ?? 'Counter'} · {row.visibilityAnchor.name}
               {row.branchId !== branchId && ' · Switch to this branch to record a return.'}
             </Button>
           ))}

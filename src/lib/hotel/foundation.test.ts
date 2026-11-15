@@ -33,9 +33,10 @@ const priorCatalogDigests = {
   // Operator templates; the hashed catalog data differs only by those grants.
   // DEV-509 (#1071): the procurement, dispensing, safety and CRM module route
   // prefixes now name existing pages; the hashed data differs only by those four.
+  // DEV-519 (#1082): the Finance role template also grants reports:operational.
   // DEV-505 (#1277): pharmacy:inventory on the Manager template; the hashed data
   // differs only by that one grant.
-  PHARMACY: '2883d7975e88dd301be308ccb896eb85bf8b2e8b133d43d035d520b3dd91086a',
+  PHARMACY: 'd4b624df014130820d3e3d68af5b29e529cf3ba47d6b802c503804ccf6747e45',
 };
 
 const property = {

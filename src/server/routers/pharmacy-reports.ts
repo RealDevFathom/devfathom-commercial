@@ -50,6 +50,12 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
+import {
+  DEFAULT_STAFFING_CONFIG,
+  readStaffingSuggestions,
+  STAFFING_LIMITS,
+  StaffingSuggestionError,
+} from '@/lib/pharmacy/staffing-suggestions';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
@@ -192,6 +198,15 @@ async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   return organizationId;
 }
+/**
+ * #1244: the pharmacovigilance table's FORCE RLS policy admits only rows of the branch bound in
+ * `app.current_branch_id`, with no fallback. Bind the already-authorized branch inside the
+ * caller's transaction before any report read or write, or every insert fails and every read
+ * is empty.
+ */
+async function bindPvBranch(db: ScopedDb, branchId: string) {
+  await db.$executeRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
+}
 const anomalyDecision = z
   .object({
     branchId: z.string().trim().min(1).max(128),
@@ -327,29 +342,33 @@ export const pharmacyReportsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePvFiling(ctx);
       const organizationId = await requirePvBranch(ctx, input.branchId);
-      if (input.inventoryLotId) {
-        const lot = await ctx.db.pharmacyInventoryLot.findFirst({
-          where: {
-            id: input.inventoryLotId,
-            branchId: input.branchId,
-            organizationId,
-            batch: { medicineId: input.medicineId },
-          },
-          select: { id: true },
-        });
-        if (!lot)
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Inventory lot does not match this branch and medicine.',
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        await bindPvBranch(db, input.branchId);
+        if (input.inventoryLotId) {
+          const lot = await db.pharmacyInventoryLot.findFirst({
+            where: {
+              id: input.inventoryLotId,
+              branchId: input.branchId,
+              organizationId,
+              batch: { medicineId: input.medicineId },
+            },
+            select: { id: true },
           });
-      }
-      ctx.audit.detail = {
-        category: 'PHARMACY_SAFETY',
-        action: 'human_asserted_report_capture',
-        skipInput: true,
-      };
-      return ctx.db.pharmacyPharmacovigilanceReport.create({
-        data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
+          if (!lot)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Inventory lot does not match this branch and medicine.',
+            });
+        }
+        ctx.audit.detail = {
+          category: 'PHARMACY_SAFETY',
+          action: 'human_asserted_report_capture',
+          skipInput: true,
+        };
+        return db.pharmacyPharmacovigilanceReport.create({
+          data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
+        });
       });
     }),
   transitionPharmacovigilanceReport: safety
@@ -372,6 +391,7 @@ export const pharmacyReportsRouter = router({
       const actorId = ctx.session.user.id;
       return ctx.db.$transaction(async (tx) => {
         const db = tx as ScopedDb;
+        await bindPvBranch(db, input.branchId);
         const report = await db.pharmacyPharmacovigilanceReport.findFirst({
           where: { id: input.id, branchId: input.branchId, organizationId },
         });
@@ -512,46 +532,50 @@ export const pharmacyReportsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = await requirePvBranch(ctx, input.branchId);
-      const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
-        where: { id: input.id, branchId: input.branchId, organizationId },
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        await bindPvBranch(db, input.branchId);
+        const report = await db.pharmacyPharmacovigilanceReport.findFirst({
+          where: { id: input.id, branchId: input.branchId, organizationId },
+        });
+        if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+        if (!['READY', 'SUBMITTED'].includes(report.state))
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Report must be ready before recording a submission.',
+          });
+        const isIdempotent =
+          report.externalSubmissionState === input.state &&
+          report.externalReference ===
+            (input.state === 'SUBMITTED' ? input.externalReference : null) &&
+          report.externalFailureReason === (input.state === 'FAILED' ? input.failureReason : null);
+        if (isIdempotent) return report;
+        if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid external submission transition.',
+          });
+        const [updated] = await db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
+          where: {
+            id: report.id,
+            branchId: input.branchId,
+            organizationId,
+            state: report.state,
+            externalSubmissionState: report.externalSubmissionState,
+          },
+          data: {
+            externalSubmissionState: input.state,
+            externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
+            externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
+          },
+        });
+        if (!updated)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Submission state changed; refresh and try again.',
+          });
+        return updated;
       });
-      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      if (!['READY', 'SUBMITTED'].includes(report.state))
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Report must be ready before recording a submission.',
-        });
-      const isIdempotent =
-        report.externalSubmissionState === input.state &&
-        report.externalReference ===
-          (input.state === 'SUBMITTED' ? input.externalReference : null) &&
-        report.externalFailureReason === (input.state === 'FAILED' ? input.failureReason : null);
-      if (isIdempotent) return report;
-      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Invalid external submission transition.',
-        });
-      const [updated] = await ctx.db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
-        where: {
-          id: report.id,
-          branchId: input.branchId,
-          organizationId,
-          state: report.state,
-          externalSubmissionState: report.externalSubmissionState,
-        },
-        data: {
-          externalSubmissionState: input.state,
-          externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
-          externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
-        },
-      });
-      if (!updated)
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'Submission state changed; refresh and try again.',
-        });
-      return updated;
     }),
   exportPharmacovigilanceDrap: safety
     .input(
@@ -563,19 +587,23 @@ export const pharmacyReportsRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = await requirePvBranch(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'drap_export', skipInput: true };
-      const reports = await ctx.db.pharmacyPharmacovigilanceReport.findMany({
-        where: {
-          organizationId,
-          branchId: input.branchId,
-          occurredAt: { gte: input.from, lte: input.to },
-        },
-        orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-        include: {
-          patient: true,
-          medicine: true,
-          lot: { include: { batch: true } },
-          prescriber: true,
-        },
+      const reports = await ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        await bindPvBranch(db, input.branchId);
+        return db.pharmacyPharmacovigilanceReport.findMany({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            occurredAt: { gte: input.from, lte: input.to },
+          },
+          orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+          include: {
+            patient: true,
+            medicine: true,
+            lot: { include: { batch: true } },
+            prescriber: true,
+          },
+        });
       });
       return {
         format: 'DRAP_PHARMACOVIGILANCE_V1' as const,
@@ -744,6 +772,50 @@ export const pharmacyReportsRouter = router({
           timeZone: ctx.organization?.timezone,
         })
       );
+    }),
+  // DEV-14: suggestions only. Reads completed receipts for one in-scope branch; writes nothing.
+  staffingSuggestions: reports
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          from: z.iso.date(),
+          to: z.iso.date(),
+          receiptsPerStaffHour: z
+            .number()
+            .int()
+            .min(STAFFING_LIMITS.receiptsPerStaffHour.min)
+            .max(STAFFING_LIMITS.receiptsPerStaffHour.max)
+            .default(DEFAULT_STAFFING_CONFIG.receiptsPerStaffHour),
+          minimumStaff: z
+            .number()
+            .int()
+            .min(STAFFING_LIMITS.minimumStaff.min)
+            .max(STAFFING_LIMITS.minimumStaff.max)
+            .default(DEFAULT_STAFFING_CONFIG.minimumStaff),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      if (!available.branches.some((branch) => branch.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      try {
+        return await readStaffingSuggestions(ctx.db, available.organizationId, {
+          branchId: input.branchId,
+          from: input.from,
+          to: input.to,
+          timeZone: ctx.organization?.timezone,
+          config: {
+            receiptsPerStaffHour: input.receiptsPerStaffHour,
+            minimumStaff: input.minimumStaff,
+          },
+        });
+      } catch (error) {
+        if (error instanceof StaffingSuggestionError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
     }),
   repeatPurchasing: reports
     .input(
