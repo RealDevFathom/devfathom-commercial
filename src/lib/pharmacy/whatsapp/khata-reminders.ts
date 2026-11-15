@@ -310,7 +310,8 @@ export async function processDueWhatsAppKhataReminders(
           return null;
         // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
         const timeZone = workspaceTimezone(organization.timezone);
-        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone))) return { kind: 'quiet-hours' };
+        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone)))
+          return { kind: 'quiet-hours' };
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
