@@ -805,6 +805,8 @@ export type RoleTemplate = {
    * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
+  /** One plain sentence shown under the staff role picker when this role is chosen. */
+  description?: string;
 };
 
 export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -930,6 +932,26 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     capabilities: ['pharmacy:counter', 'pharmacy:orders'],
   },
   {
+    // DEV-622 (#1241, owner decision 15 Nov): many pharmacies are run by one person.
+    // The default Pharmacist takes no payments (DEV-97) and the default Cashier may not
+    // sell prescription lines, so this opt-in role holds both sets of grants: verify and
+    // dispense prescriptions, take payment, open the drawer and use khata. The owner
+    // assigns it; nobody receives it automatically. Every grant is exact, so the
+    // Rx sale gate, refund (pharmacy:manage + PIN) and second-person controls are unchanged.
+    key: 'pharmacist-cashier',
+    name: 'Pharmacist and cashier',
+    isSystem: true,
+    capabilities: [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:close',
+      'pharmacy:counter',
+      'pharmacy:orders',
+    ],
+    description:
+      'Dispenses prescriptions and takes payment, for a one-person shop or a pharmacist who also runs the till.',
+  },
+  {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
@@ -966,9 +988,19 @@ export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly stri
   manager: ['sop:manage', 'sop:complete', 'sop:verify'],
   pharmacist: ['sop:complete', 'sop:verify'],
   cashier: ['sop:complete'],
+  'pharmacist-cashier': ['sop:complete', 'sop:verify'],
   procurement: ['sop:complete'],
   inventory: ['sop:complete'],
 };
+
+/**
+ * Pharmacy role templates the owner assigns by choice. They are created with the others
+ * but are never an activation prerequisite (OWNER_AND_ROLE_TEMPLATES gate).
+ */
+export const PHARMACY_OPT_IN_ROLE_KEYS: ReadonlySet<string> = new Set([
+  'owner-operator',
+  'pharmacist-cashier',
+]);
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = PHARMACY_BASE_ROLE_TEMPLATES.map(
   (role) => ({

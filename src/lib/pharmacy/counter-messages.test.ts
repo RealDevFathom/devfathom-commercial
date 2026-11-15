@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   COUNTER_ERROR_MESSAGES,
   COUNTER_GENERIC_ERROR_MESSAGE,
+  COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE,
+  COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
+  counterPaymentErrorMessage,
 } from './counter-messages';
 import { PharmacyLoyaltyError } from './customer-loyalty';
 import { PharmacySaleBatchError } from './sale-batch-safety';
@@ -117,5 +120,46 @@ describe('counterErrorMessage', () => {
     const message = counterErrorMessage(new PharmacySettlementError('UNCERTIFIED_PROVIDER'));
     expect(message).toBe('This tender needs a connected provider. Take another tender.');
     expect(message).not.toMatch(/card terminal/i);
+  });
+});
+
+/** A tRPC client failure as the counter receives it: the server message plus its code. */
+function trpcFailure(message: string, code: string) {
+  return Object.assign(new Error(message), { data: { code } });
+}
+
+describe('DEV-622: the counter names who can finish the bill', () => {
+  const NO_PERMISSION = 'You do not have permission for this action.';
+  const RX_DENIED =
+    'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.';
+
+  it('tells a default Cashier on a prescription line who can sell it', () => {
+    const message = counterErrorMessage(trpcFailure(RX_DENIED, 'FORBIDDEN'));
+    expect(message).toBe(COUNTER_RX_NEEDS_PHARMACIST_MESSAGE);
+    expect(message).toMatch(/owner/);
+    expect(message).toMatch(/Pharmacist and cashier role/);
+    // Payment refusals on a prescription line say the same thing.
+    expect(counterPaymentErrorMessage(trpcFailure(RX_DENIED, 'FORBIDDEN'))).toBe(message);
+  });
+
+  it('tells a default Pharmacist at payment or the drawer who can take payment', () => {
+    const message = counterPaymentErrorMessage(trpcFailure(NO_PERMISSION, 'FORBIDDEN'));
+    expect(message).toBe(COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE);
+    expect(message).toMatch(/owner/);
+    expect(message).toMatch(/Pharmacist and cashier role/);
+  });
+
+  it('keeps every other payment failure as it was', () => {
+    const outside = trpcFailure('Branch is outside your scope.', 'FORBIDDEN');
+    expect(counterPaymentErrorMessage(outside)).toBe('Branch is outside your scope.');
+    expect(counterPaymentErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(
+      counterErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'))
+    );
+    // The generic sentence is only reinterpreted when the server really refused (FORBIDDEN).
+    expect(counterPaymentErrorMessage(trpcFailure(NO_PERMISSION, 'BAD_REQUEST'))).toBe(
+      NO_PERMISSION
+    );
+    // Outside payment, the generic refusal is not rewritten as a payment message.
+    expect(counterErrorMessage(trpcFailure(NO_PERMISSION, 'FORBIDDEN'))).toBe(NO_PERMISSION);
   });
 });

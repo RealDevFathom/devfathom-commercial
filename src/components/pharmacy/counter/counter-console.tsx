@@ -31,11 +31,7 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import {
-  CounterCartPanel,
-  CounterLotOverride,
-  type CounterLotOverrideValue,
-} from './counter-cart';
+import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
@@ -93,7 +89,11 @@ import {
   type CounterAction,
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
-import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import {
+  COUNTER_ERROR_MESSAGES,
+  counterErrorMessage,
+  counterPaymentErrorMessage,
+} from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
@@ -1667,7 +1667,9 @@ function ScopedPharmacyCounterConsole({
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined || input.approvalCode !== undefined
+            input.familyAccountId ||
+            input.payerName !== undefined ||
+            input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
                   paidMinor > 0 ? `:after:${paidMinor}` : ''
@@ -1725,7 +1727,10 @@ function ScopedPharmacyCounterConsole({
         if (!dispatched) setStorageError(true);
         outcome =
           !dispatched || tenderRejected(error)
-            ? { status: 'rejected', message: `Payment was not accepted. ${messageFrom(error)}` }
+            ? {
+                status: 'rejected',
+                message: `Payment was not accepted. ${counterPaymentErrorMessage(error)}`,
+              }
             : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
       setTenderOutcome(outcome);
@@ -2600,7 +2605,7 @@ function ScopedPharmacyCounterConsole({
                         })
                       )
                       .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: messageFrom(error) })
+                        setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
                       )
                       // Either way the server now holds the truth about this device's drawer;
                       // stay busy until it is read back, so the step cannot be sent twice.

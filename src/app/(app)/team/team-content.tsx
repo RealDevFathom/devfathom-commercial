@@ -412,6 +412,9 @@ export function AddMemberModal({
   const [copied, setCopied] = useState(false);
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
+  // DEV-622: a role with a stored one-line description explains itself under the picker.
+  const selectedRoleDescription =
+    roleOptions.find((item) => item.id === organizationRoleId)?.description ?? null;
   const departmentReady =
     !departmentQuery.isFetching && !departmentQuery.isError && Boolean(selectedDepartment);
 
@@ -658,6 +661,7 @@ export function AddMemberModal({
                   </label>
                   <select
                     id="invite-role-template"
+                    aria-describedby="invite-role-template-help"
                     value={organizationRoleId}
                     disabled={roleQuery.isFetching || roleQuery.isError || inviteMember.isPending}
                     onChange={(event) => setOrganizationRoleId(event.target.value)}
@@ -670,12 +674,12 @@ export function AddMemberModal({
                       </option>
                     ))}
                   </select>
-                  <p className="mt-2 text-sm text-text-muted">
+                  <p id="invite-role-template-help" className="mt-2 text-sm text-text-muted">
                     {roleQuery.isFetching
                       ? 'Loading staff roles…'
                       : roleQuery.isError
                         ? 'Staff roles could not be loaded.'
-                        : copy.staffRoleHelp}
+                        : (selectedRoleDescription ?? copy.staffRoleHelp)}
                   </p>
                 </div>
 

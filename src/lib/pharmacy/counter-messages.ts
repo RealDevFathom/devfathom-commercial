@@ -11,6 +11,21 @@
  * imports `counterErrorMessage` and never formats a failure itself.
  */
 
+/** The refusal the server sends when the actor may not sell a prescription-only line. */
+const RX_SALE_DENIED_SERVER_MESSAGE =
+  'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.';
+
+/** DEV-622: shown when someone without the dispensing grant reaches a prescription line. */
+export const COUNTER_RX_NEEDS_PHARMACIST_MESSAGE =
+  'Only a pharmacist can sell a prescription-only or restricted medicine. Ask the owner, or a colleague with the Pharmacist and cashier role, to add it and take payment.';
+
+/** DEV-622: shown when someone without counter (payment) access tries to take payment. */
+export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE =
+  'Your role does not take payments or open the cash drawer. The owner, or a colleague with the Pharmacist and cashier role, can take payment for this bill.';
+
+/** The server's generic capability refusal (no `pharmacy:counter` for payment and drawer). */
+const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action.';
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -93,6 +108,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   ACCOUNT_NOT_FOUND: 'That khata account is not active on this branch. Search again.',
   REFERENCE_REQUIRED: 'Enter the transfer or wallet reference for a non-cash payment.',
   PERIOD_CLOSED: 'The accounting period for today is closed. Ask the owner to reopen it.',
+  // DEV-622: the server's Rx sale refusal (a default Cashier on a prescription line, at
+  // add-line or at payment) names who can finish the bill.
+  [RX_SALE_DENIED_SERVER_MESSAGE]: COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
 };
 
 /**
@@ -129,4 +147,27 @@ export function counterErrorMessage(error: unknown): string {
   if (mapped) return mapped;
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
+}
+
+function isForbidden(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('data' in error)) return false;
+  const data = (error as { data?: unknown }).data;
+  return (
+    typeof data === 'object' && data !== null && (data as { code?: unknown }).code === 'FORBIDDEN'
+  );
+}
+
+/**
+ * DEV-622: payment and drawer actions need `pharmacy:counter`. A default Pharmacist is
+ * refused with the server's generic sentence; at those two actions it means the operator's
+ * role does not take payments, so the counter says who can finish the bill instead.
+ */
+export function counterPaymentErrorMessage(error: unknown): string {
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  )
+    return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
+  return counterErrorMessage(error);
 }
