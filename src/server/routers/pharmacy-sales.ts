@@ -15,6 +15,7 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -474,6 +475,9 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  // DEV-629: an Rx line whose pharmacist review is not signed is a bill the counter must correct.
+  if (error instanceof PharmacyDispensingError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
     throw new TRPCError({
       code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
@@ -1833,6 +1837,15 @@ export const pharmacySalesRouter = router({
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
+            });
+            // DEV-629: queue the RX-03 pharmacist review; payment waits for its SIGN decision.
+            await db.pharmacyPharmacistReviewItem.create({
+              data: {
+                organizationId: scope.organizationId,
+                prescriptionLineId: reference.prescriptionLineId,
+                saleLineId: result.line.id,
+                requestedByUserId: scope.actorId,
+              },
             });
             annotateAudit(ctx, {
               metadata: {
