@@ -124,6 +124,23 @@ describe('reviewing a line with extracted sizes', () => {
     ]);
   });
 
+  it('keeps the printed currency when only the size name is corrected', async () => {
+    const { db, update } = reviewDb({
+      extractedVariants: [
+        { name: 'Lagre', price: { amount: '15.00', currency: 'USD', raw: '$15' } },
+      ],
+    });
+    await reviewMenuImportLine(db, {
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      reviewedById: 'user_1',
+      variants: [{ name: 'Large', priceAmount: '15.00' }],
+    });
+    expect(update.mock.calls[0]![0].data.reviewedVariants).toEqual([
+      { name: 'Large', price: { amount: '15.00', currency: 'USD', raw: null } },
+    ]);
+  });
+
   it('accepts an explicit confirmation that the line has no sizes', async () => {
     const { db, update } = reviewDb();
     await reviewMenuImportLine(db, {

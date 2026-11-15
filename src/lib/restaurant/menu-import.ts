@@ -616,20 +616,22 @@ function normalizeReviewedVariants(
       throw new MenuImportError('A size price must be a positive decimal amount.', 'INVALID');
     }
     const amount = raw === '' ? null : new Prisma.Decimal(raw);
-    // Re-confirming the printed figure keeps the printed currency, so confirming
+    // Re-confirming a printed figure keeps its printed currency, so confirming
     // a foreign size price is never a silent relabel into the line's currency.
-    // A genuinely new figure is in the line's confirmed currency (null =
-    // inherit); commit re-checks both against the organization currency.
-    const printed = extracted.find((size) => size.name.trim().toLowerCase() === key);
-    const keepsPrinted =
-      amount !== null &&
-      printed?.amount != null &&
-      amount.equals(new Prisma.Decimal(printed.amount));
+    // The match is on the figure, not only the editable name: correcting a
+    // misspelt size name must not drop the currency. A genuinely new figure is
+    // in the line's confirmed currency (null = inherit); commit re-checks both
+    // against the organization currency.
+    const samePrinted = (size: (typeof extracted)[number]) =>
+      amount !== null && size.amount !== null && amount.equals(new Prisma.Decimal(size.amount));
+    const printed =
+      extracted.find((size) => size.name.trim().toLowerCase() === key && samePrinted(size)) ??
+      extracted.find((size) => size.currency !== null && samePrinted(size));
     return {
       name,
       price: {
         amount: amount === null ? null : amount.toFixed(2),
-        currency: keepsPrinted ? (printed?.currency?.toUpperCase() ?? null) : null,
+        currency: printed?.currency?.toUpperCase() ?? null,
         raw: null,
       },
     };
