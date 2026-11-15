@@ -19,6 +19,8 @@ import {
   manualPaymentSettingsSchema,
   isManualTender,
   manualMerchantPolicies,
+  MANUAL_CARD_APPROVAL_CODE,
+  MANUAL_CARD_REFERENCE,
 } from '@/lib/pharmacy/manual-payments';
 import {
   readManualPaymentSettings,
@@ -137,6 +139,7 @@ import {
   applyPharmacyTender,
   closePharmacyDrawer,
   cutPharmacyDailyClose,
+  lockOpenPharmacyDrawer,
   openPharmacyDrawer,
   readOpenPharmacyDrawer,
   PharmacySettlementError,
@@ -185,12 +188,13 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z
-      .string()
-      .regex(/^\d{4,6}$/)
-      .optional(),
+    // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
+    // reference, never a full card number. Each tender's shape is enforced in settlement.
+    providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
+    /** DEV-713: approval code from a standalone card terminal slip. */
+    approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -1201,17 +1205,20 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (isManualTender(input.type) || input.approvalCode !== undefined)
+      annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
-        : isManualTender(input.type)
+        : // DEV-713: a card outcome needs the same counter access as the card write.
+          isManualTender(input.type) || input.type === 'CARD'
           ? await requireCounterReceiptAccess(ctx, input.branchId, true)
           : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (isManualTender(input.type) || input.approvalCode !== undefined)
+      annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
         if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
@@ -1387,16 +1394,38 @@ export const pharmacySalesRouter = router({
       }
     }),
   create: protectedProcedure
-    .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          quotation: z.boolean().default(false),
+          // DEV-725: the counter device whose drawer will take this bill's cash.
+          deviceId: z.string().min(1).optional(),
+        })
+        .strict()
+        .refine((value) => value.quotation || value.deviceId !== undefined, {
+          message: 'A counter bill needs the counter device.',
+          path: ['deviceId'],
+        })
+    )
     .mutation(async ({ ctx, input }) => {
       try {
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         // createSale enforces the persisted regulatory gate in this transaction.
-        return await ctx.db.$transaction(async (tx) =>
-          createSale(txDb(tx), scope, input.quotation)
-        );
+        // DEV-725: opening the drawer is the first step of the shift. A counter
+        // bill is never started on a device with no OPEN drawer, so the cashier
+        // cannot build a bill they are then refused at payment. Checked after the
+        // regulatory gate (which keeps its own refusal and audit), before the insert.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          return createSale(db, scope, input.quotation, async () => {
+            if (input.quotation) return;
+            if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+          });
+        });
       } catch (error) {
         fail(error);
       }

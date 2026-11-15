@@ -54,7 +54,7 @@ const ids = {
 };
 
 type SalesCaller = {
-  create: (input: { branchId: string; quotation: boolean }) => Promise<unknown>;
+  create: (input: { branchId: string; quotation: boolean; deviceId: string }) => Promise<unknown>;
   tender: (input: {
     branchId: string;
     saleId: string;
@@ -370,7 +370,9 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       tx.organization.update({ where: { id: ids.orgA }, data: { status: 'ONBOARDING' } })
     );
     await expect(
-      act(ids.orgA, admin, (api) => api.create({ branchId: ids.branchA, quotation: false }))
+      act(ids.orgA, admin, (api) =>
+        api.create({ branchId: ids.branchA, quotation: false, deviceId: 'regulatory-test-device' })
+      )
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'ORGANIZATION_NOT_ACTIVE' });
 
     await withPlatformDb((tx) =>
@@ -397,7 +399,13 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     );
     try {
       await expect(
-        act(ids.orgA, admin, (api) => api.create({ branchId: ids.branchA, quotation: false }))
+        act(ids.orgA, admin, (api) =>
+          api.create({
+            branchId: ids.branchA,
+            quotation: false,
+            deviceId: 'regulatory-test-device',
+          })
+        )
       ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'PROFILE_MISSING' });
     } finally {
       await withPlatformDb((tx) =>

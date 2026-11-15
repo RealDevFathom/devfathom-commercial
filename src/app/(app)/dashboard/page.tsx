@@ -36,18 +36,30 @@ export default async function DashboardPage({
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
 
-  // Apply role-based routing only to a fresh sign-in. Explicit dashboard visits
-  // must retain the management overview, saved preferences and first-run checklist.
-  if (signInLanding && restaurant && ssr?.session?.user) {
-    redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
+  const organizationId = ssr?.organization?.id;
+  const user = ssr?.session?.user;
+  // Only fresh sign-ins choose an operational landing. Read effective grants
+  // through the tenant-scoped ABAC engine (including role/override DENYs), and
+  // mirror the POS page's module gate so a grant cannot land on a disabled POS.
+  // Everyone else keeps the restaurant overview and its quick-access links.
+  if (signInLanding && restaurant && organizationId && user) {
+    const target = await withTenantDb(organizationId, async (db) => {
+      const subject = subjectFromSession(user);
+      if (await can(subject, 'admin:access', undefined, { db })) return '/restaurant';
+      if (
+        ssr.entitlements.enabledModules.includes('restaurant-pos') &&
+        (await can(subject, 'orders:take', undefined, { db }))
+      )
+        return '/pos';
+      return null;
+    });
+    if (target) redirect(target);
   }
 
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical
       : null;
-  const organizationId = ssr?.organization?.id;
-  const user = ssr?.session?.user;
   const checklist =
     organizationId && firstRunVertical && user
       ? await withTenantDb(organizationId, async (db) =>

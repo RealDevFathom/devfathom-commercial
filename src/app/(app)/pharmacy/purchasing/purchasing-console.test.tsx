@@ -708,6 +708,31 @@ describe('goods-in bench (PUR-02/04/05)', () => {
   });
 });
 
+describe('goods-in dates follow the workspace day (DEV-726)', () => {
+  it('defaults a direct purchase keyed at 01:30 PKT to the Karachi date, not the UTC one', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      organization: { ...actor.organization, timezone: 'Asia/Karachi' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-14T20:30:00.000Z'));
+    try {
+      render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.getByLabelText(/Direct purchase received on/)).toHaveProperty(
+      'value',
+      '2026-11-15'
+    );
+    expect(screen.getByLabelText(/Direct purchase invoice date/)).toHaveProperty(
+      'value',
+      '2026-11-15'
+    );
+  });
+});
+
 describe('segregation of duties (PUR-02)', () => {
   it('explains why the raiser cannot approve instead of offering a button that refuses', async () => {
     mocks.createCaller.mockReturnValue(
@@ -1452,5 +1477,44 @@ describe('purchasing PIN controls', () => {
     render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
     expect((screen.getByLabelText('Owner PIN') as HTMLInputElement).type).toBe('password');
     expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
+  });
+});
+
+describe('reorder advice in context (DEV-594)', () => {
+  const REPORT_GRANTS = [
+    'pharmacy.procurement',
+    'pharmacy:procurement-approve',
+    'reports:operational',
+  ];
+
+  it('offers reorder advice on Purchasing to a member who can read Pharmacy Reports', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement', 'pharmacy-reports'], REPORT_GRANTS)
+    );
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.getByRole('heading', { name: 'Reorder advice' })).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Open reorder advice' }).getAttribute('href')).toBe(
+      '/pharmacy/reports/replenishment?branch=branch-1'
+    );
+  });
+
+  it('offers no dead-end link when Pharmacy Reports is not in the package', async () => {
+    mocks.createTRPCContext.mockResolvedValue(contextStub(['pharmacy-procurement'], REPORT_GRANTS));
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.queryByRole('link', { name: 'Open reorder advice' })).toBeNull();
+  });
+
+  it('offers no link to a buyer without operational report access', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement', 'pharmacy-reports'])
+    );
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.queryByRole('heading', { name: 'Reorder advice' })).toBeNull();
   });
 });

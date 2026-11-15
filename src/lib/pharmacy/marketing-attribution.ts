@@ -2,6 +2,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { MarketingScope } from './marketing-service';
+import { localCalendarDays } from './marketing-dates';
 
 export const ATTRIBUTION_METHOD = 'LAST_META_DELIVERED_CAPTURE_BEFORE_RECEIPT_V1';
 const WINDOW_DAYS = 7;
@@ -89,11 +90,14 @@ export async function generateMarketingAttribution(
   from: Date,
   cutoff: Date
 ) {
+  // Local-midnight bounds count calendar days so a range crossing a daylight-saving change
+  // still allows ninety days; other bounds keep the elapsed-time limit.
+  const days = localCalendarDays(from, cutoff, scope.timezone);
   if (
     !Number.isFinite(from.getTime()) ||
     !Number.isFinite(cutoff.getTime()) ||
     from >= cutoff ||
-    cutoff.getTime() - from.getTime() > 90 * 86400000
+    (days === null ? cutoff.getTime() - from.getTime() > 90 * 86400000 : days > 90)
   )
     throw new Error('Attribution requires a bounded window of at most 90 days.');
   const receipts = await eligibleMarketingReceipts(

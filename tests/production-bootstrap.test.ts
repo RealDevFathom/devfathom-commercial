@@ -343,7 +343,7 @@ describe('production bootstrap', () => {
     expect(organizationDeployment.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({
-          provider: 'AZURE_CONTAINER_APPS',
+          provider: 'AWS_ECS',
           url: 'https://www.devfathom.com',
         }),
       })

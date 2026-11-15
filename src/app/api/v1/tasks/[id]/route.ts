@@ -206,6 +206,7 @@ export const PATCH = withApiAuth(
           where: {
             taskId: id,
             user: {
+              role: { not: 'ADMIN' },
               projectMembers: { none: { projectId: targetColumn.board.project.id } },
             },
           },
@@ -214,10 +215,15 @@ export const PATCH = withApiAuth(
 
       // Additive column default assignees on move (skipDuplicates keeps existing intact)
       if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
-        const destinationMembers = await tx.projectMember.findMany({
+        const destinationMembers = await tx.columnDefaultAssignee.findMany({
           where: {
-            projectId: targetColumn.board.project.id,
-            userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+            columnId: targetColumn.id,
+            user: {
+              OR: [
+                { role: 'ADMIN' },
+                { projectMembers: { some: { projectId: targetColumn.board.project.id } } },
+              ],
+            },
           },
           select: { userId: true },
         });
