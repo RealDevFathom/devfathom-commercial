@@ -51,6 +51,7 @@ import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { PharmacyStaffHome } from './pharmacy-staff-home';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
+import { PharmacistHome } from './pharmacist-home';
 
 function helpers() {
   return {
@@ -220,12 +221,10 @@ describe('PHARMACY dashboard role routing (DEV-20)', () => {
 
   it.each([
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
-    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
     ['procurement manager', ['pharmacy:procurement']],
     ['inventory clerk', ['pharmacy:inventory']],
     ['finance', ['reports:financial']],
     ['manager without the reports grant', ['pharmacy:manage', 'pharmacy:orders']],
-    ['operational reports reader', ['reports:operational']],
   ])('lands a %s on their own staff home, not the Owner command centre', async (_name, grants) => {
     const { user, page } = await render('EMPLOYEE', grants);
     expect(page.props.children.type).toBe(PharmacyStaffHome);
@@ -239,10 +238,111 @@ describe('PHARMACY dashboard role routing (DEV-20)', () => {
   it.each([
     ['Admin (owner)', 'ADMIN', []],
     ['manager with the reports grant', 'EMPLOYEE', ['pharmacy:manage', 'reports:operational']],
+    ['operational reports reader', 'EMPLOYEE', ['reports:operational']],
   ])('keeps the Owner command centre for a %s', async (_name, role, grants) => {
     const { page } = await render(role, grants);
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
     expect(page.props.children.props).toEqual({ role });
     expect(mocks.loadPharmacyStaffHome).not.toHaveBeenCalled();
+  });
+
+  it('leaves a pharmacist on the DEV-95 pharmacist home, not the staff home', async () => {
+    const { page } = await render('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:prescriptions']);
+    expect(page.props.children.type).toBe(PharmacistHome);
+    expect(mocks.loadPharmacyStaffHome).not.toHaveBeenCalled();
+  });
+});
+
+describe('PHARMACY pharmacist landing (DEV-95)', () => {
+  const DISPENSING = ['pharmacy-core', 'pharmacy-reports', 'pharmacy-dispensing'];
+  function pharmacySession(capabilities: string[], enabledModules = DISPENSING) {
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
+      capabilities.includes(action)
+    );
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: 'u', role: 'EMPLOYEE', status: 'ACTIVE' } },
+      organization: { id: 'tenant' },
+      entitlements: { vertical: 'PHARMACY', enabledModules },
+    });
+    mocks.loadPharmacyStaffHome.mockResolvedValue({
+      links: [],
+      branches: [],
+      shifts: [],
+      timeZone: 'UTC',
+    });
+  }
+  const PHARMACIST = ['pharmacy:prescriptions', 'pharmacy:dispense'];
+
+  it('lands a pharmacist on the pharmacist queue after sign-in', async () => {
+    pharmacySession(PHARMACIST);
+    await expect(
+      DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+    ).rejects.toThrow('redirect');
+    expect(mocks.redirect).toHaveBeenCalledWith('/pharmacy/pharmacist-queue');
+    // Only the three landing capabilities are read, inside the tenant database.
+    const landingReads = mocks.can.mock.calls
+      .map(([, action]) => action)
+      .filter((action) => action !== 'admin:access');
+    expect(landingReads.sort()).toEqual([
+      'pharmacy:dispense',
+      'pharmacy:prescriptions',
+      'reports:operational',
+    ]);
+    for (const call of mocks.can.mock.calls) expect(call[3]).toEqual({ db: mocks.db });
+  });
+
+  it('shows a pharmacist their own home, not the owner command centre, on an explicit visit', async () => {
+    pharmacySession(PHARMACIST);
+    const page = await DashboardPage({});
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacistHome);
+    expect(page.props.children.props.tools.map((tool: { href: string }) => tool.href)).toEqual([
+      '/pharmacy/pharmacist-queue',
+      '/pharmacy/prescriptions',
+    ]);
+  });
+
+  it('keeps a pharmacist off the command centre without Pharmacy Dispensing, with nowhere to redirect', async () => {
+    pharmacySession(PHARMACIST, ['pharmacy-core', 'pharmacy-reports']);
+    const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacistHome);
+    expect(page.props.children.props.tools).toEqual([]);
+  });
+
+  it.each([
+    ['an owner-operator', ['reports:operational', ...PHARMACIST]],
+    ['an auditor', ['reports:operational']],
+  ])('keeps the command centre for %s', async (_persona, capabilities) => {
+    pharmacySession(capabilities);
+    const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+  });
+
+  // DEV-20: a member with no pharmacist or report capability (a cashier) gets their own staff
+  // home instead of the command centre, without a redirect.
+  it('lands a member with no pharmacist capability on their staff home', async () => {
+    pharmacySession(['pharmacy:counter']);
+    const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacyStaffHome);
+  });
+
+  it('logs a failed access read and falls back to the command centre without redirecting', async () => {
+    pharmacySession(PHARMACIST);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) => {
+      if (action === 'admin:access') return false;
+      throw new TypeError('unavailable');
+    });
+    const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(error).toHaveBeenCalledWith('[dashboard] pharmacy access read unavailable', {
+      error: 'TypeError',
+    });
+    error.mockRestore();
   });
 });

@@ -53,10 +53,10 @@ describe('PharmacyStaffHome (DEV-20)', () => {
         home={{
           links: [
             {
-              key: 'dispense',
-              href: '/pharmacy/pharmacist-queue',
-              label: 'Pharmacist queue',
-              description: 'Review prescriptions and release held items.',
+              key: 'procurement',
+              href: '/pharmacy/purchasing',
+              label: 'Purchasing',
+              description: 'Raise orders and receive supplier deliveries.',
             },
           ],
           branches: [],
@@ -66,8 +66,8 @@ describe('PharmacyStaffHome (DEV-20)', () => {
       />
     );
     expect(screen.queryByRole('link', { name: 'Open Counter' })).toBeNull();
-    expect(screen.getByRole('link', { name: /Pharmacist queue/ }).getAttribute('href')).toBe(
-      '/pharmacy/pharmacist-queue'
+    expect(screen.getByRole('link', { name: /Purchasing/ }).getAttribute('href')).toBe(
+      '/pharmacy/purchasing'
     );
   });
 });

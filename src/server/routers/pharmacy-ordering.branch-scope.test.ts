@@ -102,7 +102,8 @@ describe('pharmacyOrdering.deliveryCommand: the branch in the input', () => {
     expect(recordDeliveryCommand).toHaveBeenCalledExactlyOnceWith(
       db,
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
-      remittance
+      remittance,
+      { authorizeRefund: expect.any(Function) }
     );
   });
 });

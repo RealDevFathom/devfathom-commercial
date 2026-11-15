@@ -6,6 +6,11 @@ import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { PharmacyStaffHome } from './pharmacy-staff-home';
+import {
+  PHARMACIST_LANDING_CAPABILITIES,
+  PharmacistHome,
+  pharmacistLanding,
+} from './pharmacist-home';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
 import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
@@ -52,11 +57,43 @@ export default async function DashboardPage({
         )
       : null;
 
-  // DEV-20: only the owner/administrator or a manager who holds the operational-reports grant
-  // gets the Owner command centre. Every other pharmacy member lands on their own staff home,
-  // decided here on the server from their grants, never from a client-side flag.
-  const pharmacyStaffHome =
+  // DEV-95: the owner command centre reads only `reports:operational` data.
+  // Ask the ABAC engine the report procedures use, server-side, for just the
+  // capabilities this decision needs. A pharmacist without report access lands
+  // on their own queue after sign-in and sees a pharmacist home on an explicit
+  // visit, never a command centre whose branch read the server refuses.
+  const pharmacyCapabilities =
     pharmacy && organizationId && user
+      ? await withTenantDb(organizationId, async (db) => {
+          const subject = subjectFromSession(user);
+          const held = await Promise.all(
+            PHARMACIST_LANDING_CAPABILITIES.map(async (action) =>
+              (await can(subject, action, undefined, { db })) ? action : null
+            )
+          );
+          return held.filter((action) => action !== null);
+        }).catch((error: unknown) => {
+          // Fall back to the command centre, whose own report reads stay
+          // server-gated: a member without reports:operational sees its
+          // Restricted state there, never an owner's figures.
+          console.error('[dashboard] pharmacy access read unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : null;
+  const pharmacist = pharmacyCapabilities
+    ? pharmacistLanding(pharmacyCapabilities, ssr?.entitlements.enabledModules)
+    : null;
+  if (signInLanding && pharmacist?.home) redirect(pharmacist.home);
+
+  // DEV-20: after DEV-95's pharmacist home, only the owner/administrator or a manager who holds
+  // the operational-reports grant gets the Owner command centre. Every other pharmacy member
+  // lands on their own staff home, decided here on the server from their grants, never from a
+  // client-side flag. Like DEV-95, an unavailable access read falls back to the command centre,
+  // whose own report reads stay server-gated.
+  const pharmacyStaffHome =
+    pharmacy && organizationId && user && !pharmacist
       ? await withTenantDb(organizationId, async (db) =>
           (await canOpenPharmacyCommandCentre(db, user))
             ? null
@@ -66,7 +103,12 @@ export default async function DashboardPage({
                 user,
                 ssr?.entitlements.enabledModules ?? []
               )
-        )
+        ).catch((error: unknown) => {
+          console.error('[dashboard] pharmacy staff home unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
       : null;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
@@ -108,6 +150,8 @@ export default async function DashboardPage({
           organizationName={ssr.organization?.displayName ?? 'Your properties'}
           isAdmin={ssr.session?.user?.role === 'ADMIN'}
         />
+      ) : pharmacy && pharmacist ? (
+        <PharmacistHome tools={pharmacist.tools} />
       ) : pharmacyStaffHome ? (
         <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (

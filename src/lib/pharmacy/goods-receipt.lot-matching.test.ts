@@ -16,6 +16,15 @@ vi.mock('./stock-ledger', async () => {
 });
 vi.mock('./controlled-register', () => ({ appendControlledPurchaseEntries }));
 
+const finance = vi.hoisted(() => ({
+  postGoodsReceiptEntry: vi.fn(),
+  reversePostingForSource: vi.fn(),
+}));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  ...finance,
+}));
+
 import { postGoodsReceipt } from './goods-receipt';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 

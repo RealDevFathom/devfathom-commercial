@@ -11,15 +11,14 @@ type HomeUser = {
 };
 
 /**
- * DEV-20: the Owner command centre belongs to the organization administrator (Owner/Admin)
- * and to a manager who can actually use it: `pharmacy:manage` together with
- * `reports:operational`, which every command-centre read and the layout save require. Every
- * other pharmacy member (cashier, pharmacist, procurement, inventory, finance, auditor, or a
- * manager without the reports grant) lands on their own staff home instead. Decided on the
- * server for every dashboard render.
+ * DEV-20: the Owner command centre is built only from `reports:operational` reads, so it
+ * belongs to the organization administrator (Owner/Admin) and to members holding that grant
+ * (owner-operator, a manager given reports, an auditor), as DEV-95 already decided. Pharmacists
+ * get DEV-95's pharmacist home first. Every other member (cashier, procurement, inventory,
+ * finance, or a manager without the reports grant) lands on their own staff home instead of
+ * a command centre whose reads the server refuses. Decided on the server for every render.
  */
 export const PHARMACY_COMMAND_CENTRE_ACTIONS = [
-  'pharmacy:manage',
   'reports:operational',
 ] as const satisfies readonly Action[];
 
@@ -43,14 +42,6 @@ export const PHARMACY_STAFF_LINKS = [
     description: 'Ring up sales, take payment and run your cash drawer.',
   },
   {
-    key: 'dispense',
-    action: 'pharmacy:dispense',
-    module: 'pharmacy-dispensing',
-    href: '/pharmacy/pharmacist-queue',
-    label: 'Pharmacist queue',
-    description: 'Review prescriptions and release held items.',
-  },
-  {
     key: 'procurement',
     action: 'pharmacy:procurement',
     module: 'pharmacy-procurement',
@@ -65,14 +56,6 @@ export const PHARMACY_STAFF_LINKS = [
     href: '/pharmacy/inventory',
     label: 'Inventory',
     description: 'Check stock, batches and expiry.',
-  },
-  {
-    key: 'reports',
-    action: 'reports:operational',
-    module: 'pharmacy-reports',
-    href: '/pharmacy/reports',
-    label: 'Reports',
-    description: 'Read the operational reports your role allows.',
   },
 ] as const satisfies readonly {
   key: string;

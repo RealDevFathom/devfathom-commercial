@@ -140,6 +140,25 @@ export function deriveLooseUnitPrice(input: {
 }
 
 /**
+ * MED-08: the rounding increment for one received lot.
+ *
+ * Printed MRP rules are keyed by pack level AND batch reference, so two batches
+ * of the same pack can carry different increments. Both the counter quote and
+ * the sale writer resolve the increment through this one function from the
+ * lot's exact (packLevelId, batch number) pair; a lot with no matching rule
+ * uses the increment of 1 that `priceFromLot` defaults to.
+ */
+export function mrpRoundingIncrementForLot(
+  rules: readonly { packLevelId: string; batchReference: string; roundingIncrementMinor: number }[],
+  lot: { packLevelId: string; batchNumber: string }
+): number {
+  const rule = rules.find(
+    (entry) => entry.packLevelId === lot.packLevelId && entry.batchReference === lot.batchNumber
+  );
+  return rule?.roundingIncrementMinor ?? 1;
+}
+
+/**
  * MED-08: the price of one sale unit drawn from a received lot.
  *
  * Lives here, beside `deriveLooseUnitPrice`, rather than next to the sale
