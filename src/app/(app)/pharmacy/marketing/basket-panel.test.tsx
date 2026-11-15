@@ -143,3 +143,28 @@ it('exports synthetic Studio states for the visual matrix when requested', () =>
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="studio.css"><title>Bundle review</title></head><body class="bg-surface-page text-text-body"><main class="min-w-0 p-4">${renderToStaticMarkup(panel)}</main></body></html>`
     );
 });
+
+it('keeps statistical thresholds behind optional advanced rules with defaults and local dates', () => {
+  const { container } = render(
+    <BasketPanel
+      branchId="branch-a"
+      history={history}
+      unavailable={false}
+      timeZone="Asia/Karachi"
+    />
+  );
+  const advanced = screen.getByText('Advanced matching rules (optional)').closest('details')!;
+  expect(advanced).not.toHaveAttribute('open');
+  for (const name of ['minimumSupport', 'minimumConfidence', 'minimumLift']) {
+    const input = container.querySelector(`input[name="${name}"]`)!;
+    expect(advanced).toContainElement(input as HTMLElement);
+    expect(input).not.toHaveValue(null);
+  }
+  expect(screen.getByLabelText('First day')).not.toHaveValue('');
+  expect(screen.getByLabelText('Last day')).not.toHaveValue('');
+  expect(screen.getByLabelText(/Bundle campaign send date and time/)).toHaveAttribute(
+    'type',
+    'datetime-local'
+  );
+  expect(container).not.toHaveTextContent(/Minimum (support|confidence|lift)|UTC ISO|\(UTC\)/);
+});

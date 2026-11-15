@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { workspaceDateRange } from '@/lib/timezone';
+
 import { grossMarginQuery } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
@@ -13,6 +15,8 @@ export type PharmacyReportFilters = {
   supplierId?: string;
   ingredientId?: string;
   batchId?: string;
+  /** Workspace IANA zone: event timestamps are bounded by its midnights (UTC when absent). */
+  timeZone?: string | null;
 };
 
 export type PharmacyMetricContract = {
@@ -40,7 +44,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Gross margin',
     'Posted revenue less discounts and exact allocated lot cost, including return and reversal postings. Missing journal evidence is unknown; source completeness is not asserted.',
     'finance_journal_entries + finance_journal_lines',
-    'selected branches and UTC posting dates',
+    'selected branches and posting times within workspace dates',
     '/pharmacy/reports?section=sales',
     'reports:financial',
   ],
@@ -95,7 +99,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Open stock signals with a linked requisition action.',
     'pharmacy_stock_signals + pharmacy_stock_signal_actions',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing',
     'reports:operational',
   ],
   [
@@ -140,7 +144,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Recall notices still open in the tenant.',
     'pharmacy_recall_notices',
     'organization',
-    '/pharmacy/safety',
+    '/pharmacy/inventory',
     'reports:operational',
   ],
   [
@@ -158,7 +162,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Supplier claims not released or submitted.',
     'pharmacy_supplier_claims',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing/returns',
     'reports:operational',
   ],
   [
@@ -167,7 +171,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Unresolved three-way-match receiving exceptions.',
     'pharmacy_receiving_exceptions',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing/receiving',
     'reports:operational',
   ],
   [
@@ -176,7 +180,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Branches with a current regulatory qualified-person coverage record.',
     'pharmacy_branch_regulatory_profiles',
     'selected branches at read time',
-    '/pharmacy/safety',
+    '/pharmacy/regulatory',
     'reports:operational',
   ],
   [
@@ -185,7 +189,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Unsigned pharmacist review items plus open controlled-register incidents.',
     'pharmacy_pharmacist_review_items + pharmacy_pharmacist_review_decisions + pharmacy_register_incidents',
     'selected branches at read time',
-    '/pharmacy/safety',
+    '/pharmacy/pharmacist-queue',
     'reports:operational',
   ],
   [
@@ -312,6 +316,9 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
 
 export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
+  // Business-date columns compare against `parsed`; event and posting timestamps use the
+  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.
+  const eventWindow = workspaceDateRange(filters.from, filters.to, filters.timeZone);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
@@ -320,7 +327,7 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
       organizationId: Prisma.sql`current_setting('app.current_organization_id', true)`,
       branchIds: filters.branchIds,
     },
-    { from: parsed.from, to: parsed.to, by: 'branch' }
+    { from: eventWindow.from, to: eventWindow.to, by: 'branch' }
   );
   const [money, stock, lostDemand, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([
@@ -331,7 +338,7 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
         Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
       ),
       db.$queryRaw<Array<{ value: number }>>(
-        Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${parsed.from} AND "createdAt"<${parsed.to}`
+        Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${eventWindow.from} AND "createdAt"<${eventWindow.to}`
       ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>

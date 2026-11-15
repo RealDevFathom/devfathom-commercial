@@ -1,7 +1,6 @@
 -- Records hardening steps that could not be applied on this cluster. A managed
--- PostgreSQL service installs trusted extensions under an internal superuser
--- (Azure Database for PostgreSQL uses "azuresu") that no customer role may
--- assume, so the PUBLIC EXECUTE revoke below is impossible there. Skipping it
+-- PostgreSQL service can install trusted extensions under an internal superuser
+-- that no customer role may assume, so the PUBLIC EXECUTE revoke below is impossible there. Skipping it
 -- silently would hide a real gap, so every skip is recorded instead.
 -- Kept out of "public" on purpose: preparation runs before prisma migrate deploy,
 -- and a table in the migrated schema would make a brand-new database look

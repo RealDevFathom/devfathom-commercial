@@ -1042,15 +1042,19 @@ export async function resolveScan(
     };
   }
 
-  const medicine = await db.medicine.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      saleable: true,
-      productName: { contains: term, mode: 'insensitive' },
-    },
-    orderBy: [{ productName: 'asc' }, { id: 'asc' }],
-    select: { id: true, productName: true },
-  });
+  // DEV-734: a product chosen from the live list submits its full name, so an exact
+  // name wins over an earlier-sorting name that merely contains it.
+  const byName = (productName: { equals: string } | { contains: string }) =>
+    db.medicine.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        productName: { ...productName, mode: 'insensitive' },
+      },
+      orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+      select: { id: true, productName: true },
+    });
+  const medicine = (await byName({ equals: term })) ?? (await byName({ contains: term }));
   if (medicine) {
     return {
       kind: 'medicine',

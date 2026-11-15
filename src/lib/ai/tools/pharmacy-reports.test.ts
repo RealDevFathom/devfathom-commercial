@@ -202,6 +202,23 @@ describe('Ask Fathom pharmacy reports', () => {
     }
   );
 
+  it('counts lost demand between PKT midnights, the same day its dates are on', async () => {
+    const result = await toolExecute()({
+      metricKeys: ['lostDemandEvents'],
+      from: '2026-11-03',
+      to: '2026-11-03',
+    });
+    expect(result).toMatchObject({ kind: 'answer' });
+    const lostDemand = queryRaw.mock.calls
+      .map(([query]) => query as { sql: string; values: unknown[] })
+      .find((query) => query.sql.includes('"pharmacy_unfulfilled_demand_events"'));
+    expect(lostDemand?.values).toEqual([
+      'branch_1',
+      new Date('2026-11-02T19:00:00.000Z'),
+      new Date('2026-11-03T19:00:00.000Z'),
+    ]);
+  });
+
   it('preserves finance authorization, validation and tenant scope', async () => {
     const input = { report: 'inventory_capital', branch: 'branch_1', at: '2026-09-01T00:00:00Z' };
     const execute = (role = 'ADMIN') =>

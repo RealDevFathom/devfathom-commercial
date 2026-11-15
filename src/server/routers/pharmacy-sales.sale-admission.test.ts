@@ -45,6 +45,9 @@ const line = {
   idempotencyKey: 'counter:sale-1:medicine-1',
 };
 
+/** DEV-725: a counter bill names the device whose drawer takes its cash. */
+const DEVICE = 'counter-device';
+
 function fixture(options: {
   capabilities: string[];
   assignedBranches: string[];
@@ -102,7 +105,9 @@ beforeEach(() => {
 describe('counter sale admission (DEV-607)', () => {
   it('refuses an unassigned cashier before a bill is created', async () => {
     const { db, caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [] });
-    await expect(caller.create({ branchId: BRANCH })).rejects.toMatchObject(OUTSIDE);
+    await expect(caller.create({ branchId: BRANCH, deviceId: DEVICE })).rejects.toMatchObject(
+      OUTSIDE
+    );
     expect(createSale).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
@@ -119,7 +124,9 @@ describe('counter sale admission (DEV-607)', () => {
       capabilities: ['pharmacy:counter'],
       assignedBranches: ['branch-other'],
     });
-    await expect(caller.create({ branchId: BRANCH })).rejects.toMatchObject(OUTSIDE);
+    await expect(caller.create({ branchId: BRANCH, deviceId: DEVICE })).rejects.toMatchObject(
+      OUTSIDE
+    );
     await expect(caller.addLine(line)).rejects.toMatchObject(OUTSIDE);
     expect(createSale).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
@@ -128,7 +135,7 @@ describe('counter sale admission (DEV-607)', () => {
   it('gives create, addLine and counterCart the same answer for an unassigned cashier', async () => {
     const { caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [] });
     const refusals = await Promise.all([
-      caller.create({ branchId: BRANCH }).catch((error: unknown) => error),
+      caller.create({ branchId: BRANCH, deviceId: DEVICE }).catch((error: unknown) => error),
       caller.addLine(line).catch((error: unknown) => error),
       caller.counterCart({ branchId: BRANCH, saleId: 'sale-1' }).catch((error: unknown) => error),
     ]);
@@ -139,7 +146,9 @@ describe('counter sale admission (DEV-607)', () => {
     'refuses an assigned member with only %s before any sale write',
     async (capability) => {
       const { db, caller } = fixture({ capabilities: [capability], assignedBranches: [BRANCH] });
-      await expect(caller.create({ branchId: BRANCH })).rejects.toMatchObject(NO_CAPABILITY);
+      await expect(caller.create({ branchId: BRANCH, deviceId: DEVICE })).rejects.toMatchObject(
+        NO_CAPABILITY
+      );
       await expect(caller.addLine(line)).rejects.toMatchObject(NO_CAPABILITY);
       expect(createSale).not.toHaveBeenCalled();
       expect(addSaleLine).not.toHaveBeenCalled();
@@ -152,11 +161,14 @@ describe('counter sale admission (DEV-607)', () => {
     vi.mocked(createSale).mockResolvedValue({ id: 'sale-1' } as never);
     vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
 
-    await expect(caller.create({ branchId: BRANCH })).resolves.toEqual({ id: 'sale-1' });
+    await expect(caller.create({ branchId: BRANCH, deviceId: DEVICE })).resolves.toEqual({
+      id: 'sale-1',
+    });
     await caller.addLine(line);
 
     const scope = { organizationId: 'org-1', branchId: BRANCH, actorId: 'cashier-1' };
-    expect(createSale).toHaveBeenCalledWith(expect.anything(), scope, false);
+    // DEV-725: the last argument is the drawer precondition, run inside createSale.
+    expect(createSale).toHaveBeenCalledWith(expect.anything(), scope, false, expect.any(Function));
     expect(addSaleLine).toHaveBeenCalledOnce();
     expect(vi.mocked(addSaleLine).mock.calls[0]![1]).toEqual(scope);
   });
@@ -168,7 +180,9 @@ describe('counter sale admission (DEV-607)', () => {
       role: 'ADMIN',
     });
     vi.mocked(createSale).mockResolvedValue({ id: 'sale-1' } as never);
-    await expect(caller.create({ branchId: BRANCH })).resolves.toEqual({ id: 'sale-1' });
+    await expect(caller.create({ branchId: BRANCH, deviceId: DEVICE })).resolves.toEqual({
+      id: 'sale-1',
+    });
     expect(createSale).toHaveBeenCalledOnce();
   });
 });

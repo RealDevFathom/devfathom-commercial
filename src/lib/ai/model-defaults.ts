@@ -1,9 +1,8 @@
 import type { AITier } from './tiers';
 
 /**
- * Providers that take part in routing, in the default fallback order. Azure is a
- * legacy, explicit-only selector (AI_PROVIDER=azure) and is deliberately absent:
- * it is never a default and never part of the fallback chain.
+ * Providers that take part in routing, in the default fallback order:
+ * Anthropic, then OpenAI, then Bedrock.
  */
 export const ROUTED_AI_PROVIDERS = ['anthropic', 'openai', 'bedrock'] as const;
 export type TieredAIProviderName = (typeof ROUTED_AI_PROVIDERS)[number];
