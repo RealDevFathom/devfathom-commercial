@@ -1,6 +1,7 @@
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { demandAggregate } from '@/lib/pharmacy/sales';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 
 type Demand = Awaited<ReturnType<typeof demandAggregate>>;
 
@@ -9,11 +10,13 @@ export function ObservedDemand({
   failed,
   selected,
   financial,
+  timeZone,
 }: {
   report: Demand | null;
   failed: boolean;
   selected: boolean;
   financial: boolean;
+  timeZone: string | null | undefined;
 }) {
   const events = report?.rows.reduce((total, row) => total + row._count._all, 0) ?? 0;
   const stockouts = report?.rows.filter((row) => row.reason === 'STOCKOUT') ?? [];
@@ -31,10 +34,10 @@ export function ObservedDemand({
         <>
           <p className="mb-4 text-sm text-text-muted">
             Explicit recorded requests, not unique customers or total market demand. Selected
-            branch; UTC event dates {report.window.from.toISOString().slice(0, 10)} to{' '}
-            {report.window.to.toISOString().slice(0, 10)} (end exclusive). Supplier, ingredient and
-            batch filters do not apply. Events may subsequently be recovered; this is not an open
-            backlog.
+            branch; event dates {workspaceToday(timeZone, report.window.from)} to{' '}
+            {workspaceToday(timeZone, report.window.to)} (end exclusive) in{' '}
+            {workspaceTimezone(timeZone)}. Supplier, ingredient and batch filters do not apply.
+            Events may subsequently be recovered; this is not an open backlog.
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Stat label="Recorded demand events" value={events} />

@@ -741,7 +741,7 @@ export default async function PharmacyReceivingPage({
                     hint="Required: stock is not saleable without its source invoice."
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Invoice date"
                     name="supplierInvoiceDate"
                     notice={notice}
@@ -749,7 +749,7 @@ export default async function PharmacyReceivingPage({
                     type="date"
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Received on"
                     name="receivedAt"
                     notice={notice}
@@ -954,7 +954,7 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase invoice date"
                 name="directInvoiceDate"
                 notice={notice}
@@ -962,7 +962,7 @@ export default async function PharmacyReceivingPage({
                 type="date"
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase received on"
                 name="directReceivedAt"
                 notice={notice}

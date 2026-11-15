@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { ianaTimezone, isIanaTimezone, workspaceTimezone, workspaceToday } from './timezone';
+import {
+  formatWorkspaceDateTime,
+  ianaTimezone,
+  isIanaTimezone,
+  workspaceDateRange,
+  workspaceTimezone,
+  workspaceToday,
+} from './timezone';
 
 // 22:30 UTC on 21 October: already the 22nd in Asia/Tokyo, still the 21st in UTC.
 const instant = new Date('2026-10-21T22:30:00.000Z');
@@ -35,5 +42,34 @@ describe('workspace time zones', () => {
     expect(workspaceToday('America/Chicago', instant)).toBe('2026-10-21');
     expect(workspaceToday('PKT', instant)).toBe('2026-10-21');
     expect(workspaceToday(undefined, instant)).toBe('2026-10-21');
+  });
+
+  it('keeps 00:00–04:59 PKT on the Karachi business day, not the UTC one', () => {
+    // 20:30 UTC on 14 November is 01:30 on the 15th in Karachi.
+    const afterMidnight = new Date('2026-11-14T20:30:00.000Z');
+    expect(workspaceToday('Asia/Karachi', afterMidnight)).toBe('2026-11-15');
+  });
+
+  it('shows an instant on the workspace clock and names the zone', () => {
+    expect(formatWorkspaceDateTime('2026-11-03T13:24:15.000Z', 'Asia/Karachi')).toBe(
+      '3 Nov 2026, 6:24 PM PKT'
+    );
+    expect(formatWorkspaceDateTime(new Date('2026-11-14T20:30:00.000Z'), 'Asia/Karachi')).toBe(
+      '15 Nov 2026, 1:30 AM PKT'
+    );
+    expect(formatWorkspaceDateTime('2026-11-03T13:24:15.000Z', null)).toBe(
+      '3 Nov 2026, 1:24 PM UTC'
+    );
+  });
+
+  it('bounds inclusive workspace dates by the workspace midnights', () => {
+    expect(workspaceDateRange('2026-11-09', '2026-11-15', 'Asia/Karachi')).toEqual({
+      from: new Date('2026-11-08T19:00:00.000Z'),
+      to: new Date('2026-11-15T19:00:00.000Z'),
+    });
+    expect(workspaceDateRange('2026-02-28', '2026-02-28', null)).toEqual({
+      from: new Date('2026-02-28T00:00:00.000Z'),
+      to: new Date('2026-03-01T00:00:00.000Z'),
+    });
   });
 });

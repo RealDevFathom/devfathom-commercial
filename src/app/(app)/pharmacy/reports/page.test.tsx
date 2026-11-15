@@ -8,6 +8,7 @@ const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
 const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
 const suppliers = vi.hoisted(() => vi.fn());
+const demandAggregate = vi.hoisted(() => vi.fn());
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -25,7 +26,7 @@ const commandCentre = vi.fn(async () => ({
 }));
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
-    organization: { id: 'org-a', currency: 'PKR' },
+    organization: { id: 'org-a', currency: 'PKR', timezone: 'Asia/Karachi' },
     entitlements: {
       organizationId: 'org-a',
       enabledModules: reportModules.enabled,
@@ -37,14 +38,16 @@ vi.mock('@/server/trpc', () => ({
 vi.mock('@/server/routers/pharmacy-sales', () => ({
   pharmacySalesRouter: {
     createCaller: () => ({
-      demandAggregate: async ({ from, to }: { from: Date; to: Date }) => ({
-        label: 'Estimate',
-        method: 'Explicit POS-10 events grouped by requested item and cause',
-        window: { from, to },
-        exclusions: ['searches without an explicit event', 'abandoned carts'],
-        confidence: 'observed-events-only',
-        rows: [],
-      }),
+      demandAggregate: demandAggregate.mockImplementation(
+        async ({ from, to }: { from: Date; to: Date }) => ({
+          label: 'Estimate',
+          method: 'Explicit POS-10 events grouped by requested item and cause',
+          window: { from, to },
+          exclusions: ['searches without an explicit event', 'abandoned carts'],
+          confidence: 'observed-events-only',
+          rows: [],
+        })
+      ),
     }),
   },
 }));
@@ -218,6 +221,28 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).not.toHaveBeenCalled();
   });
 
+  it('defaults the period to the Karachi business day after midnight PKT, not the UTC day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 PKT on 15 November is still 14 November in UTC.
+    vi.setSystemTime(new Date('2026-11-14T20:30:00.000Z'));
+    try {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(commandCentre).toHaveBeenCalledWith(
+      expect.objectContaining({ from: '2026-11-09', to: '2026-11-15' })
+    );
+    // Demand logged at 00:00–04:59 PKT on the 9th belongs to the period: bound it on the Karachi clock.
+    expect(demandAggregate).toHaveBeenCalledWith({
+      branchId: 'b1',
+      from: new Date('2026-11-08T19:00:00.000Z'),
+      to: new Date('2026-11-15T19:00:00.000Z'),
+    });
+    expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
+    expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+  });
+
   it('carries all supported filters and exposes the metric contract', async () => {
     render(
       await PharmacyReportsPage({
@@ -288,8 +313,12 @@ describe('pharmacy report catalog filters', () => {
       'Supplier names could not load. Apply filters again to retry.'
     );
     expect(filter).toHaveValue('sup1');
-    expect(within(filter).getByRole('option', { name: 'Selected supplier unavailable' })).toHaveProperty('selected', true);
-    expect(screen.getByText('Supplier names could not load. Apply filters again to retry.')).toBeVisible();
+    expect(
+      within(filter).getByRole('option', { name: 'Selected supplier unavailable' })
+    ).toHaveProperty('selected', true);
+    expect(
+      screen.getByText('Supplier names could not load. Apply filters again to retry.')
+    ).toBeVisible();
     expect(screen.queryByText('sup1')).not.toBeInTheDocument();
     expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
   });

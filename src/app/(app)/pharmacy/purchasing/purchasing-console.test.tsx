@@ -708,6 +708,31 @@ describe('goods-in bench (PUR-02/04/05)', () => {
   });
 });
 
+describe('goods-in dates follow the workspace day (DEV-726)', () => {
+  it('defaults a direct purchase keyed at 01:30 PKT to the Karachi date, not the UTC one', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      organization: { ...actor.organization, timezone: 'Asia/Karachi' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-14T20:30:00.000Z'));
+    try {
+      render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.getByLabelText(/Direct purchase received on/)).toHaveProperty(
+      'value',
+      '2026-11-15'
+    );
+    expect(screen.getByLabelText(/Direct purchase invoice date/)).toHaveProperty(
+      'value',
+      '2026-11-15'
+    );
+  });
+});
+
 describe('segregation of duties (PUR-02)', () => {
   it('explains why the raiser cannot approve instead of offering a button that refuses', async () => {
     mocks.createCaller.mockReturnValue(

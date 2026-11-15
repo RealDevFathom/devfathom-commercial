@@ -30,7 +30,7 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
 describe('observed demand evidence', () => {
   it('distinguishes observations, units, null estimates and exclusions', () => {
     const html = renderToStaticMarkup(
-      <ObservedDemand report={report} failed={false} selected financial />
+      <ObservedDemand timeZone="UTC" report={report} failed={false} selected financial />
     );
     for (const value of [
       'Recorded demand events',
@@ -49,14 +49,31 @@ describe('observed demand evidence', () => {
   });
   it('withholds financial estimates without financial permission', () => {
     const html = renderToStaticMarkup(
-      <ObservedDemand report={report} failed={false} selected financial={false} />
+      <ObservedDemand timeZone="UTC" report={report} failed={false} selected financial={false} />
     );
     expect(html).not.toContain('5.00');
     expect(html).not.toContain('estimated value');
   });
   it('does not turn missing reads into zero observations', () => {
-    const html = renderToStaticMarkup(<ObservedDemand report={null} failed selected financial />);
+    const html = renderToStaticMarkup(
+      <ObservedDemand timeZone="UTC" report={null} failed selected financial />
+    );
     expect(html).toContain('role="alert"');
     expect(html).not.toContain('Recorded demand events');
+  });
+  it('names the workspace dates the demand window covers, not the UTC dates', () => {
+    const karachi = {
+      ...report,
+      // 9–15 November on the Karachi clock: 19:00 UTC on the 8th to 19:00 UTC on the 15th.
+      window: {
+        from: new Date('2026-11-08T19:00:00.000Z'),
+        to: new Date('2026-11-15T19:00:00.000Z'),
+      },
+    };
+    const html = renderToStaticMarkup(
+      <ObservedDemand report={karachi} failed={false} selected financial timeZone="Asia/Karachi" />
+    );
+    expect(html).toContain('event dates 2026-11-09 to 2026-11-16 (end exclusive) in Asia/Karachi');
+    expect(html).not.toContain('UTC event dates');
   });
 });
