@@ -51,8 +51,30 @@ const writeProcedure = capabilityProcedure('purchasing:create');
 const approveProcedure = capabilityProcedure('purchasing:approve');
 
 const ID = z.string().min(1);
-/** A quantity or cost accepted as a decimal string (preferred) or a number. */
-const DECIMAL = z.union([z.string().min(1), z.number()]);
+/**
+ * A DECIMAL(18,6) quantity or cost, accepted as a plain decimal string
+ * (preferred) or a finite number: at most 12 integer digits and 6 decimal
+ * places, no sign, exponent, NaN or ±Infinity (PostgreSQL numeric stores NaN
+ * past a `>= 0` CHECK, which would poison derived stock balances).
+ */
+const DECIMAL_18_6_TEXT = /^\d{1,12}(?:\.\d{1,6})?$/;
+const decimal18_6 = (domain: 'positive' | 'nonnegative') =>
+  z
+    .union([z.string(), z.number().finite()])
+    .transform((value) => (typeof value === 'number' ? String(value) : value))
+    .pipe(
+      z
+        .string()
+        .regex(
+          DECIMAL_18_6_TEXT,
+          'Expected a non-negative decimal with at most 12 integer digits and 6 decimal places.'
+        )
+        .refine((value) => domain === 'nonnegative' || /[1-9]/.test(value), {
+          message: 'Expected a positive decimal.',
+        })
+    );
+const DECIMAL = decimal18_6('nonnegative');
+const POSITIVE_DECIMAL = decimal18_6('positive');
 const DATE_ONLY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a "YYYY-MM-DD" date.');
 const PO_STATUS = z.enum([
   'DRAFT',
@@ -99,7 +121,7 @@ const RECEIVE_LINE_INPUT = z
 const RETURN_LINE_INPUT = z
   .object({
     stockItemId: ID,
-    quantity: DECIMAL,
+    quantity: POSITIVE_DECIMAL,
     unitId: ID.optional(),
     unitCost: DECIMAL.optional(),
     batchId: ID.optional(),

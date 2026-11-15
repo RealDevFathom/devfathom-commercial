@@ -30,7 +30,8 @@ export type FinancePostingErrorReason =
   | 'INVALID_AMOUNT'
   | 'MISSING_SOURCE'
   | 'NOT_FOUND'
-  | 'MISSING_REASON';
+  | 'MISSING_REASON'
+  | 'IDEMPOTENCY_CONFLICT';
 
 export class FinancePostingError extends Error {
   constructor(readonly reason: FinancePostingErrorReason) {
@@ -63,7 +64,15 @@ export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSid
   ACCOUNTS_PAYABLE: 'CREDIT',
   CASH_OVER_SHORT: 'DEBIT',
   OPENING_BALANCE_EQUITY: 'CREDIT',
+  /** Liability. Only a posted pharmacy journal voucher writes it. */
+  MANUAL_NONTRADE_ACCRUAL: 'CREDIT',
 };
+
+/** Sources whose idempotent replay must also match the original source row. */
+export const REPLAY_IDENTITY_CHECKED_SOURCES: ReadonlySet<FinanceSourceKind> = new Set([
+  'PHARMACY_JOURNAL_VOUCHER',
+  'PHARMACY_AP_INVOICE',
+]);
 
 export type JournalScope = {
   organizationId: string;
@@ -152,7 +161,18 @@ export async function postJournalEntry(
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
     include: { lines: true },
   });
-  if (existing) return existing;
+  if (existing) {
+    // Sources that opted in prove a replayed key belongs to the same document,
+    // so a key collision can never hand one voucher another document's entry.
+    // Legacy adapters keep their existing replay behaviour unchanged.
+    if (
+      REPLAY_IDENTITY_CHECKED_SOURCES.has(input.sourceKind) &&
+      (existing.sourceKind !== input.sourceKind || existing.sourceId !== input.sourceId)
+    ) {
+      throw new FinancePostingError('IDEMPOTENCY_CONFLICT');
+    }
+    return existing;
+  }
 
   const entry = await db.financeJournalEntry.create({
     data: {

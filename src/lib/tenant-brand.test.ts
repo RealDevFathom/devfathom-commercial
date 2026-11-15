@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertWorkspaceIdentity,
+  brandHoverColor,
   isTenantIdentityMismatch,
   tenantBrandTokens,
   type TenantBrand,
@@ -36,12 +37,66 @@ describe('tenantBrandTokens', () => {
   it('overrides primary and accent token families together', () => {
     expect(tenantBrandTokens(brand('#FF684F', '#246B5A'))).toMatchObject({
       '--primary': '#FF684F',
-      '--primary-hover': '#FF684F',
+      '--primary-hover': '#FF836F',
       '--primary-foreground': '#111110',
       '--accent-brand': '#246B5A',
-      '--accent-brand-hover': '#246B5A',
+      '--accent-brand-hover': '#1E584A',
       '--ring': '#246B5A',
     });
+  });
+});
+
+describe('tenant brand hover tokens (DEV-51)', () => {
+  it.each([
+    ['#FF684F', '#246B5A'],
+    ['#0C2E2C', '#F7F1E5'],
+    ['#FFFFFF', '#000000'],
+  ])('gives %s / %s a hover shade that differs from the resting colour', (primary, accent) => {
+    const tokens = tenantBrandTokens(brand(primary, accent));
+    expect(tokens['--primary-hover']).toMatch(/^#[0-9A-F]{6}$/);
+    expect(tokens['--accent-brand-hover']).toMatch(/^#[0-9A-F]{6}$/);
+    expect(tokens['--primary-hover']!.toUpperCase()).not.toBe(primary.toUpperCase());
+    expect(tokens['--accent-brand-hover']!.toUpperCase()).not.toBe(accent.toUpperCase());
+  });
+
+  it('moves away from the label colour so hover contrast never drops', () => {
+    // Dark brand under a light label darkens; light brand under a dark label lightens.
+    expect(brandHoverColor('#246B5A')).toBe('#1E584A');
+    expect(brandHoverColor('#FF684F')).toBe('#FF836F');
+    // Already at the extreme: no room to move away, so it moves toward the label.
+    expect(brandHoverColor('#FFFFFF')).toBe('#D4D4D4');
+    expect(brandHoverColor('#000000')).not.toBe('#000000');
+  });
+
+  it('keeps the label at or above min(4.5:1, resting contrast) on hover for every colour', () => {
+    const channel = (value: number) => {
+      const c = value / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = (hex: string) => {
+      const v = hex.replace('#', '');
+      const [r, g, b] = [0, 2, 4].map((o) => channel(Number.parseInt(v.slice(o, o + 2), 16)));
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const contrast = (a: string, b: string) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (hi! + 0.05) / (lo! + 0.05);
+    };
+    const steps = [0x00, 0x33, 0x55, 0x80, 0x99, 0xaa, 0xcc, 0xff];
+    for (const r of steps) {
+      for (const g of steps) {
+        for (const b of steps) {
+          const color = `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+          const tokens = tenantBrandTokens(brand(color, null));
+          const label = tokens['--primary-foreground']!;
+          const hover = tokens['--primary-hover']!;
+          expect(hover.toUpperCase(), color).not.toBe(color.toUpperCase());
+          expect(contrast(hover, label), color).toBeGreaterThanOrEqual(
+            Math.min(4.5, contrast(color, label)) - 0.001
+          );
+        }
+      }
+    }
   });
 });
 

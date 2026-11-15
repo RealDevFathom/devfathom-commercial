@@ -26,9 +26,18 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   refundPharmacyTender: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/sales', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  returnSaleLine: vi.fn(),
+}));
 
 import { refundPharmacyTender } from '@/lib/pharmacy/settlement';
-import { REFUND_PIN_BLOCKED, REFUND_PIN_POLICY } from '@/lib/pharmacy/refund-authorization';
+import { returnSaleLine } from '@/lib/pharmacy/sales';
+import {
+  REFUND_PIN_BLOCKED,
+  REFUND_PIN_POLICY,
+  RETURN_PIN_BLOCKED,
+} from '@/lib/pharmacy/refund-authorization';
 import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
@@ -129,6 +138,7 @@ function fixture(
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(refundPharmacyTender).mockResolvedValue({ refundId: 'refund-1' } as never);
+  vi.mocked(returnSaleLine).mockResolvedValue({ returnLineId: 'return-line-1' } as never);
 });
 
 describe('DEV-647 refunds need a manager or owner PIN', () => {
@@ -176,7 +186,8 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-        settlement
+        settlement,
+        { requireCurrentBusinessDate: true }
       );
       // The credential is the signed-in user's own PIN.
       expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
@@ -255,6 +266,92 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
       blocked: REFUND_PIN_BLOCKED,
     });
     expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+});
+
+const saleReturn = {
+  branchId: 'branch-a',
+  saleLineId: 'line-a',
+  lotId: 'lot-a',
+  canonicalUnits: 2,
+  disposition: 'RESTOCK' as const,
+  reason: 'WRONG_ITEM',
+  integrityDecision: 'Sealed pack, batch verified',
+  idempotencyKey: 'return-a',
+};
+
+describe('DEV-621 returns need a manager or owner PIN', () => {
+  it.each(['cashier', 'pharmacist'])(
+    'refuses a %s before any PIN, stock or journal work',
+    async (role) => {
+      const f = fixture(ROLES[role]!);
+      await expect(f.caller.returnLine({ ...saleReturn, managerPin: PIN })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only a manager or owner can record a return.',
+      });
+      expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires the PIN field', async () => {
+    const f = fixture(ROLES.manager!);
+    await expect(f.caller.returnLine(saleReturn as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(f.caller.returnLine({ ...saleReturn, managerPin: '12' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each(['manager', 'owner', 'admin'])(
+    'lets a %s record a return with their own fresh PIN, without passing the PIN on',
+    async (role) => {
+      const f = fixture(ROLES[role]!);
+      await expect(f.caller.returnLine({ ...saleReturn, managerPin: PIN })).resolves.toMatchObject({
+        returnLineId: 'return-line-1',
+      });
+      expect(returnSaleLine).toHaveBeenCalledExactlyOnceWith(
+        f.db,
+        { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+        saleReturn
+      );
+      expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            staffProfile: expect.objectContaining({ userId: 'user-a', status: 'ACTIVE' }),
+          }),
+        })
+      );
+      expect(f.audit.detail.metadata).toMatchObject({
+        policy: REFUND_PIN_POLICY,
+        approverId: 'user-a',
+        pinVerified: true,
+      });
+    }
+  );
+
+  it('blocks a wrong PIN, records the strike and the refusal, and moves no stock', async () => {
+    const f = fixture(ROLES.owner!);
+    await expect(f.caller.returnLine({ ...saleReturn, managerPin: '8642' })).resolves.toEqual({
+      blocked: RETURN_PIN_BLOCKED,
+    });
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential-a' },
+      data: expect.objectContaining({ failedAttempts: 1 }),
+    });
+    expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        actorId: 'user-a',
+        action: 'pharmacySales.returnLine',
+        outcome: 'FAILURE',
+        errorCode: 'REFUND_PIN_REFUSED',
+      }),
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
   });
 });
 

@@ -1,8 +1,17 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import {
+  branchUnknownLossProbability,
+  estimateLossMinor,
+  lossProbability,
+  notifyCapture,
+  resolveVisit,
+  serverUnitPriceMinor,
+} from './lost-sales';
+import type { LostSaleOutcome } from './lost-sales';
 import {
   apportionDiscount,
   saleAllocationMoney,
@@ -21,6 +30,8 @@ import {
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
+import { isRefillCycleCampaignKey } from './refill-subscription-rules';
+import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import {
   claimSoldPackSerial,
@@ -33,6 +44,7 @@ import {
 } from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -158,11 +170,14 @@ export class PharmacySaleError extends Error {
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
+      | 'VOUCHER_CATEGORY_REFUSED'
+      | 'VOUCHER_INVALID'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'BILL_HAS_PAYMENTS'
   ) {
     super(reason);
   }
@@ -272,6 +287,8 @@ type AddSaleLineInput = {
   canonicalUnitsPerSaleUnit: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
+  /** DEV-27: a stored voucher to redeem; it sets the discount and its approval. */
+  voucherId?: string;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -280,8 +297,17 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
-export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
-  return addSaleLineWithAllocation(db, scope, input);
+/**
+ * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
+ * reserved customer orders keep the price they quoted, so they never opt in.
+ */
+export async function addSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  options: { applyCounterPromotions?: boolean } = {}
+) {
+  return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
 }
 
 /** Internal customer-order path; never accepted by the counter's public input schema.
@@ -297,11 +323,61 @@ export async function addReservedSaleLine(
   return addSaleLineWithAllocation(db, scope, input, reservation);
 }
 
+/**
+ * DEV-27: loads the stored voucher for a line and enforces its allowlist. The
+ * caller cannot set the amount, kind or approver of a voucher discount.
+ */
+async function voucherForRedemption(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  medicine: {
+    rx: boolean;
+    otc: boolean;
+    restricted: boolean;
+    controlled: boolean;
+    productFamily: string;
+  }
+) {
+  if (
+    input.discountKind !== undefined ||
+    input.discountMinor !== undefined ||
+    input.approvedByUserId !== undefined ||
+    input.approvalPolicy !== undefined
+  )
+    throw new PharmacySaleError('VOUCHER_INVALID');
+  const voucher = await db.pharmacyVoucher.findFirst({
+    where: {
+      id: input.voucherId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+    },
+    select: {
+      id: true,
+      discountMinor: true,
+      eligibleCategories: true,
+      issuedByUserId: true,
+      validUntil: true,
+    },
+  });
+  if (!voucher || (voucher.validUntil && voucher.validUntil.getTime() <= Date.now()))
+    throw new PharmacySaleError('VOUCHER_INVALID');
+  try {
+    assertVoucherEligibleLine(medicine, voucher.eligibleCategories);
+  } catch (error) {
+    if (error instanceof VoucherScopeError) throw new PharmacySaleError('VOUCHER_CATEGORY_REFUSED');
+    throw error;
+  }
+  return voucher;
+}
+
 async function addSaleLineWithAllocation(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
-  reservation?: ReservedSaleAllocation
+  reservation?: ReservedSaleAllocation,
+  applyCounterPromotions = false
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -357,6 +433,10 @@ async function addSaleLineWithAllocation(
       approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
     };
   }
+  // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
+  // enforced here, before any stock is allocated, so a voucher never applies to
+  // an Rx, OTC drug, supplement or medical-device line.
+  const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
@@ -426,14 +506,43 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
-  const discountMinor = input.discountMinor ?? 0;
+  const regulated = medicine.rx || medicine.restricted || medicine.controlled;
+  // #727: priced after allocation has finished waiting for its stock locks. A voucher,
+  // manual discount or complimentary line is never combined with an automatic promotion.
+  const promotionEvaluatedAt = new Date();
+  const promotion =
+    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor
+      ? await priceCounterPromotion(db, scope, {
+          medicineId: input.medicineId,
+          regulated,
+          grossMinor,
+          costMinor,
+          at: promotionEvaluatedAt,
+        })
+      : null;
+  const discountMinor = voucher
+    ? Math.min(voucher.discountMinor, grossMinor)
+    : (promotion?.discountMinor ?? input.discountMinor ?? 0);
+  const discountKind = voucher
+    ? ('VOUCHER' as const)
+    : promotion
+      ? ('PROMOTION' as const)
+      : input.discountKind;
+  const approvedByUserId = voucher
+    ? voucher.issuedByUserId
+    : (promotion?.promotion.createdByUserId ?? input.approvedByUserId);
+  const approvalPolicy = voucher
+    ? `voucher:${voucher.id}`
+    : promotion
+      ? promotionApprovalPolicy(promotion.promotion.id)
+      : input.approvalPolicy;
   validateDiscount({
-    regulated: medicine.rx || medicine.restricted || medicine.controlled,
+    regulated,
     discountMinor,
     grossMinor,
     costMinor,
-    approvedByUserId: input.approvedByUserId,
-    approvalPolicy: input.approvalPolicy,
+    approvedByUserId,
+    approvalPolicy,
   });
   const line = await db.pharmacySaleLine.create({
     data: {
@@ -451,10 +560,13 @@ async function addSaleLineWithAllocation(
       grossMinor,
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
-      discountKind: input.discountKind,
+      discountKind,
       discountMinor,
-      approvalPolicy: input.approvalPolicy,
-      approvedByUserId: input.approvedByUserId,
+      voucherId: voucher?.id ?? null,
+      approvalPolicy,
+      approvedByUserId,
+      promotionId: promotion?.promotion.id,
+      promotionName: promotion?.promotion.name,
       idempotencyKey: input.idempotencyKey,
     },
   });
@@ -483,7 +595,22 @@ async function addSaleLineWithAllocation(
       inventoryLotId: pack.inventoryLotId,
     });
   }
-  await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+  await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
+    saleLineId: line.id,
+    ...(promotion
+      ? {
+          promotionId: promotion.promotion.id,
+          promotionName: promotion.promotion.name,
+          discountMinor,
+          approvedByUserId: promotion.promotion.createdByUserId,
+          effectiveFrom: promotion.promotion.effectiveFrom.toISOString(),
+          effectiveTo: promotion.promotion.effectiveTo.toISOString(),
+          benefitBasisPoints: promotion.promotion.benefitBasisPoints,
+          benefitMinor: promotion.promotion.benefitMinor,
+          evaluatedAt: promotionEvaluatedAt.toISOString(),
+        }
+      : {}),
+  });
   return { line, allocation };
 }
 
@@ -496,14 +623,17 @@ export async function changeSaleStatus(
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
+  // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
-    hold: ['OPEN', 'HELD', 'HELD'],
-    resume: ['HELD', 'OPEN', 'RESUMED'],
-    convertQuotation: ['QUOTATION', 'OPEN', 'QUOTATION_CONVERTED'],
-    void: ['OPEN', 'VOID', 'VOIDED'],
+    hold: [['OPEN'], 'HELD', 'HELD'],
+    resume: [['HELD'], 'OPEN', 'RESUMED'],
+    convertQuotation: [['QUOTATION'], 'OPEN', 'QUOTATION_CONVERTED'],
+    void: [['OPEN', 'HELD'], 'VOID', 'VOIDED'],
   } as const;
-  const [from, to, kind] = transitions[action];
-  if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  const [allowed, to, kind] = transitions[action];
+  const from = sale.status;
+  if (!allowed.some((status) => status === from)) throw new PharmacySaleError('INVALID_STATE');
   // #414: re-opening a held sale or a quotation for selling is a sale-time act, so it
   // needs a licence valid now. Hold and void stay available to wind a sale down.
   if (to === 'OPEN')
@@ -526,6 +656,23 @@ export async function changeSaleStatus(
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    // DEV-623: a split payment leaves a bill OPEN (and it can then be held), so a
+    // void must not strand money taken on it. Every tender is refunded first, on
+    // the refund path's own manager/owner gate. Read after the claim: the sale
+    // row is locked, so a tender that committed earlier is seen here and a later
+    // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    const tenders = await db.pharmacyTender.findMany({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+    });
+    const unrefundedMinor = tenders.reduce(
+      (total, tender) =>
+        total +
+        tender.amountMinor -
+        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
+      0
+    );
+    if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -608,6 +755,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       lines: {
         include: {
           medicine: { select: { productName: true, controlled: true } },
+          // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
+          packLevel: { select: { level: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -659,6 +808,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
+      levelLabel: line.packLevel?.level ?? null,
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,
@@ -1057,18 +1207,77 @@ export async function captureDemand(
     estimatedMarginMinor?: number;
     customerId?: string;
     consentRecorded?: boolean;
-  }
+    /** DEV-81: the counter device; lines from one terminal group into a visit. */
+    terminalId?: string;
+    /** DEV-81: the full quantity asked for; `quantity` stays the unmet part. */
+    requestedQty?: number;
+    outcome?: LostSaleOutcome;
+    notifyOptIn?: boolean;
+    notifyPhone?: string;
+    freeText?: string;
+    matchedProductId?: string;
+    matchConfidence?: number;
+  },
+  now: Date = new Date()
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
   if (input.customerId && !input.consentRecorded) throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.requestedQty !== undefined && input.requestedQty < input.quantity)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  let notify: ReturnType<typeof notifyCapture>;
+  try {
+    notify = notifyCapture(input);
+  } catch {
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+  }
+  const outcome = input.outcome ?? 'UNKNOWN';
+  // DEV-81: visit, price and loss are derived here, never taken from the client.
+  const { visitId, visitType } = await resolveVisit(db, scope, {
+    terminalId: input.terminalId,
+    customerId: input.customerId,
+    saleId: input.saleId,
+    now,
+    newId: randomUUID,
+  });
+  const unitPricePkrMinor = await serverUnitPriceMinor(
+    db,
+    scope,
+    input.requestedMedicineId,
+    input.saleUnit
+  );
+  const unknown =
+    outcome === 'UNKNOWN' && visitType !== 'WALK_OUT'
+      ? (await branchUnknownLossProbability(db, scope, now)).probability
+      : 0;
+  const probability = lossProbability({
+    outcome,
+    visitType,
+    createdAt: now,
+    now,
+    unknownProbability: unknown,
+  });
   return db.unfulfilledDemandEvent.create({
     data: {
       ...input,
+      ...notify,
+      outcome,
+      freeText: input.freeText?.trim() || null,
+      requestedQty: input.requestedQty ?? input.quantity,
+      visitId,
+      visitType,
+      unitPricePkrMinor,
+      lossProbability: probability,
+      estLossPkrMinor: estimateLossMinor({
+        quantity: input.quantity,
+        unitPriceMinor: unitPricePkrMinor,
+        probability,
+      }),
       inventoryRuleSnapshot: input.inventoryRuleSnapshot as Prisma.InputJsonValue,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       capturedByUserId: scope.actorId,
+      createdAt: now,
     },
   });
 }
@@ -1273,7 +1482,9 @@ export async function optOutRestockInterest(db: ScopedDb, scope: LedgerScope, in
     where: { id: interestId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!interest || interest.status === 'RECOVERED') throw new PharmacySaleError('NOT_FOUND');
-  if (interest.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  // Order and refill-subscription holds are settled only by their own lifecycle.
+  if (interest.orderLineId || isRefillCycleCampaignKey(interest.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const at = new Date();
   await db.pharmacyRestockNotification.updateMany({
     where: {
@@ -1313,7 +1524,8 @@ export async function recoverRestockInterest(
     },
     include: { demandEvent: true },
   });
-  if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { sale: true },

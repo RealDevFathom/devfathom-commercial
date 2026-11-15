@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   readPharmacyOwnerCommandCentre: vi.fn(),
   readPharmacyAnomalySignals: vi.fn(),
+  readOwnerBriefingDemand: vi.fn(),
+  renderOwnerBriefingWhatsApp: vi.fn(),
   refreshPharmacyAnomalySignals: vi.fn(),
+  readLicenceRenewalReminders: vi.fn(),
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
@@ -50,6 +53,17 @@ vi.mock('./anomaly-signals-operations', () => ({
   ],
 }));
 
+vi.mock('./licence-renewal-operations', () => ({
+  readLicenceRenewalReminders: mocks.readLicenceRenewalReminders,
+}));
+
+const actualBriefing = await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing');
+vi.mock('./owner-briefing', async () => ({
+  ...(await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing')),
+  readOwnerBriefingDemand: mocks.readOwnerBriefingDemand,
+  renderOwnerBriefingWhatsApp: mocks.renderOwnerBriefingWhatsApp,
+}));
+
 import {
   CaptureChannel,
   composeOwnerDigest,
@@ -69,6 +83,18 @@ describe('RPT-03 owner digest', () => {
     mocks.tenantDb.pharmacyOwnerDigestSetting.updateMany.mockResolvedValue({ count: 1 });
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
+    mocks.readLicenceRenewalReminders.mockResolvedValue([]);
+    mocks.renderOwnerBriefingWhatsApp.mockImplementation(
+      actualBriefing.renderOwnerBriefingWhatsApp
+    );
+    mocks.readOwnerBriefingDemand.mockResolvedValue({
+      lostDemandMinor: 0,
+      walkOuts: 0,
+      unvaluedWalkOuts: 0,
+      recoveredMinor: 0,
+      recoveredCount: 0,
+      topGap: null,
+    });
     mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
     mocks.readPharmacyOwnerCommandCentre.mockResolvedValue({
       freshness: { status: 'CURRENT', asOf: '2026-09-04T08:00:00.000Z', source: 'ledgers' },
@@ -122,6 +148,59 @@ describe('RPT-03 owner digest', () => {
     expect(digest.rendered).toContain('cashMinor: PKR 60.00');
     expect(digest.rendered).not.toContain('cashVarianceMinor');
     expect(digest.rendered).toContain('deviceFiscalOfflineExceptions: Not available');
+    expect(digest.rendered).toContain('Anomaly review signals: 0');
+  });
+
+  it('#720 adds a renewal line for a licence expiring in 30 days, and none once renewed', async () => {
+    const actualRenewal =
+      await vi.importActual<typeof import('./licence-renewal')>('./licence-renewal');
+    const at = new Date('2026-09-04T08:00:00.000Z');
+    const subject = {
+      kind: 'BRANCH_LICENCE' as const,
+      holder: 'Main',
+      reference: 'DSL-123',
+      validTo: new Date(at.getTime() + 30 * 24 * 60 * 60 * 1000),
+      provinceCode: 'PK-PB',
+      licenceCategory: 'PHARMACY',
+    };
+    mocks.readLicenceRenewalReminders.mockResolvedValueOnce(
+      actualRenewal.licenceRenewalReminders([subject], at)
+    );
+    const input = {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    };
+    const digest = await composeOwnerDigest({} as never, input);
+
+    expect(mocks.readLicenceRenewalReminders).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+    });
+    expect(digest.rendered).toContain(
+      'Renewal: Drug sale licence (Main, DSL-123) expires in 30 days. Fee: Rs 3,000 (pharmacy).'
+    );
+    expect(digest.whatsappBody).toContain('Drug sale licence expires in 30 days.');
+    expect(digest.whatsappBody).not.toContain('DSL-123');
+
+    const renewed = await composeOwnerDigest({} as never, input);
+    expect(renewed.renewals).toEqual([]);
+    expect(renewed.rendered).not.toContain('Renewal:');
+    expect(renewed.whatsappBody).not.toContain('renewal');
+  });
+
+  it('#720 still captures the digest when the renewal read fails', async () => {
+    mocks.readLicenceRenewalReminders.mockRejectedValueOnce(new Error('unreadable'));
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.renewals).toEqual([]);
     expect(digest.rendered).toContain('Anomaly review signals: 0');
   });
 
@@ -205,6 +284,92 @@ describe('RPT-03 owner digest', () => {
     const now = new Date('2026-09-04T06:30:00.000Z');
     expect(nextDigestDueAt(now, 'PKT', 480)).toEqual(nextDigestDueAt(now, 'UTC', 480));
     expect(nextDigestDueAt(now, 'PKT', 480)).toEqual(new Date('2026-09-04T08:00:00.000Z'));
+  });
+
+  it('adds the five-line briefing to the app digest and a name-free WhatsApp body', async () => {
+    mocks.readOwnerBriefingDemand.mockResolvedValue({
+      lostDemandMinor: 450000,
+      walkOuts: 6,
+      unvaluedWalkOuts: 1,
+      recoveredMinor: 120000,
+      recoveredCount: 2,
+      topGap: {
+        displayName: 'Zyrtec 10',
+        names: ['Zyrtec 10', 'Cetirizine'],
+        lostMinor: 300000,
+        walkOuts: 4,
+        purchaseStatus: 'PO_DRAFT',
+      },
+    });
+    // 2026-09-04 is a Friday: daily only.
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.briefings.map((briefing) => briefing.window.cadence)).toEqual(['DAILY']);
+    expect(digest.rendered).toContain('Daily briefing 2026-09-04');
+    expect(digest.rendered).toContain('Sales PKR 100 · Cash PKR 60');
+    expect(digest.rendered).toContain('Lost demand PKR 4,500 (estimate) · 6 walk-outs');
+    expect(digest.rendered).toContain(
+      'Top gap: Zyrtec 10 · PKR 3,000 lost, 4 walk-outs · draft PO'
+    );
+    expect(digest.rendered).toContain('Recovered PKR 1,200 from 2 follow-ups');
+    expect(digest.rendered).toContain('Expiry at risk (30 days) PKR 7');
+    expect(digest.whatsappBody?.split('\n')).toHaveLength(6);
+    expect(digest.whatsappBody).toContain('Top gap: PKR 3,000 lost, 4 walk-outs · draft PO');
+    expect(digest.whatsappBody).not.toMatch(/zyrtec|cetirizine/i);
+    expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ organizationId: 'org_1', branchId: 'branch_1' }),
+      expect.objectContaining({ cadence: 'DAILY', from: '2026-09-04', to: '2026-09-04' }),
+      expect.anything()
+    );
+  });
+
+  it('adds a seven-day weekly summary on the configured weekday', async () => {
+    // 2026-09-07 is a Monday, the default weekly weekday.
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-07',
+    });
+    expect(digest.briefings.map((briefing) => briefing.window.cadence)).toEqual([
+      'DAILY',
+      'WEEKLY',
+    ]);
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-01',
+      to: '2026-09-07',
+    });
+    expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ cadence: 'WEEKLY', days: 7, from: '2026-09-01', to: '2026-09-07' }),
+      expect.anything()
+    );
+    expect(digest.rendered).toContain('Weekly summary 2026-09-01 to 2026-09-07');
+    expect(digest.whatsappBody).toContain('Weekly summary 2026-09-01 to 2026-09-07');
+  });
+
+  it('keeps the in-app digest when the WhatsApp body fails its guard', async () => {
+    mocks.renderOwnerBriefingWhatsApp.mockImplementation(() => {
+      throw new Error('WhatsApp briefing text must not name an item, salt or category.');
+    });
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.whatsappBody).toBeNull();
+    expect(digest.rendered).toContain('Daily briefing 2026-09-04');
   });
 
   it('never reports a WhatsApp send from the stub', async () => {

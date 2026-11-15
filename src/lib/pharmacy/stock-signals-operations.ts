@@ -327,7 +327,16 @@ export async function refreshStockSignals(
   db: ScopedDb,
   scope: LedgerScope,
   at: Date,
-  policy: SignalPolicy = DEFAULT_SIGNAL_POLICY
+  policy: SignalPolicy = DEFAULT_SIGNAL_POLICY,
+  options: {
+    /**
+     * DEV-82: a refresh triggered by one zone's sensor push may close only that
+     * zone's COLD_CHAIN alerts. Another zone's alert stays live until its own
+     * readings recover (or a person refreshes): a zone that merely went quiet
+     * is UNMONITORED, which is not evidence that its excursion ended.
+     */
+    closeColdChainOnlyAt?: string;
+  } = {}
 ): Promise<RefreshResult> {
   const facts = await loadSignalFacts(db, scope, at, policy);
   const drafts = evaluateStockSignals(facts, policy);
@@ -387,6 +396,13 @@ export async function refreshStockSignals(
   const produced = new Set(drafts.map((draft) => draft.dedupKey));
   for (const signal of live) {
     if (produced.has(signal.dedupKey)) continue;
+    if (
+      options.closeColdChainOnlyAt !== undefined &&
+      signal.kind === 'COLD_CHAIN' &&
+      signal.stockLocationId !== options.closeColdChainOnlyAt
+    ) {
+      continue;
+    }
     await db.pharmacyStockSignal.update({
       where: { id: signal.id },
       data: { status: 'CLOSED', closedAt: at, markedStaleAt: null },

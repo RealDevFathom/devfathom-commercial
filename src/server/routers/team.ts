@@ -19,7 +19,7 @@ import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
-import { generateInviteToken } from '@/lib/invite-token';
+import { createMemberInvitation } from '@/lib/member-invitation';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
@@ -44,6 +44,27 @@ const notificationPrefsSchema = z
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
+
+// #435: admin:access lets a member into the admin procedures, but granting or
+// revoking a role is its own `team:setRole` capability. Evaluate it through the
+// ABAC engine so a custom role or DENY override on an admin is enforced before
+// any role is written.
+async function assertCanSetRole(
+  user: Parameters<typeof subjectFromSession>[0],
+  db: NonNullable<Parameters<typeof can>[3]>['db'],
+  resource: { type: 'User'; id?: string; targetRole: string }
+) {
+  const allowed = await can(subjectFromSession(user), 'team:setRole', resource, {
+    source: 'TRPC',
+    db,
+  });
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to change member roles.',
+    });
+  }
+}
 
 // #424: the organization row lock serializes admin-roster changes across
 // requests, but a batched tRPC request runs every mutation concurrently inside
@@ -77,31 +98,6 @@ function withAdminRosterLock<T>(
     )
   );
   return result;
-}
-
-// How long an invitation link stays valid.
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
-
-// HTTP batch mutations share a transaction. PostgreSQL row locks do not
-// serialize callers inside that same transaction, so queue the entire invite
-// operation as well as locking the organization against other transactions.
-const inviteQueues = new WeakMap<Prisma.TransactionClient, Promise<void>>();
-
-async function serializeInvite<T>(tx: Prisma.TransactionClient, run: () => Promise<T>): Promise<T> {
-  const previous = inviteQueues.get(tx) ?? Promise.resolve();
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  inviteQueues.set(tx, pending);
-  await previous;
-  try {
-    return await run();
-  } finally {
-    release();
-    if (inviteQueues.get(tx) === pending) inviteQueues.delete(tx);
-  }
 }
 
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
@@ -216,6 +212,14 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Inviting a new member at the baseline EMPLOYEE role with no role template
+      // grants no privilege; any other role or a role template is a role grant.
+      // A baseline re-invite of a pending member is checked below, in the
+      // transaction, because it can still revoke that member's role.
+      const grantsRole = input.role !== 'EMPLOYEE' || input.organizationRoleId !== null;
+      if (grantsRole) {
+        await assertCanSetRole(ctx.session.user, ctx.db, { type: 'User', targetRole: input.role });
+      }
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -231,8 +235,6 @@ export const teamRouter = router({
       if (input.organizationRoleId && !organizationRole) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
       }
-      const { token, tokenHash } = generateInviteToken();
-      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
         name: input.name,
         role: input.role,
@@ -246,67 +248,35 @@ export const teamRouter = router({
         skills: input.skills,
       };
 
-      const user = await ctx.db.$transaction((tx) =>
-        serializeInvite(tx, async () => {
-          const organizationId = workspaceId(ctx);
-          // Serialize all seat-consuming writes for this organization. The count
-          // must happen after taking the lock so a concurrent invite that just
-          // committed is included before this transaction decides to create.
-          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-          const existing = await tx.user.findFirst({
-            where: { email },
-            select: { id: true, status: true },
-          });
-          // Only a still-pending invite may be re-sent; an active/real account blocks.
-          if (existing && existing.status !== 'INVITED') {
-            throw new TRPCError({
-              code: 'CONFLICT',
-              message: 'A user with this email already exists',
+      const { user, token } = await ctx.db.$transaction((tx) =>
+        createMemberInvitation(tx, {
+          organizationId: workspaceId(ctx),
+          email,
+          seatLimit: ctx.entitlements.seatLimit,
+          invitedById: ctx.session.user.id,
+          profile,
+          // Re-inviting overwrites the pending member's role and role template.
+          onRefresh: async (existing) => {
+            if (grantsRole) return;
+            const current = await tx.user.findUnique({
+              where: { id: existing.id },
+              select: { role: true, organizationRoleId: true },
             });
-          }
-          if (!existing) {
-            const occupiedSeats = await tx.user.count({
-              where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },
-            });
-            if (occupiedSeats >= ctx.entitlements.seatLimit) {
-              throw new TRPCError({
-                code: 'FORBIDDEN',
-                message: `Seat limit reached (${occupiedSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+            if (current?.role !== input.role || current.organizationRoleId !== null) {
+              await assertCanSetRole(ctx.session.user, tx, {
+                type: 'User',
+                id: existing.id,
+                targetRole: input.role,
               });
             }
-          }
-
-          // Upsert the user (re-invite refreshes the seeded details), then replace
-          // any prior invitation with a fresh single-use token.
-          const u = existing
-            ? await tx.user.update({
-                where: { id: existing.id },
-                data: { ...profile, password: null, status: 'INVITED' },
-              })
-            : await tx.user.create({
-                data: { ...profile, email, password: null, status: 'INVITED' },
-              });
-
-          await tx.invitation.upsert({
-            where: { userId: u.id },
-            create: {
-              userId: u.id,
-              email,
-              tokenHash,
-              invitedById: ctx.session.user.id,
-              expiresAt,
-            },
-            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
-          });
-
-          return u;
+          },
         })
       );
 
       const inviteUrl = `${appUrl()}/invite/${token}`;
 
-      // Best-effort send — never fail the mutation on an email hiccup; the admin
-      // still gets the inviteUrl back to share manually if delivery is unverified.
+      // Preserve the invitation on delivery failure so the admin can share its link.
+      let emailDelivery: 'SENT' | 'FAILED' = 'SENT';
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
@@ -323,10 +293,11 @@ export const teamRouter = router({
           text: mail.text,
         });
       } catch (err) {
+        emailDelivery = 'FAILED';
         console.error('[inviteMember] invite email failed for', email, err);
       }
 
-      return { id: user.id, inviteUrl };
+      return { id: user.id, inviteUrl, emailDelivery };
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
@@ -946,6 +917,15 @@ export const teamRouter = router({
               true
             >,
           });
+          // The edit form always sends the current role; only an actual
+          // grant or revoke needs `team:setRole`. Checked against the locked row.
+          if (input.role !== undefined && before?.role !== input.role) {
+            await assertCanSetRole(ctx.session.user, tx, {
+              type: 'User',
+              id,
+              targetRole: input.role,
+            });
+          }
           if (
             before?.role === 'ADMIN' &&
             before.status === 'ACTIVE' &&

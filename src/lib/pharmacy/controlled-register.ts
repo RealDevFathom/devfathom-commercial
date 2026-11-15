@@ -599,7 +599,18 @@ export async function listControlledPinWitnesses(
       user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
       userId: qualifiedPersonUserId ?? { not: actorId },
-      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+      credentials: {
+        some: {
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+          // A named qualified person whose PIN is locked out cannot witness yet;
+          // offering them only leads to a rejection the picker could have avoided (#283).
+          ...(qualifiedPersonUserId
+            ? { OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] }
+            : {}),
+        },
+      },
     },
     include: {
       user: {

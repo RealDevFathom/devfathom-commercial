@@ -12,8 +12,8 @@ import {
 
 /**
  * DEV-752 pack label OCR. A receiver photographs ONE physical medicine pack and
- * this reads only the printed batch/lot number and the printed expiry as
- * REVIEWABLE SUGGESTIONS. Nothing here writes stock or decides which medicine
+ * this reads only the printed batch/lot number, the printed expiry and (DEV-770)
+ * the printed retail price (MRP) as REVIEWABLE SUGGESTIONS. Nothing here writes stock or decides which medicine
  * the pack is; every value waits for the receiver to confirm it, and OCR
  * confidence is never approval.
  *
@@ -45,6 +45,8 @@ export type PackLabelExtraction = Readonly<{
   batch: PackLabelReadField;
   /** Expiry text exactly as printed, e.g. "EXP 06/2027". */
   expiry: PackLabelReadField;
+  /** Retail price (MRP) text exactly as printed, e.g. "MRP Rs. 450.00". */
+  price: PackLabelReadField;
   /** The label prints an individual pack serial. The serial itself is never returned. */
   serialPrinted: boolean;
 }>;
@@ -69,6 +71,7 @@ export class PackLabelOcrError extends Error {
 
 const MAX_BATCH = 120;
 const MAX_EXPIRY = 60;
+const MAX_PRICE = 80;
 
 type RawField = { value?: unknown; confidence?: unknown } | null | undefined;
 
@@ -97,14 +100,15 @@ export function normalizePackLabelExtraction(
     adapterVersion,
     batch: readField(record.batch, MAX_BATCH),
     expiry: readField(record.expiry, MAX_EXPIRY),
+    price: readField(record.price, MAX_PRICE),
     serialPrinted: record.serialPrinted === true,
   };
 }
 
 // ── Adapters ────────────────────────────────────────────────────────────────
 
-export const FIXTURE_PACK_LABEL_OCR_VERSION = 'fixture-pack-label-2026-11-04.1';
-export const VISION_PACK_LABEL_OCR_VERSION = 'vision-pack-label-2026-11-04.1';
+export const FIXTURE_PACK_LABEL_OCR_VERSION = 'fixture-pack-label-2026-11-15.1';
+export const VISION_PACK_LABEL_OCR_VERSION = 'vision-pack-label-2026-11-15.1';
 
 /** Deterministic capture-mode adapter; synthetic values, no credentials or network. */
 export function createFixturePackLabelOcrAdapter(): PackLabelOcrAdapter {
@@ -118,6 +122,7 @@ export function createFixturePackLabelOcrAdapter(): PackLabelOcrAdapter {
       return normalizePackLabelExtraction('FIXTURE', FIXTURE_PACK_LABEL_OCR_VERSION, {
         batch: { value: 'SYN-B2741', confidence: 0.93 },
         expiry: { value: 'EXP 06/2028', confidence: 0.9 },
+        price: { value: 'MRP Rs. 450.00', confidence: 0.9 },
         serialPrinted: false,
       });
     },
@@ -137,6 +142,9 @@ const EXTRACTION_SCHEMA = z
       'Batch or lot number exactly as printed, without its "B.No." or "Lot" label.'
     ),
     expiry: FIELD_SCHEMA.describe('Expiry text exactly as printed, e.g. "EXP 06/2027".'),
+    price: FIELD_SCHEMA.describe(
+      'Retail price (MRP) text exactly as printed, with its label and currency, e.g. "MRP Rs. 450.00". If more than one retail price is printed, return each one, separated by " | ".'
+    ),
     serialPrinted: z
       .boolean()
       .describe('True only when the label prints an individual pack serial number.'),
@@ -152,17 +160,22 @@ const SYSTEM_PROMPT = [
   '',
   'Rules:',
   '- Return the batch/lot value and the expiry text exactly as printed.',
-  '- Never infer, correct, complete or translate a value.',
+  '- Return the printed retail price (MRP) text exactly as printed, with its label and currency.',
+  '- Never infer, correct, complete, convert, round or translate a value.',
   '- A manufacturing (MFG) date is never the expiry.',
-  '- If a value is unreadable, or there is more than one candidate, return null with confidence 0.',
+  '- A trade price (TP), cost, discount or per-unit rate is never the retail price.',
+  '- If more than one retail price is printed, return every one separated by " | ";',
+  '  never pick one.',
+  '- If a value is unreadable, or the batch or expiry has more than one candidate,',
+  '  return null with confidence 0.',
   '- Set serialPrinted true only when an individual pack serial number is printed',
   '  (for example "SN", "S/N" or GS1 "(21)"). Never return the serial itself.',
-  '- Never return the serial, price, patient identity or product identity.',
+  '- Never return the serial, patient identity or product identity.',
   '- Report confidence honestly; blur, glare and embossing lower it.',
 ].join('\n');
 
 const USER_INSTRUCTION =
-  'Read the batch or lot number and the expiry printed on this one medicine pack.';
+  'Read the batch or lot number, the expiry and the retail price (MRP) printed on this one medicine pack.';
 
 export type VisionPackLabelOcrOptions = {
   /** Seam for tests and for a caller that already resolved a model. */
@@ -214,7 +227,7 @@ export function createVisionPackLabelOcrAdapter(
             },
           ],
           temperature: 0,
-          // Two short strings and a flag; a label cannot inflate the bill.
+          // Three short strings and a flag; a label cannot inflate the bill.
           maxOutputTokens: 300,
           // Retries belong to the routed chain (one jittered retry, then failover).
           maxRetries: 0,
@@ -390,12 +403,110 @@ export function parsePrintedExpiry(printed: string | null): PackLabelExpirySugge
   return unreadable;
 }
 
+// ── Printed price parsing ───────────────────────────────────────────────────
+
+export type PackLabelPriceSuggestion =
+  /** One retail price, in PKR minor units (paisa). */
+  | Readonly<{ kind: 'read'; printed: string; amountMinor: number }>
+  /** More than one different price on the label: none is chosen for the receiver. */
+  | Readonly<{ kind: 'ambiguous'; printed: string }>
+  | Readonly<{ kind: 'unreadable'; printed: string | null }>;
+
+/** Rs 1,000,000 a pack: anything above is a misread, not a price. */
+export const MAX_PRINTED_PRICE_MINOR = 100_000_000;
+
+/** The text must say it is a retail price or a rupee amount; a bare number is not one. */
+const PRICE_SIGNAL = /\b(?:m\.?\s?r\.?\s?p|price|retail|rs|pkr)(?![a-z])|₨|\/-/i;
+/** Another currency is never converted. */
+const FOREIGN_CURRENCY = /[$€£₹]/;
+/**
+ * The only words a retail price print may carry. Anything else (a trade price,
+ * a discount, another currency, "old"/"new", text aimed at the reader) means
+ * the amount cannot be trusted as the pack's MRP.
+ */
+const PRICE_WORDS: ReadonlySet<string> = new Set([
+  'mrp',
+  'max',
+  'maximum',
+  'retail',
+  'price',
+  'rs',
+  'pkr',
+  'incl',
+  'including',
+  'inclusive',
+  'of',
+  'all',
+  'taxes',
+  'tax',
+  'gst',
+  'sales',
+  'per',
+  'pack',
+]);
+/** Tax rates ("incl. 17% GST") are not amounts. */
+const PERCENTAGE = /\d+(?:[.,]\d+)?\s*%/g;
+/**
+ * Every whole numeric token, with any decimal point or separator touching it,
+ * so a partial read like ".50" or "4.50.00" is judged as written rather than
+ * shortened into a different amount. A point right after a letter is the
+ * abbreviation in "Rs." or "M.R.P.", not part of the number.
+ */
+const AMOUNT_TOKEN = /(?:(?<![A-Za-z])\.)?\d[\d.,]*/g;
+/** A signed amount ("-450", "+ 450") is never a retail price. */
+const SIGNED_AMOUNT = /[-+−]\s*\.?\d/;
+/** Western (1,250) or South Asian (1,25,000) grouping, at most two decimals. */
+const AMOUNT_SHAPE = /^(\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}|\d+)(?:\.(\d{1,2}))?$/;
+
+function amountMinor(text: string): number | null {
+  const match = AMOUNT_SHAPE.exec(text);
+  if (!match) return null;
+  const rupees = Number(match[1]!.replace(/,/g, ''));
+  const minor = rupees * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  return Number.isSafeInteger(minor) && minor > 0 && minor <= MAX_PRINTED_PRICE_MINOR
+    ? minor
+    : null;
+}
+
+/**
+ * Read printed price text into PKR minor units. Never guesses: two different
+ * amounts are `ambiguous`; a foreign currency, a trade price, any word outside
+ * a retail price print, a malformed amount or a number with no price label is
+ * `unreadable`.
+ */
+export function parsePrintedPrice(printed: string | null): PackLabelPriceSuggestion {
+  const unreadable = { kind: 'unreadable', printed } as const;
+  if (printed === null) return unreadable;
+  if (!PRICE_SIGNAL.test(printed)) return unreadable;
+  if (FOREIGN_CURRENCY.test(printed)) return unreadable;
+  const words =
+    printed
+      .toLowerCase()
+      .replace(/\bm\.?\s?r\.?\s?p\b\.?/g, ' mrp ')
+      .match(/[a-z]+/g) ?? [];
+  if (words.some((word) => !PRICE_WORDS.has(word))) return unreadable;
+
+  const text = printed.replace(PERCENTAGE, ' ');
+  if (SIGNED_AMOUNT.test(text)) return unreadable;
+  // A sentence's closing point or comma is punctuation, not a decimal.
+  const amounts = (text.match(AMOUNT_TOKEN) ?? []).map((token) => token.replace(/[.,]$/, ''));
+  if (!amounts.length) return unreadable;
+  const parsed = amounts.map(amountMinor);
+  if (parsed.some((amount) => amount === null)) return unreadable;
+  const distinct = new Set(parsed as number[]);
+  if (distinct.size > 1) return { kind: 'ambiguous', printed };
+  return { kind: 'read', printed, amountMinor: parsed[0]! };
+}
+
 // ── Receiver proposal ───────────────────────────────────────────────────────
 
 export type PackLabelWarningCode =
   | 'BATCH_UNREADABLE'
   | 'EXPIRY_UNREADABLE'
   | 'EXPIRY_AMBIGUOUS'
+  | 'PRICE_UNREADABLE'
+  | 'PRICE_AMBIGUOUS'
+  | 'PRICE_DIFFERS_FROM_CURRENT'
   | 'LOW_CONFIDENCE'
   | 'SERIAL_PRINTED';
 
@@ -407,6 +518,12 @@ export type PackLabelProposal = Readonly<{
   adapterVersion: string;
   batch: Readonly<{ value: string | null; confidence: number }>;
   expiry: PackLabelExpirySuggestion & Readonly<{ confidence: number }>;
+  price: PackLabelPriceSuggestion & Readonly<{ confidence: number }>;
+  /**
+   * The pack's current MRP on record, in PKR minor units, or null when none is
+   * set. Shown beside a different printed price so the receiver chooses.
+   */
+  currentMrpMinor: number | null;
   serialPrinted: boolean;
   warnings: readonly Readonly<{ code: PackLabelWarningCode; message: string }>[];
 }>;
@@ -418,7 +535,7 @@ const BATCH_LABEL = /^(?:b\s*\.?\s*no|batch\s*no|batch|lot\s*no|lot)[\s:.#]+/i;
 const BATCH_VALUE = /^[A-Za-z0-9/.-]+$/;
 
 /** Strip a leftover printed label and keep only a single clean batch token. */
-function printedBatch(value: string | null): string | null {
+export function printedBatch(value: string | null): string | null {
   if (value === null) return null;
   const stripped = value.trim().replace(/\s+/g, ' ').replace(BATCH_LABEL, '').trim();
   if (!stripped || stripped.length > MAX_BATCH) return null;
@@ -432,14 +549,28 @@ const WARNING_MESSAGES: Readonly<Record<PackLabelWarningCode, string>> = {
   EXPIRY_UNREADABLE: 'The expiry could not be read as one clear date. Type it from the pack.',
   EXPIRY_AMBIGUOUS:
     'The printed expiry could be read as day-month or month-day. Choose the date that matches the pack.',
+  PRICE_UNREADABLE:
+    'The printed price (MRP) could not be read clearly from the photo. Type it from the pack.',
+  PRICE_AMBIGUOUS:
+    'The label shows more than one price, so none was filled in. Type the retail price (MRP) printed on the pack.',
+  PRICE_DIFFERS_FROM_CURRENT:
+    "The printed price differs from this pack's current price. Choose which price to use.",
   LOW_CONFIDENCE:
     'Part of the label was hard to read. Check each value against the pack before confirming.',
   SERIAL_PRINTED:
     "This pack prints its own serial number. Serialized packs must be received one pack at a time by scanning each pack's 2D code, and a serial is never copied from one pack to another.",
 };
 
+export type PackLabelProposalContext = Readonly<{
+  /** The pack's current MRP on record (PKR minor units), from the server, never the photo. */
+  currentMrpMinor?: number | null;
+}>;
+
 /** Turn a pack label read into suggestions the receiver must confirm. */
-export function proposePackLabelFields(extraction: PackLabelExtraction): PackLabelProposal {
+export function proposePackLabelFields(
+  extraction: PackLabelExtraction,
+  context: PackLabelProposalContext = {}
+): PackLabelProposal {
   const batchValue = printedBatch(extraction.batch.value);
   const batch = {
     value: batchValue,
@@ -447,14 +578,31 @@ export function proposePackLabelFields(extraction: PackLabelExtraction): PackLab
   };
   const expiryConfidence = extraction.expiry.value === null ? 0 : extraction.expiry.confidence;
   const expiry = { ...parsePrintedExpiry(extraction.expiry.value), confidence: expiryConfidence };
+  const parsedPrice = parsePrintedPrice(extraction.price.value);
+  const price = {
+    ...parsedPrice,
+    confidence: parsedPrice.kind === 'read' ? extraction.price.confidence : 0,
+  };
+  const currentMrpMinor =
+    typeof context.currentMrpMinor === 'number' &&
+    Number.isSafeInteger(context.currentMrpMinor) &&
+    context.currentMrpMinor > 0
+      ? context.currentMrpMinor
+      : null;
 
   const codes: PackLabelWarningCode[] = [];
   if (batch.value === null) codes.push('BATCH_UNREADABLE');
   if (expiry.kind === 'unreadable') codes.push('EXPIRY_UNREADABLE');
   if (expiry.kind === 'ambiguous') codes.push('EXPIRY_AMBIGUOUS');
+  if (price.kind === 'unreadable') codes.push('PRICE_UNREADABLE');
+  if (price.kind === 'ambiguous') codes.push('PRICE_AMBIGUOUS');
+  if (price.kind === 'read' && currentMrpMinor !== null && price.amountMinor !== currentMrpMinor) {
+    codes.push('PRICE_DIFFERS_FROM_CURRENT');
+  }
   if (
     (batch.value !== null && batch.confidence < PACK_LABEL_LOW_CONFIDENCE) ||
-    (extraction.expiry.value !== null && expiryConfidence < PACK_LABEL_LOW_CONFIDENCE)
+    (extraction.expiry.value !== null && expiryConfidence < PACK_LABEL_LOW_CONFIDENCE) ||
+    (price.kind === 'read' && price.confidence < PACK_LABEL_LOW_CONFIDENCE)
   ) {
     codes.push('LOW_CONFIDENCE');
   }
@@ -467,6 +615,8 @@ export function proposePackLabelFields(extraction: PackLabelExtraction): PackLab
     adapterVersion: extraction.adapterVersion,
     batch,
     expiry,
+    price,
+    currentMrpMinor,
     serialPrinted: extraction.serialPrinted,
     warnings: codes.map((code) => ({ code, message: WARNING_MESSAGES[code] })),
   };

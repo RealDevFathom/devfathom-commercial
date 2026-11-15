@@ -17,14 +17,22 @@ import {
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
 import {
+  purgeExpiredOwnerDataExports,
+  runPharmacyOwnerDataExportJob,
+} from '@/lib/pharmacy/owner-data-export';
+import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
+import { purgeExpiredPharmacyRecords } from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
 
 const STALE_JOB_MS = 15 * 60_000;
+
+/** A failure that no retry can cure: the job is marked FAILED at once. */
+class PermanentJobError extends Error {}
 const RETRY_BASE_MS = 30_000;
 const CONTROL_PLANE_TABLES = new Set([
   'organizations',
@@ -635,8 +643,67 @@ function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
+const AUDIT_LOG_PURGE_ACTION = 'organization.audit_logs.purge';
+const DEFAULT_PURGE_REASON = 'Retention window elapsed and the organization is being purged.';
+
+/**
+ * Tenant audit rows are append-only (DEV-155). The database admits their
+ * deletion only inside a control-plane purge of that tenant that has first
+ * written a permanent `platform_audit_logs` record of what it removes, for which
+ * organization, by which platform actor and why, and names that record in
+ * "app.audit_purge_record_id". `platform_audit_logs` is itself append-only and
+ * excluded from the purge, so the record outlives the tenant's data.
+ */
+async function recordAuditLogPurge(
+  db: PrismaClient,
+  job: PlatformJob,
+  organizationId: string,
+  actorPlatformUserId: string
+): Promise<number> {
+  const [summary] = await db.$queryRaw<
+    Array<{ rows: number; earliest: Date | null; latest: Date | null; digest: string | null }>
+  >(Prisma.sql`
+    SELECT count(*)::int AS "rows",
+           min("createdAt") AS "earliest",
+           max("createdAt") AS "latest",
+           encode(sha256(convert_to(string_agg("id", ',' ORDER BY "id"), 'UTF8')), 'hex') AS "digest"
+    FROM "audit_logs"
+    WHERE "organizationId" = ${organizationId}
+  `);
+  const requested = objectPayload(job.payload).reason;
+  const reason =
+    typeof requested === 'string' && requested.trim() ? requested.trim() : DEFAULT_PURGE_REASON;
+  const record = await db.platformAuditLog.create({
+    data: {
+      organizationId,
+      actorPlatformUserId,
+      action: AUDIT_LOG_PURGE_ACTION,
+      targetType: 'AuditLog',
+      requestId: job.id,
+      reason,
+      metadata: {
+        jobId: job.id,
+        table: 'audit_logs',
+        rows: summary?.rows ?? 0,
+        earliestCreatedAt: summary?.earliest?.toISOString() ?? null,
+        latestCreatedAt: summary?.latest?.toISOString() ?? null,
+        idDigest: summary?.digest ? `sha256:${summary.digest}` : null,
+      },
+    },
+    select: { id: true },
+  });
+  await db.$queryRaw`SELECT set_config('app.audit_purge_record_id', ${record.id}, true)`;
+  return summary?.rows ?? 0;
+}
+
 async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult> {
   const organizationId = requiredOrganization(job);
+  const actorPlatformUserId = job.requestedById;
+  if (!actorPlatformUserId) {
+    throw new PermanentJobError(
+      'A purge requires the platform actor who requested it: this job names no requesting platform administrator. Schedule the purge again from the platform console.'
+    );
+  }
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
     select: { status: true, purgeScheduledAt: true },
@@ -679,6 +746,7 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   // have no vanished parent row to recognise it by. Transaction-local, and
   // scoped to the organization this job names.
   await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+  const recordedAuditRows = await recordAuditLogPurge(db, job, organizationId, actorPlatformUserId);
   // The customer and message rows below are about to be destroyed. Keep only
   // pseudonymous consent state and its effective date, never contact details or
   // message content, so a later complaint can be answered without retaining the
@@ -699,6 +767,15 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
       organizationId
     );
     if (count) counts[table] = count;
+  }
+  // Audit rows are only ever added, so the DELETE saw every row the record
+  // summarised; an equal count means it saw no others either. A row written
+  // in between (a failed sign-in, say) would make the permanent record
+  // understate the purge: roll everything back and let the job retry.
+  if ((counts.audit_logs ?? 0) !== recordedAuditRows) {
+    throw new Error(
+      `Audit rows changed during the purge: recorded ${recordedAuditRows}, deleted ${counts.audit_logs ?? 0}.`
+    );
   }
   await db.organization.update({
     where: { id: organizationId },
@@ -765,6 +842,10 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        // DEV-96: the result (per-class counts, refused record ids and reasons;
+        // never record contents) is stored on the job row.
+        PHARMACY_RECORD_RETENTION_V1: (database) => purgeExpiredPharmacyRecords(database),
+        PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
       return handlers[job.type](db, job, payload);
     },
@@ -772,7 +853,9 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       timeout:
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
+        job.type === 'PHARMACY_RECORD_RETENTION_V1' ||
+        job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
           ? 120_000
           : 30_000,
     }
@@ -800,7 +883,7 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  const retry = job.attempts < job.maxAttempts;
+  const retry = !(error instanceof PermanentJobError) && job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({
       where: { id: job.id },
@@ -830,11 +913,13 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
 
 const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
 const CAMERA_EVIDENCE_RETENTION_JOB = 'camera.evidence.retention.v1';
+const PHARMACY_RECORD_RETENTION_JOB = 'pharmacy.record.retention.v1';
 
 /**
  * CAM-2: turn pending counter evidence into snapshot jobs, and give every
  * organization with due retention work (a still past its gateway period, or a
- * capture past its window) at most one retention pass per UTC hour. Both are
+ * capture past its window) at most one retention pass per UTC hour. DEV-96
+ * adds one platform-wide pharmacy record retention purge per UTC hour. All are
  * keyed, so each worker run can repeat them without queueing anything twice.
  */
 async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
@@ -871,6 +956,12 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
           type: 'CAMERA_EVIDENCE_RETENTION_V1' as const,
           idempotencyKey: `${CAMERA_EVIDENCE_RETENTION_JOB}:${organizationId}:${hour}`,
         })),
+        // DEV-96: one pharmacy record retention purge per UTC hour, platform-wide.
+        {
+          organizationId: null,
+          type: 'PHARMACY_RECORD_RETENTION_V1' as const,
+          idempotencyKey: `${PHARMACY_RECORD_RETENTION_JOB}:${hour}`,
+        },
       ],
       skipDuplicates: true,
     });
@@ -888,6 +979,7 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
+  await withPlatformDb((db) => purgeExpiredOwnerDataExports(db));
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

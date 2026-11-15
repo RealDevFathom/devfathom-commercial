@@ -189,11 +189,47 @@ describe('counter return boundaries', () => {
           lines: expect.objectContaining({
             include: expect.objectContaining({
               medicine: { select: { productName: true, controlled: true } },
+              packLevel: { select: { level: true } },
             }),
           }),
         }),
       })
     );
+  });
+  it('returns the pack level label actually sold (DEV-638)', async () => {
+    const sale = {
+      id: 'sale',
+      receiptNumber: 1,
+      receiptDeviceId: 'd',
+      businessDate: new Date('2026-10-01'),
+      lines: [
+        {
+          id: 'line',
+          medicine: { productName: 'Medicine', controlled: false },
+          packLevel: { level: 'STRIP' },
+          saleUnit: 'PACK',
+          quantity: 1,
+          unitPriceMinor: 2800,
+          discountMinor: 0,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          returnLines: [],
+          unidentifiedReturnHolds: [],
+          allocations: [],
+        },
+      ],
+      tenders: [],
+      returns: [],
+    };
+    const history = await readReturnHistory(
+      {
+        pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale) },
+        pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      scope,
+      'sale'
+    );
+    expect(history.lines[0]).toMatchObject({ saleUnit: 'PACK', levelLabel: 'STRIP' });
   });
 });
 

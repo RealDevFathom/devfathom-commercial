@@ -63,7 +63,7 @@ export const metadata: Metadata = { title: 'Suppliers · Pharmacy purchasing' };
 const ROUTE = `${PURCHASING_ROUTE}/suppliers`;
 const HEADING = 'Suppliers';
 const DESCRIPTION =
-  'Licensed distributors, their licence evidence, terms and credit. A supplier is orderable only while it is authorized and holds an unexpired verified licence.';
+  'Licensed distributors, their licence evidence, terms and credit. A supplier can be ordered from only while it is authorized and holds an unexpired verified licence.';
 /** DEV-753: the same register while the owner has supplier checks off. */
 const DESCRIPTION_CHECKS_OFF =
   'Distributors, their terms and credit, and any licence evidence on file. Supplier licence and authorization checks are off, so suppliers are shown as not checked.';
@@ -373,7 +373,7 @@ export default async function PharmacySuppliersPage({
       ) : (
         <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(0,9fr)] xl:items-start">
           <SectionCard
-            eyebrow="PUR-01"
+            eyebrow="Suppliers"
             title={`Register (${suppliers.length})`}
             titleLevel={2}
             actions={
@@ -464,7 +464,7 @@ export default async function PharmacySuppliersPage({
               </SectionCard>
             )}
 
-            <SectionCard eyebrow="PUR-01" title="Add a supplier" titleLevel={2}>
+            <SectionCard eyebrow="Suppliers" title="Add a supplier" titleLevel={2}>
               <PurchasingActionForm
                 operation={{ resource: 'supplier:new', action: 'create' }}
                 action={createSupplier}
@@ -508,7 +508,7 @@ export default async function PharmacySuppliersPage({
               </PurchasingActionForm>
               <p className="mt-3 text-sm text-text-muted">
                 {checksOn
-                  ? 'A new supplier starts unauthorized and unlicensed, so it cannot be ordered from until both are recorded. That is the PUR-01 gate, not a missing step.'
+                  ? 'A new supplier starts unauthorized and unlicensed, so it cannot be ordered from until both are recorded. This is a safety check, not a missing step.'
                   : 'A new supplier starts unauthorized and unlicensed. Supplier checks are off, so it can be ordered from straight away; recording its licence and authorization is optional and is kept as evidence.'}
               </p>
             </SectionCard>
@@ -547,7 +547,7 @@ function SupplierDetail({
   return (
     <>
       <SectionCard
-        eyebrow="PUR-01"
+        eyebrow="Supplier"
         title={supplier.name}
         titleLevel={2}
         actions={<LicenceBadge supplier={supplier} />}
@@ -607,7 +607,7 @@ function SupplierDetail({
       </SectionCard>
 
       <SectionCard
-        eyebrow="PUR-01"
+        eyebrow="Supplier"
         title={`Licence evidence (${supplier.licences.length})`}
         titleLevel={2}
       >
@@ -769,11 +769,11 @@ function SupplierDetail({
             <SubmitButton>File licence</SubmitButton>
           </div>
           <Derived
-            label="Gate"
+            label="Ordering"
             value={
               checked
-                ? 'Only a verified, unexpired, current licence makes a supplier orderable.'
-                : 'Supplier checks are off: a licence is kept as evidence and does not gate ordering.'
+                ? 'Only a verified, unexpired, current licence lets you order from a supplier.'
+                : 'Supplier checks are off: a licence is kept as evidence and does not block ordering.'
             }
           />
         </PurchasingActionForm>
