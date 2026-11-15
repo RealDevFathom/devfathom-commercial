@@ -1,5 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
-import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
+import { pharmacyPromotionInput, promotionCreatorMayManage } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
 import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
 import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
@@ -2745,10 +2745,35 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await promotionScope(ctx, input.branchId);
-      return ctx.db.pharmacyPromotion.findMany({
+      const rows = await ctx.db.pharmacyPromotion.findMany({
         where: { organizationId: scope.organizationId, branchId: scope.branchId },
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         take: 200,
+      });
+      // QA-8: the counter skips a promotion whose creator no longer qualifies; say so here.
+      const qualifies = new Map<string, boolean>();
+      for (const row of rows) {
+        if (!qualifies.has(row.createdByUserId))
+          qualifies.set(
+            row.createdByUserId,
+            await promotionCreatorMayManage(
+              ctx.db,
+              scope.organizationId,
+              scope.branchId,
+              row.createdByUserId
+            )
+          );
+      }
+      return rows.map((row) => {
+        const creatorQualifies = qualifies.get(row.createdByUserId) === true;
+        return {
+          ...row,
+          creatorQualifies,
+          inactiveReason:
+            row.active && !creatorQualifies
+              ? ('The creator no longer holds the manage right for this branch.' as const)
+              : null,
+        };
       });
     }),
   /**
@@ -2967,9 +2992,7 @@ export const pharmacySalesRouter = router({
       try {
         // DEV-817: restock interests hang off demand events; the counter's gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), scope, input)
-        );
+        return await ctx.db.$transaction(async (tx) => addRestockInterest(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
