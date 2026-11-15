@@ -962,7 +962,8 @@ export const pharmacySalesRouter = router({
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
-        : isManualTender(input.type)
+        : // DEV-713: a card outcome needs the same counter access as the card write.
+          isManualTender(input.type) || input.type === 'CARD'
           ? await requireCounterReceiptAccess(ctx, input.branchId, true)
           : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));

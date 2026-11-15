@@ -494,8 +494,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         {manualCard ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             <p className="text-sm text-text-muted">
-              Take the card on the shop’s terminal first. Enter the details from the approved slip;
-              you are recorded as the person who confirmed this payment.
+              Take the card or wallet tap on the shop’s terminal first. Enter the details from the
+              approved slip; you are recorded as the person who confirmed this payment.
             </p>
             <Label htmlFor="manual-card-reference">Card last 4 digits or terminal reference</Label>
             <Input
@@ -568,7 +568,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 <p className="text-sm text-text-muted">
                   Confirm receipt in the merchant bank or wallet account before taking payment; you
                   are recorded as the person who confirmed it.
-                  {merchant.qrImageDataUrl ? ' This QR is static; the payer enters the amount shown.' : ''}
+                  {merchant.qrImageDataUrl
+                    ? ' This QR is static; the payer enters the amount shown.'
+                    : ''}
                 </p>
                 <Label htmlFor="manual-payer-name">Payer’s name</Label>
                 <Input

@@ -163,6 +163,30 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.tenderOutcome', () => {
+  it('DEV-713 reads a card outcome only with the counter access a card write needs', async () => {
+    const { cashReceivedMinor: _cash, ...withoutCashInput } = input;
+    const card = { ...withoutCashInput, type: 'CARD' as const };
+    const allowed = fixture(card);
+    await expect(allowed.caller().tenderOutcome(card)).resolves.toMatchObject({
+      status: 'ACCEPTED',
+    });
+    const denied = fixture(card);
+    const db = denied.context.db as unknown as {
+      user: { findUnique: ReturnType<typeof vi.fn> };
+    };
+    db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      organizationRole: { permissions: [] },
+      permissionOverrides: [],
+    });
+    await expect(denied.caller().tenderOutcome(card)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(denied.saleRead).not.toHaveBeenCalled();
+    expect(denied.keyRead).not.toHaveBeenCalled();
+  });
+
   it.each([stored, { tenderId: 'tender-1', settled: true, receiptNumber: 41, remainingMinor: 0 }])(
     'reads the exact accepted result through the real query: %j',
     async (result) => {
