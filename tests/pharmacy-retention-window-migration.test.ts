@@ -65,6 +65,18 @@ describe('DEV-96 retention window migration contract', () => {
     }
   });
 
+  it('purges a register entry only as the oldest survivor of a chain that has a newer entry', () => {
+    const guard = migration.slice(
+      migration.indexOf("IF p_table = 'pharmacy_controlled_register_entries' AND (")
+    );
+    expect(guard).toMatch(
+      /NOT EXISTS \(SELECT 1 FROM "pharmacy_controlled_register_entries" later[\s\S]*?later\."inventoryLotId" = p_old ->> 'inventoryLotId'\s+AND later\."serial" > \(p_old ->> 'serial'\)::integer\)/
+    );
+    expect(guard).toMatch(
+      /OR EXISTS \(SELECT 1 FROM "pharmacy_controlled_register_entries" earlier[\s\S]*?earlier\."inventoryLotId" = p_old ->> 'inventoryLotId'\s+AND earlier\."serial" < \(p_old ->> 'serial'\)::integer\)\s+\) THEN\s+RETURN false;/
+    );
+  });
+
   it('keeps the tenant purge exception behind the platform flag', () => {
     expect(migration).toMatch(
       /NULLIF\(current_setting\('app\.purging_organization_id', true\), ''\) = OLD\."organizationId"\s+AND current_setting\('app\.is_platform_admin', true\) = 'true'/

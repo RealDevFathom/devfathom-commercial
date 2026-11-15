@@ -197,6 +197,27 @@ BEGIN
   IF root_id IS NULL OR target IS DISTINCT FROM organization_id || ':' || record_class::text || ':' || root_id THEN
     RETURN false;
   END IF;
+  -- A register entry's running balance continues from the highest surviving
+  -- serial of its medicine/lot chain, and the next serial from the branch's
+  -- highest. Only the OLDEST surviving entry of a chain that has a newer entry
+  -- may go, so the survivors are always the newest contiguous suffix: the latest
+  -- balance and the branch's top serial are never removed.
+  IF p_table = 'pharmacy_controlled_register_entries' AND (
+       NOT EXISTS (SELECT 1 FROM "pharmacy_controlled_register_entries" later
+                    WHERE later."organizationId" = organization_id
+                      AND later."branchId" = p_old ->> 'branchId'
+                      AND later."medicineId" IS NOT DISTINCT FROM p_old ->> 'medicineId'
+                      AND later."inventoryLotId" = p_old ->> 'inventoryLotId'
+                      AND later."serial" > (p_old ->> 'serial')::integer)
+       OR EXISTS (SELECT 1 FROM "pharmacy_controlled_register_entries" earlier
+                   WHERE earlier."organizationId" = organization_id
+                     AND earlier."branchId" = p_old ->> 'branchId'
+                     AND earlier."medicineId" IS NOT DISTINCT FROM p_old ->> 'medicineId'
+                     AND earlier."inventoryLotId" = p_old ->> 'inventoryLotId'
+                     AND earlier."serial" < (p_old ->> 'serial')::integer)
+     ) THEN
+    RETURN false;
+  END IF;
   ends := pharmacy_retention_window_ends(record_class, organization_id, root_id);
   RETURN ends IS NOT NULL
      AND ends <= timezone('UTC', now())
