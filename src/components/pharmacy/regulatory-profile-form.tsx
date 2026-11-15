@@ -798,7 +798,14 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
           it rather than replacing it.
         </p>
       ) : (
-        <div className="min-w-0 overflow-x-auto">
+        // The table is wider than a phone viewport, so the scroll container must
+        // be focusable for keyboard users to reach its overflowing columns.
+        <div
+          role="region"
+          aria-label="Effective-dated versions"
+          tabIndex={0}
+          className="min-w-0 overflow-x-auto rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <table className="w-full min-w-[40rem] text-sm">
             <thead>
               <tr className="border-b border-border-subtle text-left">

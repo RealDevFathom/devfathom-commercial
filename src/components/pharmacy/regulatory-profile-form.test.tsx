@@ -234,3 +234,34 @@ it("replaces the previous branch's premises with the selected branch's and saves
     })
   );
 });
+
+it('makes the overflowing version-history table a keyboard-reachable scroll region (#308)', () => {
+  const version = {
+    id: 'profile-1',
+    branchId: 'branch-1',
+    version: 1,
+    effectiveFrom: new Date('2026-11-01T00:00:00.000Z'),
+    effectiveTo: null,
+    provinceCode: 'PK-PB',
+    provinceName: 'Punjab',
+    licenceCategory: 'RETAIL',
+    licenceNumber: 'LIC-1',
+    licenceValidFrom: new Date('2026-01-01T00:00:00.000Z'),
+    licenceValidTo: new Date('2030-01-01T00:00:00.000Z'),
+    qualifiedPersonRegistration: 'QP-1',
+    qualifiedPersonValidFrom: new Date('2026-01-01T00:00:00.000Z'),
+    qualifiedPersonValidTo: new Date('2030-01-01T00:00:00.000Z'),
+    effective: true,
+    inForce: true,
+    licenceExpired: false,
+    qualifiedPersonCoverageExpired: false,
+    premisesCompletionDue: false,
+  } as unknown as VersionRow;
+  render(<PharmacyRegulatoryProfileForm initial={{ ...initial, versions: [version] }} />);
+  const region = screen.getByRole('region', { name: 'Effective-dated versions' });
+  expect(region).toHaveClass('overflow-x-auto');
+  expect(region).toHaveAttribute('tabindex', '0');
+  expect(region).toContainElement(screen.getByRole('table'));
+  region.focus();
+  expect(region).toHaveFocus();
+});
