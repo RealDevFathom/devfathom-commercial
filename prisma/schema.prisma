@@ -2595,6 +2595,9 @@ enum FinanceAccountCode {
   ACCOUNTS_PAYABLE
   CASH_OVER_SHORT
   OPENING_BALANCE_EQUITY
+  /// Liability. A non-trade operating expense incurred and not yet paid,
+  /// recorded only through a posted PHARMACY_JOURNAL_VOUCHER (CEO-JVCORE-20261025).
+  MANUAL_NONTRADE_ACCRUAL
 }
 
 /// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
@@ -2614,6 +2617,89 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
+  PHARMACY_JOURNAL_VOUCHER
+}
+
+/// CEO-JVCORE-20261025: the only journal-voucher purpose the pharmacy general
+/// journal admits. Every other account/side/purpose combination is refused.
+enum PharmacyJournalVoucherPurpose {
+  NONTRADE_OPERATING_ACCRUAL
+}
+
+enum PharmacyJournalVoucherStatus {
+  DRAFT
+  CANCELLED
+  POSTED
+  REVERSED
+}
+
+/// A pharmacy general-journal voucher. Drafts are versioned and editable;
+/// posting writes one canonical finance journal entry and freezes the voucher.
+/// Lines are the voucher's own copy; posted ledger lines live in
+/// finance_journal_lines and are append-only.
+model PharmacyJournalVoucher {
+  id                 String                        @id @default(cuid())
+  organizationId     String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  reference          String
+  purpose            PharmacyJournalVoucherPurpose
+  status             PharmacyJournalVoucherStatus  @default(DRAFT)
+  version            Int                           @default(1)
+  currency           Currency                      @default(PKR)
+  occurredAt         DateTime
+  reason             String
+  evidenceReference  String
+  createKey          String
+  createdByUserId    String
+  updatedByUserId    String
+  postedAt           DateTime?
+  postedByUserId     String?
+  postCommandKey     String?
+  postPayloadHash    String?
+  journalEntryId     String?
+  cancelledAt        DateTime?
+  cancelledByUserId  String?
+  cancelReason       String?
+  reversedAt         DateTime?
+  reversedByUserId   String?
+  reversalReason     String?
+  reverseCommandKey  String?
+  reversePayloadHash String?
+  reversalEntryId    String?
+  createdAt          DateTime                      @default(now())
+  updatedAt          DateTime                      @updatedAt
+
+  lines PharmacyJournalVoucherLine[]
+
+  @@unique([organizationId, id], map: "pharmacy_jv_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_jv_org_branch_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_jv_org_reference_key")
+  @@unique([organizationId, createKey], map: "pharmacy_jv_org_create_key")
+  @@unique([organizationId, postCommandKey], map: "pharmacy_jv_org_post_command_key")
+  @@unique([organizationId, reverseCommandKey], map: "pharmacy_jv_org_reverse_command_key")
+  @@unique([organizationId, journalEntryId], map: "pharmacy_jv_org_entry_key")
+  @@unique([organizationId, reversalEntryId], map: "pharmacy_jv_org_reversal_entry_key")
+  @@index([organizationId, branchId, status, occurredAt], map: "pharmacy_jv_org_branch_status_idx")
+  @@map("pharmacy_journal_vouchers")
+}
+
+model PharmacyJournalVoucherLine {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  voucherId      String
+  lineNumber     Int
+  accountCode    FinanceAccountCode
+  side           FinanceJournalSide
+  amountMinor    Int
+  memo           String?
+  createdAt      DateTime           @default(now())
+
+  voucher PharmacyJournalVoucher @relation(fields: [organizationId, branchId, voucherId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_journal_voucher_lines_voucher_fkey")
+
+  @@unique([organizationId, voucherId, lineNumber], map: "pharmacy_jv_lines_org_voucher_line_key")
+  @@index([organizationId, branchId, voucherId], map: "pharmacy_jv_lines_org_branch_voucher_idx")
+  @@map("pharmacy_journal_voucher_lines")
 }
 
 enum PharmacyBookkeepingKind {
@@ -4331,6 +4417,9 @@ model Notification {
 /// row here. Actor identity is *snapshotted* (name/email/role) so the trail
 /// stays meaningful even after the user is deleted (actor relation is SetNull).
 /// Sensitive input fields (passwords, tokens) are redacted before storage.
+/// Append-only in PostgreSQL (DEV-155): a trigger refuses UPDATE, DELETE and
+/// TRUNCATE for every role, except the actor SetNull above and a platform purge
+/// of the tenant that first records the purge in `platform_audit_logs`.
 model AuditLog {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -13048,6 +13137,11 @@ model PharmacyGoodsReceiptLine {
   taxCreditable             Boolean                 @default(false)
   /// DEV-77: this line's share of the receipt freight, already inside unitCostMinor.
   allocatedFreightMinor     Int                     @default(0)
+  /// DEV-161: this line's share of its purchase order's freight and other
+  /// charges, already inside unitCostMinor. Posting settles it again from the
+  /// receipts that have posted, adjusting unitCostMinor by the difference only.
+  /// Zero when the receipt bills its own invoice freight.
+  allocatedOrderChargeMinor Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).
   unitCostMinor             Int

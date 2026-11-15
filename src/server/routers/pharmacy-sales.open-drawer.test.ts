@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // POS-07 regression: a second "Open drawer" on the same counter device raced into the
 // partial unique index `pharmacy_one_open_drawer_per_device` and tRPC answered the raw
@@ -51,6 +51,7 @@ function fixture(
       findFirst: vi.fn(async () => (options.branch === false ? null : { id: 'branch-1' })),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     pharmacyBranchAssignment: {
       findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
     },
@@ -81,6 +82,16 @@ function fixture(
   } as unknown as TRPCContext;
   return { db, caller: app.createCaller(context).pharmacySales };
 }
+
+// DEV-630: money writes book on the branch's current business day, so the clock is
+// pinned to the fixture's day (14:00 in Karachi).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-20T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('pharmacySales.openDrawer', () => {
   it('refuses a branch that is missing, inactive, or outside the session organization', async () => {
