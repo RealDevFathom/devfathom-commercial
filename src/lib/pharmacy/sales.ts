@@ -157,6 +157,7 @@ export class PharmacySaleError extends Error {
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'BILL_HAS_PAYMENTS'
   ) {
     super(reason);
   }
@@ -545,6 +546,23 @@ export async function changeSaleStatus(
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    // DEV-623: a split payment leaves a bill OPEN (and it can then be held), so a
+    // void must not strand money taken on it. Every tender is refunded first, on
+    // the refund path's own manager/owner gate. Read after the claim: the sale
+    // row is locked, so a tender that committed earlier is seen here and a later
+    // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    const tenders = await db.pharmacyTender.findMany({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+    });
+    const unrefundedMinor = tenders.reduce(
+      (total, tender) =>
+        total +
+        tender.amountMinor -
+        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
+      0
+    );
+    if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,

@@ -49,6 +49,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
   INVALID_STATE: 'This bill has already moved on. Refresh the counter and try again.',
+  // DEV-623: money taken on a bill comes back through a refund, never a void.
+  BILL_HAS_PAYMENTS:
+    'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',

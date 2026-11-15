@@ -92,6 +92,8 @@ describe('POS sale voiding', () => {
       },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+      // DEV-623: no money was taken on this bill.
+      pharmacyTender: { findMany: async () => [] },
     };
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
@@ -179,6 +181,10 @@ describe('POS sale voiding', () => {
           return data;
         },
       },
+      // A part payment that was refunded in full no longer blocks the void.
+      pharmacyTender: {
+        findMany: async () => [{ amountMinor: 500, refunds: [{ amountMinor: 500 }] }],
+      },
     };
 
     await changeSaleStatus(db as never, scope, 'sale-held', 'void', 'Lost to a reload');
@@ -191,6 +197,54 @@ describe('POS sale voiding', () => {
     ]);
     expect(events).toEqual([expect.objectContaining({ kind: 'VOIDED' })]);
   });
+
+  it.each(['OPEN', 'HELD'])(
+    'refuses to void a %s bill that still holds unrefunded payment (DEV-623)',
+    async (current) => {
+      let status = current;
+      const tenderQueries: unknown[] = [];
+      const allocationReads = vi.fn();
+      const stockWrites = vi.fn();
+      const events = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
+          updateMany: async ({ data }: { data: { status: string } }) => {
+            status = data.status;
+            return { count: 1 };
+          },
+        },
+        pharmacyTender: {
+          findMany: async (query: unknown) => {
+            tenderQueries.push(query);
+            // A split payment: one tender part-refunded, one untouched.
+            return [
+              { amountMinor: 1000, refunds: [{ amountMinor: 400 }] },
+              { amountMinor: 300, refunds: [] },
+            ];
+          },
+        },
+        pharmacySaleLineAllocation: { findMany: allocationReads },
+        pharmacyStockMovement: { create: stockWrites },
+        pharmacySaleEvent: { create: events },
+      };
+
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+        'BILL_HAS_PAYMENTS'
+      );
+      expect(tenderQueries).toEqual([
+        {
+          where: { organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+          select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+        },
+      ]);
+      // Refused before any stock is reversed or event recorded; the transaction
+      // rolls the status claim back.
+      expect(allocationReads).not.toHaveBeenCalled();
+      expect(stockWrites).not.toHaveBeenCalled();
+      expect(events).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['QUOTATION', 'COMPLETED', 'VOID'])(
     'still refuses to void a %s sale',

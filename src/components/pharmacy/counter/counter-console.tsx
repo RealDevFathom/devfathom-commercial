@@ -969,7 +969,8 @@ function ScopedPharmacyCounterConsole({
 
   // DEV-623: the bill open on this device survives a reload. It is restored once
   // payment recovery has run (an in-flight payment takes precedence), and only
-  // while the server still lists it as OPEN. Anything else stays under Open bills.
+  // when the server's own cart read still says OPEN; otherwise it is forgotten
+  // here and stays under Open bills.
   const activeBillScope = useMemo<ActiveBillScope | null>(
     () => (branchAuthorized && branchId ? { organizationId, accountId, branchId } : null),
     [accountId, branchAuthorized, branchId, organizationId]
@@ -977,30 +978,47 @@ function ScopedPharmacyCounterConsole({
   const activeBillKey = JSON.stringify([organizationId, accountId, branchId]);
   // The scope whose remembered bill has been checked; nothing is written before.
   const activeBillChecked = useRef<string | null>(null);
-  const listedBills = openBillsQuery.data;
+  const currentSaleId = useRef(saleId);
+  useEffect(() => {
+    currentSaleId.current = saleId;
+  }, [saleId]);
   useEffect(() => {
     if (!activeBillScope) return;
-    // Like payment recovery: read this device's storage, then load what it names.
-    const restore = (bills: readonly { saleId: string; status: string }[]) => {
-      const stored = readActiveBill(activeBillScope);
-      if (!stored || !bills.some((bill) => bill.saleId === stored && bill.status === 'OPEN'))
-        return false;
-      // The next render carries the restored bill and remembers it again.
-      setActiveSale(stored);
-      setNotice({ tone: 'success', message: 'The open bill on this counter was restored.' });
-      return true;
-    };
     if (activeBillChecked.current !== activeBillKey) {
       if (!recoveryReady) return;
-      if (!saleId && !attemptRef.current) {
-        if (!listedBills) return;
-        activeBillChecked.current = activeBillKey;
-        if (restore(listedBills)) return;
-      }
       activeBillChecked.current = activeBillKey;
+      const stored = saleId || attemptRef.current ? null : readActiveBill(activeBillScope);
+      if (stored) {
+        // Still this scope, still no bill on the counter, and the stored id unchanged.
+        const unchanged = () =>
+          activeBillChecked.current === activeBillKey &&
+          !currentSaleId.current &&
+          !attemptRef.current &&
+          readActiveBill(activeBillScope) === stored;
+        void utils.client.pharmacySales.counterCart
+          .query({ branchId: activeBillScope.branchId, saleId: stored })
+          .then(
+            (read) => (read.status === 'OPEN' ? 'open' : 'closed'),
+            (error: { data?: { code?: string } | null }) =>
+              // Gone or out of reach is final; a transient failure keeps the record.
+              error?.data?.code === 'NOT_FOUND' || error?.data?.code === 'FORBIDDEN'
+                ? 'closed'
+                : 'unknown'
+          )
+          .then((verdict) => {
+            if (verdict === 'unknown' || !unchanged()) return;
+            if (verdict === 'closed') {
+              rememberActiveBill(activeBillScope, null);
+              return;
+            }
+            setActiveSale(stored);
+            setNotice({ tone: 'success', message: 'The open bill on this counter was restored.' });
+          });
+        return;
+      }
     }
     rememberActiveBill(activeBillScope, saleId);
-  }, [activeBillKey, activeBillScope, listedBills, recoveryReady, saleId, setActiveSale]);
+  }, [activeBillKey, activeBillScope, recoveryReady, saleId, setActiveSale, utils]);
 
   const settledReceipt =
     billState === 'settled' &&
