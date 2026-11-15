@@ -715,6 +715,57 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
     expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
   });
 
+  it('refuses the MOCK for a real organization under NODE_ENV=development and saves nothing', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    vi.stubEnv('NODE_ENV', 'development');
+    try {
+      await expect(
+        deps.tenders.applyTender(deps.createTenantDb(orgId), {
+          billId,
+          tender: { type: 'CARD', amount: grandTotal },
+          actor: actor(),
+          now: AT,
+        })
+      ).rejects.toMatchObject({ reason: 'CARD_DECLINED' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0 });
+  });
+
+  it('lets the MOCK approve for a demo organization under NODE_ENV=production', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    await deps.withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: orgId }, data: { isDemo: true } })
+    );
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: { type: 'CARD', amount: grandTotal },
+        actor: actor(),
+        now: AT,
+      });
+      expect(result.settled).toBe(true);
+      const payment = await read((tx) =>
+        tx.restaurantPayment.findUnique({
+          where: { id: result.paymentId! },
+          select: { provider: true, status: true },
+        })
+      );
+      expect(payment).toEqual({ provider: 'MOCK', status: 'CAPTURED' });
+    } finally {
+      vi.unstubAllEnvs();
+      await deps.withPlatformDb((tx) =>
+        tx.organization.update({ where: { id: orgId }, data: { isDemo: false } })
+      );
+    }
+  });
+
   it('rejects an over-tender beyond the bill balance', async () => {
     const { billId } = await openBill(1); // 12.50
     await expect(
