@@ -68,6 +68,7 @@ async function readyCounter(
         recallVersion: 0,
         licenceVersion: 1,
         ruleVersion: 1,
+        recalledBatchIds: [],
       },
       signingKeyId: 'test-key',
     };
