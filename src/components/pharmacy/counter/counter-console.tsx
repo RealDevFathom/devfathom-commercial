@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -101,6 +102,11 @@ import {
   counterErrorTone,
   counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  counterSetupAdvice,
+  counterSetupReason,
+  type CounterSetupAdvice,
+} from '@/lib/pharmacy/counter-setup';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
@@ -133,6 +139,8 @@ type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
   inventoryBranchId?: string;
+  /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
+  setup?: CounterSetupAdvice;
 };
 
 type ReceiptIntent = {
@@ -796,6 +804,23 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-860: the ready-to-sell check lists missing setup before the first scan. The
+  // server answers with reason codes and whether this account may fix them.
+  const saleReadiness = trpc.pharmacySales.saleReadiness.useQuery(
+    { branchId, ...(deviceId ? { deviceId } : {}) },
+    { enabled: Boolean(branchAuthorized && branchId), staleTime: 30_000, retry: false }
+  );
+  const canFixSetup = saleReadiness.data?.canFixSetup === true;
+  const refetchSaleReadiness = saleReadiness.refetch;
+  const setupNotice = useCallback(
+    (error: unknown): { setup?: CounterSetupAdvice } => {
+      const reason = counterSetupReason(error);
+      // The drawer has its own step on the counter; nobody else is asked to open it.
+      if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
+      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+    },
+    [branchId, canFixSetup]
+  );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -1648,7 +1673,9 @@ function ScopedPharmacyCounterConsole({
           ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
             ? { inventoryBranchId: branchId }
             : {}),
+          ...setupNotice(error),
         });
+        if (counterSetupReason(error)) void refetchSaleReadiness();
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
@@ -1673,10 +1700,12 @@ function ScopedPharmacyCounterConsole({
       preview,
       quantity,
       quantityText,
+      refetchSaleReadiness,
       refreshCart,
       saleId,
       selectedOption,
       setActiveSale,
+      setupNotice,
       utils,
     ]
   );
@@ -1731,12 +1760,28 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         if (revision === scannerRevision.current)
-          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            ...setupNotice(error),
+          });
       } finally {
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+    [
+      activeRow,
+      addToCart,
+      branchId,
+      busy,
+      preview,
+      query,
+      runSearch,
+      saleUnit,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   const runTransition = useCallback(
@@ -2930,6 +2975,14 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
+      {branchAuthorized && !saleId && saleReadiness.data ? (
+        <CounterSaleReadiness
+          readiness={saleReadiness.data}
+          branchId={branchId}
+          checking={saleReadiness.isFetching}
+          onCheckAgain={() => void refetchSaleReadiness()}
+        />
+      ) : null}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
           <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
@@ -2952,6 +3005,7 @@ function ScopedPharmacyCounterConsole({
                   <StatusPill status={notice.tone} tone={notice.tone} />
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
+                    {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
                     {notice.inventoryBranchId ? (
                       <Link
                         href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}

@@ -47,6 +47,12 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { RefusalReason } from '@/server/refusal-reason';
+import {
+  evaluateCounterSaleReadiness,
+  type CounterSaleReadiness,
+} from '@/lib/pharmacy/sale-readiness';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   counterCapabilityDecision,
@@ -846,7 +852,14 @@ async function requireCounterReceiptAccess(
     annotateOrgAdminReceiptAccess(ctx, branch, assigned);
     return scope;
   }
-  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  // DEV-860: by now the branch is an active branch of the caller's own organization and
+  // the caller an active member with counter access, so naming the missing assignment
+  // reveals nothing about another tenant or user. Every earlier refusal names no reason.
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Branch is outside your scope.',
+    cause: new RefusalReason(BRANCH_NOT_ASSIGNED),
+  });
 }
 
 /** Navigation uses the counter's grant and branch rules without recording an access. */
@@ -1699,6 +1712,46 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  /**
+   * DEV-860: what stops this counter selling, listed before the first scan. The same
+   * member, capability and branch gate as `create`; a missing branch assignment is
+   * reported rather than thrown. Codes only: the counter maps them to text, and only an
+   * organization administrator (`canFixSetup`) is linked to the setup pages.
+   */
+  saleReadiness: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          deviceId: z.string().min(1).max(200).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const { scope, assigned, orgAdmin } = await counterReceiptGrant(ctx, input.branchId);
+      if (!assigned.has(input.branchId) && !orgAdmin) {
+        return {
+          ready: false,
+          blockers: [BRANCH_NOT_ASSIGNED],
+          warnings: [],
+          canFixSetup: false,
+        } satisfies CounterSaleReadiness & { canFixSetup: boolean };
+      }
+      const takesPayment = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:counter',
+        undefined,
+        { db: ctx.db }
+      );
+      const readiness = await evaluateCounterSaleReadiness(ctx.db as unknown as ScopedDb, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
+        deviceId: input.deviceId ?? null,
+        takesPayment,
+      });
+      return { ...readiness, canFixSetup: orgAdmin };
     }),
   create: protectedProcedure
     .input(

@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
+import {
+  COUNTER_CASH_DRAWER_CLOSED_MESSAGE,
+  COUNTER_UNKNOWN_ERROR_MESSAGE,
+} from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -178,6 +181,7 @@ vi.mock('@/lib/trpc', async () => {
         'substituteProposals',
         'refundAccess',
         'openBills',
+        'saleReadiness',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -479,6 +483,7 @@ beforeEach(() => {
     'refundAccess',
     'navigation',
     'openBills',
+    'saleReadiness',
   ])
     mocks.queries[name] = query();
   // DEV-97: the operator takes payment unless a test says otherwise.
@@ -2254,6 +2259,86 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     ).toBeInTheDocument();
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  describe('DEV-860: says why a sale cannot start', () => {
+    const PROFILE_MISSING_TEXT =
+      'This branch has no regulatory profile in force, so it cannot sell yet.';
+    const readiness = (canFixSetup: boolean, blockers: string[] = []) =>
+      query({ ready: blockers.length === 0, blockers, warnings: [], canFixSetup });
+
+    async function scanRefusedBill() {
+      openTheDrawer();
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockRejectedValue(refused('FORBIDDEN', 'PROFILE_MISSING'));
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      return screen.findByText(PROFILE_MISSING_TEXT);
+    }
+
+    it('names the missing setup instead of the generic counter error', async () => {
+      mocks.queries.saleReadiness = readiness(false);
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(notice).not.toHaveTextContent(COUNTER_UNKNOWN_ERROR_MESSAGE);
+      expect(notice).toHaveTextContent('Ask your owner or manager to set this up.');
+      expect(within(notice).queryByRole('link')).not.toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it('links an owner or administrator to the setup step', async () => {
+      mocks.queries.saleReadiness = readiness(true);
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(
+        within(notice).getByRole('link', { name: 'Add the branch regulatory profile' })
+      ).toHaveAttribute('href', '/pharmacy/regulatory?branch=branch-a');
+      expect(notice).not.toHaveTextContent('Ask your owner or manager');
+    });
+
+    it('names a missing branch assignment from the reason the refusal declares', async () => {
+      mocks.queries.saleReadiness = readiness(false);
+      openTheDrawer();
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockRejectedValue(
+        Object.assign(new Error('Branch is outside your scope.'), {
+          data: { code: 'FORBIDDEN', reason: 'BRANCH_NOT_ASSIGNED' },
+        })
+      );
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const message = await screen.findByText(
+        'You are not assigned to this branch, so you cannot sell here.'
+      );
+      expect(message.closest('[role="alert"]')).toHaveTextContent(
+        'Ask your owner or manager to set this up.'
+      );
+    });
+
+    it('lists missing setup before the first scan, for this branch and counter device', () => {
+      mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const panel = screen.getByRole('region', { name: 'This counter cannot sell yet' });
+      expect(panel).toHaveTextContent('This branch has no valid licence on file');
+      expect(panel).toHaveTextContent('Ask your owner or manager to set this up.');
+      expect(mocks.queryInputs).toHaveBeenCalledWith(
+        'saleReadiness',
+        expect.objectContaining({ branchId: 'branch-a' }),
+        expect.objectContaining({ enabled: true })
+      );
+    });
+
+    it('does not list setup over an open bill', () => {
+      mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(
+        screen.queryByRole('region', { name: 'This counter cannot sell yet' })
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('adds no line to an open bill once the drawer is closed elsewhere (DEV-725)', async () => {
