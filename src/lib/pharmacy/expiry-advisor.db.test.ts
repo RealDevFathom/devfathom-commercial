@@ -280,6 +280,15 @@ beforeAll(async () => {
     workPack,
   };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Tenant rows (finance postings on goods receipt) anchor to the organization.
+  await scopedDb.withPlatformDb(async (db) => {
+    await db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+       ON CONFLICT (id) DO NOTHING`,
+      [ORG_A, ORG_B]
+    );
+  });
   A1 = await seedBranch(ORG_A, 'a1');
   A2 = await seedBranch(ORG_A, 'a2');
   B1 = await seedBranch(ORG_B, 'b1');

@@ -29,7 +29,13 @@ type KhataFixture = { organizationId: string; branchId: string };
 async function createFixture(
   organizationId: string,
   label: string,
-  amounts: { overdue: number[]; partial?: { amount: number; paid: number }; future?: number }
+  amounts: {
+    overdue: number[];
+    partial?: { amount: number; paid: number };
+    future?: number;
+    /** Bounce the partial payment, linking the dishonour to the payment, the charge or nothing. */
+    dishonoured?: Array<'payment' | 'charge' | 'unlinked'>;
+  }
 ): Promise<KhataFixture> {
   return withTenantDb(organizationId, async (db: ScopedDb) => {
     await db.organization.upsert({
@@ -97,7 +103,7 @@ async function createFixture(
     for (const amount of amounts.overdue) await charge(amount, overdue);
     if (amounts.partial) {
       const item = await charge(amounts.partial.amount, overdue);
-      await db.pharmacyKhataEvent.create({
+      const payment = await db.pharmacyKhataEvent.create({
         data: {
           organizationId,
           branchId: branch.id,
@@ -108,6 +114,19 @@ async function createFixture(
           actorId: 'owner',
         },
       });
+      for (const link of amounts.dishonoured ?? []) {
+        await db.pharmacyKhataEvent.create({
+          data: {
+            organizationId,
+            branchId: branch.id,
+            familyAccountId: family.id,
+            kind: 'DISHONOURED_CHEQUE',
+            amountMinor: amounts.partial.paid,
+            settlesChargeId: link === 'payment' ? payment.id : link === 'charge' ? item.id : null,
+            actorId: 'owner',
+          },
+        });
+      }
     }
     if (amounts.future) await charge(amounts.future, future);
     return { organizationId, branchId: branch.id };
@@ -197,4 +216,27 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     // deliberately above PostgreSQL INTEGER_MAX.
     expect(result.metrics.khataAgingMinor).toBe(2_750_000_100);
   });
+
+  it.each(['payment', 'charge', 'unlinked'] as const)(
+    'ages bounced-cheque debt like the Khata balance when the dishonour links to the %s',
+    async (link) => {
+      const organizationId = `org_dishonour_${link}_${suffix}`;
+      const fixture = await createFixture(organizationId, `dishonour-${link}-${suffix}`, {
+        overdue: [],
+        partial: { amount: 100, paid: 100 },
+        dishonoured: [link],
+      });
+
+      const result = await withTenantDb(organizationId, (db) =>
+        readCommandCentre(db, {
+          branchIds: [fixture.branchId],
+          from: '2026-01-01',
+          to: '2026-01-01',
+        })
+      );
+
+      // charge 100, payment 100, dishonour 100: balance 100, so aging is 100, not 0.
+      expect(result.metrics.khataAgingMinor).toBe(100);
+    }
+  );
 });

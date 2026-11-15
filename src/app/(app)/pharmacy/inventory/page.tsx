@@ -591,16 +591,19 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Lots by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+            No available lots yet. Set up a medicine and its pack, then import your opening count or receive a supplier delivery.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
+              </Link>
+              <Link href="/pharmacy/inventory/import" className={buttonVariants({ variant: 'outline' })}>
+                Import opening stock
               </Link>
               <Link
                 href="/pharmacy/purchasing/receiving"
                 className={buttonVariants({ variant: 'outline' })}
               >
-                Receive opening stock
+                Receive supplier delivery
               </Link>
               <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
                 Pharmacy setup
@@ -608,89 +611,88 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div
-            role="region"
-            aria-label="Pharmacy inventory batches"
-            tabIndex={0}
-            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          <Table
+            containerProps={{
+              role: 'region',
+              'aria-label': 'Pharmacy inventory batches',
+              tabIndex: 0,
+              className:
+                'overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+            }}
           >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Sell order</TableHead>
-                  <TableHead>Medicine / batch</TableHead>
-                  <TableHead>Expiry</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Disposition</TableHead>
-                  <TableHead className="text-right">Physical arrangement</TableHead>
-                  <TableHead className="text-right">Pack action</TableHead>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Sell order</TableHead>
+                <TableHead>Medicine / batch</TableHead>
+                <TableHead>Expiry</TableHead>
+                <TableHead>Location</TableHead>
+                <TableHead>Disposition</TableHead>
+                <TableHead className="text-right">Physical arrangement</TableHead>
+                <TableHead className="text-right">Pack action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {available.map(({ lot, balance }, index) => (
+                <TableRow key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}>
+                  <TableCell className="font-mono">#{index + 1}</TableCell>
+                  <TableCell>
+                    <span className="font-medium text-text-strong">
+                      {lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      Batch {lot.batch.batchNumber} · {lot.supplierName}
+                    </span>
+                  </TableCell>
+                  <TableCell>{when(lot.batch.expiresAt)}</TableCell>
+                  <TableCell>{balance.location.name}</TableCell>
+                  <TableCell>
+                    <StatusPill
+                      status={label(balance.disposition)}
+                      tone={tone(balance.disposition)}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {lotStockBreakdown({
+                      onHandUnits: balance.onHandUnits,
+                      rootPackLevelId: lot.packLevelId,
+                      unitsPerPack: lot.unitsPerPack,
+                      packLevels: lot.packLevel?.presentation.packLevels,
+                      dosageForm: lot.packLevel?.presentation.dosageForm,
+                    })}{' '}
+                    · {balance.sealedPacks} sealed + {balance.looseUnits} loose
+                  </TableCell>
+                  <TableCell className="whitespace-normal align-top text-right">
+                    <BreakPackForm
+                      branchId={branch.id}
+                      inventoryLotId={lot.id}
+                      stockLocationId={balance.stockLocationId}
+                      medicineName={lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
+                      batchNumber={lot.batch.batchNumber}
+                      locationName={balance.location.name}
+                      sealedPacks={balance.sealedPacks}
+                      looseUnits={balance.looseUnits}
+                      unitsPerPack={lot.unitsPerPack}
+                      onHandUnits={balance.onHandUnits}
+                      expiresAt={lot.batch.expiresAt.toISOString()}
+                      observedAt={observedAt}
+                      unavailableReason={
+                        breakPackPermission ??
+                        (lot.batch.state !== 'ACTIVE'
+                          ? `Batch is ${label(lot.batch.state).toLowerCase()}.`
+                          : !lot.receivedAt
+                            ? 'Stock has not been received.'
+                            : !balance.location.active
+                              ? 'Stock location is inactive.'
+                              : balance.disposition !== 'AVAILABLE'
+                                ? 'Stock is not available.'
+                                : null)
+                      }
+                    />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {available.map(({ lot, balance }, index) => (
-                  <TableRow key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}>
-                    <TableCell className="font-mono">#{index + 1}</TableCell>
-                    <TableCell>
-                      <span className="font-medium text-text-strong">
-                        {lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
-                      </span>
-                      <span className="block text-xs text-text-muted">
-                        Batch {lot.batch.batchNumber} · {lot.supplierName}
-                      </span>
-                    </TableCell>
-                    <TableCell>{when(lot.batch.expiresAt)}</TableCell>
-                    <TableCell>{balance.location.name}</TableCell>
-                    <TableCell>
-                      <StatusPill
-                        status={label(balance.disposition)}
-                        tone={tone(balance.disposition)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {lotStockBreakdown({
-                        onHandUnits: balance.onHandUnits,
-                        rootPackLevelId: lot.packLevelId,
-                        unitsPerPack: lot.unitsPerPack,
-                        packLevels: lot.packLevel?.presentation.packLevels,
-                        dosageForm: lot.packLevel?.presentation.dosageForm,
-                      })}{' '}
-                      · {balance.sealedPacks} sealed + {balance.looseUnits} loose
-                    </TableCell>
-                    <TableCell className="whitespace-normal align-top text-right">
-                      <BreakPackForm
-                        branchId={branch.id}
-                        inventoryLotId={lot.id}
-                        stockLocationId={balance.stockLocationId}
-                        medicineName={
-                          lot.batch.medicine.brandName ?? lot.batch.medicine.productName
-                        }
-                        batchNumber={lot.batch.batchNumber}
-                        locationName={balance.location.name}
-                        sealedPacks={balance.sealedPacks}
-                        looseUnits={balance.looseUnits}
-                        unitsPerPack={lot.unitsPerPack}
-                        onHandUnits={balance.onHandUnits}
-                        expiresAt={lot.batch.expiresAt.toISOString()}
-                        observedAt={observedAt}
-                        unavailableReason={
-                          breakPackPermission ??
-                          (lot.batch.state !== 'ACTIVE'
-                            ? `Batch is ${label(lot.batch.state).toLowerCase()}.`
-                            : !lot.receivedAt
-                              ? 'Stock has not been received.'
-                              : !balance.location.active
-                                ? 'Stock location is inactive.'
-                                : balance.disposition !== 'AVAILABLE'
-                                  ? 'Stock is not available.'
-                                  : null)
-                        }
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </SectionCard>
 
@@ -1251,6 +1253,12 @@ export default async function PharmacyInventoryPage({
 
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Recalls and quarantine" eyebrow="Safety">
+          <p className="mb-4 text-sm text-text-muted">
+            DRAP recall alerts wait for a person before any stock moves.{' '}
+            <Link className="underline underline-offset-4" href="/pharmacy/inventory/drap-recalls">
+              Review DRAP recall alerts
+            </Link>
+          </p>
           {lots.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
