@@ -170,4 +170,56 @@ describe('restaurant device capability boundary', () => {
       ['device_2', false],
     ]);
   });
+
+  it.each([
+    ['without', false],
+    ['with', true],
+  ])(
+    'requires an organization-wide actor %s a devices:revoke role grant to revoke',
+    async (_label, grantsRevoke) => {
+      // restaurant:configure makes the actor organization-wide, but configuring the
+      // restaurant must not imply revocation.
+      mocks.can.mockImplementation(
+        async (...args: unknown[]) =>
+          args[1] === 'devices:manage' ||
+          args[1] === 'restaurant:configure' ||
+          (grantsRevoke && args[1] === 'devices:revoke')
+      );
+      mocks.findDevice.mockResolvedValue(null);
+
+      const attempt = caller().revoke(revokeInput);
+
+      if (grantsRevoke) {
+        await expect(attempt).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        expect(mocks.findDevice).toHaveBeenCalledWith({ where: { id: 'device_1' } });
+      } else {
+        await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.findDevice).not.toHaveBeenCalled();
+      }
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_admin' }),
+        'devices:revoke',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(mocks.createCoAuthorization).not.toHaveBeenCalled();
+
+      mocks.list.mockResolvedValue([
+        {
+          id: 'device_1',
+          name: 'Front POS',
+          kind: 'POS',
+          branchId: 'branch_1',
+          branch: { id: 'branch_1', name: 'Downtown' },
+          stationId: null,
+          status: 'ACTIVE',
+          lastSeenAt: null,
+          revokedAt: null,
+          createdAt: new Date('2026-08-18T07:00:00Z'),
+        },
+      ]);
+      const devices = await caller().list();
+      expect(devices.map((device) => device.canRevoke)).toEqual([grantsRevoke]);
+    }
+  );
 });
