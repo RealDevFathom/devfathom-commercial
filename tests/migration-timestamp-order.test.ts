@@ -3,6 +3,15 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  HOW_TO_FIX,
+  isAppendOnly,
+  LEDGER_FILE,
+  LEGACY_FILE,
+  readBaseLedger,
+  readList,
+} from '../scripts/qa/migration-rules';
+
 // QA-12 / DEV-813. Migrations that existed when this rule was adopted are
 // frozen in tests/fixtures/legacy-migration-names.txt (never rename or re-stamp
 // them: they may already be applied). Every migration added afterwards is
@@ -11,15 +20,13 @@ import { describe, expect, it } from 'vitest';
 // migration before it in the ledger, have a unique timestamp, be wrapped in
 // BEGIN/COMMIT, and be written to be safe to re-run.
 const MIGRATIONS_DIR = 'prisma/migrations';
-const readList = (file: string) =>
-  readFileSync(file, 'utf8')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'));
-const legacy = readList('tests/fixtures/legacy-migration-names.txt');
-const ledger = readList('tests/fixtures/new-migration-order.txt');
+const legacy = readList(LEGACY_FILE);
+const ledger = readList(LEDGER_FILE);
 const legacySet = new Set(legacy);
-const newestLegacy = legacy.map((n) => n.slice(0, 14)).sort().at(-1)!;
+const newestLegacy = legacy
+  .map((n) => n.slice(0, 14))
+  .sort()
+  .at(-1)!;
 
 const all = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
   .filter((e) => e.isDirectory())
@@ -37,15 +44,32 @@ describe('migration timestamp order and wrapping rules', () => {
   });
 
   it('lists every new migration in the ordered ledger, and nothing else', () => {
-    expect(new Set(ledger).size, 'duplicate ledger entry').toBe(ledger.length);
-    expect(ledger.slice().sort()).toEqual(added);
+    expect(new Set(ledger).size, `duplicate ledger entry. ${HOW_TO_FIX}`).toBe(ledger.length);
+    expect(ledger.slice().sort(), `ledger and directory disagree. ${HOW_TO_FIX}`).toEqual(added);
+  });
+
+  it('only appends to the ledger on origin/develop (no insert, reorder or removal)', () => {
+    expect(isAppendOnly(readBaseLedger(), ledger), `ledger is not append-only. ${HOW_TO_FIX}`).toBe(
+      true
+    );
+  });
+
+  it('detects a middle insertion, reorder or removal as not append-only', () => {
+    const base = ['20261120000000_a', '20261121000000_b'];
+    expect(isAppendOnly(base, [...base, '20261122000000_c'])).toBe(true);
+    expect(isAppendOnly(base, ['20261120000000_a', '20261120500000_m', '20261121000000_b'])).toBe(
+      false
+    );
+    expect(isAppendOnly(base, ['20261121000000_b', '20261120000000_a'])).toBe(false);
+    expect(isAppendOnly(base, ['20261120000000_a'])).toBe(false);
+    expect(isAppendOnly([], base)).toBe(true);
   });
 
   it('stamps new migrations strictly later than all legacy and earlier ledger entries', () => {
     let previous = newestLegacy;
     for (const name of ledger) {
       const ts = name.slice(0, 14);
-      expect(ts > previous, `${name} must be later than ${previous}`).toBe(true);
+      expect(ts > previous, `${name} must be later than ${previous}. ${HOW_TO_FIX}`).toBe(true);
       previous = ts;
     }
   });
