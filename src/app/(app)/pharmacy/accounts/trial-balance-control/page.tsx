@@ -331,7 +331,7 @@ export default async function TrialBalanceControlPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Trial-balance control"
@@ -339,6 +339,6 @@ export default async function TrialBalanceControlPage({
       />
       <ControlForm controls={formControls} />
       {state.kind === 'loaded' ? <Results state={state} /> : <Notice state={state} />}
-    </main>
+    </div>
   );
 }

@@ -29,7 +29,7 @@ export default async function ImportedStockPage({
   const pageHref = (page: number) =>
     `${ROUTE}?${new URLSearchParams({ q: data?.search ?? '', page: String(page) })}`;
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy inventory · Import references"
         heading="Imported stock"
@@ -198,6 +198,6 @@ export default async function ImportedStockPage({
           </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }

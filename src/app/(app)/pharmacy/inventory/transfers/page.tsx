@@ -90,7 +90,7 @@ export default async function PharmacyTransfersPage({
       : false;
   if (!ctx?.session?.user || !moduleEnabled || !permitted) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader {...header} />
         <SectionCard title={moduleEnabled ? 'Permission required' : 'Inventory module unavailable'}>
           <p className="text-sm text-text-muted">
@@ -99,7 +99,7 @@ export default async function PharmacyTransfersPage({
               : 'Enable Pharmacy Inventory in workspace modules to move stock between branches.'}
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -119,15 +119,15 @@ export default async function PharmacyTransfersPage({
     workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
   if (!branch && branches.length > 0) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader {...header} />
         <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
-      </main>
+      </div>
     );
   }
   if (!branch) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader {...header} />
         <SectionCard title="Create an active branch first">
           <p className="text-sm text-text-muted">
@@ -140,7 +140,7 @@ export default async function PharmacyTransfersPage({
             Review workspace setup
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -228,7 +228,7 @@ export default async function PharmacyTransfersPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         {...header}
         actions={
@@ -343,6 +343,6 @@ export default async function PharmacyTransfersPage({
           <Empty>{branch.name} has not sent any stock yet. Allocate a transfer above.</Empty>
         )}
       </SectionCard>
-    </main>
+    </div>
   );
 }

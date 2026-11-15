@@ -19,8 +19,18 @@ import {
   recordDeliveryCommand,
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
-import { MAX_DELIVERY_DISTANCE_METERS } from '@/lib/pharmacy/delivery-radius-profitability';
+import {
+  confirmPortalKhataPayment,
+  decidePortalRequest,
+  listPortalQueue,
+  mintPortalLink,
+  PharmacyPortalError,
+  type PortalRequestKind,
+} from '@/lib/pharmacy/customer-portal';
+import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import { PharmacySettlementError } from '@/lib/pharmacy/settlement';
+import { MAX_DELIVERY_DISTANCE_METERS } from '@/lib/pharmacy/delivery-radius-profitability';
 import { PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
   approveRefillCycle,
@@ -162,6 +172,20 @@ async function staffBranchIds(ctx: TRPCContext): Promise<string[] | null> {
   return rows.map((row) => row.branchId);
 }
 
+async function holds(ctx: TRPCContext, action: 'pharmacy:dispense' | 'pharmacy:counter') {
+  if (!ctx.session?.user) return false;
+  return can(subjectFromSession(ctx.session.user), action, undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+}
+
+/** Bind the branch for branch-scoped row-level security, as the counter's khata path does. */
+async function bindBranch(db: ScopedDb, branch: string) {
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branch}, true)`;
+}
+
 async function isStaff(ctx: TRPCContext) {
   if (!ctx.session?.user) return false;
   return can(subjectFromSession(ctx.session.user), 'pharmacy:orders', undefined, {
@@ -172,6 +196,17 @@ async function isStaff(ctx: TRPCContext) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyPortalError) {
+    const code =
+      error.reason === 'REQUEST_NOT_FOUND' || error.reason === 'CUSTOMER_NOT_FOUND'
+        ? 'NOT_FOUND'
+        : error.reason === 'KIND_NOT_ALLOWED'
+          ? 'FORBIDDEN'
+          : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: error.reason });
+  }
+  if (error instanceof FamilyKhataError || error instanceof PharmacySettlementError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof BranchOperationDeniedError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyDeliveryError)
@@ -420,6 +455,91 @@ export const pharmacyOrderingRouter = router({
             input.orderId
           )
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  // DEV-15 (#762): customer PWA. A sign-in link for one customer; the customer
+  // signs in with a code sent to their stored phone.
+  portalLink: staffProcedure
+    .input(z.object({ branchId, customerId: z.string().trim().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          mintPortalLink(txDb(tx), await scopeFor(ctx, input.branchId), input.customerId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  // Open customer PWA requests for this branch. Refills and prescription-photo
+  // orders are decided by a pharmacist; khata payments by the counter.
+  portalQueue: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const [pharmacist, counter, orders] = await Promise.all([
+        holds(ctx, 'pharmacy:dispense'),
+        holds(ctx, 'pharmacy:counter'),
+        isStaff(ctx),
+      ]);
+      if (!pharmacist && !counter && !orders) throw new TRPCError({ code: 'FORBIDDEN' });
+      const requests = await ctx.db.$transaction(async (tx) => {
+        const scope = await scopeFor(ctx, input.branchId);
+        await bindBranch(txDb(tx), scope.branchId);
+        return listPortalQueue(txDb(tx), scope);
+      });
+      return { requests, canVerifyPrescriptions: pharmacist, canConfirmPayments: counter };
+    }),
+
+  portalDecide: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          requestId: z.string().trim().min(1).max(128),
+          decision: z.enum(['VERIFY', 'REJECT']),
+          note: z.string().trim().max(500).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Server-side permission: a refill or prescription-photo order needs the
+      // pharmacist dispensing permission; rejecting a payment notice needs counter access.
+      const allowed: PortalRequestKind[] = [];
+      if (await holds(ctx, 'pharmacy:dispense')) allowed.push('REFILL', 'RX_ORDER');
+      if (await holds(ctx, 'pharmacy:counter')) allowed.push('KHATA_PAYMENT');
+      if (!allowed.length) throw new TRPCError({ code: 'FORBIDDEN' });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const scope = await scopeFor(ctx, input.branchId);
+          await bindBranch(txDb(tx), scope.branchId);
+          return decidePortalRequest(txDb(tx), scope, input, allowed);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  portalConfirmPayment: capabilityProcedure('pharmacy:counter')
+    .input(
+      z
+        .object({
+          branchId,
+          requestId: z.string().trim().min(1).max(128),
+          // Optional: the server books on today; any other client date is refused.
+          businessDate: z.date().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const scope = await scopeFor(ctx, input.branchId);
+          await bindBranch(txDb(tx), scope.branchId);
+          return confirmPortalKhataPayment(txDb(tx), scope, input);
+        });
       } catch (error) {
         fail(error);
       }
