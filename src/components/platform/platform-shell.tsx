@@ -242,7 +242,7 @@ export function PlatformShell({
 
           <Link
             href="/platform"
-            aria-label="DevFathom platform home"
+            aria-label="DevFathom Platform control home"
             className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <FathomMark className="size-10" variant="brand" />
