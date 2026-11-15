@@ -29,6 +29,8 @@ const state = vi.hoisted(() => ({
   sale: null as Record<string, unknown> | null,
   customer: null as Record<string, unknown> | null,
   branchName: 'Gulberg Branch',
+  claimCommitted: true,
+  deliveries: [] as Promise<unknown>[],
 }));
 
 vi.mock('./whatsapp/message-log', () => ({
@@ -164,6 +166,13 @@ const db = {
       const link = state.links.find((row) => matches(row, where));
       return link ? { ...link } : null;
     }),
+    updateMany: vi.fn(
+      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const link = state.links.find((row) => row.id === where.id);
+        if (link) applyUpdate(link, data);
+        return { count: link ? 1 : 0 };
+      }
+    ),
     update: vi.fn(
       async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const link = state.links.find((row) => row.id === where.id)!;
@@ -173,6 +182,11 @@ const db = {
     ),
   },
   $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
+  pharmacyMessageLog: {
+    findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
+      state.claimCommitted ? { id: where.id } : null
+    ),
+  },
   $queryRaw: vi.fn(async () => []),
 };
 
@@ -220,7 +234,7 @@ function saleWith(line: { rx?: boolean; prescriptionLineId?: string | null } = {
 async function send(
   options: { provider?: MockWhatsAppProvider; env?: Record<string, string> } = {}
 ) {
-  return sendWhatsAppReceiptLink({
+  const result = await sendWhatsAppReceiptLink({
     db: db as never,
     scope,
     saleId: 'sale-1',
@@ -229,7 +243,17 @@ async function send(
     config,
     provider: options.provider ?? new MockWhatsAppProvider(config),
     env: options.env ?? {},
+    // Stands in for "after the request transaction ends".
+    defer: (work) => {
+      state.deliveries.push(work());
+    },
   });
+  await Promise.all(state.deliveries);
+  return result;
+}
+
+async function delivered() {
+  return Promise.all(state.deliveries);
 }
 
 function tokenFrom(provider: MockWhatsAppProvider): string {
@@ -243,6 +267,8 @@ beforeEach(() => {
   state.claims = [];
   state.claimResult = 'log-1';
   state.branchName = 'Gulberg Branch';
+  state.claimCommitted = true;
+  state.deliveries = [];
   state.sale = saleWith();
   state.customer = {
     id: 'customer-1',
@@ -260,10 +286,11 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
     const result = await send({ provider });
 
     expect(result).toEqual({
-      outcome: 'PREPARED',
+      outcome: 'QUEUED',
       expiresAt: '2026-12-15T07:05:00.000Z',
       rxProtected: false,
     });
+    await expect(delivered()).resolves.toEqual(['PREPARED']);
     expect(provider.calls).toHaveLength(1);
     const call = provider.calls[0]!;
     expect(call).toMatchObject({
@@ -363,6 +390,85 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
         config: { ...config, templates: { ...config.templates, receiptLink: null } },
       })
     ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
+  });
+
+  it('never sends inside the request transaction, only after it commits', async () => {
+    const provider = new MockWhatsAppProvider(config);
+    let deferred: (() => Promise<unknown>) | null = null;
+    const result = await sendWhatsAppReceiptLink({
+      db: db as never,
+      scope,
+      saleId: 'sale-1',
+      actorUserId: 'cashier-1',
+      now,
+      config,
+      provider,
+      env: {},
+      defer: (work) => {
+        deferred = work;
+      },
+    });
+    expect(result.outcome).toBe('QUEUED');
+    expect(state.claims).toHaveLength(1);
+    expect(state.links).toHaveLength(1);
+    expect(provider.calls).toHaveLength(0);
+    await deferred!();
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('defers delivery to the tenant transaction by default', async () => {
+    const { bindSideEffects } = await import('@/lib/side-effects/scope');
+    const provider = new MockWhatsAppProvider(config);
+    const scopeAfter = await bindSideEffects(async (sideEffects) => {
+      await sendWhatsAppReceiptLink({
+        db: db as never,
+        scope,
+        saleId: 'sale-1',
+        actorUserId: 'cashier-1',
+        now,
+        config,
+        provider,
+        env: {},
+      });
+      return sideEffects.afterTransaction;
+    });
+    expect(scopeAfter).toHaveLength(1);
+    expect(provider.calls).toHaveLength(0);
+    for (const work of scopeAfter) work();
+    await vi.waitFor(() => expect(provider.calls).toHaveLength(1));
+  });
+
+  it('sends nothing when the request transaction rolled the claim back', async () => {
+    state.claimCommitted = false;
+    const provider = new MockWhatsAppProvider(config);
+    await send({ provider });
+    await expect(delivered()).resolves.toEqual(['SKIPPED']);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('revokes the link when WhatsApp definitively refuses the message', async () => {
+    const { sendClaimedMessage } = await import('./whatsapp/message-log');
+    vi.mocked(sendClaimedMessage).mockResolvedValueOnce('FAILED');
+    await send();
+    await expect(delivered()).resolves.toEqual(['FAILED']);
+    expect(state.links[0]!.revokedAt).toEqual(now);
+  });
+
+  it('refuses an Rx receipt when the one-time code template is not set up', async () => {
+    state.sale = saleWith({ rx: true });
+    await expect(
+      sendWhatsAppReceiptLink({
+        db: db as never,
+        scope,
+        saleId: 'sale-1',
+        actorUserId: 'cashier-1',
+        now,
+        config: { ...config, templates: { ...config.templates, receiptOtp: null } },
+        defer: () => undefined,
+      })
+    ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
+    expect(state.claims).toHaveLength(0);
+    expect(state.links).toHaveLength(0);
   });
 
   it('sends at most one receipt message per sale per day', async () => {

@@ -3408,11 +3408,16 @@ function ScopedPharmacyCounterConsole({
                 saleId: receiptSaleId,
                 customerRequested: true,
               });
+              // Delivery runs after the request commits; never claim it was delivered.
               return sent.outcome === 'DUPLICATE'
-                ? { ok: true, message: 'A WhatsApp receipt for this sale was already sent today.' }
-                : sent.outcome === 'FAILED'
-                  ? { ok: false, message: 'WhatsApp did not accept the receipt. Retry later.' }
-                  : { ok: true, message: 'WhatsApp receipt sent with a secure link.' };
+                ? {
+                    ok: true,
+                    message: 'A WhatsApp receipt for this sale was already requested today.',
+                  }
+                : {
+                    ok: true,
+                    message: 'WhatsApp receipt queued. Delivery is not confirmed at the counter.',
+                  };
             } catch (error) {
               return { ok: false, message: messageFrom(error) };
             }

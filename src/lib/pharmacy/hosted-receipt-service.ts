@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { tenantHostUrl } from '@/lib/tenancy/host-routing';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
@@ -37,7 +38,25 @@ import {
 } from './whatsapp/provider';
 
 export type HostedReceiptScope = { organizationId: string; branchId: string };
-export type HostedReceiptSendOutcome = 'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'DUPLICATE';
+/**
+ * QUEUED: the claim and link are written and delivery runs after the request's
+ * transaction commits, so the counter never reports a delivery it cannot know.
+ * DUPLICATE: a receipt for this sale was already requested today.
+ */
+export type HostedReceiptSendOutcome = 'QUEUED' | 'DUPLICATE';
+export type HostedReceiptDelivery = 'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'SKIPPED';
+
+/** Run delivery after the owning tenant transaction ends (immediately outside one). */
+function deferUntilCommitted(work: () => Promise<unknown>): void {
+  afterTenantTransaction(() => {
+    void work().catch((error: unknown) => {
+      console.error(
+        '[pharmacy] hosted receipt delivery failed',
+        error instanceof Error ? error.name : 'error'
+      );
+    });
+  });
+}
 
 /** The deployment's sender must belong to this tenant and the template must be approved. */
 function senderReady(
@@ -77,6 +96,8 @@ export async function sendWhatsAppReceiptLink(input: {
   config?: WhatsAppConfig;
   provider?: WhatsAppProvider;
   env?: Record<string, string | undefined>;
+  /** Tests observe delivery; production waits for the request transaction to end. */
+  defer?: (work: () => Promise<HostedReceiptDelivery>) => void;
 }): Promise<{ outcome: HostedReceiptSendOutcome; expiresAt: string | null; rxProtected: boolean }> {
   const { db, scope } = input;
   const now = input.now ?? new Date();
@@ -171,6 +192,9 @@ export async function sendWhatsAppReceiptLink(input: {
   assertNeutralWhatsAppParameters(parameters, names);
 
   const rxProtected = sale.lines.some(isRxSaleLine);
+  // An Rx link the customer could never unlock is not worth sending.
+  if (rxProtected && !senderReady(config, scope.organizationId, 'receiptOtp'))
+    throw new HostedReceiptError('NOT_CONFIGURED');
   const expiresAt = hostedReceiptExpiresAt(now, hostedReceiptTtlDays(input.env));
   const entry = {
     organizationId: scope.organizationId,
@@ -207,18 +231,32 @@ export async function sendWhatsAppReceiptLink(input: {
   });
   if (!claim) return { outcome: 'DUPLICATE', expiresAt: null, rxProtected };
 
+  // The tRPC request holds one tenant transaction: an independent sender
+  // transaction must not run until the claim and link have committed.
   const provider = input.provider ?? createWhatsAppProvider(config);
-  const outcome = await sendClaimedMessage(entry, claim.logId, () =>
-    provider.sendTemplate({ to, template: 'receiptLink', parameters })
-  );
-  if (outcome === 'FAILED') {
-    await db.pharmacyHostedReceipt.update({
-      where: { id: claim.linkId },
-      data: { revokedAt: now },
-    });
-    return { outcome, expiresAt: null, rxProtected };
-  }
-  return { outcome, expiresAt: expiresAt.toISOString(), rxProtected };
+  (input.defer ?? deferUntilCommitted)(async () => {
+    // Deferred work also runs after a rollback; only a committed, still-pending
+    // claim may be sent.
+    const committed = await withTenantDb(scope.organizationId, (tx) =>
+      tx.pharmacyMessageLog.findFirst({
+        where: { id: claim.logId, status: 'PENDING', providerMessageId: null },
+        select: { id: true },
+      })
+    );
+    if (!committed) return 'SKIPPED';
+    const outcome = await sendClaimedMessage(entry, claim.logId, () =>
+      provider.sendTemplate({ to, template: 'receiptLink', parameters })
+    );
+    if (outcome === 'FAILED')
+      await withTenantDb(scope.organizationId, (tx) =>
+        tx.pharmacyHostedReceipt.updateMany({
+          where: { id: claim.linkId },
+          data: { revokedAt: now },
+        })
+      );
+    return outcome;
+  });
+  return { outcome: 'QUEUED', expiresAt: expiresAt.toISOString(), rxProtected };
 }
 
 async function liveLink(db: ScopedDb, token: string, now: Date) {

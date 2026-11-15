@@ -60,7 +60,7 @@ vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
 }));
 vi.mock('@/lib/pharmacy/hosted-receipt-service', () => ({
   sendWhatsAppReceiptLink: vi.fn(async () => ({
-    outcome: 'SENT',
+    outcome: 'QUEUED',
     expiresAt: '2026-12-15T00:00:00.000Z',
     rxProtected: false,
   })),
@@ -350,7 +350,7 @@ const paths: {
     name: 'counterReceiptWhatsApp',
     run: (caller, branchId = 'branch-a') =>
       caller.counterReceiptWhatsApp({ branchId, saleId: 'sale-a', customerRequested: true }),
-    allowed: { outcome: 'SENT', rxProtected: false },
+    allowed: { outcome: 'QUEUED', rxProtected: false },
   },
   {
     name: 'counterReceiptFormat',

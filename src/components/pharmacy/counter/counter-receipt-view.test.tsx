@@ -520,7 +520,7 @@ it.each([true, false])(
 it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the customer asked', async () => {
   const onSendWhatsApp = vi.fn(async () => ({
     ok: true,
-    message: 'WhatsApp receipt sent with a secure link.',
+    message: 'WhatsApp receipt queued. Delivery is not confirmed at the counter.',
   }));
   render(<CounterReceiptView {...props({ onSendWhatsApp })} />);
 
@@ -535,7 +535,7 @@ it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the custome
   fireEvent.click(send);
 
   expect(onSendWhatsApp).toHaveBeenCalledExactlyOnceWith('sale-1');
-  expect(await screen.findByText('WhatsApp receipt sent with a secure link.')).toBeTruthy();
+  expect(await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')).toBeTruthy();
 });
 
 it('DEV-16: surfaces a refused WhatsApp receipt and hides the control on an unsettled bill', async () => {
