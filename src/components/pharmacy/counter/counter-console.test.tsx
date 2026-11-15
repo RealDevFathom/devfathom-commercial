@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   searchProps: vi.fn<(props: ComponentProps<typeof CounterSearchResults>) => void>(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
+  khataApprovers: vi.fn(),
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
@@ -118,6 +119,7 @@ vi.mock('@/lib/trpc', async () => {
         tenderOutcome: { query: mocks.outcomeQuery },
         khataAccounts: { query: mocks.khataAccounts },
         khataStatement: { query: mocks.khataStatement },
+        khataOverLimitApprovers: { query: mocks.khataApprovers },
       },
     },
     pharmacySales: {
@@ -160,6 +162,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterReceiptBrowserPrintFailed',
         'openDrawer',
         'captureDemand',
+        'setDemandOutcome',
         'declineSubstitute',
         'linkCustomer',
         'khataSignup',
@@ -488,6 +491,7 @@ beforeEach(() => {
     'counterReceiptBrowserPrintFailed',
     'openDrawer',
     'captureDemand',
+    'setDemandOutcome',
     'declineSubstitute',
     'linkCustomer',
     'khataSignup',
@@ -524,6 +528,7 @@ beforeEach(() => {
   mocks.khataAccounts.mockResolvedValue([
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
   ]);
+  mocks.khataApprovers.mockResolvedValue([]);
   mocks.signIn.mockResolvedValue({ ok: true });
   window.localStorage.clear();
 });
@@ -1846,12 +1851,19 @@ it.each([404, 200])(
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('I am the only owner or manager: re-enter my password'));
+    fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+      target: { value: 'Paying on Friday' },
+    });
+    fireEvent.change(screen.getByLabelText('Your password (current account)'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerOverride: true, overrideReason: 'Paying on Friday' })
+    );
     expect(fetch).toHaveBeenCalledWith(
       '/api/login',
       expect.objectContaining({ method: 'POST', credentials: 'include' })
@@ -1866,6 +1878,46 @@ it.each([404, 200])(
     );
   }
 );
+
+it('DEV-290: sends a manager PIN approval with the tender but never stores it', async () => {
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+  ]);
+  mocks.khataApprovers.mockResolvedValue([
+    { id: 'staff-manager', name: 'Manager Sana', self: false },
+  ]);
+  const setItem = vi.spyOn(Storage.prototype, 'setItem');
+  renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  chooseTender('KHATA');
+  await screen.findByText(/Ledger balance/);
+  fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+  await screen.findByRole('option', { name: 'Manager Sana' });
+  expect(mocks.khataApprovers).toHaveBeenCalledWith({ branchId: 'branch-a' });
+  fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+    target: { value: 'Paying on Friday' },
+  });
+  fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
+    target: { value: 'staff-manager' },
+  });
+  fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '975310' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+  await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+  expect(mocks.mutations.tender).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ownerOverride: true,
+      overrideReason: 'Paying on Friday',
+      overLimitApproval: { staffProfileId: 'staff-manager', pin: '975310' },
+    })
+  );
+  // The recovery attempt was persisted before the write, without the PIN.
+  const stored = setItem.mock.calls.filter(([key]) => key.includes('counter.attempt'));
+  expect(stored.length).toBeGreaterThan(0);
+  for (const [, value] of stored) {
+    expect(value).not.toContain('975310');
+    expect(value).not.toContain('overLimitApproval');
+  }
+  setItem.mockRestore();
+});
 
 describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   beforeEach(() => {
@@ -2084,8 +2136,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   it('adds no line to an open bill once the drawer is closed elsewhere (DEV-725)', async () => {
     openTheDrawer();
     let resolveSearch:
-      | ((result: { rows: CounterSearchRow[]; truncated: boolean }) => void)
-      | undefined;
+      ((result: { rows: CounterSearchRow[]; truncated: boolean }) => void) | undefined;
     mocks.searchFetch.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -3021,21 +3072,24 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
-  it.each([0, 10])('explains missing sale units using the selected row stock (%s)', (onHandUnits) => {
-    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() =>
-      mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [], onHandUnits }))
-    );
-    if (onHandUnits === 0) {
-      expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
-      expect(screen.queryByText(/pack setup does not match/)).not.toBeInTheDocument();
-    } else {
-      expect(screen.getByText(/pack setup does not match/)).toHaveAttribute('role', 'status');
-      expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
+  it.each([0, 10])(
+    'explains missing sale units using the selected row stock (%s)',
+    (onHandUnits) => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() =>
+        mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [], onHandUnits }))
+      );
+      if (onHandUnits === 0) {
+        expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
+        expect(screen.queryByText(/pack setup does not match/)).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByText(/pack setup does not match/)).toHaveAttribute('role', 'status');
+        expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
+      }
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     }
-    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
-    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
-  });
+  );
 
   it('clears the shortage draft and records only the replacement quantity', async () => {
     mocks.mutations.captureDemand!.mockResolvedValue({});
@@ -3060,6 +3114,39 @@ describe('DEV-618 counter composition', () => {
       )
     );
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('DEV-81 offers optional outcome chips after a shortage and records one tap', async () => {
+    mocks.mutations.captureDemand!.mockResolvedValue({ id: 'demand-a' });
+    mocks.mutations.setDemandOutcome!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls
+        .at(-1)![0]
+        .onSelect(barcodeRow({ saleUnits: [], onHandUnits: 0 }))
+    );
+    fireEvent.change(screen.getByLabelText('Requested tablets'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record shortage: 3 tablets' }));
+    await waitFor(() =>
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ quantity: 3, requestedQty: 3, reason: 'STOCKOUT' })
+      )
+    );
+    const chips = await screen.findByRole('region', { name: 'What happened to the short line' });
+    expect(chips).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Substitute taken' }));
+    await waitFor(() =>
+      expect(mocks.mutations.setDemandOutcome).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          branchId: 'branch-a',
+          demandId: 'demand-a',
+          outcome: 'SUBSTITUTE_TAKEN',
+        })
+      )
+    );
+    expect(
+      screen.queryByRole('region', { name: 'What happened to the short line' })
+    ).not.toBeInTheDocument();
   });
 
   it('stages real metadata and quantity, switches units with F3/F4/F5, and submits the chosen batch with F6', async () => {

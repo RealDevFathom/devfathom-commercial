@@ -85,7 +85,7 @@ const selectClass =
 
 export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
   const [open, setOpen] = useState(false);
-  // DEV-647: cashiers record returns only; refunds stay with managers and owners.
+  // DEV-647 / DEV-621: returns and refunds stay with managers and owners.
   const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
   const refundAuthorized = access.data?.authorized === true;
   const title = refundAuthorized ? 'Returns & refunds' : 'Returns';
@@ -100,7 +100,7 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
           <DialogDescription>
             {refundAuthorized
               ? 'Find the original receipt, record returned stock, then refund its original tenders.'
-              : 'Find the original receipt and record returned stock. A manager or owner refunds it.'}
+              : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
           </DialogDescription>
           {open && (
             <ReturnForm
@@ -242,9 +242,12 @@ export function ReturnForm({
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') {
-        const result = await returnLine.mutateAsync(
-          controlledWitness ? { ...next.input, controlledWitness } : next.input
-        );
+        // DEV-621: the manager PIN is sent with the request only, never saved with the attempt.
+        const result = await returnLine.mutateAsync({
+          ...next.input,
+          ...(controlledWitness ? { controlledWitness } : {}),
+          managerPin: pin ?? '',
+        });
         if (isBlockedResult(result)) {
           // The server refused before any stock change. A fresh attempt is definitely not
           // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
@@ -291,9 +294,7 @@ export function ReturnForm({
       setAmount('');
       setMessage(
         next.kind === 'return'
-          ? refundAuthorized
-            ? 'Return recorded. Choose an original tender to refund.'
-            : 'Return recorded. A manager or owner must refund it with their PIN.'
+          ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
           : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
@@ -388,7 +389,7 @@ export function ReturnForm({
         onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
       <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
-        Required for every refund. The PIN is never saved on this device.
+        Required for every return and refund. The PIN is never saved on this device.
       </p>
     </div>
   );
@@ -438,28 +439,27 @@ export function ReturnForm({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {attempt?.kind === 'refund' &&
+      {attempt &&
         (refundAuthorized ? (
           managerPinField
         ) : (
           <p role="note" className="text-sm text-text-muted">
-            This saved refund is kept for reconciliation. A manager or owner must retry it with
-            their PIN.
+            This saved {attempt.kind} is kept for reconciliation. A manager or owner must retry it
+            with their PIN.
           </p>
         ))}
       {attempt && (
         <Button
           className="h-11"
-          onClick={() =>
-            void execute(attempt, witness, attempt.kind === 'refund' ? managerPin : undefined)
-          }
+          onClick={() => void execute(attempt, witness, managerPin)}
           disabled={
             busy ||
             !online ||
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
             (attempt.kind === 'return' && (!data || !witnessReady)) ||
-            (attempt.kind === 'refund' && (!refundAuthorized || !managerPinReady))
+            !refundAuthorized ||
+            !managerPinReady
           }
         >
           Retry saved {attempt.kind}
@@ -550,206 +550,219 @@ export function ReturnForm({
           </Button>
         </p>
       )}
+      {data && !refundAuthorized && (
+        <p role="note" className="text-sm text-text-muted">
+          Returns and refunds need a manager or owner. Ask one to record this return and refund it
+          with their PIN.
+        </p>
+      )}
       {data && (
         <>
-          <fieldset
-            disabled={locked || stale}
-            className="space-y-3 rounded-lg border border-border-subtle p-4"
-          >
-            <legend className="px-1 font-semibold">1. Record returned stock</legend>
-            <Label htmlFor="return-line">Sold line</Label>
-            <select
-              id="return-line"
-              className={selectClass}
-              value={lineId}
-              onChange={(event) => {
-                setLineId(event.target.value);
-                setWitnessStaffId('');
-                setWitnessPin('');
-                setLotId('');
-                setDisposition('QUARANTINE');
-                setConfirmed(false);
-              }}
+          {/* DEV-621: one PIN entry approves the next return or refund; it clears after each. */}
+          {refundAuthorized && !attempt && managerPinField}
+          {refundAuthorized && (
+            <fieldset
+              disabled={locked || stale}
+              className="space-y-3 rounded-lg border border-border-subtle p-4"
             >
-              <option value="">Choose a line</option>
-              {data.lines.map((row) => (
-                <option
-                  key={row.id}
-                  value={row.id}
-                  disabled={row.returnedUnits === row.canonicalUnits}
-                >
-                  {row.name} · {formatSoldQuantity(row)} · {row.canonicalUnits - row.returnedUnits}{' '}
-                  units returnable
-                </option>
-              ))}
-            </select>
-            <Label htmlFor="return-lot">Returned lot / batch</Label>
-            <select
-              id="return-lot"
-              className={selectClass}
-              value={lotId}
-              onChange={(event) => {
-                setLotId(event.target.value);
-                setDisposition('QUARANTINE');
-                setConfirmed(false);
-              }}
-            >
-              <option value="">Lot cannot be verified — quarantine</option>
-              {line?.lots.map((lot) => (
-                <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                  Batch {lot.batchNumber}
-                  {lot.expiresAt
-                    ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
-                    : ''} · {lot.returnableUnits} units remaining
-                  {lot.restockAllowed ? '' : ' · quarantine only'}
-                </option>
-              ))}
-            </select>
-            {!lotId && (
-              <p className="text-sm text-text-muted">
-                Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
-                receives available stock.
-              </p>
-            )}
-            <Label htmlFor="return-units">Return quantity (base units)</Label>
-            <Input
-              id="return-units"
-              className="h-11"
-              type="number"
-              min="1"
-              max={maximumUnits}
-              step="1"
-              value={units}
-              onChange={(event) => {
-                setUnits(event.target.value);
-                setConfirmed(false);
-              }}
-            />
-            {line && (
-              <p className="text-sm text-text-muted">
-                One sold {soldUnitNoun(line.saleUnit, line.levelLabel)} contains{' '}
-                {line.canonicalUnitsPerSaleUnit} base units.
-              </p>
-            )}
-            <Label htmlFor="return-reason">Reason</Label>
-            <select
-              id="return-reason"
-              className={selectClass}
-              value={reason}
-              onChange={(event) => {
-                setReason(event.target.value);
-                setConfirmed(false);
-              }}
-            >
-              <option value="WRONG_ITEM">Wrong item / strip</option>
-              <option value="DAMAGED">Damaged</option>
-              <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
-              <option value="OTHER">Other — explain in inspection</option>
-            </select>
-            <Label htmlFor="return-disposition">Stock disposition</Label>
-            <select
-              id="return-disposition"
-              className={selectClass}
-              value={disposition}
-              onChange={(event) => {
-                setDisposition(event.target.value as typeof disposition);
-                setConfirmed(false);
-              }}
-            >
-              <option value="QUARANTINE">Quarantine for review</option>
-              <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
-                Restock to verified lot and original shelf
-              </option>
-            </select>
-            {disposition === 'QUARANTINE' && (
-              <>
-                <Label htmlFor="return-location">Quarantine location</Label>
-                <select
-                  id="return-location"
-                  className={selectClass}
-                  value={location}
-                  onChange={(event) => {
-                    setLocation(event.target.value);
-                    setConfirmed(false);
-                  }}
-                >
-                  <option value="">Choose location</option>
-                  {data.locations.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.name}
-                    </option>
-                  ))}
-                </select>
-                {data.locations.length === 0 && (
-                  <p role="alert">
-                    No quarantine location is configured for this branch. Ask a supervisor to
-                    configure one.
-                  </p>
-                )}
-              </>
-            )}
-            <Label htmlFor="return-integrity">Inspection and integrity decision</Label>
-            <Input
-              id="return-integrity"
-              className="h-11"
-              value={integrity}
-              onChange={(event) => {
-                setIntegrity(event.target.value);
-                setConfirmed(false);
-              }}
-            />
-            <p className="text-sm text-text-muted">
-              Restock only inspected medicine with acceptable storage and intact packaging. Expired
-              or recalled lots are refused by the server.
-            </p>
-            {!attempt && witnessRequired && witnessFields}
-            <label className="flex min-h-11 items-center gap-2">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
+              <legend className="px-1 font-semibold">1. Record returned stock</legend>
+              <Label htmlFor="return-line">Sold line</Label>
+              <select
+                id="return-line"
+                className={selectClass}
+                value={lineId}
+                onChange={(event) => {
+                  setLineId(event.target.value);
+                  setWitnessStaffId('');
+                  setWitnessPin('');
+                  setLotId('');
+                  setDisposition('QUARANTINE');
+                  setConfirmed(false);
+                }}
+              >
+                <option value="">Choose a line</option>
+                {data.lines.map((row) => (
+                  <option
+                    key={row.id}
+                    value={row.id}
+                    disabled={row.returnedUnits === row.canonicalUnits}
+                  >
+                    {row.name} · {formatSoldQuantity(row)} ·{' '}
+                    {row.canonicalUnits - row.returnedUnits} units returnable
+                  </option>
+                ))}
+              </select>
+              <Label htmlFor="return-lot">Returned lot / batch</Label>
+              <select
+                id="return-lot"
+                className={selectClass}
+                value={lotId}
+                onChange={(event) => {
+                  setLotId(event.target.value);
+                  setDisposition('QUARANTINE');
+                  setConfirmed(false);
+                }}
+              >
+                <option value="">Lot cannot be verified — quarantine</option>
+                {line?.lots.map((lot) => (
+                  <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
+                    Batch {lot.batchNumber}
+                    {lot.expiresAt
+                      ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
+                      : ''}{' '}
+                    · {lot.returnableUnits} units remaining
+                    {lot.restockAllowed ? '' : ' · quarantine only'}
+                  </option>
+                ))}
+              </select>
+              {!lotId && (
+                <p className="text-sm text-text-muted">
+                  Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
+                  receives available stock.
+                </p>
+              )}
+              <Label htmlFor="return-units">Return quantity (base units)</Label>
+              <Input
+                id="return-units"
+                className="h-11"
+                type="number"
+                min="1"
+                max={maximumUnits}
+                step="1"
+                value={units}
+                onChange={(event) => {
+                  setUnits(event.target.value);
+                  setConfirmed(false);
+                }}
               />
-              I confirm the quantity, inspection and stock disposition.
-            </label>
-            <Button
-              className="h-11"
-              variant="destructive"
-              disabled={
-                !line ||
-                !confirmed ||
-                !integrity.trim() ||
-                !Number.isSafeInteger(Number(units)) ||
-                Number(units) < 1 ||
-                Number(units) > maximumUnits ||
-                (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                (disposition === 'QUARANTINE' && !location) ||
-                !witnessReady
-              }
-              onClick={() =>
-                void execute(
-                  {
-                    kind: 'return',
-                    saleId,
-                    input: {
-                      branchId,
-                      saleLineId: lineId,
-                      lotId: lotId || undefined,
-                      canonicalUnits: Number(units),
-                      disposition,
-                      quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
-                      reason,
-                      integrityDecision: integrity,
-                      idempotencyKey: browserUuid(),
+              {line && (
+                <p className="text-sm text-text-muted">
+                  One sold {soldUnitNoun(line.saleUnit, line.levelLabel)} contains{' '}
+                  {line.canonicalUnitsPerSaleUnit} base units.
+                </p>
+              )}
+              <Label htmlFor="return-reason">Reason</Label>
+              <select
+                id="return-reason"
+                className={selectClass}
+                value={reason}
+                onChange={(event) => {
+                  setReason(event.target.value);
+                  setConfirmed(false);
+                }}
+              >
+                <option value="WRONG_ITEM">Wrong item / strip</option>
+                <option value="DAMAGED">Damaged</option>
+                <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
+                <option value="OTHER">Other — explain in inspection</option>
+              </select>
+              <Label htmlFor="return-disposition">Stock disposition</Label>
+              <select
+                id="return-disposition"
+                className={selectClass}
+                value={disposition}
+                onChange={(event) => {
+                  setDisposition(event.target.value as typeof disposition);
+                  setConfirmed(false);
+                }}
+              >
+                <option value="QUARANTINE">Quarantine for review</option>
+                <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
+                  Restock to verified lot and original shelf
+                </option>
+              </select>
+              {disposition === 'QUARANTINE' && (
+                <>
+                  <Label htmlFor="return-location">Quarantine location</Label>
+                  <select
+                    id="return-location"
+                    className={selectClass}
+                    value={location}
+                    onChange={(event) => {
+                      setLocation(event.target.value);
+                      setConfirmed(false);
+                    }}
+                  >
+                    <option value="">Choose location</option>
+                    {data.locations.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name}
+                      </option>
+                    ))}
+                  </select>
+                  {data.locations.length === 0 && (
+                    <p role="alert">
+                      No quarantine location is configured for this branch. Ask a supervisor to
+                      configure one.
+                    </p>
+                  )}
+                </>
+              )}
+              <Label htmlFor="return-integrity">Inspection and integrity decision</Label>
+              <Input
+                id="return-integrity"
+                className="h-11"
+                value={integrity}
+                onChange={(event) => {
+                  setIntegrity(event.target.value);
+                  setConfirmed(false);
+                }}
+              />
+              <p className="text-sm text-text-muted">
+                Restock only inspected medicine with acceptable storage and intact packaging.
+                Expired or recalled lots are refused by the server.
+              </p>
+              {!attempt && witnessRequired && witnessFields}
+              <label className="flex min-h-11 items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  onChange={(event) => setConfirmed(event.target.checked)}
+                />
+                I confirm the quantity, inspection and stock disposition.
+              </label>
+              <Button
+                className="h-11"
+                variant="destructive"
+                disabled={
+                  !line ||
+                  !confirmed ||
+                  !integrity.trim() ||
+                  !Number.isSafeInteger(Number(units)) ||
+                  Number(units) < 1 ||
+                  Number(units) > maximumUnits ||
+                  (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
+                  (disposition === 'QUARANTINE' && !location) ||
+                  !witnessReady ||
+                  !managerPinReady
+                }
+                onClick={() =>
+                  void execute(
+                    {
+                      kind: 'return',
+                      saleId,
+                      input: {
+                        branchId,
+                        saleLineId: lineId,
+                        lotId: lotId || undefined,
+                        canonicalUnits: Number(units),
+                        disposition,
+                        quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
+                        reason,
+                        integrityDecision: integrity,
+                        idempotencyKey: browserUuid(),
+                      },
                     },
-                  },
-                  witness
-                )
-              }
-            >
-              Record return
-            </Button>
-          </fieldset>
-          {refundAuthorized ? (
+                    witness,
+                    managerPin
+                  )
+                }
+              >
+                Record return
+              </Button>
+            </fieldset>
+          )}
+          {refundAuthorized && (
             <fieldset
               disabled={locked || stale}
               className="space-y-3 rounded-lg border border-border-subtle p-4"
@@ -800,7 +813,6 @@ export function ReturnForm({
                   reversal required. I will reconcile the original provider separately.
                 </label>
               )}
-              {!attempt && managerPinField}
               <Button
                 variant="destructive"
                 className="h-11"
@@ -836,10 +848,6 @@ export function ReturnForm({
                 Confirm refund
               </Button>
             </fieldset>
-          ) : (
-            <p role="note" className="text-sm text-text-muted">
-              Refunds need a manager or owner. Ask one to refund this receipt with their PIN.
-            </p>
           )}
           <section aria-label="Return and refund history" className="space-y-2">
             <h3 className="font-semibold">Return and refund history</h3>

@@ -538,7 +538,8 @@ export async function listPurchaseOrders(db: ScopedDb, scope: PurchasingOrderSco
       lines: {
         orderBy: { lineNumber: 'asc' },
         include: {
-          medicine: { select: { id: true, productName: true } },
+          // #718: the receiving bench lets non-drug lines arrive without batch, expiry or MRP.
+          medicine: { select: { id: true, productName: true, productFamily: true } },
           packLevel: { select: { id: true, level: true } },
         },
       },
