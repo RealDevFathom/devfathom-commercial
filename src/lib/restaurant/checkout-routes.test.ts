@@ -10,6 +10,7 @@ import {
   moneyErrorResponse,
 } from './checkout-routes';
 import { OrderCommandError } from './orders';
+import { RefundError } from './refunds';
 import { DailyCloseError } from './daily-close-errors';
 import { quoteOpenBillSettlement } from './tenders';
 
@@ -371,5 +372,16 @@ describe('daily close error responses', () => {
     expect(await response.json()).toEqual({
       error: 'The business day has active orders; resolve them before closing.',
     });
+  });
+});
+
+describe('refund error responses', () => {
+  it('reports a refund against an unsettled bill as a conflict', async () => {
+    const response = moneyErrorResponse(
+      new RefundError('Only a settled bill can be refunded.', 'BILL_NOT_SETTLED')
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'Only a settled bill can be refunded.' });
   });
 });

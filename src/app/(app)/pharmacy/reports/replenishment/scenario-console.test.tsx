@@ -18,6 +18,9 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+// The seasonal calendar panel has its own tests and tRPC hooks.
+vi.mock('./seasonal-calendar-panel', () => ({ SeasonalCalendarPanel: () => null }));
+
 import { ScenarioConsole } from './scenario-console';
 
 const props = {
@@ -275,4 +278,15 @@ it('focuses the single medicine input when selection validation fails', () => {
   expect(screen.getByText('Search and select a medicine.')).toBeVisible();
   expect(screen.getByRole('combobox', { name: 'Find medicine' })).toHaveFocus();
   expect(mocks.replenishment).not.toHaveBeenCalled();
+});
+
+it('uses plain wording instead of statistics jargon', () => {
+  const { container } = render(<ScenarioConsole {...props} financial />);
+  const text = container.textContent ?? '';
+  expect(text).toContain('Forecast from');
+  expect(text).toContain('Your settings');
+  expect(text).toContain('Based on the same weekday last week');
+  expect(text).not.toContain('Weekly seasonal naive');
+  expect(text).not.toContain('forecast origin');
+  expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
 });

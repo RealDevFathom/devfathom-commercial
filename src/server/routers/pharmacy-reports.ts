@@ -51,6 +51,14 @@ import {
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import {
+  deleteSeasonalWindow,
+  listSeasonalWindows,
+  readSaltDemandSpikes,
+  saltSpikeInput,
+  saveSeasonalWindow,
+  seasonalWindowInput,
+} from '@/lib/pharmacy/seasonal-calendar-operations';
+import {
   DEFAULT_STAFFING_CONFIG,
   readStaffingSuggestions,
   STAFFING_LIMITS,
@@ -266,6 +274,22 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
   if (!available.branches.some((branch) => branch.id === branchId))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
 }
+
+async function requireReportBranch(ctx: TRPCContext, branchId: string) {
+  const available = await scope(ctx);
+  if (!available.branches.some((branch) => branch.id === branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+  return { organizationId: available.organizationId, branchId };
+}
+
+function badRequest(error: unknown, fallback: string): never {
+  throw new TRPCError({
+    code: 'BAD_REQUEST',
+    message: error instanceof RangeError ? error.message : fallback,
+  });
+}
+
+const seasonalBranch = z.object({ branchId: z.string().trim().min(1).max(128) }).strict();
 
 export const pharmacyReportsRouter = router({
   categoryGrowth: reports
@@ -684,6 +708,62 @@ export const pharmacyReportsRouter = router({
         code: 'BAD_REQUEST',
         message: 'Replenishment evidence is unavailable for this scope or scenario.',
       });
+    }
+  }),
+  seasonalCalendar: reports.input(seasonalBranch).query(async ({ ctx, input }) => {
+    const branchScope = await requireReportBranch(ctx, input.branchId);
+    return {
+      windows: await listSeasonalWindows(ctx.db, branchScope),
+      canEdit:
+        ctx.session!.user.role === 'ADMIN' &&
+        (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        })),
+    };
+  }),
+  // DEV-74: the seasonal calendar is owner-editable per branch; edits are audited by the
+  // procedure's mutation audit and recorded with the acting user on the row.
+  saveSeasonalWindow: reports.input(seasonalWindowInput).mutation(async ({ ctx, input }) => {
+    await requireFinancialReports(ctx);
+    await requireOwnerBranch(ctx, input.branchId);
+    try {
+      return await saveSeasonalWindow(
+        ctx.db,
+        {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session!.user.id,
+        },
+        input
+      );
+    } catch (error) {
+      badRequest(error, 'The seasonal window could not be saved.');
+    }
+  }),
+  deleteSeasonalWindow: reports
+    .input(seasonalBranch.extend({ id: z.string().trim().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      await requireOwnerBranch(ctx, input.branchId);
+      try {
+        await deleteSeasonalWindow(
+          ctx.db,
+          { organizationId: ctx.entitlements.organizationId, branchId: input.branchId },
+          input.id
+        );
+      } catch (error) {
+        badRequest(error, 'The seasonal window could not be removed.');
+      }
+      return { deleted: true as const };
+    }),
+  saltSpikes: reports.input(saltSpikeInput).query(async ({ ctx, input }) => {
+    const branchScope = await requireReportBranch(ctx, input.branchId);
+    try {
+      return await readSaltDemandSpikes(ctx.db, branchScope, input);
+    } catch (error) {
+      badRequest(error, 'Spike detection is unavailable for this period.');
     }
   }),
   dailyWorkPack: branchReports

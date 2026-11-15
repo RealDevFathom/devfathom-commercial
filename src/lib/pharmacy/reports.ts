@@ -284,7 +284,10 @@ type MoneyCounts = {
   cashVarianceMinor: number;
 };
 
-async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: readonly string[]): Promise<number> {
+async function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[]
+): Promise<number> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -297,7 +300,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
-        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+        // A dishonoured cheque re-opens what it bounced, exactly as readKhataBalance counts it:
+        // linked to a payment it re-opens that payment's charge, linked to a charge it re-opens
+        // that charge, and otherwise it is owed now with no due date of its own.
+        Prisma.sql`WITH settlements AS (SELECT e."organizationId", e."branchId", e."kind", e."amountMinor"::bigint AS amount, COALESCE(bounced."settlesChargeId", e."settlesChargeId") AS "chargeId" FROM "pharmacy_khata_events" e LEFT JOIN "pharmacy_khata_events" bounced ON e."kind"='DISHONOURED_CHEQUE' AND bounced."kind"='PAYMENT' AND bounced."organizationId"=e."organizationId" AND bounced."branchId"=e."branchId" AND bounced."id"=e."settlesChargeId" WHERE e."organizationId"=current_setting('app.current_organization_id',true) AND e."branchId"=${branchId} AND e."kind" IN ('PAYMENT','DISHONOURED_CHEQUE')), payments AS (SELECT "organizationId", "branchId", "chargeId" AS "settlesChargeId", SUM(CASE WHEN "kind"='PAYMENT' THEN amount ELSE -amount END) AS paid FROM settlements WHERE "chargeId" IS NOT NULL GROUP BY "organizationId", "branchId", "chargeId"), unlinked AS (SELECT COALESCE(SUM(s.amount),0) AS owed FROM settlements s WHERE s."kind"='DISHONOURED_CHEQUE' AND NOT EXISTS (SELECT 1 FROM "pharmacy_khata_events" c WHERE c."organizationId"=s."organizationId" AND c."branchId"=s."branchId" AND c."id"=s."chargeId" AND c."kind"='CHARGE')) SELECT (COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)+(SELECT owed FROM unlinked))::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
       total += rows[0]?.value ?? BigInt(0);
     }
@@ -314,7 +320,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
   return value;
 }
 
-export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
+export async function readPharmacyOwnerCommandCentre(
+  db: Prisma.TransactionClient,
+  filters: PharmacyReportFilters
+) {
   const parsed = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
   // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.

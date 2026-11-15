@@ -539,6 +539,10 @@ export type CounterCartLine = {
   activeIngredients?: Array<{ ingredientId: string; name: string }>;
   /** An emergency controlled supply was recorded for this line (open follow-up). */
   emergencySupply: boolean;
+  /** DEV-629: the prescription line a pharmacist attached to this sale line, if any. */
+  prescriptionLineId?: string | null;
+  /** DEV-629: a pharmacist signed the RX-03 review of this sale line (its sale release). */
+  prescriptionSigned?: boolean;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
@@ -621,6 +625,21 @@ export async function readCounterCart(
       })
     : [];
   const emergencyLineIds = new Set(emergencyFollowUps.map((row) => row.saleLineId));
+  // DEV-629: settlement releases a referenced non-controlled line only on a signed RX-03 review.
+  const referencedLineIds = sale.lines
+    .filter((line) => !line.medicine.controlled && line.prescriptionLineId)
+    .map((line) => line.id);
+  const signedReviews = referencedLineIds.length
+    ? await db.pharmacyPharmacistReviewItem.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          saleLineId: { in: referencedLineIds },
+          decisions: { some: { kind: 'SIGN', signedAt: { not: null } } },
+        },
+        select: { saleLineId: true },
+      })
+    : [];
+  const signedLineIds = new Set(signedReviews.map((row) => row.saleLineId));
 
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
@@ -657,6 +676,8 @@ export async function readCounterCart(
         name: component.ingredient.name,
       })),
       emergencySupply: emergencyLineIds.has(line.id),
+      prescriptionLineId: line.prescriptionLineId,
+      prescriptionSigned: signedLineIds.has(line.id),
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,

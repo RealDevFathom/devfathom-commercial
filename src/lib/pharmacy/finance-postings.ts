@@ -996,6 +996,29 @@ export async function postDailyCloseEntry(
   });
   if (!close) throw new PharmacyFinanceError('NOT_FOUND');
   if (close.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  // A reopened close restates the whole day's variance, so the close it supersedes is reversed
+  // first; the journal then carries only the latest close's variance, never the sum of all cuts.
+  if (close.supersedesCloseId) {
+    const superseded = await db.financeJournalEntry.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        sourceKind: 'PHARMACY_DAILY_CLOSE',
+        sourceId: close.supersedesCloseId,
+        reversesEntryId: null,
+      },
+    });
+    if (superseded)
+      await reverseJournalEntry(
+        db,
+        { organizationId: scope.organizationId, actorId: scope.actorId },
+        {
+          entryId: superseded.id,
+          reason: `Superseded by daily close #${close.sequence}`,
+          at: input.at,
+          idempotencyKey: `${postingKey('PHARMACY_DAILY_CLOSE', close.supersedesCloseId)}:reversal`,
+        }
+      );
+  }
   if (close.cashVarianceMinor === 0) return null;
   const short = close.cashVarianceMinor < 0;
   const amountMinor = Math.abs(close.cashVarianceMinor);

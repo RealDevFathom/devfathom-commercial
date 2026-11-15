@@ -2429,6 +2429,17 @@ describe('manual quarantine resolution authorization', () => {
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
+  it('requires safety authority to read, confirm or dismiss DRAP recall drafts', async () => {
+    await expect(caller().drapRecallQueue()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    await expect(caller().confirmDrapRecall({ ingestId: 'ingest_1' })).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    await expect(
+      caller().dismissDrapRecall({ ingestId: 'ingest_1', reason: 'Not stocked' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects an out-of-tenant branch before looking up stock', async () => {
     db.pharmacyBranch.findMany.mockResolvedValue([]);
     await expect(caller().releaseQuarantinedPart(input)).rejects.toMatchObject({

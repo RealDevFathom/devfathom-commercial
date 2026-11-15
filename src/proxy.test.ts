@@ -92,6 +92,20 @@ describe('platform host routing', () => {
     expect(unrelated.status).toBe(307);
   });
 
+  it('serves hosted receipt links without a session, never indexed, cached or referred', async () => {
+    const response = await proxy(tenantRequest('/receipt/0123456789abcdefghjkmnpqrstvwxyz'));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-next')).toBe('1');
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+
+    const sibling = await proxy(tenantRequest('/receipts'));
+    expect(sibling.status).toBe(307);
+    expect(sibling.headers.get('x-robots-tag')).toBeNull();
+  });
+
   it('allows public occurrence links without exposing authenticated meetings pages', async () => {
     const publicMeeting = await proxy(tenantRequest('/meet/occurrence-public-id'));
     expect(publicMeeting.status).toBe(200);

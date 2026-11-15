@@ -1,6 +1,8 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
+import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
+import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
 import {
   authorizeCounterApproval,
   confirmCounterApproval,
@@ -13,6 +15,7 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -52,6 +55,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -336,9 +340,11 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
 > & {
   discountApproval?: CounterApprovalPin;
+  /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
+  voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
 };
 
@@ -372,6 +378,18 @@ async function approvedLineInput(
     idempotencyKey: input.idempotencyKey,
   };
   const { override } = input;
+  // DEV-819: a voucher is redeemed only after the signed-in cashier re-enters their own PIN,
+  // verified in its own transaction so a wrong PIN's lockout strike is kept.
+  if (input.voucherId) {
+    const verified = await authenticateVoucherCashierPin({
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      pin: input.voucherPin,
+    });
+    annotateAudit(ctx, { metadata: { voucherId: input.voucherId, voucherPinVerified: verified } });
+    if (!verified) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+    lineInput.voucherCashierPinVerified = true;
+  }
   if ((input.discountMinor ?? 0) > 0) {
     const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
     approvals.push({ kind: 'DISCOUNT', approval });
@@ -448,6 +466,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
   return { ...tender, type: tender.type === 'KHATA' ? ('CREDIT' as const) : tender.type };
 }
 
+const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string> = {
+  NOT_CONFIGURED: 'WhatsApp receipts are not set up for this pharmacy.',
+  LINK_HOST_NOT_CONFIGURED: 'Receipt links are not set up for this workspace.',
+  NOT_SETTLED: 'Only a settled receipt can be sent.',
+  NO_CUSTOMER: 'Link a customer to this sale before sending a WhatsApp receipt.',
+  NO_CONSENT: 'This customer has not opted in to WhatsApp messages.',
+  NO_PHONE: 'This customer has no valid WhatsApp number on file.',
+  NOT_NEUTRAL: 'The receipt message would name a medicine, so it was not sent.',
+};
+
 function fail(error: unknown): never {
   if (error instanceof LostSalesError)
     throw new TRPCError({
@@ -463,6 +491,9 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  // DEV-629: an Rx line whose pharmacist review is not signed is a bill the counter must correct.
+  if (error instanceof PharmacyDispensingError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
     throw new TRPCError({
       code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
@@ -1759,6 +1790,11 @@ export const pharmacySalesRouter = router({
           // DEV-27: a voucher is redeemed by its stored id; the server sets the amount and
           // enforces the voucher's eligible categories. A client cannot label a voucher.
           voucherId: z.string().trim().min(1).max(128).optional(),
+          // DEV-819: the redeeming cashier's own staff PIN, required with a voucher.
+          voucherPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           discountApproval: counterApprovalPin.optional(),
           override: z
@@ -1847,6 +1883,15 @@ export const pharmacySalesRouter = router({
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
+            });
+            // DEV-629: queue the RX-03 pharmacist review; payment waits for its SIGN decision.
+            await db.pharmacyPharmacistReviewItem.create({
+              data: {
+                organizationId: scope.organizationId,
+                prescriptionLineId: reference.prescriptionLineId,
+                saleLineId: result.line.id,
+                requestedByUserId: scope.actorId,
+              },
             });
             annotateAudit(ctx, {
               metadata: {
@@ -3139,6 +3184,43 @@ export const pharmacySalesRouter = router({
             message: 'This bill is not settled, so it has no receipt to print.',
           });
         }
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-16: send the settled receipt to the customer's WhatsApp, only on the
+   * customer's request at the counter. The template carries the branch,
+   * receipt number, total, method and a tokenized hosted link — never an item.
+   */
+  counterReceiptWhatsApp: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).max(128),
+          customerRequested: z.literal(true),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        return await sendWhatsAppReceiptLink({
+          db: ctx.db,
+          scope,
+          saleId: input.saleId,
+          actorUserId: ctx.session.user.id,
+        });
+      } catch (error) {
+        if (error instanceof HostedReceiptError)
+          throw new TRPCError({
+            code:
+              error.reason === 'NOT_CONFIGURED' || error.reason === 'LINK_HOST_NOT_CONFIGURED'
+                ? 'PRECONDITION_FAILED'
+                : 'BAD_REQUEST',
+            message: HOSTED_RECEIPT_ERROR_MESSAGES[error.reason],
+          });
         fail(error);
       }
     }),
