@@ -54,6 +54,9 @@ export type KhataAccount = {
   creditLimitMinor: number;
   balanceMinor: number;
 };
+export type KhataSignupInput =
+  | { patientId: string; displayName: string; consentGranted: true }
+  | { displayName: string; phone: string; consentGranted: true };
 export type CounterTenderPanelProps = {
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
@@ -70,6 +73,10 @@ export type CounterTenderPanelProps = {
   loadKhataAccounts?: () => Promise<KhataAccount[]>;
   reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
   printKhataStatement?: (familyAccountId: string) => Promise<void>;
+  /** DEV-716: find or create the patient, record consent, link and open a 0-limit account. */
+  signUpKhata?: (input: KhataSignupInput) => Promise<void>;
+  /** The counter's selected patient, offered as the Khata payer. */
+  khataSignupPatient?: { patientId: string; displayName: string } | null;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
   state: CounterTenderBillState;
@@ -142,6 +149,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       loadKhataAccounts,
       reauthenticateOwner,
       printKhataStatement,
+      signUpKhata,
+      khataSignupPatient,
       manualSettings,
       manualSettingsLoading = false,
       manualSettingsError = false,
@@ -158,6 +167,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
+    const [khataReload, setKhataReload] = useState(0);
+    const [signupName, setSignupName] = useState('');
+    const [signupPhone, setSignupPhone] = useState('');
+    const [signupConsent, setSignupConsent] = useState(false);
+    const [signupPending, setSignupPending] = useState(false);
+    const [signupError, setSignupError] = useState('');
     const [providerRef, setProviderRef] = useState(initialDraft?.providerRef ?? '');
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
     const [referenceSkipped, setReferenceSkipped] = useState(
@@ -246,7 +261,49 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       return () => {
         live = false;
       };
-    }, [isKhata, loadKhataAccounts]);
+    }, [isKhata, loadKhataAccounts, khataReload]);
+    const signupPatient = khataSignupPatient ?? null;
+    const signupPatientId = signupPatient?.patientId ?? null;
+    // Consent belongs to one person: a different payer must tick it again.
+    useEffect(() => {
+      setSignupConsent(false);
+      setSignupError('');
+    }, [signupPatientId]);
+    const signupReady =
+      editable &&
+      !signupPending &&
+      signupConsent &&
+      (signupPatient !== null ||
+        (signupName.trim() !== '' && /^\+?[\d\s-]{7,20}$/.test(signupPhone.trim())));
+
+    async function submitKhataSignup() {
+      if (!signUpKhata || !signupReady) return;
+      setSignupPending(true);
+      setSignupError('');
+      try {
+        await signUpKhata(
+          signupPatient
+            ? {
+                patientId: signupPatient.patientId,
+                displayName: signupPatient.displayName,
+                consentGranted: true,
+              }
+            : { displayName: signupName.trim(), phone: signupPhone.trim(), consentGranted: true }
+        );
+        setSignupName('');
+        setSignupPhone('');
+        setSignupConsent(false);
+        setKhataReload((value) => value + 1);
+      } catch (error) {
+        setSignupError(
+          error instanceof Error && error.message
+            ? error.message
+            : 'Khata signup failed. Check the details and retry.'
+        );
+      } finally {
+        setSignupPending(false);
+      }
+    }
     const submittable =
       editable &&
       !blocked &&
@@ -644,7 +701,76 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
             {khataError ? <p role="alert">{khataError}</p> : null}
             {!khataLoading && !khataError && !accounts.length ? (
-              <p>Link a customer with an active family account before using Khata.</p>
+              signUpKhata ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-text-body">
+                    No Khata account on this bill. Sign the customer up to open one.
+                  </p>
+                  {signupPatient ? (
+                    <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
+                  ) : (
+                    <>
+                      <Label htmlFor="khata-signup-name">Customer name</Label>
+                      <Input
+                        id="khata-signup-name"
+                        className="h-11 rounded-sm"
+                        autoComplete="off"
+                        value={signupName}
+                        maxLength={200}
+                        disabled={!editable || signupPending}
+                        onChange={(event) => {
+                          setSignupName(event.target.value);
+                          setSignupConsent(false);
+                        }}
+                      />
+                      <Label htmlFor="khata-signup-phone">Phone</Label>
+                      <Input
+                        id="khata-signup-phone"
+                        className="h-11 rounded-sm"
+                        type="tel"
+                        inputMode="tel"
+                        autoComplete="off"
+                        value={signupPhone}
+                        maxLength={20}
+                        disabled={!editable || signupPending}
+                        onChange={(event) => {
+                          setSignupPhone(event.target.value);
+                          setSignupConsent(false);
+                        }}
+                      />
+                    </>
+                  )}
+                  <Label className="flex min-h-11 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={signupConsent}
+                      disabled={!editable || signupPending}
+                      onChange={(event) => setSignupConsent(event.target.checked)}
+                    />
+                    Customer consents to a Khata account and loyalty record
+                  </Label>
+                  <p className="text-sm text-text-muted">
+                    The credit limit starts at {formatMinor(0)}. An owner must authorize any higher
+                    limit.
+                  </p>
+                  {signupError ? (
+                    <p role="alert" className="text-sm text-destructive">
+                      {signupError}
+                    </p>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 rounded-sm"
+                    disabled={!signupReady}
+                    onClick={() => void submitKhataSignup()}
+                  >
+                    {signupPending ? 'Opening Khata…' : 'Open Khata account'}
+                  </Button>
+                </div>
+              ) : (
+                <p>Link a customer with an active family account before using Khata.</p>
+              )
             ) : null}
             {account ? (
               <p className="text-sm text-text-body">

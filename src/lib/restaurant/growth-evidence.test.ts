@@ -209,6 +209,7 @@ describe('Restaurant growth evidence boundary', () => {
     'currency',
     'unit',
     'equation',
+    'equationAboveSales',
     'money',
     'coverage',
     'missing',
@@ -220,6 +221,7 @@ describe('Restaurant growth evidence boundary', () => {
     if (kind === 'currency') f.currency = 'UNKNOWN';
     if (kind === 'unit') f.moneyUnit = 'INTEGER_MINOR';
     if (kind === 'equation') f.drivers.netSales.current = '44.99';
+    if (kind === 'equationAboveSales') f.drivers.netSales.current = '85.02';
     if (kind === 'money') f.drivers.grossSales.current = '1e3';
     if (kind === 'coverage') f.coverage.current.closedDayCount = 1;
     if (kind === 'chronology') f.asOf = '2026-10-08T00:00:00.000Z';
@@ -257,6 +259,19 @@ describe('Restaurant growth evidence boundary', () => {
       expect(result.snapshot.gateway.facts).toEqual([]);
     }
   );
+  it('accepts net sales that deduct only the sales part of refunds', async () => {
+    // Sales before refunds 85.01; refundTotal 20.01 carries refunded tax/service,
+    // so the close deducted only 15.01 of it from net sales.
+    const f = fixture();
+    f.drivers.netSales.current = '70';
+    source(f);
+    const result = await readRestaurantGrowthEvidence(setup().h, input);
+    if (result.status !== 'EVIDENCE') throw new Error('Missing evidence');
+    expect(result.snapshot.periods[0].state).toBe('AVAILABLE');
+    expect(
+      result.snapshot.periods[0].facts.find((fact) => fact.key === 'netSales')?.valueMinor
+    ).toBe('7000');
+  });
   it('redacts source exceptions including timeout payloads', async () => {
     read.mockRejectedValue(new Error('Timeout postgres://private password model-token'));
     expect(await readRestaurantGrowthEvidence(setup().h, input)).toEqual({

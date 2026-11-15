@@ -52,6 +52,7 @@ import {
   FamilyKhataError,
   readSaleKhataAccounts,
   readSaleKhataStatement,
+  signUpSaleKhata,
 } from '@/lib/pharmacy/family-khata';
 import {
   KHATA_REPAYMENT_TENDERS,
@@ -67,6 +68,7 @@ import {
   searchCounterCatalog,
 } from '@/lib/pharmacy/counter';
 import {
+  COUNTER_KEYMAP_PRESETS,
   PharmacyCounterKeymapError,
   resolveCounterKeymap,
   type CounterBinding,
@@ -826,6 +828,43 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
           return recordKhataRepayment(db, scope, input);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // DEV-716: inline Khata signup from the Khata tender. Counter write access only;
+  // the new account always starts at a 0 limit (raising it needs the owner gate).
+  khataSignup: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          patientId: z.string().min(1).max(128).optional(),
+          displayName: z.string().trim().min(1).max(200),
+          phone: z
+            .string()
+            .trim()
+            .regex(/^\+?[\d\s-]{7,20}$/)
+            .optional(),
+          consentGranted: z.literal(true),
+        })
+        .strict()
+        .refine((value) => value.patientId !== undefined || value.phone !== undefined, {
+          message: 'Phone is required for a new patient.',
+          path: ['phone'],
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Patient name and phone are personal data; keep them out of the audit input copy.
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return signUpSaleKhata(db, scope, input);
         });
       } catch (error) {
         fail(error);
@@ -2499,6 +2538,10 @@ export const pharmacySalesRouter = router({
         preset: (stored?.preset ?? 'devfathom') as 'devfathom' | 'legacySpeed',
         overrides: (stored?.overrides ?? {}) as Record<string, CounterBinding>,
       });
+      if (!resolved.preset.confirmed && ctx.session.user.role !== 'ADMIN') {
+        // Retain the saved proposal for owner review, but never teach it to staff.
+        return { ...resolveCounterKeymap({ preset: 'devfathom' }), stored: false };
+      }
       return { ...resolved, stored: stored !== null };
     } catch {
       // A row that no longer resolves (a preset removed, a chord that now
@@ -2542,6 +2585,9 @@ export const pharmacySalesRouter = router({
       const organizationId = ctx.entitlements?.organizationId;
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!COUNTER_KEYMAP_PRESETS[input.preset].confirmed && ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This preset is not available to staff.' });
+      }
       try {
         const resolved = resolveCounterKeymap({
           preset: input.preset,

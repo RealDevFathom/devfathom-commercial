@@ -12,6 +12,10 @@
  *   `data.validation[field]`, and every one of those field names is a name in
  *   this form, so the message appears under the input, the input is marked
  *   `aria-invalid`, and the first bad field is focused (UX rule 11).
+ * - **The province is the branch's.** A profile only puts its own branch in
+ *   force, so the province is locked to the branch's province; when that
+ *   province has no published rules the form says so instead of offering
+ *   another province's rules (#977).
  * - **Nothing is a dead end.** A province whose rules are still provisional
  *   still lets the profile be recorded, and says plainly that the branch cannot
  *   operate until those rules are confirmed — rather than offering an empty
@@ -33,6 +37,10 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
+  provinceName,
+  regulatoryVersionStatusLabel,
+  rulesNotPublishedMessage,
+  sameProvince,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -90,9 +98,6 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
-  );
   const formRef = useRef<HTMLFormElement>(null);
 
   const utils = trpc.useUtils();
@@ -144,9 +149,14 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     refresh(nextBranchId);
   };
 
-  const jurisdiction: Jurisdiction | undefined = data.jurisdictions.find(
-    (candidate) => candidate.provinceCode === provinceCode
-  );
+  const branch = data.branches.find((candidate) => candidate.id === branchId);
+  const jurisdiction: Jurisdiction | undefined = branch
+    ? data.jurisdictions.find((candidate) =>
+        sameProvince(candidate.provinceCode, branch.provinceCode)
+      )
+    : undefined;
+  const provinceCode = jurisdiction?.provinceCode ?? branch?.provinceCode ?? '';
+  const rulesMissing = Boolean(branch) && !jurisdiction;
   const categories = jurisdiction?.licenceCategories ?? [];
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
@@ -324,6 +334,15 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             {saved}
           </p>
         ) : null}
+        {rulesMissing ? (
+          <p
+            className="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+            role="status"
+          >
+            {rulesNotPublishedMessage(provinceCode)} Your DevFathom account manager can tell you
+            when they are.
+          </p>
+        ) : null}
         <form className="space-y-6" noValidate onSubmit={submit} ref={formRef}>
           <fieldset className="grid gap-4 sm:grid-cols-2">
             <legend className="mb-2 font-display text-base font-semibold text-text-strong">
@@ -350,9 +369,11 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               error={errors.provinceCode}
               htmlFor="provinceCode"
               hint={
-                jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
-                  : 'Only provinces with published rules appear here.'
+                rulesMissing
+                  ? rulesNotPublishedMessage(provinceCode)
+                  : jurisdiction?.provisional
+                    ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                    : 'Set by the branch — a profile always names the province its branch operates in.'
               }
               label="Province"
             >
@@ -362,18 +383,15 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 className={controlClass}
                 id="provinceCode"
                 name="provinceCode"
-                onChange={(event) => setProvinceCode(event.target.value)}
-                value={provinceCode}
               >
-                {data.jurisdictions.length === 0 ? (
-                  <option value="">No published jurisdictions</option>
-                ) : null}
-                {data.jurisdictions.map((option) => (
-                  <option key={option.provinceCode} value={option.provinceCode}>
-                    {option.provinceName}
-                    {option.provisional ? ' (rules provisional)' : ''}
-                  </option>
-                ))}
+                <option value={provinceCode}>
+                  {provinceName(provinceCode)}
+                  {rulesMissing
+                    ? ' (rules not published yet)'
+                    : jurisdiction?.provisional
+                      ? ' (rules provisional)'
+                      : ''}
+                </option>
               </select>
             </Field>
             <Field
@@ -749,6 +767,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* Not disabled when `rulesMissing`: that reads the rules in force today,
+                while the server checks the date this version takes effect, so a
+                province whose rules start later can still be recorded for that date. */}
             <Button disabled={save.isPending || uploading} type="submit">
               {save.isPending ? 'Saving…' : 'Save this version'}
             </Button>
@@ -768,6 +789,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
 }
 
 function VersionHistory({ versions }: { versions: readonly Version[] }) {
+  const now = new Date();
   return (
     <SectionCard title="Effective-dated versions" titleLevel={2}>
       {versions.length === 0 ? (
@@ -816,8 +838,8 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
                   </td>
                   <td className="py-2">
                     <StatusPill
-                      status={version.inForce ? 'In force' : 'Superseded'}
-                      tone={version.inForce ? 'success' : 'neutral'}
+                      status={regulatoryVersionStatusLabel(version, now)}
+                      tone={version.inForce ? 'success' : version.effective ? 'warning' : 'neutral'}
                     />
                   </td>
                 </tr>

@@ -37,6 +37,7 @@ const dailyRow = {
   branch: { name: 'Main', timezone: 'Asia/Karachi' },
   sourceDailyClose: {
     grossSales: D('125.50'),
+    netSales: D('120.25'),
     compTotal: D('5.25'),
     discountTotal: D('0'),
     refundTotal: D('10'),
@@ -153,6 +154,8 @@ it.each(['7', '4'])(
       netSales: D(stored),
       sourceDailyClose: {
         grossSales: D('10'),
+        // Legacy close: net persisted before any refund deduction.
+        netSales: D('7'),
         compTotal: D('2'),
         discountTotal: D('1'),
         refundTotal: D('3'),
@@ -176,10 +179,41 @@ it.each(['7', '4'])(
       expect.objectContaining({
         select: expect.objectContaining({
           sourceDailyClose: expect.objectContaining({
-            select: expect.objectContaining({ discountTotal: true, refundTotal: true }),
+            select: expect.objectContaining({
+              netSales: true,
+              discountTotal: true,
+              refundTotal: true,
+            }),
           }),
         }),
       })
     );
   }
 );
+
+it('reports the close net sales when refunds include tax and service charge', async () => {
+  // Bill subtotal 100 + tax 16 + service 10, fully refunded: refundTotal 126
+  // carries tax/service, but the close's netSales deducts only the sales part.
+  const row = {
+    ...dailyRow,
+    netSales: D('0'),
+    refundTotal: D('126'),
+    sourceDailyClose: {
+      grossSales: D('100'),
+      netSales: D('0'),
+      compTotal: D('0'),
+      discountTotal: D('0'),
+      refundTotal: D('126'),
+      supersededBy: [],
+    },
+  };
+  db.insightDailyRollup.findMany.mockResolvedValue([row]);
+  const [report] = await listInsightReports(db as unknown as ScopedDb, 'financial', {});
+  expect(report.netSales).toBe('0');
+  db.insightDailyRollup.findFirst.mockResolvedValue(row);
+  const detail = await readInsightReport(db as unknown as ScopedDb, 'financial', {
+    branchId: row.branchId,
+    businessDate: '2026-08-20',
+  });
+  expect(detail.netSales).toBe('0');
+});

@@ -158,7 +158,7 @@ describe('CounterSearchResults safety flags', () => {
     expect(stock).toHaveTextContent(row.presentation);
     expect(stock).toHaveTextContent('Tablet');
     expect(stock).toHaveTextContent('Exp 2028-06-30');
-    expect(stock).toHaveTextContent('240 units');
+    expect(stock).toHaveTextContent('240 tabs');
     expect(stock).toHaveTextContent('Fridge F-1');
     expect(screen.getByText('250.00')).toBeVisible();
     expect(stock).not.toHaveTextContent('Controlled');
@@ -168,6 +168,54 @@ describe('CounterSearchResults safety flags', () => {
       expect(badge.closest('[data-slot="status-pill"]')).toHaveClass('whitespace-nowrap');
       expect(badge.closest('[data-slot="status-pill"]')?.className).not.toContain('truncate');
     }
+  });
+
+  it('shows stock as boxes + strips with the tablet total, not a raw unit count (DEV-727)', () => {
+    const boxed: CounterSearchRow = {
+      ...row,
+      onHandUnits: 573,
+      saleableUnits: [
+        {
+          kind: 'PACK',
+          levelLabel: 'BOX',
+          canonicalUnitsPerSaleUnit: 100,
+          wholeUnits: 5,
+          unitPriceMinor: 25000,
+          proRataCeilingMinor: 25000,
+        },
+        {
+          kind: 'STRIP',
+          levelLabel: 'STRIP',
+          canonicalUnitsPerSaleUnit: 10,
+          wholeUnits: 57,
+          unitPriceMinor: 2500,
+          proRataCeilingMinor: 2500,
+        },
+        {
+          kind: 'UNIT',
+          levelLabel: 'UNIT',
+          canonicalUnitsPerSaleUnit: 1,
+          wholeUnits: 573,
+          unitPriceMinor: 250,
+          proRataCeilingMinor: 250,
+        },
+      ],
+    };
+    render(
+      <CounterSearchResults
+        rows={[boxed]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    const stock = screen.getByText(/Batch B-1044/);
+    expect(stock).toHaveTextContent('5 boxes + 7 strips + 3 tabs (573 tabs)');
+    expect(stock).not.toHaveTextContent('573 units');
   });
 
   it('shows each result’s batch, expiry, stock, rack and price without opening details', () => {
@@ -256,7 +304,7 @@ describe('CounterSearchResults safety flags', () => {
     );
 
     const medicine = screen.getByRole('button', { name: /Paracetamol/ });
-    expect(medicine).toHaveTextContent('Batch — · Exp — · 0 units');
+    expect(medicine).toHaveTextContent('Batch — · Exp — · 0 tabs');
     expect(medicine).toHaveTextContent('Location unavailable');
     expect(medicine).toHaveTextContent('Not sellable');
     expect(medicine).toHaveTextContent('Blocked stock present: expired.');
