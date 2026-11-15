@@ -402,13 +402,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-dispensing',
     pharmacyCapabilities: ['pharmacy:dispense'],
   },
+  // DEV-35: the substitution workspace opens for dispense or Pharmacy Safety.
   {
     label: 'Substitution',
     href: '/pharmacy/substitution',
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:dispense'],
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:safety'],
   },
   {
     label: 'Controlled register',

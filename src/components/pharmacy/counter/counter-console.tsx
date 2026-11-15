@@ -307,6 +307,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       evidenceAuthorized={user.role === 'ADMIN'}
       keymapPreviewAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -346,6 +347,7 @@ function ScopedPharmacyCounterConsole({
   evidenceAuthorized = false,
   keymapPreviewAuthorized = false,
   safetyLicensed,
+  dispensingLicensed = false,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
@@ -354,6 +356,8 @@ function ScopedPharmacyCounterConsole({
   keymapPreviewAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
+  /** Pharmacy Dispensing owns the substitution workspace the Rx hand-off links to. */
+  dispensingLicensed?: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -385,6 +389,19 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
+  // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
+  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
+    enabled: Boolean(accountId),
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+    staleTime: 30_000,
+  });
+  const canOpenSubstitution =
+    dispensingLicensed &&
+    railAccess.data?.userId === accountId &&
+    (railAccess.data?.capabilities ?? []).some(
+      (capability) => capability === 'pharmacy:dispense' || capability === 'pharmacy:safety'
+    );
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -2629,6 +2646,7 @@ function ScopedPharmacyCounterConsole({
                       : 'ready'
                 }
                 prescriptionOnly={activeRow?.restriction.rx ?? false}
+                canOpenSubstitution={canOpenSubstitution}
                 error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
                 disabled={busy}
                 onChoose={(proposal) => {

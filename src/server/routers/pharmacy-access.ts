@@ -12,6 +12,8 @@ import { canAccessPharmacyCounter } from './pharmacy-sales';
  * - `pharmacy:dispense` — the pharmacist queue and substitution evidence.
  * - `reports:operational` — the pharmacy reports command centre.
  * - `pharmacy:counter` — the counter's capability family and active branch scope.
+ * - `pharmacy:safety` — with `pharmacy:dispense`, opens the substitution workspace
+ *   (DEV-35), so the counter only links there for a holder of either.
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
@@ -19,6 +21,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:dispense',
   'reports:operational',
   'pharmacy:counter',
+  'pharmacy:safety',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];

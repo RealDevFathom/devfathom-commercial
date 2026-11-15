@@ -275,6 +275,13 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
+    it('shows Substitution to a Pharmacy Safety holder without dispensing (DEV-35)', () => {
+      const visible = hrefs('EMPLOYEE', ['pharmacy:safety']);
+      expect(visible).toContain('/pharmacy/substitution');
+      expect(visible).not.toContain('/pharmacy/pharmacist-queue');
+      expect(hrefs('EMPLOYEE', ['reports:operational'])).not.toContain('/pharmacy/substitution');
+    });
+
     it('keeps the administrator-only day close for administrators', () => {
       expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
     });
