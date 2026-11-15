@@ -129,4 +129,45 @@ describe('restaurant device capability boundary', () => {
     expect(mocks.findDevice).toHaveBeenCalledWith({ where: { id: 'device_1' } });
     expect(mocks.createCoAuthorization).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [new Set(['devices:manage']), false],
+    [new Set(['devices:manage', 'devices:revoke']), true],
+  ])('lists canRevoke from the branch devices:revoke scope (%o)', async (capabilities, canRevoke) => {
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] === 'devices:manage');
+    mocks.staffCapabilities.mockResolvedValue(capabilities);
+    mocks.list.mockResolvedValue([
+      {
+        id: 'device_1',
+        name: 'Front POS',
+        kind: 'POS',
+        branchId: 'branch_1',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        stationId: null,
+        status: 'ACTIVE',
+        lastSeenAt: null,
+        revokedAt: null,
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+      {
+        id: 'device_2',
+        name: 'Old POS',
+        kind: 'POS',
+        branchId: 'branch_1',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        stationId: null,
+        status: 'REVOKED',
+        lastSeenAt: null,
+        revokedAt: new Date('2026-08-19T07:00:00Z'),
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ]);
+
+    const devices = await caller().list();
+
+    expect(devices.map((device) => [device.id, device.canRevoke])).toEqual([
+      ['device_1', canRevoke],
+      ['device_2', false],
+    ]);
+  });
 });

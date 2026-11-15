@@ -67,6 +67,27 @@ async function assertApproverCanCoAuthorize(
 }
 
 /**
+ * Branches whose devices the actor may revoke, mirroring the `revoke` mutation's
+ * `devices:revoke` branch check. Only drives the console's Revoke affordance.
+ */
+async function revocableBranchIds(
+  db: ScopedDb,
+  user: Parameters<typeof resolveCapabilityBranchAuthorization>[1],
+  organizationId: string | null | undefined
+): Promise<Set<string>> {
+  try {
+    const authorization = await resolveCapabilityBranchAuthorization(db, user, 'devices:revoke', {
+      organizationId,
+      requireExactlyOneActiveActor: true,
+    });
+    return new Set(authorization.branchIds);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') return new Set();
+    throw error;
+  }
+}
+
+/**
  * M2-L3 / §5 / C7 — back-office device administration.
  *
  * Admins enroll and revoke terminal devices from the web console. Revocation is
@@ -258,6 +279,8 @@ export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
   list: auditedProtectedProcedure.query(async ({ ctx }) => {
     let authorization = await resolveDemoDirectoryScope(ctx, 'devices', demoDirectoryPolicy);
+    // Branches where `revoke` would accept this actor; the server re-checks on revoke.
+    let revokeBranchIds = new Set<string>();
     if (!authorization) {
       if (
         !(await can(subjectFromSession(ctx.session!.user), 'devices:manage', undefined, {
@@ -272,6 +295,11 @@ export const restaurantDevicesRouter = router({
         ctx.session!.user,
         'devices:manage',
         { organizationId: ctx.entitlements.organizationId }
+      );
+      revokeBranchIds = await revocableBranchIds(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
       );
     }
     const now = new Date();
@@ -291,6 +319,7 @@ export const restaurantDevicesRouter = router({
       revokedAt: device.revokedAt,
       createdAt: device.createdAt,
       health: deviceHealth(device, now),
+      canRevoke: device.status !== 'REVOKED' && revokeBranchIds.has(device.branchId),
     }));
   }),
 
