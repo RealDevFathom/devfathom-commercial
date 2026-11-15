@@ -626,6 +626,9 @@ model Medicine {
   lasa                         Boolean                              @default(false)
   coldChain                    Boolean                              @default(false)
   saleable                     Boolean                              @default(false)
+  /// #718: shop-set retail price and category; NON_DRUG_RETAIL (FRONT_SHOP) items only.
+  retailPriceMinor             Int?
+  retailCategory               String?
   createdAt                    DateTime                             @default(now())
   updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
@@ -14323,15 +14326,17 @@ model PharmacyVoucher {
 }
 
 model PharmacyMarketingTemplate {
-  id               String                   @id @default(cuid())
-  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId         String
-  name             String
-  channel          PharmacyMarketingChannel
-  body             String
-  approvedByUserId String
-  approvedAt       DateTime
-  createdAt        DateTime                 @default(now())
+  id                  String                   @id @default(cuid())
+  organizationId      String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  name                String
+  channel             PharmacyMarketingChannel
+  body                String
+  approvedByUserId    String
+  approvedAt          DateTime
+  createdAt           DateTime                 @default(now())
+  /// #718: catalogue items this template promotes; NON_DRUG_RETAIL only (trigger-guarded).
+  featuredMedicineIds String[]                 @default([])
 
   @@unique([organizationId, id])
   @@map("pharmacy_marketing_templates")

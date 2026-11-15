@@ -76,6 +76,11 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import {
+  isNonDrugRetail,
+  resolveReceiptBatchIdentity,
+  resolveReceiptRetailPrice,
+} from '@/lib/pharmacy/product-class';
 import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
@@ -222,8 +227,10 @@ function serialUniqueViolation(error: unknown): boolean {
 
 type ReceiptIdentityInput = {
   medicineId: string;
-  batchNumber: string;
-  printedExpiry: Date;
+  /** #718: a non-drug item may arrive without a printed batch or expiry. */
+  productFamily: string;
+  batchNumber?: string;
+  printedExpiry?: Date;
   expiryPrecision: 'DAY' | 'MONTH';
   gtin?: string;
   serialNumber?: string;
@@ -267,6 +274,19 @@ async function resolveReceiptLineIdentity(
     throw new PharmacyReceivingError('GS1_INVALID');
   }
 
+  // #718: resolve the house batch only after the scan, so a generated non-drug batch names the
+  // expiry actually received and two deliveries with different scanned expiries never collide.
+  const resolved = resolveReceiptBatchIdentity({
+    productFamily: line.productFamily,
+    batchNumber,
+    printedExpiry,
+    expiryPrecision,
+  });
+  if (!resolved.ok) throw new PharmacyReceivingError(resolved.reason);
+  batchNumber = resolved.batchNumber;
+  printedExpiry = resolved.printedExpiry;
+  expiryPrecision = resolved.expiryPrecision;
+
   if (gtin) {
     const codes = [gtin, gtin.startsWith('0') ? gtin.slice(1) : null].filter(
       (code): code is string => Boolean(code)
@@ -283,18 +303,21 @@ async function resolveReceiptLineIdentity(
     }
   }
 
-  if (line.acceptedCanonicalUnits > 0 && packIsExpired(printedExpiry, line.receivedAt)) {
+  if (line.acceptedCanonicalUnits > 0 && packIsExpired(resolved.printedExpiry, line.receivedAt)) {
     throw new PharmacyReceivingError('EXPIRED_PACK');
   }
 
-  const near = nearExpiryWarning(printedExpiry.toISOString().slice(0, 10), line.receivedAt);
+  const near = nearExpiryWarning(
+    resolved.printedExpiry.toISOString().slice(0, 10),
+    line.receivedAt
+  );
   warnings = warnings.filter((code) => code !== 'NEAR_EXPIRY');
   if (near && line.acceptedCanonicalUnits > 0) warnings.push(near.code);
 
   return {
-    batchNumber,
-    printedExpiry,
-    expiryPrecision,
+    batchNumber: resolved.batchNumber,
+    printedExpiry: resolved.printedExpiry,
+    expiryPrecision: resolved.expiryPrecision,
     gtin,
     serialNumber,
     serialKey: serialNumber ? serialNumber.toUpperCase() : null,
@@ -1411,10 +1434,12 @@ const purchasingRouter = router({
                   purchaseOrderLineId: z.string().min(1).optional(),
                   medicineId: z.string().min(1),
                   packLevelId: z.string().min(1),
-                  batchNumber: z.string().trim().min(1).max(120),
-                  printedExpiry: z.date(),
+                  // #718: optional only for NON_DRUG_RETAIL (FRONT_SHOP) items; the server
+                  // still refuses a medicine line without its printed batch, expiry and MRP.
+                  batchNumber: z.string().trim().min(1).max(120).optional(),
+                  printedExpiry: z.date().optional(),
                   expiryPrecision: z.enum(['DAY', 'MONTH']),
-                  printedMrpMinor: z.number().int().positive(),
+                  printedMrpMinor: z.number().int().positive().optional(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   receivedPacks: z.number().int().nonnegative(),
                   bonusPacks: z.number().int().nonnegative().default(0),
@@ -1561,8 +1586,29 @@ const purchasingRouter = router({
             [];
           const seenSerials = new Set<string>();
           for (const [index, line] of input.lines.entries()) {
-            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
-              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            const item = await db.medicine.findFirst({
+              where: { id: line.medicineId, saleable: true },
+              select: { id: true, productFamily: true, retailPriceMinor: true },
+            });
+            if (!item) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // #718: a medicine keeps PUR-02 exactly (typed printed batch, expiry and DRAP MRP). A
+            // non-drug item may arrive without a batch or expiry and is priced at the shop-set
+            // retail price, so the counter never has to ask for a batch.
+            if (!isNonDrugRetail(item.productFamily)) {
+              const typed = resolveReceiptBatchIdentity({
+                productFamily: item.productFamily,
+                batchNumber: line.batchNumber,
+                printedExpiry: line.printedExpiry,
+                expiryPrecision: line.expiryPrecision,
+              });
+              if (!typed.ok) throw new PharmacyReceivingError(typed.reason);
+            }
+            const printedMrpMinor = resolveReceiptRetailPrice({
+              productFamily: item.productFamily,
+              printedMrpMinor: line.printedMrpMinor,
+              retailPriceMinor: item.retailPriceMinor,
+            });
+            if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
             if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
               throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
@@ -1607,6 +1653,7 @@ const purchasingRouter = router({
             orderCostTermsByLine.push(orderCostTerms);
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
+              productFamily: item.productFamily,
               batchNumber: line.batchNumber,
               printedExpiry: line.printedExpiry,
               expiryPrecision: line.expiryPrecision,
@@ -1660,7 +1707,7 @@ const purchasingRouter = router({
               batchNumber: identity.batchNumber,
               printedExpiry: identity.printedExpiry,
               expiryPrecision: identity.expiryPrecision,
-              printedMrpMinor: line.printedMrpMinor,
+              printedMrpMinor,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,

@@ -270,7 +270,11 @@ export const pharmacyFinanceRouter = router({
     }),
 
   grossMargin: ledgerReportProcedure
-    .input(reportPeriod.safeExtend({ by: z.enum(['line', 'batch', 'product', 'branch']) }))
+    .input(
+      reportPeriod.safeExtend({
+        by: z.enum(['line', 'batch', 'product', 'branch', 'productClass']),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const period = { from: new Date(input.from), to: new Date(input.to) };
       const [rows, currencies] = await Promise.all([

@@ -18,6 +18,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isNonDrugRetail, receivingLotArrived } from '@/lib/pharmacy/product-class';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
@@ -272,8 +273,18 @@ export default async function PharmacyReceivingPage({
         [1, ...EXTRA_LOT_SLOTS].flatMap((slot) => {
           const key = lotSlotKey(line.id, slot);
           // A lot with no batch number was not delivered on this consignment.
-          // It stays outstanding rather than being filed as a zero receipt.
-          if (!field(form, `batchNumber:${key}`)) return [];
+          // It stays outstanding rather than being filed as a zero receipt. A non-drug
+          // item (#718) carries no batch, so its first lot arrives with its packs.
+          if (
+            !receivingLotArrived({
+              productFamily: line.medicine.productFamily,
+              primaryLot: slot === 1,
+              batchNumber: field(form, `batchNumber:${key}`),
+              printedExpiry: field(form, `printedExpiry:${key}`),
+              receivedPacks: field(form, `receivedPacks:${key}`),
+            })
+          )
+            return [];
           return [
             {
               ...readCaptureFields(form, key),
@@ -296,7 +307,7 @@ export default async function PharmacyReceivingPage({
       if (lines.length === 0) {
         throw Object.assign(
           new PurchasingValidationError(
-            'Enter a batch number on at least one line — that is what marks it as arrived.'
+            'Enter a batch number on at least one line — that is what marks it as arrived. A non-drug item arrives with its packs.'
           ),
           { field: 'batchNumber' }
         );
@@ -859,6 +870,7 @@ export default async function PharmacyReceivingPage({
                           suggestedPriceMinor={line.listPricePerPackMinor}
                           title={line.medicine.productName}
                           unitsPerPack={line.canonicalUnitsPerPack}
+                          nonDrugRetail={isNonDrugRetail(line.medicine.productFamily)}
                         />
                         <details className="rounded-[var(--radius-sm)] border border-border-subtle px-4 py-2">
                           <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-text-body focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
@@ -882,6 +894,7 @@ export default async function PharmacyReceivingPage({
                                 suggestedPriceMinor={line.listPricePerPackMinor}
                                 title={`${line.medicine.productName} — lot ${slot}`}
                                 unitsPerPack={line.canonicalUnitsPerPack}
+                                nonDrugRetail={isNonDrugRetail(line.medicine.productFamily)}
                               />
                             ))}
                           </div>
@@ -1211,6 +1224,7 @@ function CaptureFieldset({
   prefill,
   photoReader,
   defaultLocationId,
+  nonDrugRetail,
 }: {
   keyPrefix: string;
   title: string;
@@ -1225,6 +1239,8 @@ function CaptureFieldset({
   /** DEV-752: the pack-photo shortcut that fills this line's lot fields. */
   photoReader?: React.ReactNode;
   defaultLocationId?: string;
+  /** #718: batch, expiry and MRP are optional for a non-drug retail item. */
+  nonDrugRetail?: boolean;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
@@ -1249,7 +1265,11 @@ function CaptureFieldset({
           label="Batch number"
           name={`batchNumber:${keyPrefix}`}
           notice={notice}
-          hint="Leave blank if this line did not arrive. A 2D scan fills this in."
+          hint={
+            nonDrugRetail
+              ? 'Optional for a non-drug item. Set packs to 0 if it did not arrive.'
+              : 'Leave blank if this line did not arrive. A 2D scan fills this in.'
+          }
         />
         <TextField
           defaultValue={prefill?.printedExpiry}
@@ -1260,7 +1280,9 @@ function CaptureFieldset({
           hint={
             prefill?.printedExpiry
               ? 'Filled from the scan. Confirm it against the supplier invoice.'
-              : undefined
+              : nonDrugRetail
+                ? 'Optional for a non-drug item.'
+                : undefined
           }
         />
         <TextField
@@ -1300,7 +1322,11 @@ function CaptureFieldset({
           label="Printed MRP (PKR)"
           name={`printedMrp:${keyPrefix}`}
           notice={notice}
-          hint="Per pack, as printed on the carton."
+          hint={
+            nonDrugRetail
+              ? 'Optional for a non-drug item. Blank uses the shop retail price.'
+              : 'Per pack, as printed on the carton.'
+          }
         />
         <TextField
           defaultValue={suggestedPacks && suggestedPacks > 0 ? suggestedPacks : undefined}
@@ -1703,8 +1729,12 @@ function readCaptureFields(form: FormData, key: string) {
     0
   );
   return {
-    batchNumber: field(form, `batchNumber:${key}`),
-    printedExpiry: dateField(form, `printedExpiry:${key}`, 'Printed expiry'),
+    // #718: blank batch, expiry and MRP pass through as omitted; the server still refuses a
+    // medicine lot without them and fills a non-drug lot from the shop retail price.
+    batchNumber: optionalField(form, `batchNumber:${key}`),
+    printedExpiry: field(form, `printedExpiry:${key}`)
+      ? dateField(form, `printedExpiry:${key}`, 'Printed expiry')
+      : undefined,
     gtin: optionalField(form, `gtin:${key}`),
     serialNumber: optionalField(form, `serialNumber:${key}`),
     gs1Payload: optionalField(form, `gs1Payload:${key}`),
@@ -1712,7 +1742,9 @@ function readCaptureFields(form: FormData, key: string) {
     gs1Warnings: warningCodes(form, key),
     expiryPrecision: (field(form, `expiryPrecision:${key}`) === 'DAY' ? 'DAY' : 'MONTH') as
       'DAY' | 'MONTH',
-    printedMrpMinor: moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP'),
+    printedMrpMinor: field(form, `printedMrp:${key}`)
+      ? moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP')
+      : undefined,
     receivedPacks: integerField(form, `receivedPacks:${key}`, 'Packs received'),
     bonusPacks: optionalIntegerField(form, `bonusPacks:${key}`, 'Free packs', 0),
     rejectedCanonicalUnits,
