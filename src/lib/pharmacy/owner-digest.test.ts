@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   readPharmacyOwnerCommandCentre: vi.fn(),
   readPharmacyAnomalySignals: vi.fn(),
   readOwnerBriefingDemand: vi.fn(),
+  renderOwnerBriefingWhatsApp: vi.fn(),
   refreshPharmacyAnomalySignals: vi.fn(),
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
@@ -51,9 +52,11 @@ vi.mock('./anomaly-signals-operations', () => ({
   ],
 }));
 
+const actualBriefing = await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing');
 vi.mock('./owner-briefing', async () => ({
   ...(await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing')),
   readOwnerBriefingDemand: mocks.readOwnerBriefingDemand,
+  renderOwnerBriefingWhatsApp: mocks.renderOwnerBriefingWhatsApp,
 }));
 
 import {
@@ -75,6 +78,9 @@ describe('RPT-03 owner digest', () => {
     mocks.tenantDb.pharmacyOwnerDigestSetting.updateMany.mockResolvedValue({ count: 1 });
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
+    mocks.renderOwnerBriefingWhatsApp.mockImplementation(
+      actualBriefing.renderOwnerBriefingWhatsApp
+    );
     mocks.readOwnerBriefingDemand.mockResolvedValue({
       lostDemandMinor: 0,
       walkOuts: 0,
@@ -236,7 +242,7 @@ describe('RPT-03 owner digest', () => {
     );
     expect(digest.rendered).toContain('Recovered PKR 1,200 from 2 follow-ups');
     expect(digest.rendered).toContain('Expiry at risk (30 days) PKR 7');
-    expect(digest.whatsappBody.split('\n')).toHaveLength(6);
+    expect(digest.whatsappBody?.split('\n')).toHaveLength(6);
     expect(digest.whatsappBody).toContain('Top gap: PKR 3,000 lost, 4 walk-outs · draft PO');
     expect(digest.whatsappBody).not.toMatch(/zyrtec|cetirizine/i);
     expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
@@ -273,6 +279,21 @@ describe('RPT-03 owner digest', () => {
     );
     expect(digest.rendered).toContain('Weekly summary 2026-09-01 to 2026-09-07');
     expect(digest.whatsappBody).toContain('Weekly summary 2026-09-01 to 2026-09-07');
+  });
+
+  it('keeps the in-app digest when the WhatsApp body fails its guard', async () => {
+    mocks.renderOwnerBriefingWhatsApp.mockImplementation(() => {
+      throw new Error('WhatsApp briefing text must not name an item, salt or category.');
+    });
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.whatsappBody).toBeNull();
+    expect(digest.rendered).toContain('Daily briefing 2026-09-04');
   });
 
   it('never reports a WhatsApp send from the stub', async () => {

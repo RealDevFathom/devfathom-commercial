@@ -264,9 +264,56 @@ describe('DEV-78 owner briefing', () => {
   });
 
   it('rejects WhatsApp text that names an item, salt or category', () => {
-    expect(() => assertWhatsAppBriefingSafe('Top gap: Panadol', ['Panadol'])).toThrow();
-    expect(() => assertWhatsAppBriefingSafe('Antibiotics short today', [])).toThrow();
-    expect(() => assertWhatsAppBriefingSafe('Sales PKR 100', ['Panadol'])).not.toThrow();
+    expect(() => assertWhatsAppBriefingSafe('Top gap: Panadol')).toThrow();
+    expect(() => assertWhatsAppBriefingSafe('Antibiotics short today')).toThrow();
+    expect(() => assertWhatsAppBriefingSafe('Expiry 2026-09-04 tablet')).toThrow();
+    expect(() => assertWhatsAppBriefingSafe('Sales PKR 100 · Cash PKR 60')).not.toThrow();
+  });
+
+  it('renders every purchase status and survives a gap named like template wording', async () => {
+    const window = ownerBriefingWindow('2026-09-04', 'WEEKLY');
+    const statuses = [
+      'UNMATCHED',
+      'NONE',
+      'REQUISITION_DRAFT',
+      'REQUISITION_SUBMITTED',
+      'REQUISITION_APPROVED',
+      'PO_DRAFT',
+      'PO_SUBMITTED',
+      'PO_APPROVED',
+      'PO_SENT',
+      'PO_RECEIVING',
+    ] as const;
+    for (const purchaseStatus of statuses) {
+      const text = renderOwnerBriefingWhatsApp(
+        buildOwnerBriefing(window, ledger, {
+          lostDemandMinor: 1,
+          walkOuts: 1,
+          unvaluedWalkOuts: 1,
+          recoveredMinor: 1,
+          recoveredCount: 1,
+          topGap: {
+            displayName: 'Daily',
+            names: ['Daily', 'Weekly summary'],
+            lostMinor: 1,
+            walkOuts: 1,
+            purchaseStatus,
+          },
+        })
+      );
+      expect(text).toContain('Weekly summary');
+    }
+    // A free-text request typed as template wording still renders a safe body.
+    const db = seededDb({
+      ...seed,
+      events: [event('2026-09-04', { requestedText: 'Daily', estimatedValueMinor: 5_000 })],
+    });
+    const daily = ownerBriefingWindow('2026-09-04', 'DAILY');
+    const demand = await readOwnerBriefingDemand(db as never, scope, daily);
+    expect(demand.topGap?.displayName).toBe('Daily');
+    expect(() =>
+      renderOwnerBriefingWhatsApp(buildOwnerBriefing(daily, ledger, demand))
+    ).not.toThrow();
   });
 
   it('takes window, weekday, expiry horizon and look-back from configuration', () => {

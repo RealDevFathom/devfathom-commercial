@@ -124,7 +124,7 @@ export type OwnerBriefingDemand = {
   topGap: {
     /** In-app only. Never rendered into WhatsApp text. */
     displayName: string;
-    /** Every name the gap is known by; the WhatsApp guard rejects any of them. */
+    /** Every name the gap is known by; in-app only, never rendered into WhatsApp. */
     names: string[];
     lostMinor: number;
     walkOuts: number;
@@ -367,41 +367,30 @@ export function renderOwnerBriefingApp(briefing: OwnerBriefing): string {
   ].join('\n');
 }
 
-/** Category and generic words a WhatsApp business message must never carry. */
-const WHATSAPP_FORBIDDEN_TERMS = [
-  'drug',
-  'drugs',
-  'medicine',
-  'medicines',
-  'medication',
-  'salt',
-  'tablet',
-  'tablets',
-  'capsule',
-  'capsules',
-  'syrup',
-  'injection',
-  'antibiotic',
-  'antibiotics',
-  'painkiller',
-  'opioid',
-  'narcotic',
-  'psychotropic',
-  'controlled',
-];
+/**
+ * The only words a WhatsApp briefing may contain: the fixed template vocabulary.
+ * An allowlist (not a blocklist of names) means an item, salt or category can
+ * never pass, and an item whose name happens to match template wording (for
+ * example a request typed as "Daily") cannot make a safe body fail.
+ */
+const WHATSAPP_BRIEFING_VOCABULARY = new Set(
+  [
+    'daily briefing weekly summary to',
+    'sales pkr cash lost demand estimate walk-outs without',
+    'top gap lost none recorded details in the app',
+    'recovered from follow-ups',
+    'expiry at risk days khata due not available',
+    'linked a catalogue item no purchase order yet requisition draft submitted approved',
+    'po awaiting approval sent receiving',
+  ]
+    .join(' ')
+    .split(' ')
+);
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** Throws when a WhatsApp body names an item, salt or category. */
-export function assertWhatsAppBriefingSafe(body: string, names: readonly string[]) {
-  for (const term of [...names, ...WHATSAPP_FORBIDDEN_TERMS]) {
-    const trimmed = term.trim();
-    if (trimmed.length < 2) continue;
-    if (
-      new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(trimmed)}($|[^\\p{L}\\p{N}])`, 'iu').test(body)
-    )
+/** Throws when a WhatsApp body carries any word outside the fixed briefing vocabulary. */
+export function assertWhatsAppBriefingSafe(body: string) {
+  for (const [word] of body.matchAll(/\p{L}+(?:-\p{L}+)*/gu)) {
+    if (!WHATSAPP_BRIEFING_VOCABULARY.has(word.toLowerCase()))
       throw new Error('WhatsApp briefing text must not name an item, salt or category.');
   }
   return body;
@@ -419,5 +408,5 @@ export function renderOwnerBriefingWhatsApp(briefing: OwnerBriefing): string {
         : 'Top gap: none recorded'
     ),
   ].join('\n');
-  return assertWhatsAppBriefingSafe(body, gap?.names ?? []);
+  return assertWhatsAppBriefingSafe(body);
 }

@@ -61,8 +61,11 @@ export type OwnerDigest = {
   briefings: OwnerBriefing[];
   /** In-app text; the only rendering that names the top gap. */
   rendered: string;
-  /** Owner-only WhatsApp body: figures and status, never an item, salt or category. */
-  whatsappBody: string;
+  /**
+   * Owner-only WhatsApp body: figures and status, never an item, salt or
+   * category. Null when it fails the vocabulary guard; in-app capture still runs.
+   */
+  whatsappBody: string | null;
 };
 
 export interface DigestChannel {
@@ -84,6 +87,15 @@ const moneyKeys = new Set<MetricKey>([
 function renderValue(key: MetricKey, value: number | null): string {
   if (value == null) return 'Not available';
   return moneyKeys.has(key) ? `PKR ${(value / 100).toFixed(2)}` : String(value);
+}
+
+/** A WhatsApp guard failure must never block the in-app digest capture. */
+function safeWhatsAppBody(briefings: OwnerBriefing[]): string | null {
+  try {
+    return briefings.map(renderOwnerBriefingWhatsApp).join('\n\n');
+  } catch {
+    return null;
+  }
 }
 
 export async function composeOwnerDigest(
@@ -143,7 +155,7 @@ export async function composeOwnerDigest(
       ...renderAnomalyDigest(anomalies),
       `As of ${report.freshness.asOf}`,
     ].join('\n'),
-    whatsappBody: briefings.map(renderOwnerBriefingWhatsApp).join('\n\n'),
+    whatsappBody: safeWhatsAppBody(briefings),
   };
 }
 
