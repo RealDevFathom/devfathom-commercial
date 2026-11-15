@@ -23,6 +23,7 @@ const eq = (actual: Prisma.Decimal | null | undefined, expected: string) =>
   expect((actual ?? D('0')).equals(expected)).toBe(true);
 
 type Purchasing = typeof import('./purchasing');
+type ScopedTx = import('@/lib/tenancy/scoped-db').ScopedDb;
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -545,6 +546,92 @@ describeIfDatabase('M6 purchasing — supplier returns', () => {
         })
       )
     ).rejects.toMatchObject({ name: 'PurchasingError', reason: 'INVALID' });
+  }, 30_000);
+});
+
+describeIfDatabase('DEV-775 purchasing — concurrent receive and cancel', () => {
+  /**
+   * Run `first` inside an open tenant transaction and hold that transaction
+   * open while `second` starts in its own transaction; then commit `first`.
+   * Before DEV-775 the second command acted on a stale status read and both
+   * succeeded. Now the PO row lock makes `second` wait and re-read.
+   */
+  async function overlap(
+    first: (tx: ScopedTx) => Promise<unknown>,
+    second: () => Promise<unknown>
+  ) {
+    let secondRun: Promise<unknown> | undefined;
+    const firstRun = deps.withTenantDb(orgId, async (tx) => {
+      const result = await first(tx);
+      secondRun = second();
+      // Give the second command time to reach the PO before this one commits.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return result;
+    });
+    const [firstResult] = await Promise.allSettled([firstRun]);
+    const [secondResult] = await Promise.allSettled([secondRun!]);
+    return [firstResult!, secondResult!] as const;
+  }
+
+  async function storedState(orderId: string) {
+    return deps.withTenantDb(orgId, async (tx) => {
+      const order = await deps.purchasing.getPurchaseOrder(tx, orderId);
+      const movements = await tx.restaurantStockMovement.count({
+        where: { receipt: { purchaseOrderId: orderId } },
+      });
+      return { order, movements };
+    });
+  }
+
+  it('rejects a cancel that started before a receipt committed', async () => {
+    const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10' });
+    const [received, cancelled] = await overlap(
+      (tx) =>
+        deps.purchasing.receivePurchaseOrder(tx, {
+          purchaseOrderId: orderId,
+          lines: [{ purchaseOrderLineId: lineId, receivedQuantity: '10' }],
+        }),
+      () => deps.withTenantDb(orgId, (tx) => deps.purchasing.cancelPurchaseOrder(tx, orderId))
+    );
+
+    expect(received.status).toBe('fulfilled');
+    expect(cancelled.status).toBe('rejected');
+    expect((cancelled as PromiseRejectedResult).reason).toMatchObject({
+      name: 'PurchasingError',
+      reason: 'INVALID_STATE',
+    });
+    const { order, movements } = await storedState(orderId);
+    expect(order.status).toBe('RECEIVED');
+    expect(order.cancelledAt).toBeNull();
+    expect(order.receipts).toHaveLength(1);
+    eq(order.lines[0]!.receivedQuantityCanonical, '10');
+    expect(movements).toBe(1);
+  }, 30_000);
+
+  it('rejects a receipt that started before a cancel committed, with no stock posted', async () => {
+    const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10' });
+    const [cancelled, received] = await overlap(
+      (tx) => deps.purchasing.cancelPurchaseOrder(tx, orderId),
+      () =>
+        deps.withTenantDb(orgId, (tx) =>
+          deps.purchasing.receivePurchaseOrder(tx, {
+            purchaseOrderId: orderId,
+            lines: [{ purchaseOrderLineId: lineId, receivedQuantity: '10' }],
+          })
+        )
+    );
+
+    expect(cancelled.status).toBe('fulfilled');
+    expect(received.status).toBe('rejected');
+    expect((received as PromiseRejectedResult).reason).toMatchObject({
+      name: 'PurchasingError',
+      reason: 'INVALID_STATE',
+    });
+    const { order, movements } = await storedState(orderId);
+    expect(order.status).toBe('CANCELLED');
+    expect(order.receipts).toHaveLength(0);
+    eq(order.lines[0]!.receivedQuantityCanonical, '0');
+    expect(movements).toBe(0);
   }, 30_000);
 });
 

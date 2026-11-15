@@ -3101,6 +3101,7 @@ const readActions = {
   requisitions: () => caller().requisitions(),
   purchaseOrders: () => caller().purchaseOrders(),
   receivedAgainstOrder: () => caller().receivedAgainstOrder({ purchaseOrderId: 'po_a' }),
+  officialPriceAlerts: () => caller().officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
@@ -3587,4 +3588,32 @@ it('does not let self-provisioning reactivate an archived staff profile', async 
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
   expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+});
+
+describe('DEV-693 official price hints at goods-in', () => {
+  function withAlerts() {
+    const findMany = vi.fn(async () => []);
+    Object.assign(db, { pharmacyDrapPriceAlert: { findMany } });
+    return findMany;
+  }
+
+  it('gives a receiver without price access no hint and reads no alert', async () => {
+    const findMany = withAlerts();
+    await expect(caller().officialPriceAlerts({ medicineIds: ['med_a'] })).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads only open alerts of the caller tenant for the medicines on the bench', async () => {
+    const findMany = withAlerts();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) =>
+        action === 'pharmacy:procurement' || action === 'pharmacy:safety'
+    );
+    await caller().officialPriceAlerts({ medicineIds: ['med_a'] });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', dismissedAt: null, medicineId: { in: ['med_a'] } },
+      })
+    );
+  });
 });

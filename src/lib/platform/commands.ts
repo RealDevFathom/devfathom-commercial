@@ -1182,6 +1182,7 @@ async function bootstrapOrganization(
           organizationId: organization.id,
           key: template.key,
           name: template.name,
+          ...(template.description ? { description: template.description } : {}),
           isSystem: template.isSystem,
           permissions: {
             create: template.capabilities.map((capability) => ({

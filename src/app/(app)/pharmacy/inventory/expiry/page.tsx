@@ -80,7 +80,7 @@ export default async function PharmacyExpiryBoardPage({
   const moduleEnabled = ctx ? hasModule(ctx.entitlements, 'pharmacy-inventory') : false;
   const header = (
     <PageHeader
-      eyebrow="Pharmacy operations · INV-09"
+      eyebrow="Pharmacy operations"
       heading="Expiry board"
       description="Act on stock before it becomes dead stock: mark it down, send it back, or pull it from sale."
     />

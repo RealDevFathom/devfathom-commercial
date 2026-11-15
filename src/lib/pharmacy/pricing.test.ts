@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   confirmPriceChanges,
+  DRAP_PRICE_INFORMATION_ONLY,
   currentPackPrice,
   packUnits,
   priceVariance,
@@ -123,43 +124,41 @@ describe('WHA-1606 pack pricing', () => {
       await resolveNoticePack(scoped, 'org-a', 'medicine', 'Tablet', 'BOX', new Date())
     ).toBeNull();
   });
-  it('old caller now writes policy plus audit; future dates and null selling retained', async () => {
+  it.each(['PROPOSED', 'CONFIRMED'])(
+    'DEV-693: refuses to confirm a %s DRAP proposal and writes no price, status or audit',
+    async (status) => {
+      for (const confirm of [
+        (scoped: ScopedDb) => confirmPriceChange(scoped, scope, 'proposal'),
+        (scoped: ScopedDb) => confirmPriceChanges(scoped, scope, ['proposal']),
+      ]) {
+        const { db, scoped, proposal } = fake();
+        proposal.status = status;
+        await expect(confirm(scoped)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: DRAP_PRICE_INFORMATION_ONLY,
+        });
+        expect(db.pharmacyPriceChangeProposal.findFirst).toHaveBeenCalledWith({
+          where: { organizationId: 'org-a', id: 'proposal' },
+          select: { id: true, ingestId: true },
+        });
+        expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+        expect(db.pharmacyPriceChangeProposal.update).not.toHaveBeenCalled();
+        expect(db.auditLog.create).not.toHaveBeenCalled();
+      }
+    }
+  );
+  it('reports a missing proposal as not found, still without writes', async () => {
     const { db, scoped } = fake();
-    await confirmPriceChange(scoped, scope, 'proposal');
-    expect(db.$transaction).toHaveBeenCalledOnce();
-    expect(db.$queryRaw).toHaveBeenCalledOnce();
-    expect(db.pharmacyPackPrice.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        effectiveFrom: new Date('2027-01-01'),
-        source: 'drap',
-        sellingPriceMinor: null,
-        mrpMinor: 30000,
-      }),
+    db.pharmacyPriceChangeProposal.findFirst.mockResolvedValueOnce(null as never);
+    await expect(confirmPriceChanges(scoped, scope, ['missing'])).rejects.toMatchObject({
+      code: 'NOT_FOUND',
     });
-    expect(db.auditLog.create).toHaveBeenCalledOnce();
-  });
-  it('unmapped legacy proposals cannot confirm', async () => {
-    const { db, scoped, proposal } = fake();
-    proposal.packLevelId = 'missing';
-    await expect(confirmPriceChanges(scoped, scope, ['proposal'])).rejects.toThrow('mapping');
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
-    expect(db.pharmacyPriceChangeProposal.update).not.toHaveBeenCalled();
   });
-  it('duplicate selection rejected before writes', async () => {
+  it('duplicate selection rejected before any read', async () => {
     const { db, scoped } = fake();
     await expect(confirmPriceChanges(scoped, scope, ['a', 'a'])).rejects.toThrow();
-    expect(db.$transaction).not.toHaveBeenCalled();
-  });
-  it('confirmed replay requires existing policy, does not duplicate audit', async () => {
-    const { db, scoped, proposal } = fake();
-    proposal.status = 'CONFIRMED';
-    db.pharmacyPackPrice.findFirst.mockResolvedValueOnce({
-      mrpMinor: 30000,
-      sellingPriceMinor: null,
-    });
-    await confirmPriceChanges(scoped, scope, ['proposal']);
-    expect(db.auditLog.create).not.toHaveBeenCalled();
-    await expect(confirmPriceChanges(scoped, scope, ['proposal'])).rejects.toThrow('Legacy');
+    expect(db.pharmacyPriceChangeProposal.findFirst).not.toHaveBeenCalled();
   });
   it('current selection explicitly excludes future effective dates', async () => {
     const { db, scoped } = fake();
