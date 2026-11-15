@@ -112,7 +112,7 @@ import {
 } from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
-  formatReceiptDate,
+  formatShortExpiry,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -3132,7 +3132,7 @@ function ScopedPharmacyCounterConsole({
                         activeRow.dosageForm,
                         activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
                         activeRow.nearestSafeExpiry
-                          ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
+                          ? formatShortExpiry(activeRow.nearestSafeExpiry)
                           : null,
                         locationLabel,
                       ]

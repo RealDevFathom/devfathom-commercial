@@ -158,6 +158,37 @@ describe('composed platform worker boundaries', () => {
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
   });
 
+  it('resumes the retention purge where the last successful run stopped (QA-3)', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    const query = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql: { text?: string; strings?: string[] }) => {
+      const text = sql.text ?? sql.strings?.join('') ?? '';
+      if (text.includes(`"type" = 'pharmacy.record.retention.v1'`)) {
+        return [
+          {
+            result: {
+              resumeAfter: { FISCAL: { anchor: '2014-05-06T07:08:09.000Z', id: 'sale-1000' } },
+            },
+          },
+        ];
+      }
+      return query(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+    const fiscal = purgeScans().find(([sql]) =>
+      String(sql?.text ?? '').includes('"pharmacy_sales" r')
+    );
+    expect(String(fiscal?.[0]?.text ?? '')).toContain('r."id") > (');
+    expect(fiscal?.[0]?.values).toEqual(
+      expect.arrayContaining([new Date('2014-05-06T07:08:09.000Z'), 'sale-1000'])
+    );
+    // Classes with no stored resume point start from the oldest record.
+    const register = purgeScans().find(([sql]) =>
+      String(sql?.text ?? '').includes('"pharmacy_controlled_register_entries" r')
+    );
+    expect(String(register?.[0]?.text ?? '')).not.toContain('r."id") > (');
+  });
+
   it('retries a failed retention purge without affecting other work', async () => {
     queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
     const query = m.query.getMockImplementation()!;

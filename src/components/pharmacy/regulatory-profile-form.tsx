@@ -37,6 +37,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
 import {
   FISCAL_STATUSES,
+  PAKISTAN_PROVINCES,
   PROVISIONAL_LICENCE_CATEGORY,
   provinceName,
   regulatoryVersionStatusLabel,
@@ -91,11 +92,105 @@ function Field({
   );
 }
 
+/**
+ * QA-3 — the owner or admin sets the province a branch operates in. The
+ * branch's province decides which published rules its profile is recorded on,
+ * so a branch provisioned on the wrong province is corrected here rather than
+ * left unable to record its profile. The server audits every change.
+ */
+function BranchProvinceControl({
+  branch,
+  hasProfileInForce,
+  onSaved,
+}: {
+  branch: Regulatory['branches'][number];
+  hasProfileInForce: boolean;
+  onSaved: (message: string) => void;
+}) {
+  const stored =
+    Object.keys(PAKISTAN_PROVINCES).find((code) => sameProvince(code, branch.provinceCode)) ?? '';
+  const [choice, setChoice] = useState(stored);
+  const [error, setError] = useState<string | null>(null);
+  const setProvince = trpc.pharmacyOnboarding.setBranchProvince.useMutation({
+    onSuccess: (result) => {
+      setError(null);
+      onSaved(
+        result.changed
+          ? `${branch.name} now operates in ${provinceName(result.provinceCode)}.`
+          : `${branch.name} already operates in ${provinceName(result.provinceCode)}.`
+      );
+    },
+    onError: (failure) => {
+      const validation = (failure.data?.validation ?? null) as Record<
+        string,
+        string[] | undefined
+      > | null;
+      setError(validation?.provinceCode?.[0] ?? validation?.branchId?.[0] ?? failure.message);
+    },
+  });
+  const changing = choice !== '' && !sameProvince(choice, branch.provinceCode);
+
+  return (
+    <form
+      className="mt-4 space-y-3"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        setProvince.mutate({ branchId: branch.id, provinceCode: choice });
+      }}
+    >
+      <Field
+        error={error ?? undefined}
+        hint={
+          changing && hasProfileInForce
+            ? `The version in force names ${provinceName(branch.provinceCode)}. After the change, record a version for ${provinceName(choice)} below; until then dispensing at this branch is refused.`
+            : 'Decides which province’s published rules this branch’s profile is recorded on.'
+        }
+        htmlFor="branch-province"
+        label="Province this branch operates in"
+      >
+        <select
+          aria-describedby={error ? 'branch-province-error' : undefined}
+          aria-invalid={error ? true : undefined}
+          className={controlClass}
+          id="branch-province"
+          name="branchProvince"
+          onChange={(event) => {
+            setChoice(event.target.value);
+            setError(null);
+          }}
+          value={choice}
+        >
+          {stored ? null : (
+            <option disabled value="">
+              {provinceName(branch.provinceCode)} (not a recognised province — choose one)
+            </option>
+          )}
+          {Object.entries(PAKISTAN_PROVINCES).map(([code, name]) => (
+            <option key={code} value={code}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Button
+        disabled={!changing || setProvince.isPending}
+        size="touch"
+        type="submit"
+        variant="outline"
+      >
+        {setProvince.isPending ? 'Saving…' : 'Save province'}
+      </Button>
+    </form>
+  );
+}
+
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
+  const [provinceNotice, setProvinceNotice] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
@@ -147,6 +242,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     setBranchId(nextBranchId);
     setErrors({});
     setSaved(null);
+    setProvinceNotice(null);
     refresh(nextBranchId);
   };
 
@@ -281,6 +377,27 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             ))}
           </select>
         </Field>
+        {branch ? (
+          <BranchProvinceControl
+            branch={branch}
+            hasProfileInForce={Boolean(inForce)}
+            // Remount on a branch switch or a saved change so the picker shows
+            // the branch's stored province, never the previous selection.
+            key={`${branch.id}:${branch.provinceCode}`}
+            onSaved={(message) => {
+              setProvinceNotice(message);
+              refresh();
+            }}
+          />
+        ) : null}
+        {provinceNotice ? (
+          <p
+            className="mt-3 rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success"
+            role="status"
+          >
+            {provinceNotice}
+          </p>
+        ) : null}
         {pendingProvince ? (
           <div className="mt-4">
             <PendingLegalReviewNotice provinceName={pendingProvince} />

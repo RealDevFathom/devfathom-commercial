@@ -34,7 +34,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
-  formatReceiptDate,
+  formatReceiptExpiry,
   formatReceiptIssuedAt,
   receiptCashReceived,
   receiptPromotionLabel,
@@ -103,7 +103,7 @@ function escPosFacts(
           const batch = issued ? allocation.batchNumber : null;
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
           return `${strings.batch}: ${batch ?? 'Unavailable'} | ${strings.expiry}: ${
-            expiry ? formatReceiptDate(expiry) : 'Unavailable'
+            expiry ? formatReceiptExpiry(expiry) : 'Unavailable'
           } | Tablets/units: ${allocation.canonicalUnits}`;
         }),
         ...(promotion ? [promotion] : []),

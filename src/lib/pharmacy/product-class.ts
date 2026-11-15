@@ -83,6 +83,32 @@ export function validateRetailFields(input: {
  * A missing expiry is stored as a far-future date no expiry window or FEFO block can reach.
  */
 export const NON_DRUG_NO_EXPIRY = new Date('9998-12-31T00:00:00.000Z');
+
+/**
+ * QA-3 — whether a stored lot date is the no-expiry marker above, either as the printed date or
+ * as the expiry instant derived from it. The marker is storage only: every screen, receipt and
+ * export says the item has no expiry instead of printing 9998-12-31 as if it were a real date.
+ */
+export function isNoExpiryDate(value: Date | string | null | undefined): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const date = value instanceof Date ? value : new Date(value);
+  return (
+    !Number.isNaN(date.getTime()) && date.getUTCFullYear() >= NON_DRUG_NO_EXPIRY.getUTCFullYear()
+  );
+}
+
+export const NO_EXPIRY_LABEL = 'No expiry';
+
+/**
+ * QA-3 — the one way a lot expiry is shown or printed: "No expiry" for the marker, otherwise the
+ * caller's own rendering of the date (each surface keeps its date style).
+ */
+export function formatLotExpiry<T extends Date | string>(
+  value: T,
+  render: (value: T) => string
+): string {
+  return isNoExpiryDate(value) ? NO_EXPIRY_LABEL : render(value);
+}
 export const NON_DRUG_HOUSE_BATCH_PREFIX = 'RETAIL-';
 
 export type ReceiptBatchResolution =
