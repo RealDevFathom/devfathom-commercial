@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { entitlementIndependentHistoryProcedure, protectedProcedure, router } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
+import { isMeetingTimeRangeValid, MEETING_TIME_ORDER_ERROR } from '@/lib/meetings/time-range';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
 import { computePunctuality } from '@/lib/meeting-occurrence';
@@ -323,15 +324,20 @@ export const meetingsRouter = router({
 
   create: protectedProcedure
     .input(
-      z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        startTime: z.date(),
-        endTime: z.date(),
-        location: z.string().optional(),
-        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
-        attendeeIds: z.array(z.string()),
-      })
+      z
+        .object({
+          title: z.string().min(1),
+          description: z.string().optional(),
+          startTime: z.date(),
+          endTime: z.date(),
+          location: z.string().optional(),
+          recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
+          attendeeIds: z.array(z.string()),
+        })
+        .refine((input) => isMeetingTimeRangeValid(input.startTime, input.endTime), {
+          message: MEETING_TIME_ORDER_ERROR,
+          path: ['endTime'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       // Guard against stale sessions: if the session JWT references a user that
@@ -391,6 +397,22 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
+
+      if (data.startTime !== undefined || data.endTime !== undefined) {
+        const current = await ctx.db.meeting.findUnique({
+          where: { id },
+          select: { startTime: true, endTime: true },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (
+          !isMeetingTimeRangeValid(
+            data.startTime ?? current.startTime,
+            data.endTime ?? current.endTime
+          )
+        ) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: MEETING_TIME_ORDER_ERROR });
+        }
+      }
 
       if (attendeeIds) {
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];

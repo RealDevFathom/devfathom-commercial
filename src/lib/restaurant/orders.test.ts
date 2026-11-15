@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { canCloseDeliveredOrder } from '@/components/restaurant/pos/order-ticket-panel';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 
@@ -65,6 +66,7 @@ type Deps = {
   stateMachine: typeof import('@/lib/restaurant/order-state-machine');
   coAuth: typeof import('@/lib/restaurant/co-authorization');
   deliveryDispatch: typeof import('@/lib/restaurant/terminal-delivery-dispatch');
+  terminalOrders: typeof import('@/lib/restaurant/terminal-orders');
 };
 
 let deps: Deps;
@@ -128,17 +130,27 @@ async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills, close, stateMachine, coAuth, deliveryDispatch] =
-    await Promise.all([
-      import('@/lib/tenancy/scoped-db'),
-      import('@/lib/restaurant/devices'),
-      import('@/lib/restaurant/orders'),
-      import('@/lib/restaurant/bills'),
-      import('@/lib/restaurant/daily-close'),
-      import('@/lib/restaurant/order-state-machine'),
-      import('@/lib/restaurant/co-authorization'),
-      import('@/lib/restaurant/terminal-delivery-dispatch'),
-    ]);
+  const [
+    scopedDb,
+    devices,
+    orders,
+    bills,
+    close,
+    stateMachine,
+    coAuth,
+    deliveryDispatch,
+    terminalOrders,
+  ] = await Promise.all([
+    import('@/lib/tenancy/scoped-db'),
+    import('@/lib/restaurant/devices'),
+    import('@/lib/restaurant/orders'),
+    import('@/lib/restaurant/bills'),
+    import('@/lib/restaurant/daily-close'),
+    import('@/lib/restaurant/order-state-machine'),
+    import('@/lib/restaurant/co-authorization'),
+    import('@/lib/restaurant/terminal-delivery-dispatch'),
+    import('@/lib/restaurant/terminal-orders'),
+  ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
@@ -150,6 +162,7 @@ beforeAll(async () => {
     stateMachine,
     coAuth,
     deliveryDispatch,
+    terminalOrders,
   };
 
   const [runtimeRole] = await deps.withPlatformDb(
@@ -353,6 +366,273 @@ async function readyDeliveryOrder() {
   return { db, orderId: opened.orderId, fulfillmentId: fulfillment.id };
 }
 
+/** A real delivery order, built through the command layer: one live item cooked to
+ * PREPARED, one voided before the kitchen, one bill cut for the live item. A PREPAID
+ * order is paid in full before dispatch; a COD order keeps its bill open. */
+async function preparedDeliveryOrder(paymentMode: 'PREPAID' | 'COD') {
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
+    branchId: ids.branch,
+    channel: 'TAKEAWAY',
+    publicationId: ids.publication,
+    actor: actor(),
+    now: AT,
+  });
+  const live = await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(),
+  });
+  const voided = await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(),
+  });
+  await read(async (tx) => {
+    await tx.restaurantOrder.update({
+      where: { id: opened.orderId },
+      data: { channel: 'DELIVERY', customerId: ids.customer },
+    });
+    await tx.restaurantDeliveryFulfillment.create({
+      data: {
+        branchId: ids.branch,
+        customerId: ids.customer,
+        orderId: opened.orderId,
+        recipientNameSnapshot: 'Delivery Guest',
+        normalizedPhoneSnapshot: '+923001234567',
+        addressLine1Snapshot: '1 Test Street',
+        localitySnapshot: 'Karachi',
+        countryCodeSnapshot: 'PK',
+        deliveryFeeSnapshot: '0',
+        promisedMinutesSnapshot: 30,
+        promisedAt: new Date(AT.getTime() + 30 * 60_000),
+      },
+    });
+  });
+  await deps.orders.voidItem(db, {
+    orderId: opened.orderId,
+    itemId: voided.itemId,
+    reason: 'guest changed their mind',
+    actor: actor(),
+  });
+  await deps.orders.sendOrder(db, { orderId: opened.orderId, actor: actor() });
+  for (const toStatus of ['FIRING', 'PREPARED'] as const) {
+    await deps.orders.advanceItem(db, {
+      orderId: opened.orderId,
+      itemId: live.itemId,
+      toStatus,
+      actor: actor(),
+    });
+  }
+  const cut = await deps.bills.cutBills(db, {
+    orderId: opened.orderId,
+    branchId: ids.branch,
+    split: { kind: 'NONE' },
+    actor: actor(),
+  });
+  const billId = cut.billIds[0]!;
+  const fulfillment = await read((tx) =>
+    tx.restaurantDeliveryFulfillment.findFirstOrThrow({ where: { orderId: opened.orderId } })
+  );
+  const pay = () =>
+    read(async (tx) => {
+      const bill = await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } });
+      await tx.restaurantTender.create({
+        data: {
+          billId,
+          type: 'CASH',
+          amount: bill.grandTotal,
+          businessDate: bill.businessDate,
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+      });
+      await deps.bills.settleBill(tx, {
+        billId,
+        staffProfileId: ids.operator,
+        deviceId,
+        at: AT,
+      });
+    });
+  if (paymentMode === 'PREPAID') await pay();
+  return {
+    db,
+    orderId: opened.orderId,
+    liveItemId: live.itemId,
+    voidedItemId: voided.itemId,
+    billId,
+    fulfillmentId: fulfillment.id,
+    pay,
+  };
+}
+
+function kdsTransition(
+  delivery: { db: ScopedDb; fulfillmentId: string },
+  status: 'DISPATCHED' | 'DELIVERED'
+) {
+  return deps.deliveryDispatch.transitionDeliveryFromKds(delivery.db, {
+    organizationId: orgId,
+    branchId: ids.branch,
+    deviceId,
+    idempotencyKey: key(),
+    fulfillmentId: delivery.fulfillmentId,
+    status,
+    staffProfileId: ids.operator,
+  });
+}
+
+/** The POS Close-order rule evaluated on the server's own order read model. */
+async function posCanClose(orderId: string): Promise<boolean> {
+  const detail = await deps.terminalOrders.getOrderForBranch(
+    deps.createTenantDb(orgId),
+    orderId,
+    ids.branch
+  );
+  if (!detail) throw new Error('order not readable');
+  return canCloseDeliveredOrder(detail);
+}
+
+async function closeBookkeeping(orderId: string, billId: string) {
+  return read(async (tx) => ({
+    closedEvents: await tx.restaurantOrderEvent.count({
+      where: { orderId, eventType: 'order.closed' },
+    }),
+    deliveryServes: (
+      await tx.restaurantOrderEvent.findMany({
+        where: { orderId, eventType: 'item.advanced' },
+        select: { payload: true },
+      })
+    ).filter((event) => (event.payload as { via?: string }).via === 'delivery.delivered').length,
+    loyaltyEntries: await tx.loyaltyPointsEntry.count({ where: { billId } }),
+  }));
+}
+
+describeIfDatabase('delivered delivery orders close (DEV-159)', () => {
+  it.each(['COD', 'PREPAID'] as const)(
+    'serves a %s order on delivery and closes it once it is paid',
+    async (paymentMode) => {
+      const delivery = await preparedDeliveryOrder(paymentMode);
+      await expect(kdsTransition(delivery, 'DISPATCHED')).resolves.toMatchObject({
+        status: 'DISPATCHED',
+        paymentMode,
+      });
+      await expect(kdsTransition(delivery, 'DELIVERED')).resolves.toMatchObject({
+        status: 'DELIVERED',
+        paymentMode,
+      });
+
+      const afterDelivery = await read((tx) =>
+        tx.restaurantOrder.findUniqueOrThrow({
+          where: { id: delivery.orderId },
+          select: { status: true, items: { select: { id: true, status: true } } },
+        })
+      );
+      expect(afterDelivery.status).toBe('SERVED');
+      expect(new Map(afterDelivery.items.map((item) => [item.id, item.status]))).toEqual(
+        new Map([
+          [delivery.liveItemId, 'SERVED'],
+          [delivery.voidedItemId, 'VOIDED'],
+        ])
+      );
+
+      if (paymentMode === 'COD') await delivery.pay();
+      expect(await posCanClose(delivery.orderId)).toBe(true);
+      await expect(
+        deps.orders.closeOrder(delivery.db, { orderId: delivery.orderId, actor: actor() })
+      ).resolves.toMatchObject({ replayed: false });
+
+      const closed = await read((tx) =>
+        tx.restaurantOrder.findUniqueOrThrow({
+          where: { id: delivery.orderId },
+          select: { status: true, closedAt: true },
+        })
+      );
+      expect(closed.status).toBe('CLOSED');
+      expect(closed.closedAt).not.toBeNull();
+      const once = await closeBookkeeping(delivery.orderId, delivery.billId);
+      expect(once.closedEvents).toBe(1);
+      expect(once.deliveryServes).toBe(1);
+
+      // A repeated close or a repeated DELIVERED hand-off books nothing again.
+      await expect(
+        deps.orders.closeOrder(delivery.db, { orderId: delivery.orderId, actor: actor() })
+      ).rejects.toMatchObject({ reason: 'NOT_CLOSABLE' });
+      await expect(kdsTransition(delivery, 'DELIVERED')).resolves.toMatchObject({
+        status: 'DELIVERED',
+      });
+      expect(await closeBookkeeping(delivery.orderId, delivery.billId)).toEqual(once);
+    }
+  );
+
+  it('keeps the POS Close-order rule and closeOrder in agreement at every step', async () => {
+    const delivery = await preparedDeliveryOrder('COD');
+    // Each step asks the server to close exactly as the POS would. Before delivery it
+    // refuses; delivered but unpaid it at most parks the order awaiting tender; only a
+    // delivered, paid order reaches CLOSED, and that is the one step the POS offers.
+    const serverCloses = async () => {
+      await deps.orders
+        .closeOrder(delivery.db, { orderId: delivery.orderId, actor: actor() })
+        .catch((error: unknown) => {
+          expect(error).toMatchObject({ reason: 'NOT_CLOSABLE' });
+        });
+      const order = await read((tx) =>
+        tx.restaurantOrder.findUniqueOrThrow({
+          where: { id: delivery.orderId },
+          select: { status: true },
+        })
+      );
+      return order.status === 'CLOSED';
+    };
+
+    // Prepared, not yet dispatched.
+    expect(await posCanClose(delivery.orderId)).toBe(false);
+    expect(await serverCloses()).toBe(false);
+
+    await kdsTransition(delivery, 'DISPATCHED');
+    expect(await posCanClose(delivery.orderId)).toBe(false);
+    expect(await serverCloses()).toBe(false);
+
+    // Delivered, cash still to collect.
+    await kdsTransition(delivery, 'DELIVERED');
+    expect(await posCanClose(delivery.orderId)).toBe(false);
+    expect(await serverCloses()).toBe(false);
+
+    // Delivered and paid: both sides say close.
+    await delivery.pay();
+    expect(await posCanClose(delivery.orderId)).toBe(true);
+    expect(await serverCloses()).toBe(true);
+  });
+
+  it('refuses the delivered hand-off while a live item is back in the kitchen', async () => {
+    const delivery = await preparedDeliveryOrder('PREPAID');
+    await kdsTransition(delivery, 'DISPATCHED');
+    await deps.orders.advanceItem(delivery.db, {
+      orderId: delivery.orderId,
+      itemId: delivery.liveItemId,
+      toStatus: 'FIRING',
+      actor: actor(),
+    });
+    await expect(kdsTransition(delivery, 'DELIVERED')).rejects.toMatchObject({
+      name: 'DeliveryError',
+      reason: 'INVALID_TRANSITION',
+    });
+    const state = await read(async (tx) => ({
+      delivery: await tx.restaurantDeliveryFulfillment.findUniqueOrThrow({
+        where: { id: delivery.fulfillmentId },
+        select: { status: true },
+      }),
+      item: await tx.restaurantOrderItem.findUniqueOrThrow({
+        where: { id: delivery.liveItemId },
+        select: { status: true },
+      }),
+    }));
+    expect(state).toEqual({ delivery: { status: 'DISPATCHED' }, item: { status: 'FIRING' } });
+    expect(await posCanClose(delivery.orderId)).toBe(false);
+  });
+});
+
 describeIfDatabase('orders command layer (real DB)', () => {
   it('opens an order: stamps business date, allocates a number, appends event + outbox', async () => {
     const db = deps.createTenantDb(orgId);
@@ -455,7 +735,9 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
     const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
     expect(rejected).toMatchObject({
-      reason: expect.objectContaining({ reason: expect.stringMatching(/DAY_CLOSED|ACTIVE_ORDERS/) }),
+      reason: expect.objectContaining({
+        reason: expect.stringMatching(/DAY_CLOSED|ACTIVE_ORDERS/),
+      }),
     });
   });
 

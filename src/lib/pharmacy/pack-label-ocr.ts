@@ -535,7 +535,7 @@ const BATCH_LABEL = /^(?:b\s*\.?\s*no|batch\s*no|batch|lot\s*no|lot)[\s:.#]+/i;
 const BATCH_VALUE = /^[A-Za-z0-9/.-]+$/;
 
 /** Strip a leftover printed label and keep only a single clean batch token. */
-function printedBatch(value: string | null): string | null {
+export function printedBatch(value: string | null): string | null {
   if (value === null) return null;
   const stripped = value.trim().replace(/\s+/g, ' ').replace(BATCH_LABEL, '').trim();
   if (!stripped || stripped.length > MAX_BATCH) return null;

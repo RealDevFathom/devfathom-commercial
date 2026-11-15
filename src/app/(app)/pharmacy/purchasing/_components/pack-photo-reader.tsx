@@ -83,7 +83,7 @@ function isPhotoType(value: string): value is PhotoType {
   return (PHOTO_TYPES as readonly string[]).includes(value);
 }
 
-function base64Of(blob: Blob): Promise<string> {
+export function base64Of(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('The photo could not be read. Take it again.'));
@@ -103,7 +103,9 @@ function base64Of(blob: Blob): Promise<string> {
  * Fails closed when the browser cannot re-encode it, so the original file and
  * its metadata are never uploaded; manual entry stays available.
  */
-async function preparedPhoto(file: File): Promise<{ contentType: PhotoType; dataBase64: string }> {
+export async function preparedPhoto(
+  file: File
+): Promise<{ contentType: PhotoType; dataBase64: string }> {
   if (!isPhotoType(file.type)) throw new Error('Use a JPEG, PNG or WebP photo.');
   if (file.size === 0) throw new Error('That photo is empty. Take it again.');
   try {

@@ -5,6 +5,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { InvoiceCaptureReader } from '../_components/invoice-capture-reader';
 import { PackPhotoReader } from '../_components/pack-photo-reader';
 import { ScanSearch } from '../_components/scan-search';
 
@@ -18,6 +19,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { officialPriceText } from '@/lib/pharmacy/official-price';
 import { isNonDrugRetail, receivingLotArrived } from '@/lib/pharmacy/product-class';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
@@ -30,6 +32,7 @@ import type {
   StockLocationOption,
 } from '@/lib/pharmacy/purchasing-console';
 import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
+import { configuredInvoiceCaptureAdapterName } from '@/lib/pharmacy/invoice-capture';
 import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
 import {
   defaultReceivingLocationId,
@@ -97,7 +100,11 @@ const HEADING = 'Goods in';
 const DESCRIPTION =
   'The receiving bench. Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost against a purchase order or a direct purchase, then post it into the batch ledger.';
 
-const DIRECT_SLOTS = [0, 1, 2] as const;
+/**
+ * Line slots on the direct purchase form. Revealed one at a time; DEV-679 fills
+ * as many as a distributor invoice needs, so a typical bill fits on one receipt.
+ */
+const DIRECT_SLOTS = Array.from({ length: 20 }, (_, slot) => slot);
 
 /**
  * PUR-02 receiving, PUR-04 match exceptions and PUR-05 direct purchase.
@@ -204,6 +211,7 @@ export default async function PharmacyReceivingPage({
     locations
   );
   const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
+  const invoiceCaptureEnabled = configuredInvoiceCaptureAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
   const receivable = orders.filter(
@@ -219,6 +227,20 @@ export default async function PharmacyReceivingPage({
   > = {};
   if (selectedOrder) {
     outstanding = await caller.receivedAgainstOrder({ purchaseOrderId: selectedOrder.id });
+  }
+
+  // DEV-693: official DRAP price changes for the medicines on this order, as a
+  // read-only hint. Only roles that may see prices get them; anyone else, or a
+  // read failure, simply sees no hint. Nothing here changes a price.
+  let officialPriceAlerts: Awaited<ReturnType<typeof caller.officialPriceAlerts>> = [];
+  if (selectedOrder?.lines.length) {
+    try {
+      officialPriceAlerts = await caller.officialPriceAlerts({
+        medicineIds: [...new Set(selectedOrder.lines.map((line) => line.medicineId))],
+      });
+    } catch {
+      // No price permission or the alerts could not be read: receiving goes on unchanged.
+    }
   }
 
   /** The scan box resolves against the register, not against a guess. */
@@ -586,7 +608,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── PUR-04 review queue ────────────────────────────────────────────── */}
       <SectionCard
-        eyebrow="PUR-04"
+        eyebrow="Invoice matching"
         title={`Match exceptions — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
         titleLevel={2}
         actions={
@@ -684,7 +706,12 @@ export default async function PharmacyReceivingPage({
           Input tax is calculated from posted, creditable invoice lines. Confirm the claim with your
           tax adviser; this report is a reconciliation aid, not a tax filing.
         </p>
-        {inputTaxReport.rows.some((row) => row.flagged) ? (
+        {inputTaxReport.rows.length === 0 ? (
+          <p className="mt-3 text-sm text-text-muted">
+            No bills to check. Nothing has been received at this branch yet, so this is not an
+            all-clear.
+          </p>
+        ) : inputTaxReport.rows.some((row) => row.flagged) ? (
           <ul className="mt-3 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-warning/40">
             {inputTaxReport.rows
               .filter((row) => row.flagged)
@@ -712,7 +739,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
-      <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
           <EmptyState
             title="No order is out with a supplier"
@@ -841,8 +868,31 @@ export default async function PharmacyReceivingPage({
                         />
                       ) : null;
                     const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
+                    // Newest alert for this medicine whose notice names no pack, or names
+                    // the pack on this line; a BOX notice never labels a STRIP line.
+                    const officialAlert = officialPriceAlerts.find(
+                      (alert) =>
+                        alert.medicineId === line.medicineId &&
+                        (!alert.packLevel || alert.packLevel === line.packLevel.level)
+                    );
+                    const officialPrice = officialAlert
+                      ? `${officialPriceText(officialAlert)}${
+                          officialAlert.presentation || officialAlert.packLevel
+                            ? ` (${[officialAlert.presentation, officialAlert.packLevel]
+                                .filter(Boolean)
+                                .join(', ')})`
+                            : ''
+                        }`
+                      : undefined;
                     return (
                       <div className="space-y-3" key={line.id}>
+                        {officialPrice && (
+                          <p className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken px-4 py-2 text-sm text-text-body">
+                            <span className="font-medium">{line.medicine.productName}:</span>{' '}
+                            {officialPrice}. For information only: record the MRP printed on the
+                            pack in hand.
+                          </p>
+                        )}
                         <CaptureFieldset
                           defaultLocationId={defaultLocationId}
                           photoReader={
@@ -933,7 +983,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-05 direct purchase ─────────────────────────────────────────── */}
-      <SectionCard eyebrow="PUR-05" title="Direct purchase — no purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Direct purchase — no purchase order" titleLevel={2}>
         <p className="text-sm text-text-muted">
           A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the
           same as receiving against an order — the only difference is that a bypass reason and a
@@ -957,6 +1007,19 @@ export default async function PharmacyReceivingPage({
             className="mt-4 space-y-4"
           >
             <input name="branchId" type="hidden" value={branchId} />
+            {invoiceCaptureEnabled ? (
+              <InvoiceCaptureReader
+                branchId={branchId}
+                lineSlots={DIRECT_SLOTS.length}
+                names={{
+                  supplier: 'supplierId',
+                  invoiceRef: 'directInvoiceRef',
+                  invoiceDate: 'directInvoiceDate',
+                  packPrefix: 'directPack-',
+                  linePrefix: 'd',
+                }}
+              />
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <TextField
                 label="Direct purchase reference"
@@ -968,7 +1031,7 @@ export default async function PharmacyReceivingPage({
                 emptyHint={
                   checksOff
                     ? 'No supplier yet. Add one in the supplier register first.'
-                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                    : 'No supplier is ready to order from. Authorize one and file a verified licence first.'
                 }
                 label="Supplier"
                 name="supplierId"
@@ -1107,7 +1170,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── receipts, side by side with the selected one ───────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-02/04" title={`Receipts (${receipts.length})`} titleLevel={2}>
+        <SectionCard eyebrow="Goods in" title={`Receipts (${receipts.length})`} titleLevel={2}>
           {receipts.length === 0 ? (
             <EmptyState
               title="Nothing has been received at this branch"
@@ -1462,7 +1525,7 @@ function ReceiptDetail({
 }) {
   return (
     <SectionCard
-      eyebrow="PUR-02/04/05"
+      eyebrow="Goods receipt"
       title={receipt.reference}
       titleLevel={2}
       actions={<StatusPill status={receipt.status} />}

@@ -5,10 +5,11 @@ vi.mock('server-only', () => ({}));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  manualConnectorInputDigest,
   MAX_CONNECTOR_ROWS_PER_CALL,
   runManualReferenceConnector,
 } from './reference-connector-automation';
-import type { NormalizedMedicineReferenceRow } from './reference-connectors';
+import { DRAP_REGISTRY_RIGHTS, type NormalizedMedicineReferenceRow } from './reference-connectors';
 
 function row(
   rowSourceKey: string,
@@ -134,6 +135,11 @@ function makeDb() {
       findFirst: vi
         .fn()
         .mockImplementation(async ({ where }) => (where.id === target.id ? { ...target } : null)),
+      findMany: vi
+        .fn()
+        .mockImplementation(async ({ where }) =>
+          where.drapRegistrationNumber === target.drapRegistrationNumber ? [{ ...target }] : []
+        ),
       update: vi.fn().mockImplementation(async ({ data }) => Object.assign(target, data)),
     },
   };
@@ -260,5 +266,87 @@ describe('manual reference connector automation', () => {
     expect(second).toMatchObject({ status: 'COMPLETED', cursorEnd: rows.length });
     expect(fixture.runs).toHaveLength(1);
     expect(fixture.proposals).toHaveLength(rows.length);
+  });
+});
+
+describe('DRAP registry connector automation', () => {
+  const drapInput = (rows: NormalizedMedicineReferenceRow[]) => ({
+    ...runInput(rows),
+    connectorKey: 'drap-registry' as const,
+    fileName: 'drap.csv',
+  });
+
+  it('matches an existing medicine by registration number and only proposes changes', async () => {
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      drapInput([
+        row('drap-old-registration', {
+          drapRegistrationNumber: 'old-registration',
+          productName: 'Official name',
+          brandName: 'Official brand',
+          manufacturer: 'Old maker',
+          strength: '500 mg',
+          dosageForm: 'tablet',
+          pack: '10 tablets',
+          rx: 'true',
+        }),
+      ])
+    );
+
+    expect(result).toMatchObject({ rowsApplied: 0, directFieldsApplied: 0, proposalRows: 1 });
+    expect(fixture.raw.medicine.update).not.toHaveBeenCalled();
+    expect(fixture.raw.pharmacyReferenceConnector.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId_key: { organizationId: 'org-a', key: 'drap-registry' } },
+      })
+    );
+    const proposal = fixture.proposals[0] as unknown as {
+      targetMedicineId: string;
+      payload: { values: Record<string, string>; source: Record<string, unknown> };
+    };
+    expect(proposal.targetMedicineId).toBe('medicine-a');
+    expect(proposal.payload.values).toEqual({
+      productName: 'Official name',
+      brandName: 'Official brand',
+      strength: '500 mg',
+      dosageForm: 'tablet',
+      pack: '10 tablets',
+      rx: 'true',
+    });
+    expect(proposal.payload.source).toMatchObject({
+      connectorId: 'drap-registry',
+      label: 'DRAP registry file',
+      rights: DRAP_REGISTRY_RIGHTS,
+    });
+  });
+
+  it('rejects a registration number that already matches two medicines', async () => {
+    fixture.raw.medicine.findMany.mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }]);
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      drapInput([
+        row('drap-dup', {
+          drapRegistrationNumber: 'dup',
+          productName: 'Twin',
+          strength: '1 mg',
+          dosageForm: 'tablet',
+          pack: '10 tablets',
+        }),
+      ])
+    );
+
+    expect(result).toMatchObject({ rowsRejected: 1, proposalRows: 0 });
+    expect(result.rejectionReasons).toEqual([
+      { rowSourceKey: 'drap-dup', reasons: ['AMBIGUOUS_DRAP_REGISTRATION'] },
+    ]);
+  });
+
+  it('keeps DRAP and manual uploads of the same rows as separate inputs', async () => {
+    const rows = [
+      row('same', { productName: 'X', strength: '1 mg', dosageForm: 'tablet', pack: '1 tablet' }),
+    ];
+    expect(manualConnectorInputDigest(drapInput(rows))).not.toBe(
+      manualConnectorInputDigest({ ...drapInput(rows), connectorKey: 'manual-file' })
+    );
   });
 });

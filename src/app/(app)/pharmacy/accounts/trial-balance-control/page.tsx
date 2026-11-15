@@ -14,6 +14,7 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -90,7 +91,13 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
         </label>
         <label className="grid gap-2 text-sm">
           From (UTC)
-          <Input className="min-h-11" name="from" type="date" defaultValue={controls?.from} required />
+          <Input
+            className="min-h-11"
+            name="from"
+            type="date"
+            defaultValue={controls?.from}
+            required
+          />
         </label>
         <label className="grid gap-2 text-sm">
           To, exclusive (UTC)
@@ -144,9 +151,9 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
   return (
     <SectionCard title={status} titleLevel={2}>
       <p className="text-sm text-text-muted">
-        Branch {state.scope.branchId}. Posted branch journal lines only; coverage and completeness
-        remain unknown. UTC window [{state.from.toISOString()}, {state.to.toISOString()}). Source:
-        finance_journal_lines. Retrieved {state.retrievedAt.toISOString()}.
+        Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
+        {formatUtcInstant(state.from)} to {formatUtcInstant(state.to)} (end exclusive). Source:
+        posted accounts. Retrieved {formatUtcInstant(state.retrievedAt)}.
       </p>
       <p className="mt-2 text-sm text-text-muted">
         A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of

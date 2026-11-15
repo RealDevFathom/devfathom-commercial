@@ -103,8 +103,8 @@ describe('pharmacy navigation', () => {
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
-  /** What a manager holding procurement and operational reports is granted (#979). */
-  const operatingCapabilities = ['pharmacy:procurement', 'reports:operational'];
+  /** What a manager holding procurement and operational reports is granted (#979, DEV-240). */
+  const operatingCapabilities = ['pharmacy:manage', 'pharmacy:procurement', 'reports:operational'];
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',
@@ -256,6 +256,7 @@ describe('pharmacy navigation', () => {
       expect(visible).toContain('/pharmacy/counter');
       for (const hidden of [
         '/pharmacy/counter/close',
+        '/pharmacy/inventory',
         '/pharmacy/reports',
         '/pharmacy/prescriptions',
         '/pharmacy/pharmacist-queue',
@@ -275,6 +276,17 @@ describe('pharmacy navigation', () => {
     it.each(capabilityGated)('keeps %s from an administrator the engine refuses', (route) => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
+
+    it.each(['pharmacy:inventory', 'pharmacy:manage'])(
+      'shows Inventory to a member holding %s, and always to administrators (DEV-240)',
+      (capability) => {
+        expect(hrefs('EMPLOYEE', ['pharmacy:counter', 'pharmacy:close'])).not.toContain(
+          '/pharmacy/inventory'
+        );
+        expect(hrefs('EMPLOYEE', [capability])).toContain('/pharmacy/inventory');
+        expect(hrefs('ADMIN')).toContain('/pharmacy/inventory');
+      }
+    );
 
     it('shows Substitution to a Pharmacy Safety holder without dispensing (DEV-35)', () => {
       const visible = hrefs('EMPLOYEE', ['pharmacy:safety']);

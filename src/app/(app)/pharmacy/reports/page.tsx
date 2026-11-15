@@ -26,6 +26,7 @@ import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { LostSalesRecovery } from './lost-sales-recovery';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { StaffingSuggestions } from './staffing-suggestions';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
@@ -451,7 +452,7 @@ export default async function PharmacyReportsPage({
           </nav>
         }
       />
-      <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
+      <SectionCard eyebrow="Reports" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             Branch
@@ -595,7 +596,7 @@ export default async function PharmacyReportsPage({
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
             <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
-            <span>Source: {result.freshness.source}</span>
+            <span>Source: {plainReportSource(result.freshness.source) ?? 'pharmacy records'}</span>
           </div>
           {section === 'sales' && metrics ? (
             <SectionCard
@@ -683,7 +684,7 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           {expiryAdvice ? (
             <SectionCard
-              eyebrow="AI-02 · Advisory only"
+              eyebrow="Advisory only"
               id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
@@ -781,7 +782,7 @@ export default async function PharmacyReportsPage({
             </SectionCard>
           ) : (
             <SectionCard
-              eyebrow="AI-02 · Owner only"
+              eyebrow="Owner only"
               id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
@@ -793,7 +794,7 @@ export default async function PharmacyReportsPage({
           )}
           {anomalies ? (
             <SectionCard
-              eyebrow="AI-04 / RPT-03 · Review only"
+              eyebrow="Review only"
               title="Anomaly review signals"
               titleLevel={2}
               actions={
@@ -984,11 +985,7 @@ export default async function PharmacyReportsPage({
               )}
             </SectionCard>
           ) : (
-            <SectionCard
-              eyebrow="AI-04 / RPT-03 · Owner only"
-              title="Anomaly review signals"
-              titleLevel={2}
-            >
+            <SectionCard eyebrow="Owner only" title="Anomaly review signals" titleLevel={2}>
               <p className="text-sm text-text-muted">
                 Financial report and owner permissions are required to view anomaly evidence.
               </p>
@@ -1102,7 +1099,9 @@ export default async function PharmacyReportsPage({
                           <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
                             <div>
                               <dt className="inline font-semibold">Source: </dt>
-                              <dd className="inline">{contract.source ?? 'Not available'}</dd>
+                              <dd className="inline">
+                                {plainReportSource(contract.source) ?? 'Not recorded'}
+                              </dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold">Scope: </dt>
@@ -1113,8 +1112,10 @@ export default async function PharmacyReportsPage({
                               </dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold">Permission: </dt>
-                              <dd className="inline">{contract.permission}</dd>
+                              <dt className="inline font-semibold">Access: </dt>
+                              <dd className="inline">
+                                {plainReportPermission(contract.permission)}
+                              </dd>
                             </div>
                           </dl>
                           {contract.drillThrough ? (
@@ -1139,11 +1140,7 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           {digest ? (
             <>
-              <SectionCard
-                eyebrow="RPT-03 · Scheduled delivery"
-                title="Daily owner digest"
-                titleLevel={2}
-              >
+              <SectionCard eyebrow="Scheduled delivery" title="Daily owner digest" titleLevel={2}>
                 <p className="text-sm text-text-muted">
                   Opt in per branch. Times use your workspace timezone. Capture history is always
                   stored; WhatsApp remains disabled until a provider integration is implemented.
@@ -1244,7 +1241,7 @@ export default async function PharmacyReportsPage({
               </SectionCard>
             </>
           ) : (
-            <SectionCard eyebrow="RPT-03 · Owner only" title="Daily owner digest" titleLevel={2}>
+            <SectionCard eyebrow="Owner only" title="Daily owner digest" titleLevel={2}>
               <p className="text-sm text-text-muted">
                 Digest settings and history require owner permission. Reports remain available on
                 demand.

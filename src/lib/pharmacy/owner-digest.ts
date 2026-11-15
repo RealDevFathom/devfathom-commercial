@@ -20,6 +20,12 @@ import {
   type OwnerBriefing,
   type OwnerBriefingCadence,
 } from './owner-briefing';
+import {
+  renderRenewalReminderLine,
+  renderRenewalWhatsApp,
+  type RenewalReminder,
+} from './licence-renewal';
+import { readLicenceRenewalReminders } from './licence-renewal-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
@@ -59,6 +65,8 @@ export type OwnerDigest = {
   anomalies: Awaited<ReturnType<typeof readPharmacyAnomalySignals>>;
   /** Daily briefing, plus the weekly summary on the configured weekday. */
   briefings: OwnerBriefing[];
+  /** #720 — licences and registrations inside a 90/60/30/7-day renewal window. */
+  renewals: RenewalReminder[];
   /** In-app text; the only rendering that names the top gap. */
   rendered: string;
   /**
@@ -98,6 +106,11 @@ function safeWhatsAppBody(briefings: OwnerBriefing[]): string | null {
   }
 }
 
+function joinWhatsApp(...parts: Array<string | null>): string | null {
+  const present = parts.filter((part): part is string => part !== null);
+  return present.length > 0 ? present.join('\n\n') : null;
+}
+
 export async function composeOwnerDigest(
   db: ScopedDb,
   input: {
@@ -115,9 +128,14 @@ export async function composeOwnerDigest(
     from: input.businessDate,
     to: input.businessDate,
   };
-  const [report, anomalies] = await Promise.all([
+  const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
     readPharmacyAnomalySignals(db, filters),
+    // Additive line: an unreadable reminder never blocks the digest itself.
+    readLicenceRenewalReminders(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+    }).catch((): RenewalReminder[] => []),
   ]);
   const config = ownerBriefingConfig();
   const cadences: OwnerBriefingCadence[] = isWeeklyBriefingDay(input.businessDate, config)
@@ -150,14 +168,16 @@ export async function composeOwnerDigest(
     metrics,
     anomalies,
     briefings,
+    renewals,
     rendered: [
       `Daily owner digest · ${input.branchName} · ${input.businessDate}`,
       ...briefings.map(renderOwnerBriefingApp),
       ...metrics.map((metric) => `${metric.label}: ${renderValue(metric.key, metric.value)}`),
       ...renderAnomalyDigest(anomalies),
+      ...renewals.map(renderRenewalReminderLine),
       `As of ${report.freshness.asOf}`,
     ].join('\n'),
-    whatsappBody: safeWhatsAppBody(briefings),
+    whatsappBody: joinWhatsApp(safeWhatsAppBody(briefings), renderRenewalWhatsApp(renewals)),
   };
 }
 

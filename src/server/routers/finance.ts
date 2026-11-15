@@ -15,6 +15,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { invoiceTotals, invoiceTotalsError } from '@/lib/finance/invoice-totals';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { paymentLedgerDeleteError, paymentLedgerUpdateError } from '@/lib/finance/payment-ledger';
@@ -97,6 +98,7 @@ export const createInvoiceInputSchema = z.object({
     .max(1_000, 'Invoice must have 1,000 line items or fewer'),
   subtotal: nonNegativeMoney(),
   tax: nonNegativeMoney().default(0),
+  discount: nonNegativeMoney().default(0),
   total: nonNegativeMoney(),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.date(),
@@ -337,7 +339,7 @@ export const financeRouter = router({
     await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
     await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
     // FIN-01: never trust client-sent money. Derive every line `amount`, the
-    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+    // `subtotal` and the `total` from quantity × rate (− discount + tax) on the server, so
     // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
     // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
     const lineItems = input.items.map((it) => ({
@@ -346,9 +348,14 @@ export const financeRouter = router({
       rate: it.rate,
       amount: multiplyMoney(it.quantity, it.rate),
     }));
-    const subtotal = sumMoney(lineItems.map((it) => it.amount));
-    const tax = round2(input.tax ?? 0);
-    const total = sumMoney([subtotal, tax]);
+    const totals = invoiceTotals(
+      lineItems.map((it) => it.amount),
+      input.tax,
+      input.discount
+    );
+    const totalsError = invoiceTotalsError(totals);
+    if (totalsError) throw new TRPCError({ code: 'BAD_REQUEST', message: totalsError });
+    const { subtotal, tax, discount, total } = totals;
     assertDerivedInvoiceMoney(lineItems, subtotal, total);
 
     // INV-<year>-<n>, unique per organization and allocated under a per-tenant
@@ -362,6 +369,7 @@ export const financeRouter = router({
           items: lineItems,
           subtotal,
           tax,
+          discount,
           total,
           currency: input.currency,
           status: 'DRAFT',
@@ -384,7 +392,7 @@ export const financeRouter = router({
 
   // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
   // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE
-  // from quantity × rate (+ tax) — a caller-supplied total is never trusted (FIN-01).
+  // from quantity × rate (− discount + tax) — a caller-supplied total is never trusted (FIN-01).
   // Only a DRAFT or SENT invoice may be edited; a PAID/CANCELLED/OVERDUE invoice is
   // settled or void and its figures are frozen.
   updateInvoice: adminProcedure
@@ -402,6 +410,7 @@ export const financeRouter = router({
           .min(1)
           .max(1_000),
         tax: nonNegativeMoney().optional(),
+        discount: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
         notes: z.string().optional(),
         status: z.enum(['DRAFT', 'SENT']).optional(),
@@ -416,9 +425,7 @@ export const financeRouter = router({
         amount: multiplyMoney(it.quantity, it.rate),
       }));
       const subtotal = sumMoney(lineItems.map((it) => it.amount));
-      const tax = round2(input.tax ?? 0);
-      const total = sumMoney([subtotal, tax]);
-      assertDerivedInvoiceMoney(lineItems, subtotal, total);
+      assertDerivedInvoiceMoney(lineItems, subtotal, subtotal);
 
       const invoice = await ctx.db.$transaction(async (tx) => {
         // Serialize edits with payment settlement. Without this lock, a payment can
@@ -426,7 +433,7 @@ export const financeRouter = router({
         await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
         const current = await tx.invoice.findUnique({
           where: { id: input.id },
-          select: { status: true },
+          select: { status: true, tax: true, discount: true },
         });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
         if (current.status !== 'DRAFT' && current.status !== 'SENT') {
@@ -436,7 +443,15 @@ export const financeRouter = router({
           });
         }
 
-        const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+        // Omitted adjustments retain their stored values, read under the settlement lock.
+        const totals = invoiceTotals(
+          lineItems.map((it) => it.amount),
+          input.tax ?? Number(current.tax ?? 0),
+          input.discount ?? Number(current.discount ?? 0)
+        );
+        const totalsError = invoiceTotalsError(totals);
+        if (totalsError) throw new TRPCError({ code: 'BAD_REQUEST', message: totalsError });
+        const data: Record<string, unknown> = { items: lineItems, ...totals };
         if (input.dueDate) data.dueDate = input.dueDate;
         if (input.notes !== undefined) data.notes = input.notes.trim() || null;
         if (input.status && input.status !== current.status) {

@@ -1323,6 +1323,43 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
 
+  it('refuses a supplier bill that is already filed, in any letter case, before any write (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'POSTED',
+    });
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, supplierInvoiceRef: 'inv-8841' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: expect.any(String),
+          supplierId: 'supplier_a',
+          supplierInvoiceRef: { equals: 'inv-8841', mode: 'insensitive' },
+        },
+      })
+    );
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a duplicate direct purchase bill before the approver PIN is checked (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'DRAFT',
+    });
+    await expect(
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Cash and carry', approvedByUserId: 'approver_a', pin: '1234' },
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
   it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
     'keeps a %s DENY effective for a tenant admin without a role',
     async (capability) => {
@@ -3064,6 +3101,7 @@ const readActions = {
   requisitions: () => caller().requisitions(),
   purchaseOrders: () => caller().purchaseOrders(),
   receivedAgainstOrder: () => caller().receivedAgainstOrder({ purchaseOrderId: 'po_a' }),
+  officialPriceAlerts: () => caller().officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
@@ -3550,4 +3588,32 @@ it('does not let self-provisioning reactivate an archived staff profile', async 
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
   expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+});
+
+describe('DEV-693 official price hints at goods-in', () => {
+  function withAlerts() {
+    const findMany = vi.fn(async () => []);
+    Object.assign(db, { pharmacyDrapPriceAlert: { findMany } });
+    return findMany;
+  }
+
+  it('gives a receiver without price access no hint and reads no alert', async () => {
+    const findMany = withAlerts();
+    await expect(caller().officialPriceAlerts({ medicineIds: ['med_a'] })).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads only open alerts of the caller tenant for the medicines on the bench', async () => {
+    const findMany = withAlerts();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) =>
+        action === 'pharmacy:procurement' || action === 'pharmacy:safety'
+    );
+    await caller().officialPriceAlerts({ medicineIds: ['med_a'] });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', dismissedAt: null, medicineId: { in: ['med_a'] } },
+      })
+    );
+  });
 });

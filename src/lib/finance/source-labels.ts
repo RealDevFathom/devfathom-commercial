@@ -16,6 +16,7 @@ const FINANCE_SOURCE_LABELS = {
   PHARMACY_OPENING_LEDGER: 'Opening balance',
   PHARMACY_BOOKKEEPING_TRANSACTION: 'Bookkeeping transaction',
   PHARMACY_JOURNAL_VOUCHER: 'Journal voucher',
+  PHARMACY_AP_INVOICE: 'Supplier expense invoice',
 } as const satisfies Readonly<Record<FinanceSourceKind, string>>;
 
 export function financeSourceLabel(code: string): string {

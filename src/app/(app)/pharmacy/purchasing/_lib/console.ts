@@ -18,12 +18,12 @@ import { createTRPCContext } from '@/server/trpc';
 export const PURCHASING_ROUTE = '/pharmacy/purchasing';
 
 export const PURCHASING_TABS = [
-  { href: PURCHASING_ROUTE, label: 'Overview', requirement: 'PUR-01..06' },
-  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers', requirement: 'PUR-01' },
-  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders', requirement: 'PUR-02/03' },
-  { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder', requirement: 'DEV-678' },
-  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in', requirement: 'PUR-02/04/05' },
-  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims', requirement: 'PUR-06' },
+  { href: PURCHASING_ROUTE, label: 'Overview' },
+  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers' },
+  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders' },
+  { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder' },
+  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in' },
+  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims' },
 ] as const;
 
 /**
@@ -136,6 +136,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
       'A controlled medicine needs the qualified person named on the receipt to enter their PIN before it can be posted.',
     field: 'witnessPin',
   },
+  DUPLICATE_SUPPLIER_INVOICE: {
+    message:
+      'This supplier invoice is already filed as a receipt from this supplier. A bill is received once; check the invoice number against the receipts list.',
+    field: 'supplierInvoiceRef',
+  },
   DUPLICATE_SERIAL: {
     message:
       'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.',
@@ -166,6 +171,7 @@ const KNOWN_REJECTIONS = new Set([
   'SELF_VERIFICATION',
   APPROVAL_BLOCKED,
   'DUPLICATE_SERIAL',
+  'DUPLICATE_SUPPLIER_INVOICE',
   'EXPIRED_PACK',
   'GS1_INVALID',
   'GTIN_MEDICINE_MISMATCH',
