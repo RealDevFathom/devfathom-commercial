@@ -1035,7 +1035,7 @@
   --accent: #30302d;
   --accent-foreground: #f7f7f4;
   --border: var(--border-subtle);
-  --input: var(--border-default);
+  --input: #7a7971; /* 3.2:1 on raised/card surfaces (WCAG 1.4.11) */
   --ring: var(--accent-brand);
   --sidebar: #242422;
   --sidebar-foreground: #dfdfda;
