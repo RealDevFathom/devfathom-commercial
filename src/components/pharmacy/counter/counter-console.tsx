@@ -44,6 +44,7 @@ import {
   type CounterReceiptPresentationResult,
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
+import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
@@ -2245,6 +2246,13 @@ function ScopedPharmacyCounterConsole({
             className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
           >
             <CounterReturnPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={todayBusinessDate}
+            />
+            <CounterKhataPaymentPanel
               branchId={branchId}
               organizationId={organizationId}
               accountId={accountId}
