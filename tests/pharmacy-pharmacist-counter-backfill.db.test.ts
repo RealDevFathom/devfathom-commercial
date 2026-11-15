@@ -11,6 +11,8 @@ const client = new pg.Client({ connectionString: url });
 const suffix = randomUUID().replaceAll('-', '');
 const org = `qa1241_${suffix}`;
 const other = `${org}_other`;
+// Roles are unique per (organization, key), so the custom lookalike needs its own tenant.
+const lookalike = `${org}_lookalike`;
 const restaurant = `${org}_restaurant`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -43,6 +45,7 @@ const allow = (capabilities: string[]) =>
     for (const [organizationId, vertical] of [
       [org, 'PHARMACY'],
       [other, 'PHARMACY'],
+      [lookalike, 'PHARMACY'],
       [restaurant, 'RESTAURANT'],
     ] as const) {
       await client.query(
@@ -53,7 +56,7 @@ const allow = (capabilities: string[]) =>
     for (const [key, roleKey, isSystem, roleOrg] of [
       ['system', 'pharmacist', true, org],
       ['denied', 'pharmacist', true, other],
-      ['custom', 'pharmacist', false, other],
+      ['custom', 'pharmacist', false, lookalike],
       ['restaurant', 'pharmacist', true, restaurant],
       ['finance', 'finance', true, org],
     ] as const) {
@@ -103,18 +106,18 @@ const allow = (capabilities: string[]) =>
 
   it('writes the grant into the role organization and is idempotent', async () => {
     const tenants = await client.query<{ mismatched: number }>(
-      `SELECT count(*)::int AS mismatched FROM organization_role_permissions p JOIN organization_roles r ON r.id=p."organizationRoleId" WHERE r."organizationId" IN ($1,$2,$3) AND p."organizationId"<>r."organizationId"`,
-      [org, other, restaurant]
+      `SELECT count(*)::int AS mismatched FROM organization_role_permissions p JOIN organization_roles r ON r.id=p."organizationRoleId" WHERE r."organizationId" IN ($1,$2,$3,$4) AND p."organizationId"<>r."organizationId"`,
+      [org, other, lookalike, restaurant]
     );
     expect(tenants.rows[0]!.mismatched).toBe(0);
     const before = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, lookalike, restaurant]
     );
     await client.query(migration);
     const after = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, lookalike, restaurant]
     );
     expect(after.rows).toEqual(before.rows);
   });
