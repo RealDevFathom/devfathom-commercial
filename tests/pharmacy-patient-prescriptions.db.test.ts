@@ -170,12 +170,17 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
     await secondFill!.query('BEGIN');
     const secondPid = (await secondFill!.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
       .rows[0]!.pid;
-    const competingFill = secondFill!.query(
-      `INSERT INTO pharmacy_prescription_fills
-        (id, "prescriptionLineId", "fillSequence", "quantityCanonicalUnits",
-         "dispensedByUserId", "idempotencyKey")
-       VALUES ($1, $2, 1, 60, $3, $4)`,
-      [id('fill_second'), lineA, id('dispenser'), id('fill_key_second')]
+    // Attach the rejection assertion now: PostgreSQL can reject the competing
+    // insert as soon as the first transaction commits, before a later await
+    // would install a handler, which surfaces as an unhandled rejection.
+    const competingFill = expectPgCode('23514', () =>
+      secondFill!.query(
+        `INSERT INTO pharmacy_prescription_fills
+          (id, "prescriptionLineId", "fillSequence", "quantityCanonicalUnits",
+           "dispensedByUserId", "idempotencyKey")
+         VALUES ($1, $2, 1, 60, $3, $4)`,
+        [id('fill_second'), lineA, id('dispenser'), id('fill_key_second')]
+      )
     );
 
     let observedLockWait = false;
@@ -193,7 +198,7 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
     expect(observedLockWait).toBe(true);
 
     await firstFill!.query('COMMIT');
-    await expectPgCode('23514', () => competingFill);
+    await competingFill;
     await secondFill!.query('ROLLBACK');
 
     const cumulative = await runtime!.query<{ fills: number; units: number }>(

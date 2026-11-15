@@ -15,6 +15,36 @@ export type RuntimeRoleClient = {
   query<Row = never>(sql: string, values?: unknown[]): Promise<QueryResult<Row>>;
 };
 type Logger = Pick<Console, 'log' | 'warn'>;
+export type OpenExtensionAdmin = () => Promise<RuntimeRoleClient>;
+
+const SIMILARITY_FUNCTION = 'public.similarity_op(text,text)';
+const SIMILARITY_GRANT = `GRANT EXECUTE ON FUNCTION ${SIMILARITY_FUNCTION} TO ${ROLE_NAME}`;
+// prepare-extensions.ts revokes PUBLIC EXECUTE as the extension owner, so a migration role that is
+// neither that owner nor a superuser holds no privilege on similarity_op and cannot grant it.
+// The extension administrator grants it as the owner instead, exactly as the revoke was made.
+export const OWNER_SIMILARITY_GRANT = `DO $similarity_grant$
+DECLARE
+  owner_name name;
+  configured_role_is_superuser boolean;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(procedure.proowner)
+    INTO STRICT owner_name
+    FROM pg_catalog.pg_proc AS procedure
+   WHERE procedure.oid = '${SIMILARITY_FUNCTION}'::regprocedure;
+  SELECT role.rolsuper
+    INTO STRICT configured_role_is_superuser
+    FROM pg_catalog.pg_roles AS role
+   WHERE role.rolname = current_user;
+  IF NOT configured_role_is_superuser AND owner_name <> current_user THEN
+    IF NOT pg_catalog.pg_has_role(current_user, owner_name, 'SET') THEN
+      RAISE EXCEPTION 'extension administrator % cannot SET ROLE to similarity_op owner %',
+        current_user, owner_name USING ERRCODE = '42501';
+    END IF;
+    EXECUTE format('SET LOCAL ROLE %I', owner_name);
+  END IF;
+  ${SIMILARITY_GRANT};
+END
+$similarity_grant$`;
 
 const ATTRIBUTE_QUERY = `
   SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit
@@ -37,6 +67,46 @@ function hasRequiredPosture(role: RoleAttributes | undefined): role is RoleAttri
   );
 }
 
+async function canExecuteSimilarity(client: RuntimeRoleClient): Promise<boolean> {
+  const result = await client.query<{ allowed: boolean }>(
+    `SELECT has_function_privilege('${ROLE_NAME}', '${SIMILARITY_FUNCTION}', 'EXECUTE') AS allowed`
+  );
+  return result.rows[0]?.allowed === true;
+}
+
+async function grantSimilarity(
+  client: RuntimeRoleClient,
+  openExtensionAdmin: OpenExtensionAdmin | undefined,
+  logger: Logger
+): Promise<void> {
+  try {
+    await client.query(SIMILARITY_GRANT);
+    logger.log('medicine search similarity operator: granted');
+    return;
+  } catch (error) {
+    if (!isPermissionDenied(error)) throw error;
+  }
+  if (openExtensionAdmin) {
+    const admin = await openExtensionAdmin();
+    await admin.query('BEGIN');
+    try {
+      await admin.query(OWNER_SIMILARITY_GRANT);
+      await admin.query('COMMIT');
+    } catch (error) {
+      await admin.query('ROLLBACK');
+      throw error;
+    }
+    logger.log('medicine search similarity operator: granted (as extension owner)');
+  }
+  if (!(await canExecuteSimilarity(client)))
+    throw new Error(
+      `${ROLE_NAME} cannot execute ${SIMILARITY_FUNCTION}, and DATABASE_URL may not grant it. ` +
+        'Set EXTENSION_ADMIN_DATABASE_URL, or rerun prisma/prepare-extensions.ts now that the role exists.'
+    );
+  if (!openExtensionAdmin)
+    logger.log('medicine search similarity operator: skipped (already executable)');
+}
+
 async function readRole(client: RuntimeRoleClient): Promise<RoleAttributes | undefined> {
   return (await client.query<RoleAttributes>(ATTRIBUTE_QUERY)).rows[0];
 }
@@ -44,7 +114,8 @@ async function readRole(client: RuntimeRoleClient): Promise<RoleAttributes | und
 export async function prepareRuntimeRole(
   client: RuntimeRoleClient,
   password: string | undefined,
-  logger: Logger = console
+  logger: Logger = console,
+  openExtensionAdmin?: OpenExtensionAdmin
 ): Promise<void> {
   let role = await readRole(client);
   if (!role) {
@@ -97,10 +168,6 @@ export async function prepareRuntimeRole(
       `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ROLE_NAME}`,
     ],
     [
-      'medicine search similarity operator',
-      `GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${ROLE_NAME}`,
-    ],
-    [
       'future tables',
       `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${ROLE_NAME}`,
     ],
@@ -113,6 +180,7 @@ export async function prepareRuntimeRole(
     await client.query(sql);
     logger.log(`${step}: granted`);
   }
+  await grantSimilarity(client, openExtensionAdmin, logger);
 
   const finalRole = await readRole(client);
   if (!hasRequiredPosture(finalRole))
@@ -141,12 +209,33 @@ async function main() {
     appUrl.pathname !== adminUrl.pathname
   )
     throw new Error('APP_DATABASE_URL must target the same server and database as DATABASE_URL.');
+  const extensionAdminUrl = process.env.EXTENSION_ADMIN_DATABASE_URL || undefined;
+  if (extensionAdminUrl) {
+    const extensionUrl = new URL(extensionAdminUrl);
+    if (
+      extensionUrl.hostname !== adminUrl.hostname ||
+      extensionUrl.port !== adminUrl.port ||
+      extensionUrl.pathname !== adminUrl.pathname
+    )
+      throw new Error(
+        'EXTENSION_ADMIN_DATABASE_URL must target the same server and database as DATABASE_URL.'
+      );
+  }
   const client = new pg.Client({ connectionString: adminUrl.toString() });
+  let extensionAdmin: pg.Client | undefined;
+  const openExtensionAdmin = extensionAdminUrl
+    ? async () => {
+        extensionAdmin = new pg.Client({ connectionString: extensionAdminUrl });
+        await extensionAdmin.connect();
+        return extensionAdmin;
+      }
+    : undefined;
   try {
     await client.connect();
     const password = appUrl.password ? decodeURIComponent(appUrl.password) : undefined;
-    await prepareRuntimeRole(client, password);
+    await prepareRuntimeRole(client, password, console, openExtensionAdmin);
   } finally {
+    await extensionAdmin?.end();
     await client.end();
   }
 }

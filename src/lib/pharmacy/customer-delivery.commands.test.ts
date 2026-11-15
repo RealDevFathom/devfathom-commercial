@@ -65,7 +65,14 @@ it('refunds actual partial cash before voiding a physically returned open sale',
     scope,
     expect.objectContaining({ originalTenderId: 'tender-a', amountMinor: 400 })
   );
-  expect(changeSaleStatus).toHaveBeenCalledWith(db, scope, 'sale-a', 'void', expect.any(String));
+  expect(changeSaleStatus).toHaveBeenCalledWith(
+    db,
+    scope,
+    'sale-a',
+    'void',
+    { kind: 'FAILED_DELIVERY_RETURN' },
+    expect.any(String)
+  );
   expect(vi.mocked(refundPharmacyTender).mock.invocationCallOrder[0]).toBeLessThan(
     vi.mocked(changeSaleStatus).mock.invocationCallOrder[0]
   );
