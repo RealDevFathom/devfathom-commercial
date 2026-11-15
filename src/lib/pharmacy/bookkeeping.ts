@@ -1,3 +1,5 @@
+import { settleFamilyKhata } from './family-khata';
+import { earnCollectedKhata, reverseCollectedKhata } from './loyalty-collection';
 import type {
   Currency,
   PharmacyAllocationSourceKind,
@@ -129,6 +131,12 @@ export async function postBookkeepingTransaction(
   }
   if (allocated > input.amountMinor) throw new PharmacyBookkeepingError('INVALID_ALLOCATION');
 
+  if (
+    allocations.some((row) => row.sourceKind === 'CUSTOMER_KHATA') &&
+    (input.kind !== 'CUSTOMER_RECEIPT' || (input.currency && input.currency !== 'PKR'))
+  )
+    throw new PharmacyBookkeepingError('INVALID_ALLOCATION');
+
   const replay = await db.pharmacyBookkeepingTransaction.findFirst({
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
     include: { allocations: true },
@@ -168,6 +176,18 @@ export async function postBookkeepingTransaction(
     currency: input.currency ?? 'PKR',
     lines: bookkeepingJournalLines(input).map((line) => ({ ...line, branchId: scope.branchId })),
   });
+  if (allocations.some(row => row.sourceKind === 'CUSTOMER_KHATA'))
+    await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`);
+  for (const allocation of allocations.filter((row) => row.sourceKind === 'CUSTOMER_KHATA')) {
+    const settled = await settleFamilyKhata(db, scope, {
+      familyAccountId: allocation.sourceId,
+      amountMinor: allocation.amountMinor,
+      occurredAt: input.occurredAt,
+      collectionId: transaction.id,
+    });
+    for (const payment of settled.allocations)
+      await earnCollectedKhata(db, scope, payment.id, transaction.id);
+  }
   return db.pharmacyBookkeepingTransaction.update({
     where: { id: transaction.id },
     data: { status: 'POSTED', postedAt: new Date(), journalEntryId: entry.id },
@@ -193,6 +213,10 @@ export async function reverseBookkeepingTransaction(
   if (!transaction?.journalEntryId) throw new PharmacyBookkeepingError('NOT_FOUND');
   if (transaction.status === 'REVERSED') return transaction;
   if (transaction.status !== 'POSTED') throw new PharmacyBookkeepingError('INVALID_STATE');
+  if (transaction.kind === 'CUSTOMER_RECEIPT') {
+    await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`);
+    await reverseCollectedKhata(db, scope, transaction.id);
+  }
   const reversal = await reverseJournalEntry(db, scope, {
     entryId: transaction.journalEntryId,
     reason: input.reason,

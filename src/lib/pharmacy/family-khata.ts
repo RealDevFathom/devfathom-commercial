@@ -23,7 +23,7 @@ export class FamilyKhataError extends Error {
 }
 
 export type KhataHistoryEntry = {
-  kind: 'CHARGE' | 'PAYMENT' | 'DISHONOURED_CHEQUE';
+  kind: 'CHARGE' | 'PAYMENT' | 'DISHONOURED_CHEQUE' | 'PAYMENT_REVERSAL';
   amountMinor: number;
   occurredAt: Date;
   dueAt?: Date | null;
@@ -58,7 +58,8 @@ export function calculateKhataHealthSuggestion(
     (entry) => entry.occurredAt >= windowStart && entry.occurredAt <= windowEnd
   );
   const charges = entries.filter((entry) => entry.kind === 'CHARGE');
-  const payments = entries.filter((entry) => entry.kind === 'PAYMENT');
+  const reversedPaymentIds = new Set(history.filter(entry => entry.kind === 'PAYMENT_REVERSAL').map(entry => entry.settlesChargeId));
+  const payments = entries.filter((entry) => entry.kind === 'PAYMENT' && !reversedPaymentIds.has(entry.id));
   const dishonouredCheques = entries.filter((entry) => entry.kind === 'DISHONOURED_CHEQUE').length;
   const paidChargeIds = new Set(payments.map((payment) => payment.settlesChargeId));
   const overdueChargeCount = charges.filter(
@@ -152,10 +153,11 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; collectionId?: string }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
+  if (input.collectionId) await lockKhataCollection(db, scope, input.familyAccountId);
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
   );
@@ -168,8 +170,13 @@ export async function settleFamilyKhata(
     orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
   });
   const paidByCharge = new Map<string, number>();
+  const reversedPayments = new Set(
+    events
+      .filter((event) => event.kind === 'PAYMENT_REVERSAL')
+      .map((event) => event.settlesChargeId)
+  );
   for (const event of events)
-    if (event.kind === 'PAYMENT' && event.settlesChargeId)
+    if (event.kind === 'PAYMENT' && event.settlesChargeId && !reversedPayments.has(event.id))
       paidByCharge.set(
         event.settlesChargeId,
         (paidByCharge.get(event.settlesChargeId) ?? 0) + event.amountMinor
@@ -196,6 +203,7 @@ export async function settleFamilyKhata(
           branchId: scope.branchId,
           familyAccountId: input.familyAccountId,
           kind: 'PAYMENT',
+          note: input.collectionId ? `Collection ${input.collectionId}` : undefined,
           amountMinor,
           occurredAt: input.occurredAt,
           settlesChargeId: item.charge.id,
@@ -413,4 +421,21 @@ export async function authorizeKhataCharge(
     });
   }
   return account;
+}
+
+/** Match refund lock order: sale, then family, then customer consent. */
+export async function lockKhataCollection(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  familyAccountId: string
+) {
+  await db.$queryRaw(Prisma.sql`
+    SELECT s.id FROM pharmacy_sales s
+    JOIN pharmacy_tenders t ON t."organizationId"=s."organizationId" AND t."saleId"=s.id
+    JOIN pharmacy_khata_events k ON k."organizationId"=t."organizationId" AND k.id='khata:' || t.id
+    WHERE s."organizationId"=${scope.organizationId} AND s."branchId"=${scope.branchId}
+      AND k."familyAccountId"=${familyAccountId} AND k.kind='CHARGE'
+    ORDER BY s.id FOR UPDATE OF s`);
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_family_accounts
+    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${familyAccountId} FOR UPDATE`);
 }

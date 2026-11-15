@@ -40,10 +40,24 @@ describe('CRM-L01 pharmacy loyalty', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('accrues whole points from net paid excluding loyalty tender', async () => {
+  it('accrues whole points at an explicitly configured rate, excluding loyalty tender', async () => {
     expect(pointsForNetPaid(10_099)).toBe(100);
     const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
     const db = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'customer-a', patientId: 'patient-a' }]),
+      pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }) },
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+      pharmacyLoyaltyProgramVersion: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'program-a',
+            mode: 'PERCENT',
+            rewardPoints: 1,
+            spendMinor: 100,
+          }),
+      },
       pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
       pharmacySale: {
         findFirst: vi.fn().mockResolvedValue({
@@ -66,6 +80,17 @@ describe('CRM-L01 pharmacy loyalty', () => {
     const prior = { id: 'earn-a', points: 12, idempotencyKey: 'loyalty:earn:sale-a' };
     const create = vi.fn();
     const db = {
+      pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+      pharmacyLoyaltyProgramVersion: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'program-a',
+            mode: 'PERCENT',
+            rewardPoints: 1,
+            spendMinor: 100,
+          }),
+      },
       pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(prior), create },
     };
     await expect(accrueSalePoints(db as never, scope, 'sale-a')).resolves.toMatchObject({
@@ -91,6 +116,17 @@ describe('CRM-L01 pharmacy loyalty', () => {
       return created;
     });
     const db = {
+      pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+      pharmacyLoyaltyProgramVersion: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'program-a',
+            mode: 'PERCENT',
+            rewardPoints: 1,
+            spendMinor: 100,
+          }),
+      },
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockImplementation(async () => created),
         findFirst: vi.fn().mockResolvedValue({ points: -20 }),
@@ -129,6 +165,17 @@ describe('CRM-L01 pharmacy loyalty', () => {
           phoneLast4: '1234',
           creditLimitMinor: 20_000,
         }),
+      },
+      pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+      pharmacyLoyaltyProgramVersion: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'program-a',
+            mode: 'PERCENT',
+            rewardPoints: 1,
+            spendMinor: 100,
+          }),
       },
       pharmacyLoyaltyPointsEntry: {
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: 35 } }),

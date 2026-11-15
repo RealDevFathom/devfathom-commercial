@@ -86,6 +86,12 @@ function fixture() {
       create: vi.fn().mockResolvedValue({ id: 'tender-a', createdAt: new Date() }),
     },
     pharmacySaleEvent: { create: vi.fn() },
+    pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+    pharmacyLoyaltyProgramVersion: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ id: 'program-a', mode: 'PERCENT', rewardPoints: 1, spendMinor: 100 }),
+    },
     pharmacyLoyaltyPointsEntry: {
       findUnique: vi.fn().mockResolvedValue(null),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 10 } }),

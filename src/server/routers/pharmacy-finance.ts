@@ -170,6 +170,16 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  khataCollectionAccounts: bookkeepingProcedure.input(z.object({ branchId: id })).query(async ({ ctx, input }) => {
+    const scoped = await scope(ctx, input.branchId);
+    return ctx.db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${scoped.branchId}, true)`;
+      return tx.pharmacyFamilyAccount.findMany({
+        where: { organizationId: scoped.organizationId, branchId: scoped.branchId, active: true },
+        select: { id: true, displayName: true }, orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+      });
+    });
+  }),
   cashFlowForecast: ledgerReportProcedure.input(cashFlowForecastInput).query(({ input }) => {
     try {
       return forecastPharmacyCashFlow(input);

@@ -1,4 +1,6 @@
 import 'server-only';
+import { lockLoyaltyOrganization } from './loyalty-program';
+import { reverseVersionedEarns } from './loyalty-versioned-refund';
 
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
@@ -28,6 +30,7 @@ export async function reverseRefundedEarnedPoints(
   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales
     WHERE id=${refund.saleId} AND "organizationId"=${scope.organizationId}
       AND "branchId"=${scope.branchId} FOR UPDATE`);
+  await lockLoyaltyOrganization(db, scope.organizationId);
   await lockCustomerConsent(db, scope.organizationId, customerId);
   const key = `loyalty:earn-reversal:${refund.id}`;
   const prior = await db.pharmacyLoyaltyPointsEntry.findUnique({
@@ -55,6 +58,12 @@ export async function reverseRefundedEarnedPoints(
     where: { ...binding, kind: 'EARN' },
   });
   if (!earn) return null;
+  if (earn.programVersionId)
+    return reverseVersionedEarns(db, scope, {
+      refundId: refund.id,
+      saleId: refund.saleId,
+      customerId,
+    });
   // Stops the operator's refund and names who must look, so a deliberate TRPCError.
   if (earn.netPaidMinor === null || earn.points !== pointsForNetPaid(earn.netPaidMinor))
     throw new TRPCError({

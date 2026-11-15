@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   updateCustomers: vi.fn(),
   findCustomer: vi.fn(),
   annotateAudit: vi.fn(),
+  configure: vi.fn(),
+  transaction: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/loyalty-program', () => ({ configureLoyaltyProgram: mocks.configure }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/abac', async () => ({
@@ -43,6 +46,7 @@ function caller({
 } = {}) {
   return pharmacyLoyaltyRouter.createCaller({
     db: {
+      $transaction: mocks.transaction,
       pharmacyBranch: { findMany: mocks.branches, findFirst: mocks.branch },
       pharmacyCustomer: { updateMany: mocks.updateCustomers, findFirst: mocks.findCustomer },
     },
@@ -58,6 +62,7 @@ function caller({
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.transaction.mockImplementation(async (run) => run({ transaction: true }));
   mocks.can.mockResolvedValue(true);
   mocks.licensed.mockReturnValue(true);
   mocks.branches.mockResolvedValue([]);
@@ -193,5 +198,50 @@ describe('ordinary loyalty router visibility', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(mocks.updateCustomers).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+});
+
+const config = {
+  option: 'percent-1' as const,
+  khataEnabled: true,
+  approveReconciliation: true as const,
+  reconciliationDigest: 'a'.repeat(64),
+};
+describe('DEV-746 owner earning configuration', () => {
+  it('derives the rate and tenant on the server and audits its version', async () => {
+    mocks.configure.mockResolvedValue({ id: 'program-a', version: 1 });
+    await caller().configure(config);
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.configure).toHaveBeenCalledWith(
+      { transaction: true },
+      'org-a',
+      'owner-a',
+      expect.objectContaining({ mode: 'PERCENT', rewardPoints: 1, spendMinor: 10000 })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'pharmacyLoyalty.configure', targetId: 'program-a' })
+    );
+  });
+  it('refuses non-owner capability and cross-organization sessions', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().configure(config)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    mocks.can.mockResolvedValue(true);
+    await expect(caller({ entitlementOrg: 'org-b' }).configure(config)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.configure).not.toHaveBeenCalled();
+  });
+  it('rejects rates over 100%, missing choices, and unapproved reconciliation', async () => {
+    await expect(
+      caller().configure({ ...config, option: 'percent-custom', percentage: '100.01' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().configure({ ...config, option: undefined } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().configure({ ...config, approveReconciliation: false } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.configure).not.toHaveBeenCalled();
   });
 });

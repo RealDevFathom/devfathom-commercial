@@ -380,6 +380,19 @@ beforeAll(async () => {
     });
   // The customer earns real points: the pharmacist sells and is paid for four strips. A refused
   // redemption rolls back, so the balance covers every one-strip redemption below.
+  await withTenantDb(ids.org, (db) =>
+    db.pharmacyLoyaltyProgramVersion.create({
+      data: {
+        organizationId: ids.org,
+        version: 1,
+        mode: 'PERCENT',
+        rewardPoints: 1,
+        spendMinor: 100,
+        khataEnabled: false,
+        actorId: ids.pharmacist,
+      },
+    })
+  );
   const earning = await pharmacistSale({ customer: true, quantity: 4 });
   await expect(payInCash(ids.pharmacist, earning)).resolves.toMatchObject({ settled: true });
 }, 120_000);

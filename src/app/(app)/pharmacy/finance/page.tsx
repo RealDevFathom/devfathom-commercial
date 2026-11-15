@@ -112,8 +112,10 @@ export default async function PharmacyFinancePage({
   }
   const caller = pharmacyFinanceRouter.createCaller(ctx);
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
+  let khataAccounts: Awaited<ReturnType<typeof caller.khataCollectionAccounts>>;
   try {
     workspace = await caller.workspace({ branchId: branch.id });
+    khataAccounts = await caller.khataCollectionAccounts({ branchId: branch.id });
   } catch {
     return (
       <main className="space-y-6">
@@ -165,7 +167,16 @@ export default async function PharmacyFinancePage({
             ? new Date(`${field(data, 'chequeDueAt')}T12:00:00Z`)
             : undefined,
           fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
-          allocations: [],
+          allocations: field(data, 'familyAccountId')
+            ? [
+                {
+                  sourceKind: 'CUSTOMER_KHATA',
+                  sourceId: field(data, 'familyAccountId'),
+                  sourceReference: field(data, 'reference'),
+                  amountMinor: moneyMinor(data, 'amount'),
+                },
+              ]
+            : [],
         });
         redirect(destination(branchId, 'Transaction posted and journal balanced.'));
       }
@@ -219,8 +230,10 @@ export default async function PharmacyFinancePage({
       }
       if (action === 'reconcile-settlement') {
         await actionCaller.reconcile({
-          branchId, statementLineId: field(data, 'statementLineId'),
-          settlementBatchId: field(data, 'settlementBatchId'), amountMinor: moneyMinor(data, 'amount'),
+          branchId,
+          statementLineId: field(data, 'statementLineId'),
+          settlementBatchId: field(data, 'settlementBatchId'),
+          amountMinor: moneyMinor(data, 'amount'),
         });
         redirect(destination(branchId, 'Statement matched to POS settlement receipts.'));
       }
@@ -229,7 +242,8 @@ export default async function PharmacyFinancePage({
           branchId,
           reference: field(data, 'reference'),
           provider: field(data, 'provider'),
-          tenderType: field(data, 'tenderType') as 'CARD' | 'WALLET' | 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA',
+          tenderType: field(data, 'tenderType') as
+            'CARD' | 'WALLET' | 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA',
           businessDate: new Date(`${field(data, 'businessDate')}T12:00:00Z`),
           tenderIds: data.getAll('tenderIds').map(String),
         });
@@ -362,7 +376,10 @@ export default async function PharmacyFinancePage({
         </form>
       </SectionCard>
       <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
-      <SectionCard title="Create POS settlement batch" eyebrow="Card · Raast · wallet · bank transfer">
+      <SectionCard
+        title="Create POS settlement batch"
+        eyebrow="Card · Raast · wallet · bank transfer"
+      >
         {workspace.settlementCandidates.length ? (
           <form action={perform} className="grid gap-4 md:grid-cols-3">
             <input type="hidden" name="action" value="settlement-batch" />
@@ -418,7 +435,11 @@ export default async function PharmacyFinancePage({
                     Receipt {tender.sale.receiptNumber ?? 'pending'} · {label(tender.type)} ·{' '}
                     {tender.provider ?? 'Direct'} · {money(tender.amountMinor)}
                     {tender.payerName ? ` · ${tender.payerName}` : ''}
-                    {tender.providerRef ? ` · Ref ${tender.providerRef}` : tender.referenceSkipped ? ' · Reference skipped' : ''}
+                    {tender.providerRef
+                      ? ` · Ref ${tender.providerRef}`
+                      : tender.referenceSkipped
+                        ? ' · Reference skipped'
+                        : ''}
                   </span>
                 </label>
               ))}
@@ -444,8 +465,7 @@ export default async function PharmacyFinancePage({
                   {batch.reference} · {batch.provider} · {batch.tenders.length} tenders
                 </span>
                 <span className="tabular-nums text-sm text-text-muted">
-                  {money(batch.expectedMinor)}
-                  {' '}· Matched {money(batch.settledMinor ?? 0)}
+                  {money(batch.expectedMinor)} · Matched {money(batch.settledMinor ?? 0)}
                 </span>
               </div>
             ))}
@@ -505,6 +525,21 @@ export default async function PharmacyFinancePage({
                 type="date"
                 defaultValue={today}
               />
+            </label>
+            <label className="text-sm text-text-body">
+              Khata account (customer receipts only)
+              <select className={inputClass} name="familyAccountId" defaultValue="">
+                <option value="">No Khata allocation</option>
+                {khataAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.displayName}
+                  </option>
+                ))}
+              </select>
+              <span className="text-sm text-text-muted">
+                Allocates the collected amount to outstanding charges. Eligible points are earned on
+                collection.
+              </span>
             </label>
             <label className="text-sm text-text-body">
               Counterparty name
@@ -670,26 +705,49 @@ export default async function PharmacyFinancePage({
       </SectionCard>
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Bank reconciliation" eyebrow="Statement matching">
-          {workspace.bankLines.some((line) => line.status === 'UNMATCHED') && workspace.settlementBatches.some((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor) ? (
+          {workspace.bankLines.some((line) => line.status === 'UNMATCHED') &&
+          workspace.settlementBatches.some(
+            (batch) => (batch.settledMinor ?? 0) < batch.expectedMinor
+          ) ? (
             <form action={perform} className="mb-5 grid gap-3">
               <input type="hidden" name="action" value="reconcile-settlement" />
               <input type="hidden" name="branchId" value={branch.id} />
-              <label className="text-sm">Bank or wallet statement line
+              <label className="text-sm">
+                Bank or wallet statement line
                 <select className={inputClass} name="statementLineId" required>
-                  {workspace.bankLines.filter((line) => line.status === 'UNMATCHED' && line.amountMinor > 0).map((line) => (
-                    <option key={line.id} value={line.id}>{line.lineReference} · {money(line.amountMinor)}</option>
-                  ))}
+                  {workspace.bankLines
+                    .filter((line) => line.status === 'UNMATCHED' && line.amountMinor > 0)
+                    .map((line) => (
+                      <option key={line.id} value={line.id}>
+                        {line.lineReference} · {money(line.amountMinor)}
+                      </option>
+                    ))}
                 </select>
               </label>
-              <label className="text-sm">POS settlement batch
+              <label className="text-sm">
+                POS settlement batch
                 <select className={inputClass} name="settlementBatchId" required>
-                  {workspace.settlementBatches.filter((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor).map((batch) => (
-                    <option key={batch.id} value={batch.id}>{batch.reference} · {label(batch.tenderType)} · Expected {money(batch.expectedMinor)} · Remaining {money(batch.expectedMinor - (batch.settledMinor ?? 0))}</option>
-                  ))}
+                  {workspace.settlementBatches
+                    .filter((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor)
+                    .map((batch) => (
+                      <option key={batch.id} value={batch.id}>
+                        {batch.reference} · {label(batch.tenderType)} · Expected{' '}
+                        {money(batch.expectedMinor)} · Remaining{' '}
+                        {money(batch.expectedMinor - (batch.settledMinor ?? 0))}
+                      </option>
+                    ))}
                 </select>
               </label>
-              <label className="text-sm">Amount to match (PKR)
-                <Input className="mt-1 min-h-11" name="amount" type="number" min="0.01" step="0.01" required />
+              <label className="text-sm">
+                Amount to match (PKR)
+                <Input
+                  className="mt-1 min-h-11"
+                  name="amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
+                />
               </label>
               <Button type="submit">Match POS settlement to statement</Button>
             </form>

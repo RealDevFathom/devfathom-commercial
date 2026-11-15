@@ -225,6 +225,24 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
         return { sale, line };
       });
     }
+    // Explicit fixture earning policy; production has no default rate.
+    await inTenant(async (db) => {
+      const latest = await db.pharmacyLoyaltyProgramVersion.findFirst({
+        where: { organizationId: scope.organizationId },
+        orderBy: { version: 'desc' },
+      });
+      await db.pharmacyLoyaltyProgramVersion.create({
+        data: {
+          organizationId: scope.organizationId,
+          version: (latest?.version ?? 0) + 1,
+          mode: 'PERCENT',
+          rewardPoints: 1,
+          spendMinor: 100,
+          khataEnabled: false,
+          actorId: scope.actorId,
+        },
+      });
+    });
     // Earn actual points through settlement, rather than seeding a fabricated redemption.
     const earned = await bill();
     await inTenant((db) =>

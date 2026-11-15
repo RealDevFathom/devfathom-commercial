@@ -1,5 +1,8 @@
 import 'server-only';
 
+import { currentLoyaltyProgram, loyaltyBalance, lockLoyaltyOrganization } from './loyalty-program';
+import { earnedPoints } from './loyalty-rate';
+
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { postTenderEntry } from './finance-postings';
@@ -106,10 +109,14 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
     include: { tenders: true },
   });
   if (!sale?.customerId) return null;
+  await lockLoyaltyOrganization(db, scope.organizationId);
+  const program = await currentLoyaltyProgram(db, scope.organizationId);
+  if (!program || !(await hasEarningConsent(db, scope.organizationId, sale.customerId)))
+    return null;
   const netPaidMinor = sale.tenders
-    .filter((tender) => tender.type !== 'LOYALTY')
+    .filter((tender) => tender.type !== 'LOYALTY' && tender.type !== 'CREDIT')
     .reduce((sum, tender) => sum + tender.amountMinor, 0);
-  const points = pointsForNetPaid(netPaidMinor);
+  const points = earnedPoints(netPaidMinor, program);
   if (points === 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
@@ -118,6 +125,7 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       customerId: sale.customerId,
       saleId: sale.id,
       kind: 'EARN',
+      programVersionId: program.id,
       points,
       netPaidMinor,
       actorId: scope.actorId,
@@ -181,6 +189,7 @@ export async function redeemSalePoints(
   );
   // #659: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  await lockLoyaltyOrganization(db, scope.organizationId);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
@@ -198,14 +207,7 @@ export async function redeemSalePoints(
   });
   if (!consent?.granted || consent.revokedAt)
     throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
-  const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: sale.customerId,
-    },
-    _sum: { points: true },
-  });
+  const balance = await loyaltyBalance(db, scope.organizationId, scope.branchId, sale.customerId);
   const totalMinor = sale.lines.reduce(
     (sum, line) => sum + line.grossMinor - line.discountMinor,
     0
@@ -216,7 +218,7 @@ export async function redeemSalePoints(
   try {
     redemption = redemptionFor({
       requestedPoints: input.points,
-      availablePoints: balance._sum.points ?? 0,
+      availablePoints: balance,
       outstandingMinor,
     });
   } catch (error) {
@@ -337,10 +339,7 @@ export async function readCustomerSnapshot(
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const [points, sales, pointsHistory, pointsCount] = await Promise.all([
-    db.pharmacyLoyaltyPointsEntry.aggregate({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
-      _sum: { points: true },
-    }),
+    loyaltyBalance(db, scope.organizationId, scope.branchId, customerId),
     db.pharmacySale.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -391,7 +390,7 @@ export async function readCustomerSnapshot(
     );
   return {
     customer,
-    pointsBalance: points._sum.points ?? 0,
+    pointsBalance: points,
     pointsHistory,
     pointsCount,
     pointsPage: page,
@@ -451,7 +450,7 @@ export async function readLoyaltyHistory(
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };
   const [balance, total] = await Promise.all([
-    db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
+    loyaltyBalance(db, scope.organizationId, scope.branchId, customerId),
     db.pharmacyLoyaltyPointsEntry.count({ where }),
   ]);
   const pageCount = Math.max(1, Math.ceil(total / LOYALTY_HISTORY_PAGE_SIZE));
@@ -474,7 +473,7 @@ export async function readLoyaltyHistory(
   });
   return {
     customer,
-    pointsBalance: balance._sum.points ?? 0,
+    pointsBalance: balance,
     entries,
     total,
     page: currentPage,
@@ -483,4 +482,20 @@ export async function readLoyaltyHistory(
     historyLimitReached:
       pageCount > LOYALTY_HISTORY_MAX_PAGE && currentPage === LOYALTY_HISTORY_MAX_PAGE,
   };
+}
+
+/** Consent locks serialize earning with revocation and concurrent branch redemptions. */
+export async function hasEarningConsent(db: ScopedDb, organizationId: string, customerId: string) {
+  await lockCustomerConsent(db, organizationId, customerId);
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { organizationId, id: customerId, active: true },
+    select: { patientId: true },
+  });
+  if (!customer) return false;
+  const consent = await db.patientConsent.findFirst({
+    where: { organizationId, patientId: customer.patientId, purpose: 'LOYALTY' },
+    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  return Boolean(consent?.granted && !consent.revokedAt);
 }

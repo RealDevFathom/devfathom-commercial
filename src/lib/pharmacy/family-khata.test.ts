@@ -416,3 +416,22 @@ describe('counter Khata ledger gate', () => {
     ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
   });
 });
+
+it('reopens only the reversed payment allocation without recording a dishonoured cheque', async () => {
+  const db = {
+    $queryRaw: vi.fn(),
+    pharmacyKhataEvent: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'charge-a', kind: 'CHARGE', amountMinor: 1000 },
+        { id: 'payment-a', kind: 'PAYMENT', amountMinor: 600, settlesChargeId: 'charge-a' },
+        { id: 'reversal-a', kind: 'PAYMENT_REVERSAL', amountMinor: 600, settlesChargeId: 'payment-a' },
+      ]),
+      create: vi.fn().mockImplementation(async ({ data }) => data),
+    },
+  };
+  const result = await settleFamilyKhata(db as never, { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' }, {
+    familyAccountId: 'family-a', amountMinor: 1000, occurredAt: new Date(),
+  });
+  expect(result.remainingBalanceMinor).toBe(0);
+  expect(result.allocations).toEqual([expect.objectContaining({ kind: 'PAYMENT', amountMinor: 1000, settlesChargeId: 'charge-a' })]);
+});

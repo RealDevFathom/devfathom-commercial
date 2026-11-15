@@ -64,6 +64,11 @@ export default async function LoyaltyPage({
     <PageHeader
       eyebrow="Pharmacy / customers"
       heading="Loyalty points"
+      actions={
+        <Link className={linkClass} href="/pharmacy/settings/loyalty">
+          Earning settings
+        </Link>
+      }
       description="Review points balances and the receipts behind each change."
     />
   );
@@ -140,8 +145,8 @@ export default async function LoyaltyPage({
           </Button>
         </form>
         <p className="mt-3 text-sm text-text-muted">
-          Retail customers across this workspace. Points shown only for {branchName}. Clinical
-          records are excluded.
+          Retail customers across this workspace. Points are shared across branches after owner
+          reconciliation. History is shown for {branchName}; clinical records are excluded.
         </p>
         <ul className="mt-3 divide-y divide-border-subtle">
           {customers.map((c) => (
@@ -195,8 +200,8 @@ export default async function LoyaltyPage({
           </p>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <p className="mt-2 text-sm text-text-muted">
-            {branchName} · {history.total} ledger entries. All-time branch balance; newest entries
-            first. Refunds and reversals remain visible.
+            {branchName} · {history.total} ledger entries. All-time available balance; newest branch
+            entries first. Refunds and reversals remain visible.
           </p>
           {history.entries.length ? (
             <div
@@ -306,7 +311,7 @@ export default async function LoyaltyPage({
         </SectionCard>
       ) : (
         <SectionCard title="Choose an account" titleLevel={2}>
-          <p>Select a customer above to view their branch balance and points history.</p>
+          <p>Select a customer above to view their available balance and branch points history.</p>
         </SectionCard>
       )}
       <Link className={linkClass} href="/pharmacy/counter">

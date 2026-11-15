@@ -36,3 +36,47 @@ Restaurant-admin/customer APIs are in `src/server/routers/restaurant-customers.t
 
 - A dedicated accounting export of loyalty liability with expiration/breakage policy: **NOT IMPLEMENTED**; current liability is derivable from `LoyaltyPointsEntry` in `prisma/schema.prisma`.
 - Cross-brand household merge and external CRM synchronization: **NOT IMPLEMENTED**.
+
+## Pharmacy earning and balance migration (DEV-746)
+
+Pharmacy redemption remains **1 point = PKR 1**. `/pharmacy/settings/loyalty`
+requires the existing owner/admin capability and Pharmacy CRM entitlement. There is
+no default earning rate. Owners explicitly choose a preset (1%, 2%, or 1 point per
+PKR 1,000), a custom percentage, or custom points per complete spend step. Rules
+are immutable organization-scoped versions; future earning records the version.
+All products qualify. Cash and other collected tenders earn at sale settlement;
+redeemed points do not generate new points. Exact integer arithmetic rounds down
+to whole points per sale or individual collection allocation.
+
+The owner’s Khata switch controls earning on **collection**, including partial
+payments. In Pharmacy Finance, post a customer receipt and choose its Khata
+account. The existing journal records the receipt and the family ledger allocates
+it against outstanding charges in the same transaction. Unallocated receipts
+cannot identify a loyalty customer and do not earn. Refund debt cancellations
+are not collections. Latest loyalty consent is checked under the customer consent
+lock at earning time. Credit on a legacy sale which already earned at sale time
+never earns again on collection. Receipt reversal restores the debt and reverses
+only the remaining earned points from that receipt.
+
+The schema migration does not activate a program, move balances, or seed a rate.
+Before first activation, the owner reviews current branch totals and explicitly
+approves reconciliation. A digest rejects stale approvals. The transaction
+records the actor, source count, signed total, and per-customer/per-branch totals,
+then creates an organization wallet projection exactly once. All original ledger
+rows, branch references, and historical refund curves remain unchanged. Existing
+ledger RLS policies remain intact. Subsequent entries update the projection in the
+same database transaction. Wallets are organization-scoped even when the posting
+transaction is branch-scoped; history still identifies the original branch.
+Before reconciliation, existing redemption continues against branch-local balances.
+
+New refunds use the earning entry’s immutable version and original payment basis,
+not the currently selected rate. Credit refunds first reduce unpaid eligibility;
+only refunded collected spend reverses earned points. Consent withdrawal prevents
+new earnings, but does not prevent accounting reversals.
+
+The held wallet PR (#64, formerly #603) targets a different integration branch and
+is not incorporated or released by DEV-746. #1294’s customer search enhancements
+remain separate. The restaurant immutable-version design is reused conceptually;
+pharmacy keeps its fixed redemption contract and its own historical ledger.
+Production scope and balance reconciliation require authorized operational review;
+local source inspection and tests are not evidence of deployed tenant behavior.

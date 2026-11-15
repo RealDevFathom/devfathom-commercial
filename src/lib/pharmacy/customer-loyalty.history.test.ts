@@ -13,6 +13,12 @@ function fixture() {
       }),
       findMany: vi.fn().mockResolvedValue([]),
     },
+    pharmacyLoyaltyMigration: { findUnique: vi.fn().mockResolvedValue(null) },
+    pharmacyLoyaltyProgramVersion: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ id: 'program-a', mode: 'PERCENT', rewardPoints: 1, spendMinor: 100 }),
+    },
     pharmacyLoyaltyPointsEntry: {
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 14 } }),
       count: vi.fn().mockResolvedValue(26),

@@ -1,4 +1,10 @@
 import 'server-only';
+import {
+  configureLoyaltyProgram,
+  currentLoyaltyProgram,
+  loyaltyReconciliation,
+} from '@/lib/pharmacy/loyalty-program';
+import { LOYALTY_RATE_OPTIONS } from '@/lib/pharmacy/loyalty-rate';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { hasModule } from '@/lib/entitlements';
@@ -40,6 +46,82 @@ async function historyRead<T>(read: () => Promise<T>) {
 // Server-page caller: no central router mutation. Explicit CRM check also applies
 // when composed by core integration; see evidence/handoff-loyalty-20261008.md.
 export const pharmacyLoyaltyRouter = router({
+  settings: adminProcedure.query(async ({ ctx }) => {
+    const scope = scopeFor(ctx);
+    const [program, migration, reconciliation] = await Promise.all([
+      currentLoyaltyProgram(ctx.db, scope.organizationId),
+      ctx.db.pharmacyLoyaltyMigration.findUnique({
+        where: { organizationId: scope.organizationId },
+      }),
+      loyaltyReconciliation(ctx.db, scope.organizationId),
+    ]);
+    return { program, migrated: Boolean(migration), reconciliation };
+  }),
+  configure: adminProcedure
+    .input(
+      z
+        .object({
+          option: z.enum(['percent-1', 'percent-2', 'step-1000', 'percent-custom', 'step-custom']),
+          percentage: z
+            .string()
+            .regex(/^\d{1,3}(\.\d{1,2})?$/)
+            .optional(),
+          pointsPerStep: z.number().int().min(1).max(1_000_000).optional(),
+          spendRupees: z.number().int().min(1).max(20_000_000).optional(),
+          khataEnabled: z.boolean(),
+          approveReconciliation: z.literal(true),
+          reconciliationDigest: z.string().regex(/^[a-f0-9]{64}$/),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx);
+      let rate: { mode: string; rewardPoints: number; spendMinor: number };
+      const preset = LOYALTY_RATE_OPTIONS.find((option) => option.id === input.option);
+      if (preset) rate = preset;
+      else if (input.option === 'percent-custom' && input.percentage) {
+        const [whole, fraction = ''] = input.percentage.split('.');
+        rate = {
+          mode: 'PERCENT',
+          rewardPoints: Number(whole) * 100 + Number(fraction.padEnd(2, '0')),
+          spendMinor: 1_000_000,
+        };
+      } else if (input.option === 'step-custom' && input.pointsPerStep && input.spendRupees) {
+        rate = {
+          mode: 'STEP',
+          rewardPoints: input.pointsPerStep,
+          spendMinor: input.spendRupees * 100,
+        };
+      } else
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter the selected earning rate.' });
+      if (
+        rate.rewardPoints <= 0 ||
+        BigInt(rate.rewardPoints) * BigInt(100) > BigInt(rate.spendMinor)
+      )
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Choose an earning rate above 0% and at most 100%.',
+        });
+      const program = await ctx.db.$transaction((tx) =>
+        configureLoyaltyProgram(tx as typeof ctx.db, scope.organizationId, scope.actorId, {
+          ...input,
+          ...rate,
+        })
+      );
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'CREATE',
+        action: 'pharmacyLoyalty.configure',
+        targetType: 'PharmacyLoyaltyProgramVersion',
+        targetId: program.id,
+        metadata: {
+          version: program.version,
+          reconciliationDigest: input.reconciliationDigest,
+          khataEnabled: input.khataEnabled,
+        },
+      });
+      return program;
+    }),
   branches: adminProcedure.query(({ ctx }) => {
     const scope = scopeFor(ctx);
     return ctx.db.pharmacyBranch.findMany({

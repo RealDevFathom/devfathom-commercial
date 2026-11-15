@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
   branches: vi.fn(),
   workspace: vi.fn(),
+  khataCollectionAccounts: vi.fn().mockResolvedValue([]),
   marginComparison: vi.fn(),
   perpetualValuation: vi.fn(),
   grossMargin: vi.fn(),
