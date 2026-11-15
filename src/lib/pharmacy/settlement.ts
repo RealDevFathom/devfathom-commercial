@@ -282,6 +282,8 @@ export async function applyPharmacyTender(
     providerRef?: string;
     payerName?: string;
     referenceSkipped?: boolean;
+    /** #708: the buyer the Sindh cash memo names, recorded only on the completing tender. */
+    buyerName?: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;

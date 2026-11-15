@@ -32,7 +32,9 @@ import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  cashMemoManufacturer,
   COUNTER_RECEIPT_STRINGS,
+  counterReceiptCashMemo,
   formatMinor,
   formatReceiptDate,
   formatReceiptIssuedAt,
@@ -86,16 +88,21 @@ function escPosFacts(
   } catch {
     throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
   }
+  // #708: the Sindh r.18 cash memo, from the profile in force at completion.
+  const memo = counterReceiptCashMemo(receipt, taxIdentity, 'en');
   return {
     businessName: receipt.branchName,
     invoiceNumber: String(receipt.receiptNumber),
-    invoiceLabel: strings.invoice,
-    issuedAt: `${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
+    invoiceLabel: memo ? memo.title : strings.invoice,
+    issuedAt: `${memo ? `${memo.rule}\n` : ''}${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${memo ? `\n${memo.buyer}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
       return [
         lineIdentity(line),
-        counterLinePricing(line, 'en', 'x'),
+        ...(memo ? [cashMemoManufacturer(line, 'en')] : []),
+        memo
+          ? `${strings.quantity} x ${strings.unitPrice}: ${counterLinePricing(line, 'en', 'x')}`
+          : counterLinePricing(line, 'en', 'x'),
         ...(line.allocations ?? []).map((allocation) => {
           const batch = issued ? allocation.batchNumber : null;
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
@@ -111,7 +118,11 @@ function escPosFacts(
     taxLines: [
       ...(taxIdentity.address ? [taxIdentity.address] : []),
       ...(taxIdentity.phone ? [`${strings.phone}: ${taxIdentity.phone}`] : []),
-      ...(taxIdentity.licenceNumber ? [`${strings.licence}: ${taxIdentity.licenceNumber}`] : []),
+      ...(memo
+        ? memo.licence
+        : taxIdentity.licenceNumber
+          ? [`${strings.licence}: ${taxIdentity.licenceNumber}`]
+          : []),
       ...(taxIdentity.ntn ? [`NTN: ${taxIdentity.ntn}`] : []),
       ...(taxIdentity.strn ? [`STRN: ${taxIdentity.strn}`] : []),
     ],
@@ -124,12 +135,15 @@ function escPosFacts(
       ...(cashReceived !== null ? [`Cash received: ${formatMinor(cashReceived)}`] : []),
       `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
     ],
-    payments: receipt.tenders.length
-      ? receipt.tenders.map(
-          (tender) =>
-            `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
-        )
-      : ['Payment details unavailable'],
+    payments: [
+      ...(receipt.tenders.length
+        ? receipt.tenders.map(
+            (tender) =>
+              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
+          )
+        : ['Payment details unavailable']),
+      ...(memo ? [`\n${memo.signature}`] : []),
+    ],
   };
 }
 
@@ -236,7 +250,16 @@ export async function readPharmacyReceiptTaxIdentity(
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-    select: { premises: true, licenceNumber: true, ntn: true, strn: true },
+    select: {
+      premises: true,
+      licenceNumber: true,
+      ntn: true,
+      strn: true,
+      provinceCode: true,
+      licenceValidFrom: true,
+      licenceValidTo: true,
+      qualifiedPersonRegistration: true,
+    },
   });
   const premises = profile?.premises as
     { addressLine?: unknown; city?: unknown; phone?: unknown } | undefined;
@@ -250,6 +273,11 @@ export async function readPharmacyReceiptTaxIdentity(
     licenceNumber: profile?.licenceNumber?.trim() || null,
     ntn: profile?.ntn?.trim() || null,
     strn: profile?.strn?.trim() || null,
+    // #708: the province and licence facts the Sindh cash memo prints.
+    provinceCode: profile?.provinceCode?.trim() || null,
+    licenceValidFrom: profile?.licenceValidFrom?.toISOString() ?? null,
+    licenceValidTo: profile?.licenceValidTo?.toISOString() ?? null,
+    pharmacistRegistration: profile?.qualifiedPersonRegistration?.trim() || null,
   };
 }
 

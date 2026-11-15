@@ -103,6 +103,7 @@ import {
 import {
   formatMinor,
   formatReceiptDate,
+  isSindhCashMemoProvince,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -1472,6 +1473,7 @@ function ScopedPharmacyCounterConsole({
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
+        buyerName?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1513,7 +1515,7 @@ function ScopedPharmacyCounterConsole({
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined
+            input.familyAccountId || input.payerName !== undefined || input.buyerName !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
@@ -1524,6 +1526,7 @@ function ScopedPharmacyCounterConsole({
           ...(input.referenceSkipped !== undefined
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
+          ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -2887,9 +2890,13 @@ function ScopedPharmacyCounterConsole({
                   payerName: restoredAttempt.input.payerName,
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
+                  buyerName: restoredAttempt.input.buyerName,
                 }
               : undefined
           }
+          cashMemo={isSindhCashMemoProvince(
+            branches.find((branch) => branch.id === branchId)?.provinceCode
+          )}
           recoveryOutcome={tenderOutcome}
           checkingOutcome={checkingOutcome}
           onCheckOutcome={

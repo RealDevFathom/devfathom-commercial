@@ -18,14 +18,22 @@ export const completionSaleInclude = {
     },
   },
   tenders: true,
+  // #708: the sale's customer names the buyer on a cash memo when none is typed.
+  customer: { select: { displayName: true } },
 } satisfies Prisma.PharmacySaleInclude;
+
+/** Trimmed, length-clamped snapshot text; blank values are omitted, never stored empty. */
+function snapshotText(value: string | null | undefined, max: number): string | undefined {
+  const text = value?.trim();
+  return text ? text.slice(0, max).trim() : undefined;
+}
 
 // Internal: callers hold the sale lock and have verified exact paid coverage in this transaction.
 export async function completePaidPharmacySale(
   db: ScopedDb,
   scope: LedgerScope,
   sale: Prisma.PharmacySaleGetPayload<{ include: typeof completionSaleInclude }>,
-  input: { deviceId: string; businessDate: Date },
+  input: { deviceId: string; businessDate: Date; buyerName?: string },
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
@@ -99,6 +107,9 @@ export async function completePaidPharmacySale(
     )
       throw new PharmacyReceiptIdentityError();
   }
+  // #708: typed at tender first, else the sale's customer; an unnamed walk-in stays blank.
+  const buyerName =
+    snapshotText(input.buyerName, 100) ?? snapshotText(sale.customer?.displayName, 100);
   const snapshot = validateReceiptIdentity(
     {
       receiptIdentitySnapshotVersion: 1,
@@ -107,6 +118,7 @@ export async function completePaidPharmacySale(
       deviceId: input.deviceId,
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
+      ...(buyerName ? { buyerName } : {}),
       lines: sale.lines.map((line) => ({
         saleLineId: line.id,
         medicineId: line.medicineId,
@@ -124,6 +136,9 @@ export async function completePaidPharmacySale(
               .join(' + ')
           : null,
         presentation: line.presentation.presentation,
+        ...(snapshotText(line.medicine.manufacturer, 200)
+          ? { manufacturer: snapshotText(line.medicine.manufacturer, 200) }
+          : {}),
         allocations: line.allocations.map((allocation) => {
           const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;
           return {

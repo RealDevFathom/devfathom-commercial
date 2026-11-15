@@ -182,6 +182,14 @@ const tenderInput = z
       .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
+    // #708: the buyer the Sindh cash memo names. Last, so existing payload hashes hold.
+    buyerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]*$/u, 'Use a plain name.')
+      .optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -2138,7 +2146,7 @@ export const pharmacySalesRouter = router({
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
-        select: { id: true, code: true, name: true, city: true },
+        select: { id: true, code: true, name: true, city: true, provinceCode: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({

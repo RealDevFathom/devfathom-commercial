@@ -39,6 +39,7 @@ const storedSchema = z
         providerRef: z.string().regex(/^\d{4,6}$/).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
+        buyerName: z.string().trim().min(1).max(100).optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),

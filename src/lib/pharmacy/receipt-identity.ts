@@ -19,6 +19,8 @@ const lineSchema = z
     medicineName: id,
     strength: id.nullable(),
     presentation: id,
+    /** #708: absent on snapshots issued before manufacturers were recorded. */
+    manufacturer: z.string().trim().min(1).max(200).optional(),
     allocations: z.array(allocationSchema).min(1),
   })
   .strict();
@@ -30,6 +32,8 @@ const snapshotSchema = z
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),
+    /** #708: the buyer the cash memo names; absent for an unnamed walk-in. */
+    buyerName: z.string().trim().min(1).max(100).optional(),
     lines: z.array(lineSchema).min(1),
   })
   .strict();

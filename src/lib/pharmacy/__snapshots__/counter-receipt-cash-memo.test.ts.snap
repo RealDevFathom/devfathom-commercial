@@ -1,0 +1,146 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh A4 receipt 1`] = `
+"<!doctype html><html lang="en" dir="ltr"><head>
+<meta charset="utf-8"><title>Receipt 42</title>
+<style>@page { size: A4; margin: 10mm; }
+* { box-sizing: border-box; } body { margin: 0; width: 190mm; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre>Saddar Branch
+Cash memo: 42
+Sindh Drugs Rules 1979, r.18
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+Buyer: Ayesha Khan
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+Manufacturer: GSK Pakistan
+Qty × Unit price: strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+Phone: 042-1234567
+Drug-sale licence: DSL-SD-77 (valid 2026-01-01
+to 2027-12-31)
+Pharmacist registration: PCP-9001
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00
+
+Signature of qualified person: ________________</pre></body></html>"
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh ESC/POS thermal job 1`] = `
+{
+  "businessName": "Saddar Branch",
+  "invoiceLabel": "Cash memo",
+  "invoiceNumber": "42",
+  "issuedAt": "Sindh Drugs Rules 1979, r.18
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+Buyer: Ayesha Khan
+REPRINT - not a new sale",
+  "lines": [
+    "Paracetamol - 500 mg - Tablet
+Manufacturer: GSK Pakistan
+Qty x Unit price: strip: 2 x 20.00
+Batch: B-001 | Expiry: 2027-06-30 | Tablets/units: 20
+Amount: 40.00",
+  ],
+  "payments": [
+    "Cash: 40.00",
+    "
+Signature of qualified person: ________________",
+  ],
+  "taxBreakdown": "UNAVAILABLE",
+  "taxLines": [
+    "7 Zaibunnisa Street, Karachi",
+    "Phone: 042-1234567",
+    "Drug-sale licence: DSL-SD-77 (valid 2026-01-01 to 2027-12-31)",
+    "Pharmacist registration: PCP-9001",
+    "NTN: NTN-1",
+  ],
+  "totals": [
+    "PKR",
+    "Gross: 40.00",
+    "Discount: 0.00",
+    "Total: 40.00",
+    "Tendered: 50.00",
+    "Cash received: 50.00",
+    "Change: 10.00",
+  ],
+}
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh Urdu receipt 1`] = `
+"Saddar Branch
+کیش میمو: 42
+سندھ ڈرگ رولز ۱۹۷۹، قاعدہ ۱۸
+تاریخ: 2026-11-14 14:30 PKT
+کیشیئر: Cashier One
+خریدار: Ayesha Khan
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+تیار کنندہ: GSK Pakistan
+مقدار × فی یونٹ قیمت: پتّا: 2 × ۲۰٫۰۰
+بیچ: B-001 · میعاد: 2027-06-30 · گولیاں/یونٹس: 20
+رقم: ۴۰٫۰۰
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+فون: 042-1234567
+ادویات فروشی لائسنس: DSL-SD-77 (کارآمد 2026-01-01 تا 2027-12-31)
+فارماسسٹ رجسٹریشن: PCP-9001
+NTN: NTN-1
+پاکستانی روپے
+کل رقم: ۴۰٫۰۰
+رعایت: ۰٫۰۰
+قابلِ ادائیگی: ۴۰٫۰۰
+ادا شدہ: ۵۰٫۰۰
+نقد ادا شدہ: ۵۰٫۰۰
+واپسی: ۱۰٫۰۰
+------------------------------------------------
+نقد: ۴۰٫۰۰
+
+مستند شخص کے دستخط: ________________"
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh thermal 80 mm receipt 1`] = `
+"Saddar Branch
+Cash memo: 42
+Sindh Drugs Rules 1979, r.18
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+Buyer: Ayesha Khan
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+Manufacturer: GSK Pakistan
+Qty × Unit price: strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+Phone: 042-1234567
+Drug-sale licence: DSL-SD-77 (valid 2026-01-01
+to 2027-12-31)
+Pharmacist registration: PCP-9001
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00
+
+Signature of qualified person: ________________"
+`;

@@ -30,6 +30,13 @@ export type PharmacyReceiptTaxIdentity = {
   licenceNumber?: string | null;
   ntn: string | null;
   strn: string | null;
+  /** #708: regulatory facts the Sindh cash memo prints; absent on older callers. */
+  provinceCode?: string | null;
+  /** ISO dates of the drug-sale licence in force at completion. */
+  licenceValidFrom?: string | null;
+  licenceValidTo?: string | null;
+  /** Qualified person (pharmacist) registration number, optional on the memo. */
+  pharmacistRegistration?: string | null;
 };
 
 export type CounterReceiptLine = {
@@ -46,6 +53,8 @@ export type CounterReceiptLine = {
     grossMinor?: number | null;
   }[];
   medicineName: string;
+  /** #708: manufacturer snapshotted at completion; null when not recorded. */
+  manufacturer?: string | null;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
   strength: string | null;
   presentation: string;
@@ -80,6 +89,8 @@ export type CounterReceipt = {
   businessDate: string | null;
   completedAt: string | null;
   cashierName?: string | null;
+  /** #708: buyer named at completion (typed at tender, or the sale's customer/patient). */
+  buyerName?: string | null;
   currency: string;
   lines: CounterReceiptLine[];
   tenders: CounterReceiptTender[];
@@ -115,6 +126,15 @@ type Strings = {
   cashier: string;
   licence: string;
   phone: string;
+  cashMemo: string;
+  cashMemoRule: string;
+  manufacturer: string;
+  buyer: string;
+  licenceValid: string;
+  licenceValidTo: string;
+  pharmacistRegistration: string;
+  signature: string;
+  notRecorded: string;
   tenderName: Record<string, string>;
   saleUnit: Record<SaleUnitKind, string>;
   noReceiptNumber: string;
@@ -149,6 +169,15 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     cashier: 'Cashier',
     licence: 'Drug-sale licence',
     phone: 'Phone',
+    cashMemo: 'Cash memo',
+    cashMemoRule: 'Sindh Drugs Rules 1979, r.18',
+    manufacturer: 'Manufacturer',
+    buyer: 'Buyer',
+    licenceValid: 'valid',
+    licenceValidTo: 'to',
+    pharmacistRegistration: 'Pharmacist registration',
+    signature: 'Signature of qualified person',
+    notRecorded: 'Not recorded',
     tenderName: {
       CASH: 'Cash',
       CARD: 'Card',
@@ -187,6 +216,15 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     cashier: 'کیشیئر',
     licence: 'ادویات فروشی لائسنس',
     phone: 'فون',
+    cashMemo: 'کیش میمو',
+    cashMemoRule: 'سندھ ڈرگ رولز ۱۹۷۹، قاعدہ ۱۸',
+    manufacturer: 'تیار کنندہ',
+    buyer: 'خریدار',
+    licenceValid: 'کارآمد',
+    licenceValidTo: 'تا',
+    pharmacistRegistration: 'فارماسسٹ رجسٹریشن',
+    signature: 'مستند شخص کے دستخط',
+    notRecorded: 'درج نہیں',
     tenderName: {
       CASH: 'نقد',
       CARD: 'کارڈ',
@@ -417,4 +455,71 @@ export function formatReceiptIssuedAt(value: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '—' : formatKarachiDateTime(date);
+}
+
+/**
+ * #708: whether a province code is Sindh, compared without the `PK-` prefix or
+ * case, as the regulatory profile form compares provinces.
+ */
+export function isSindhCashMemoProvince(code: string | null | undefined): boolean {
+  return typeof code === 'string' && code.trim().toUpperCase().replace(/^PK-/, '') === 'SD';
+}
+
+/** Blank rule the buyer or qualified person completes by hand on paper. */
+export const CASH_MEMO_BLANK = '________________';
+
+export type CounterReceiptCashMemo = {
+  title: string;
+  rule: string;
+  buyer: string;
+  /** The licence with its validity, then the optional pharmacist registration. */
+  licence: string[];
+  signature: string;
+};
+
+/**
+ * #708 — Sindh Drugs Rules r.18 cash memo facts, or null outside Sindh.
+ *
+ * The mode is not an operator toggle: it follows the regulatory profile that
+ * was in force when the sale completed, so a reprint from history prints the
+ * same memo and a Punjab branch's receipt is unchanged. Missing facts print
+ * as "not recorded" or a blank to be completed by hand, never invented.
+ */
+export function counterReceiptCashMemo(
+  receipt: Pick<CounterReceipt, 'buyerName'>,
+  identity: PharmacyReceiptTaxIdentity | null | undefined,
+  locale: CounterReceiptLocale
+): CounterReceiptCashMemo | null {
+  if (!isSindhCashMemoProvince(identity?.provinceCode)) return null;
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const licenceNumber = identity?.licenceNumber?.trim() || strings.notRecorded;
+  const from = identity?.licenceValidFrom ? formatReceiptDate(identity.licenceValidFrom) : null;
+  const to = identity?.licenceValidTo ? formatReceiptDate(identity.licenceValidTo) : null;
+  const validity =
+    from && to
+      ? ` (${strings.licenceValid} ${from} ${strings.licenceValidTo} ${to})`
+      : to
+        ? ` (${strings.licenceValid} ${strings.licenceValidTo} ${to})`
+        : '';
+  const pharmacist = identity?.pharmacistRegistration?.trim();
+  return {
+    title: strings.cashMemo,
+    rule: strings.cashMemoRule,
+    buyer: `${strings.buyer}: ${receipt.buyerName?.trim() || CASH_MEMO_BLANK}`,
+    licence: [
+      `${strings.licence}: ${licenceNumber}${validity}`,
+      ...(pharmacist ? [`${strings.pharmacistRegistration}: ${pharmacist}`] : []),
+    ],
+    signature: `${strings.signature}: ${CASH_MEMO_BLANK}`,
+  };
+}
+
+/** The per-line manufacturer fact a cash memo adds; r.18 asks for it on every line. */
+export function cashMemoManufacturer(
+  line: Pick<CounterReceiptLine, 'manufacturer' | 'identityStatus'>,
+  locale: CounterReceiptLocale
+): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const manufacturer = line.identityStatus === 'ISSUED' ? line.manufacturer?.trim() : null;
+  return `${strings.manufacturer}: ${manufacturer || strings.notRecorded}`;
 }

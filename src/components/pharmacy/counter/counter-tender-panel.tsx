@@ -77,6 +77,11 @@ export type CounterTenderPanelProps = {
   signUpKhata?: (input: KhataSignupInput) => Promise<void>;
   /** The counter's selected patient, offered as the Khata payer. */
   khataSignupPatient?: { patientId: string; displayName: string } | null;
+  /**
+   * #708: the branch prints the Sindh r.18 cash memo, so the buyer can be named
+   * here. Optional for walk-ins; the selected patient's name is offered first.
+   */
+  cashMemo?: boolean;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
   state: CounterTenderBillState;
@@ -89,6 +94,7 @@ export type CounterTenderPanelProps = {
     payerName?: string;
     providerRef?: string;
     referenceSkipped?: boolean;
+    buyerName?: string;
   };
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
@@ -104,6 +110,7 @@ export type CounterTenderPanelProps = {
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
+      buyerName?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -151,6 +158,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       printKhataStatement,
       signUpKhata,
       khataSignupPatient,
+      cashMemo = false,
       manualSettings,
       manualSettingsLoading = false,
       manualSettingsError = false,
@@ -175,6 +183,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [signupError, setSignupError] = useState('');
     const [providerRef, setProviderRef] = useState(initialDraft?.providerRef ?? '');
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
+    // Null until edited, so the selected patient's name fills it without an effect.
+    const [buyerDraft, setBuyerDraft] = useState<string | null>(initialDraft?.buyerName ?? null);
+    const buyerName = buyerDraft ?? khataSignupPatient?.displayName ?? '';
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
     );
@@ -350,6 +361,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
+            ...(cashMemo && buyerName.trim() ? { buyerName: buyerName.trim() } : {}),
             ...(manual && capture?.success
               ? {
                   payerName: capture.data.payerName,
@@ -368,6 +380,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setCashReceived('');
           setProviderRef('');
           setPayerName('');
+          // The buyer name is kept: only the tender that settles the bill records it.
           setReferenceSkipped(false);
           if (isKhata && loadKhataAccounts) {
             try {
@@ -587,6 +600,26 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </p>
           ) : null}
         </div>
+
+        {cashMemo ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
+            <Input
+              id="tender-buyer-name"
+              autoComplete="off"
+              maxLength={100}
+              value={buyerName}
+              disabled={!editable}
+              aria-describedby="tender-buyer-name-help"
+              onChange={(event) => setBuyerDraft(event.target.value)}
+              className="h-11 rounded-sm"
+            />
+            <p id="tender-buyer-name-help" className="text-sm text-text-muted">
+              Printed on the Sindh cash memo. Leave blank for a walk-in; the buyer can write it on
+              the printed memo.
+            </p>
+          </div>
+        ) : null}
 
         {manual ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">

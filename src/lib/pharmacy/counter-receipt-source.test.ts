@@ -75,3 +75,91 @@ describe('DEV-636 receipt cashier attribution', () => {
     });
   });
 });
+
+describe('#708 cash memo facts on reprint', () => {
+  function snapshotFixture(extra: { buyerName?: string; manufacturer?: string }) {
+    const completedAt = new Date('2026-11-14T09:30:00.000Z');
+    const sale = {
+      id: 'sale-a',
+      receiptNumber: 5,
+      receiptDeviceId: 'counter-a',
+      completedAt,
+      businessDate: new Date('2026-11-14T00:00:00.000Z'),
+      lines: [
+        {
+          id: 'line-a',
+          medicineId: 'med-a',
+          presentationId: 'pres-a',
+          saleUnit: 'UNIT',
+          quantity: 2,
+          canonicalUnits: 2,
+          unitPriceMinor: 100,
+          discountMinor: 0,
+          grossMinor: 200,
+          allocations: [
+            { id: 'al-a', inventoryLotId: 'lot-a', canonicalUnits: 2, grossMinor: 200 },
+          ],
+        },
+      ],
+      tenders: [],
+    };
+    const payload = {
+      receiptIdentitySnapshotVersion: 1,
+      saleId: 'sale-a',
+      receiptNumber: 5,
+      deviceId: 'counter-a',
+      businessDate: '2026-11-14',
+      issuedAt: completedAt.toISOString(),
+      ...(extra.buyerName ? { buyerName: extra.buyerName } : {}),
+      lines: [
+        {
+          saleLineId: 'line-a',
+          medicineId: 'med-a',
+          presentationId: 'pres-a',
+          medicineName: 'Paracetamol',
+          strength: '500 mg',
+          presentation: 'Tablet',
+          ...(extra.manufacturer ? { manufacturer: extra.manufacturer } : {}),
+          allocations: [
+            {
+              allocationId: 'al-a',
+              inventoryLotId: 'lot-a',
+              batchNumber: 'B-001',
+              expiresAt: '2027-06-30T00:00:00.000Z',
+              canonicalUnits: 2,
+            },
+          ],
+        },
+      ],
+    };
+    const db = {
+      pharmacySale: { findFirst: vi.fn(async () => sale) },
+      pharmacySaleEvent: { findMany: vi.fn(async () => [{ payload, actorId: null }]) },
+      user: { findFirst: vi.fn() },
+    };
+    return readCounterReceipt(
+      db as never,
+      { organizationId: 'org-a', branchId: 'branch-a' },
+      'sale-a',
+      { name: 'Synthetic pharmacy', currency: 'PKR' }
+    );
+  }
+
+  it('reprints the buyer and manufacturer recorded when the sale completed', async () => {
+    const receipt = await snapshotFixture({
+      buyerName: 'Ayesha Khan',
+      manufacturer: 'GSK Pakistan',
+    });
+    expect(receipt.buyerName).toBe('Ayesha Khan');
+    expect(receipt.lines[0]).toMatchObject({
+      identityStatus: 'ISSUED',
+      manufacturer: 'GSK Pakistan',
+    });
+  });
+
+  it('reads older snapshots without the facts as unrecorded, never invented', async () => {
+    const receipt = await snapshotFixture({});
+    expect(receipt.buyerName).toBeNull();
+    expect(receipt.lines[0]).toMatchObject({ identityStatus: 'ISSUED', manufacturer: null });
+  });
+});
