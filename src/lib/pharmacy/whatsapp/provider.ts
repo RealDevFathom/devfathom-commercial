@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'backInStock';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 export type WhatsAppConfig = {
@@ -125,6 +125,8 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
       khataReminder:
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN') ??
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      // DEV-79: utility template whose body names no drug, salt or category.
+      backInStock: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_BACK_IN_STOCK'),
     },
     khataTemplates: {
       en:

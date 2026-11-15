@@ -129,6 +129,7 @@ import {
   optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  linkRestockRecoveries,
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
@@ -2347,6 +2348,18 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           recoverRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-79: link notified requests to the sale that recovered them (also run by the job). */
+  linkRestockRecoveries: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          linkRestockRecoveries(txDb(tx), await scopeFor(ctx, input.branchId))
         );
       } catch (error) {
         fail(error);

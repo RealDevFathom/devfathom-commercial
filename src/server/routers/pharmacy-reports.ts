@@ -3,6 +3,7 @@ import {
   readPharmacyMarketingReport,
   validateMarketingReportFilters,
 } from '@/lib/pharmacy/marketing-report';
+import { readLostSalesRecovery } from '@/lib/pharmacy/lost-sales-recovery-report';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import {
@@ -259,6 +260,21 @@ export const pharmacyReportsRouter = router({
         });
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
+    }),
+  /** DEV-79: estimated lost, recovered and net demand value by branch, salt and distributor. */
+  lostSalesRecovery: reports
+    .input(filters.pick({ branchId: true, from: true, to: true }))
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      try {
+        validateMarketingReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid report dates.',
+        });
+      }
+      return readLostSalesRecovery(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
   createPharmacovigilanceReport: auditedProtectedProcedure
     .input(
