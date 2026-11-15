@@ -39,6 +39,7 @@ vi.mock('@/lib/pharmacy/whatsapp/khata-reminders', () => ({
 }));
 import type { TRPCContext } from '@/server/trpc';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
+import { PharmacyBookkeepingError } from '@/lib/pharmacy/bookkeeping';
 import { pharmacyKhataRouter } from './khata-router';
 
 function caller({ role = 'ADMIN', organizationId = 'org-a', vertical = 'PHARMACY' } = {}) {
@@ -152,6 +153,14 @@ describe('DEV-730 Khata router', () => {
     await expect(caller().collectPayment(payment)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'PAYMENT_EXCEEDS_BALANCE',
+    });
+  });
+
+  it('maps a closed accounting period to a typed refusal', async () => {
+    mocks.collect.mockRejectedValue(new PharmacyBookkeepingError('PERIOD_CLOSED'));
+    await expect(caller().collectPayment(payment)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'PERIOD_CLOSED',
     });
   });
 

@@ -9,6 +9,7 @@ import {
   listKhataLedger,
   type FamilyKhataScope,
 } from '@/lib/pharmacy/family-khata';
+import { PharmacyBookkeepingError } from '@/lib/pharmacy/bookkeeping';
 import { processDueWhatsAppKhataReminders } from '@/lib/pharmacy/whatsapp/khata-reminders';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
@@ -56,6 +57,8 @@ function inBranch<T>(ctx: TRPCContext, scope: FamilyKhataScope, run: (db: Scoped
 }
 
 function khataFail(error: unknown): never {
+  if (error instanceof PharmacyBookkeepingError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof FamilyKhataError)
     throw new TRPCError({
       code: error.reason === 'ACCOUNT_NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',

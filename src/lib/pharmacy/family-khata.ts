@@ -3,6 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { postBookkeepingTransaction } from './bookkeeping';
 import { auditPatientRead } from './patient-prescriptions';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
@@ -556,7 +557,7 @@ export async function collectKhataPayment(
       id: input.familyAccountId,
       active: true,
     },
-    select: { id: true },
+    select: { id: true, payer: { select: { displayName: true } } },
   });
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const idPrefix = `${KHATA_COLLECTION_ID_PREFIX}${account.id}:${input.idempotencyKey}:`;
@@ -577,12 +578,32 @@ export async function collectKhataPayment(
       remainingBalanceMinor: await readKhataBalance(db, scope, account.id),
     };
   }
+  const occurredAt = new Date();
   const result = await settleFamilyKhata(db, scope, {
     familyAccountId: account.id,
     amountMinor: input.amountMinor,
-    occurredAt: new Date(),
+    occurredAt,
     idPrefix,
     note: `Collected · ${input.method}`,
+  });
+  // The Khata sale debited ACCOUNTS_RECEIVABLE through its CREDIT tender posting. Clear it
+  // in the same transaction so financial statements agree with the Khata ledger; a closed
+  // accounting period rolls the whole collection back.
+  await postBookkeepingTransaction(db, scope, {
+    reference: `KHATA-${input.idempotencyKey}`,
+    kind: 'CUSTOMER_RECEIPT',
+    amountMinor: result.paidMinor,
+    occurredAt,
+    idempotencyKey: `${idPrefix}receipt`,
+    counterpartyName: account.payer.displayName,
+    memo: `Khata collection · ${input.method}`,
+    fundingAccount: input.method === 'CASH' ? 'CASH' : 'BANK',
+    allocations: result.allocations.map((allocation) => ({
+      sourceKind: 'CUSTOMER_KHATA' as const,
+      sourceId: allocation.settlesChargeId!,
+      sourceReference: `Khata charge ${allocation.settlesChargeId}`,
+      amountMinor: allocation.amountMinor,
+    })),
   });
   return {
     replayed: false,

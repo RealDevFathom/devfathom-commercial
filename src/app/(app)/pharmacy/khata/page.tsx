@@ -65,6 +65,10 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
     tone: 'alert',
     text: 'Payment not recorded: enter an amount greater than zero, with at most two decimals.',
   },
+  PERIOD_CLOSED: {
+    tone: 'alert',
+    text: 'Payment not recorded: the accounting period for today is closed on this branch.',
+  },
   ACCOUNT_NOT_FOUND: {
     tone: 'alert',
     text: 'That Khata account is no longer active on this branch.',
@@ -100,7 +104,6 @@ function failureCode(error: unknown) {
   if (error instanceof TRPCError) {
     if (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED') return 'FORBIDDEN';
     if (error.message in notices) return error.message;
-    if (error.code === 'BAD_REQUEST') return 'INVALID_AMOUNT';
   }
   return 'error';
 }

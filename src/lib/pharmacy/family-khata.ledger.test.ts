@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const bookkeeping = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('./patient-prescriptions', () => ({ auditPatientRead: vi.fn() }));
+vi.mock('./bookkeeping', () => ({ postBookkeepingTransaction: bookkeeping.post }));
 
 import { collectKhataPayment, FamilyKhataError, listKhataLedger } from './family-khata';
 
@@ -153,7 +155,9 @@ describe('DEV-730 collect Khata payment', () => {
   function db() {
     return {
       $queryRaw: queryRaw,
-      pharmacyFamilyAccount: { findFirst: vi.fn(async () => account) },
+      pharmacyFamilyAccount: {
+        findFirst: vi.fn(async () => account && { ...account, payer: { displayName: 'Ahmed' } }),
+      },
       pharmacyKhataEvent: {
         findMany: vi.fn(async (args: { where: { id?: unknown } }) =>
           args.where.id
@@ -205,6 +209,46 @@ describe('DEV-730 collect Khata payment', () => {
       note: 'Collected · CASH',
     });
     expect(result).toEqual({ replayed: false, paidMinor: 2_500, remainingBalanceMinor: 3_500 });
+    // The receivable created by the CREDIT tender posting is cleared in the same transaction.
+    expect(bookkeeping.post).toHaveBeenCalledTimes(1);
+    expect(bookkeeping.post).toHaveBeenCalledWith(expect.anything(), scope, {
+      reference: 'KHATA-key-0001',
+      kind: 'CUSTOMER_RECEIPT',
+      amountMinor: 2_500,
+      occurredAt: expect.any(Date),
+      idempotencyKey: 'khata-collect:fam_a:key-0001:receipt',
+      counterpartyName: 'Ahmed',
+      memo: 'Khata collection · CASH',
+      fundingAccount: 'CASH',
+      allocations: [
+        {
+          sourceKind: 'CUSTOMER_KHATA',
+          sourceId: 'charge_a',
+          sourceReference: 'Khata charge charge_a',
+          amountMinor: 2_500,
+        },
+      ],
+    });
+  });
+
+  it('posts a non-cash collection to the bank and fails the whole collection when the period is closed', async () => {
+    await collectKhataPayment(db() as never, scope, {
+      familyAccountId: 'fam_a',
+      amountMinor: 1_000,
+      method: 'BANK_TRANSFER',
+      idempotencyKey: 'key-0004',
+    });
+    expect(bookkeeping.post.mock.calls[0]![2]).toMatchObject({ fundingAccount: 'BANK' });
+
+    bookkeeping.post.mockRejectedValueOnce(new Error('PERIOD_CLOSED'));
+    await expect(
+      collectKhataPayment(db() as never, scope, {
+        familyAccountId: 'fam_a',
+        amountMinor: 1_000,
+        method: 'CASH',
+        idempotencyKey: 'key-0005',
+      })
+    ).rejects.toThrow('PERIOD_CLOSED');
   });
 
   it('replays a retried submission instead of collecting twice', async () => {
@@ -216,6 +260,7 @@ describe('DEV-730 collect Khata payment', () => {
       idempotencyKey: 'key-0001',
     });
     expect(create).not.toHaveBeenCalled();
+    expect(bookkeeping.post).not.toHaveBeenCalled();
     expect(result).toMatchObject({ replayed: true, paidMinor: 2_500 });
   });
 
@@ -229,6 +274,7 @@ describe('DEV-730 collect Khata payment', () => {
       })
     ).rejects.toMatchObject<Partial<FamilyKhataError>>({ reason: 'PAYMENT_EXCEEDS_BALANCE' });
     expect(create).not.toHaveBeenCalled();
+    expect(bookkeeping.post).not.toHaveBeenCalled();
   });
 
   it('refuses an inactive or other-branch account before any write', async () => {
