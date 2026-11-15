@@ -732,7 +732,9 @@ export async function changeSaleStatus(
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
   authority: SaleTransitionAuthority,
   reason?: string,
-  controlledWitness?: ControlledRestorationPin
+  controlledWitness?: ControlledRestorationPin,
+  /** DEV-508: structured detail kept on the status event, e.g. a void's reason code. */
+  eventPayload?: Prisma.InputJsonValue
 ) {
   const sale = await saleInScope(db, scope, saleId);
   // DEV-821: fails closed. A void releases the bill's stock, so a missing or
@@ -842,7 +844,7 @@ export async function changeSaleStatus(
     });
   }
 
-  await event(db, scope, saleId, kind, reason);
+  await event(db, scope, saleId, kind, reason, eventPayload);
   return saleInScope(db, scope, saleId);
 }
 

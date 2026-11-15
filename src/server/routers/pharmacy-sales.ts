@@ -75,6 +75,7 @@ import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
 import { Prisma } from '@/generated/prisma/client';
 import { randomUUID } from 'node:crypto';
 import {
@@ -2212,13 +2213,35 @@ export const pharmacySalesRouter = router({
           branchId,
           saleId: z.string().min(1),
           action: z.enum(['hold', 'resume', 'convertQuotation', 'void']),
-          reason: z.string().trim().min(1).optional(),
+          reason: z.string().trim().min(1).max(500).optional(),
+          // DEV-508: a counter void must say why, from the fixed reason codes.
+          voidReason: saleVoidReasonSchema.optional(),
           controlledWitness: z
             .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
             .strict()
             .optional(),
         })
         .strict()
+        .superRefine((value, issue) => {
+          if (value.action === 'void' && !value.voidReason)
+            issue.addIssue({
+              code: 'custom',
+              path: ['voidReason'],
+              message: 'Choose a reason for this void.',
+            });
+          if (value.action === 'void' && value.reason !== undefined)
+            issue.addIssue({
+              code: 'custom',
+              path: ['reason'],
+              message: 'A void takes its reason from voidReason.',
+            });
+          if (value.action !== 'void' && value.voidReason)
+            issue.addIssue({
+              code: 'custom',
+              path: ['voidReason'],
+              message: 'Only a void takes a void reason.',
+            });
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {
@@ -2226,6 +2249,7 @@ export const pharmacySalesRouter = router({
           try {
             const db = txDb(tx);
             const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+            const voidReason = input.action === 'void' ? input.voidReason : undefined;
             return await changeSaleStatus(
               db,
               scope,
@@ -2237,8 +2261,16 @@ export const pharmacySalesRouter = router({
                 actorIsManager:
                   input.action === 'void' && (await actorMayRefund(db, ctx.session!.user)),
               },
-              input.reason,
-              input.controlledWitness
+              voidReason ? saleVoidReasonText(voidReason) : input.reason,
+              input.controlledWitness,
+              ...(voidReason
+                ? [
+                    {
+                      voidReasonCode: voidReason.code,
+                      ...(voidReason.note ? { voidNote: voidReason.note } : {}),
+                    },
+                  ]
+                : [])
             );
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
