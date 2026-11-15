@@ -5,9 +5,12 @@ import type { ClaimedJob } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({
+  recordAudit: vi.fn(),
   enqueue: vi.fn(),
   processTerminalEvent: vi.fn(),
 }));
+
+vi.mock('@/server/audit', () => ({ recordAudit: mocks.recordAudit }));
 
 vi.mock('@/lib/restaurant/scheduler', () => ({
   enqueue: mocks.enqueue,
@@ -262,9 +265,22 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
         T0
       );
       expect(squatter.deduplicated).toBe(false);
+      mocks.recordAudit.mockClear();
 
       const signed = await recordInboundWebhook(db, signedTerminal, T0);
 
+      expect(mocks.recordAudit).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          action: 'restaurant.webhook.unauthenticated_row_replaced',
+          targetType: 'RestaurantWebhookInbox',
+          targetId: squatter.inbox.id,
+          metadata: expect.objectContaining({
+            source: 'card-provider',
+            externalEventId: 'evt_target',
+          }),
+        }),
+        expect.anything()
+      );
       expect(signed.deduplicated).toBe(false);
       expect(signed.enqueuedJobId).toBe('job_2');
       expect(signed.inbox.id).not.toBe(squatter.inbox.id);

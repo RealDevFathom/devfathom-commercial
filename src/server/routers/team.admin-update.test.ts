@@ -192,3 +192,26 @@ describe('team.adminUpdateMember team:setRole gate', () => {
     expect(mocks.update).toHaveBeenCalledOnce();
   });
 });
+
+// DEV-850: the reset path enforces the role hierarchy and refuses a self-reset.
+describe('team.adminResetPassword hierarchy guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+  });
+
+  it('refuses a self-reset before writing', async () => {
+    mocks.findUnique.mockResolvedValue({ role: 'ADMIN' });
+    await expect(
+      caller().adminResetPassword({ id: 'admin_1', newPassword: 'Correct-Horse-9-Battery' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown member', async () => {
+    mocks.findUnique.mockResolvedValue(null);
+    await expect(
+      caller().adminResetPassword({ id: 'nobody', newPassword: 'Correct-Horse-9-Battery' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});

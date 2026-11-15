@@ -40,3 +40,26 @@ export const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 export async function unusablePasswordHash(): Promise<string> {
   return hash(randomBytes(32).toString('base64url'), 12);
 }
+
+const ROLE_RANK: Record<string, number> = { EMPLOYEE: 1, HR: 2, ADMIN: 3 };
+
+/**
+ * DEV-850 role-hierarchy guard for administrative resets. An administrator may not
+ * reset the password of a member who outranks them, and may not reset their own
+ * (that path skips the current-password check; use "change password"). Returns a
+ * denial message, or null when the reset may proceed. An unknown role ranks above
+ * every known one, so it fails closed.
+ */
+export function passwordResetDenial(input: {
+  actorId: string;
+  actorRole: string;
+  targetId: string;
+  targetRole: string;
+}): string | null {
+  if (input.actorId === input.targetId) {
+    return 'Use change password to update your own password.';
+  }
+  const actor = ROLE_RANK[input.actorRole] ?? 0;
+  const target = ROLE_RANK[input.targetRole] ?? Number.POSITIVE_INFINITY;
+  return target > actor ? 'You cannot reset the password of a member with a higher role.' : null;
+}

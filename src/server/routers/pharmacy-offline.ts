@@ -47,7 +47,7 @@ import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import { manualTenderCaptureSchema, validateManualTenderPolicy, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
-import { counterOperatorDenial } from '@/lib/pharmacy/counter-capability';
+import { counterBranchAssignmentDenial, counterOperatorDenial } from '@/lib/pharmacy/counter-capability';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { adminProcedure, router } from '../trpc';
 
@@ -548,6 +548,16 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             ctx.scope.organizationId,
             ctx.scope.branchId,
             { source: 'REST', ip: clientIp(request) }
+          );
+          if (denial) throw new CounterTransportError(denial, 403);
+        } else {
+          // DEV-850: lease, quota and reject act on this terminal's branch, so a
+          // manager must also be assigned to it (admins span the organization).
+          const denial = await counterBranchAssignmentDenial(
+            db,
+            actor.session.user,
+            ctx.scope.organizationId,
+            ctx.scope.branchId
           );
           if (denial) throw new CounterTransportError(denial, 403);
         }

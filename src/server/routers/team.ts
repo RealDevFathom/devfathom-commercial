@@ -19,7 +19,7 @@ import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
-import { adminPasswordResetData } from '@/lib/auth/admin-password-reset';
+import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
 import { createMemberInvitation } from '@/lib/member-invitation';
 import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -1019,6 +1019,18 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const target = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { role: true },
+      });
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      const denial = passwordResetDenial({
+        actorId: ctx.session.user.id,
+        actorRole: ctx.session.user.role,
+        targetId: input.id,
+        targetRole: target.role,
+      });
+      if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
       const hashed = await hash(input.newPassword, 12);
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({

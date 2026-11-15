@@ -251,4 +251,24 @@ describe('DEV-831 offline counter operator authorization', () => {
     expect((await call('lease', token, { size: 1 })).status).toBe(200);
     expect(mocks.reserveReceiptNumberBlock).toHaveBeenCalledTimes(1);
   });
+
+  it('denies lease, quota and reject to a manager not assigned to the terminal branch', async () => {
+    const token = await establish();
+    state.grants = new Set(['admin:access']);
+    state.assignedBranches = new Set(['branch_other']);
+    for (const operation of ['lease', 'quota', 'reject'] as const) {
+      const response = await call(operation, token, {});
+      expect(response.status, operation).toBe(403);
+      expect(await response.json(), operation).toEqual({ error: 'branch_forbidden' });
+    }
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+
+  it('lets an organization administrator lease without a branch assignment', async () => {
+    const token = await establish();
+    state.role = 'ADMIN';
+    state.grants = new Set(['admin:access']);
+    state.assignedBranches.clear();
+    expect((await call('lease', token, { size: 1 })).status).toBe(200);
+  });
 });

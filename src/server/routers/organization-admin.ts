@@ -12,7 +12,7 @@ import {
 import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
-import { adminPasswordResetData } from '@/lib/auth/admin-password-reset';
+import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -728,9 +728,16 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({
         where: { id: input.id, organizationId: id },
-        select: { id: true, email: true },
+        select: { id: true, email: true, role: true },
       });
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      const denial = passwordResetDenial({
+        actorId: ctx.session.user.id,
+        actorRole: ctx.session.user.role,
+        targetId: user.id,
+        targetRole: user.role,
+      });
+      if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
       await ctx.db.user.update({
         where: { id: user.id },
         data: adminPasswordResetData(await hash(input.password, 12)),
