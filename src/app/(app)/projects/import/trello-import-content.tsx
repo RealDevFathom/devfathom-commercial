@@ -200,7 +200,7 @@ export function TrelloImportContent() {
           <p className="mt-2 text-sm text-muted-foreground text-center max-w-sm">
             Export from Trello: Menu &rarr; More &rarr; Print and Export &rarr; Export as JSON
           </p>
-          <label className="mt-6 cursor-pointer rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]">
+          <label className="mt-6 cursor-pointer rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]">
             Choose File
             <input
               type="file"
@@ -339,7 +339,7 @@ export function TrelloImportContent() {
           <button
             onClick={handleImport}
             disabled={!canImport}
-            className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
           >
             Import Board
           </button>
@@ -402,7 +402,7 @@ export function TrelloImportContent() {
           )}
           <button
             onClick={() => router.push(`/projects`)}
-            className="mt-8 rounded-xl bg-primary px-8 py-3 text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="mt-8 rounded-xl bg-primary px-8 py-3 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
           >
             Go to Projects
           </button>

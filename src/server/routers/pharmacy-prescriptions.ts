@@ -23,6 +23,7 @@ import {
   resolveRxOcrAdapter,
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
+import { buildRxDraftCart } from '@/lib/pharmacy/rx-draft-cart';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '../trpc';
 import {
@@ -45,6 +46,22 @@ const prescriptionCalendarDate = z
       value.getUTCMilliseconds() === 0,
     'Prescription validity must be a calendar date.'
   );
+
+/** Optional free text: trimmed, and an empty field is stored as absent. */
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform((value) => value || undefined);
+
+function prescriberConflict() {
+  return new TRPCError({
+    code: 'CONFLICT',
+    message: 'A prescriber with this registration number is already in the directory.',
+  });
+}
 
 async function requireCounterPatientAccess(
   ctx: Pick<TRPCContext, 'db' | 'requestMeta'> & {
@@ -132,6 +149,37 @@ async function readableSourceFile(
   return file;
 }
 
+/** Read a stored Rx image with the configured OCR adapter (never applied by itself). */
+async function readRxSource(ctx: Parameters<typeof readableSourceFile>[0], sourceFileRef: string) {
+  const adapterName = configuredRxOcrAdapterName();
+  if (!adapterName) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Prescription reading is not enabled for this workspace.',
+    });
+  }
+  const file = await readableSourceFile(ctx, sourceFileRef);
+  let extraction;
+  try {
+    extraction = await resolveRxOcrAdapter(adapterName).extract({
+      content: file.bytes,
+      mimeType: file.contentType,
+      sourceFileRef: sourceFileRef,
+    });
+  } catch (error) {
+    if (error instanceof RxOcrError) {
+      // Provider detail stays server-side; the counter gets an operator sentence.
+      throw new TRPCError({
+        code: error.reason === 'ADAPTER_UNAVAILABLE' ? 'PRECONDITION_FAILED' : 'BAD_GATEWAY',
+        message: 'The prescription could not be read. Enter the details by hand.',
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  return extraction;
+}
+
 export const pharmacyPrescriptionsRouter = router({
   workspace: fileProcedure
     .input(
@@ -216,18 +264,48 @@ export const pharmacyPrescriptionsRouter = router({
         })),
       };
     }),
-  createPatient: capabilityProcedure('pharmacy:prescriptions')
+  // DEV-626 / DEV-53 / #1036: registering a patient or prescriber is
+  // prescription work, so it carries the same module + `pharmacy:prescriptions`
+  // gate (and raw-input audit suppression for patient identifiers) as capture.
+  createPatient: fileProcedure
     .input(
       z
         .object({
           displayName: z.string().trim().min(1).max(200),
-          cnic: z.string().max(32).optional(),
-          phone: z.string().max(32).optional(),
+          cnic: optionalText(32),
+          phone: optionalText(32),
           dateOfBirth: z.date().optional(),
         })
         .strict()
     )
     .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
+
+  createPrescriber: fileProcedure
+    .input(
+      z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          registrationNumber: z.string().trim().min(1).max(64),
+          phone: optionalText(32),
+          facility: optionalText(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const duplicate = await ctx.db.pharmacyPrescriber.findFirst({
+        where: { organizationId, registrationNumber: input.registrationNumber },
+        select: { id: true },
+      });
+      if (duplicate) throw prescriberConflict();
+      try {
+        return await ctx.db.pharmacyPrescriber.create({ data: input });
+      } catch (error) {
+        // A concurrent registration that raced past the pre-check.
+        if ((error as { code?: unknown } | null)?.code === 'P2002') throw prescriberConflict();
+        throw error;
+      }
+    }),
 
   recordConsent: capabilityProcedure('pharmacy:prescriptions')
     .input(
@@ -281,38 +359,63 @@ export const pharmacyPrescriptionsRouter = router({
   extractSource: fileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .mutation(async ({ ctx, input }) => {
-      const adapterName = configuredRxOcrAdapterName();
-      if (!adapterName) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Prescription reading is not enabled for this workspace.',
-        });
-      }
-      const file = await readableSourceFile(ctx, input.sourceFileRef);
-      let extraction;
-      try {
-        extraction = await resolveRxOcrAdapter(adapterName).extract({
-          content: file.bytes,
-          mimeType: file.contentType,
-          sourceFileRef: input.sourceFileRef,
-        });
-      } catch (error) {
-        if (error instanceof RxOcrError) {
-          // Provider detail stays server-side; the counter gets an operator sentence.
-          throw new TRPCError({
-            code: error.reason === 'ADAPTER_UNAVAILABLE' ? 'PRECONDITION_FAILED' : 'BAD_GATEWAY',
-            message: 'The prescription could not be read. Enter the details by hand.',
-            cause: error,
-          });
-        }
-        throw error;
-      }
+      const extraction = await readRxSource(ctx, input.sourceFileRef);
       const medicines = await ctx.db.medicine.findMany({
         where: { organizationId: ctx.entitlements.organizationId, saleable: true },
         select: { id: true, productName: true, brandName: true },
         orderBy: { productName: 'asc' },
       });
       return proposeRxPrefill(extraction, medicines);
+    }),
+
+  /**
+   * DEV-63: Rx photo → DRAFT cart with salt and strength matching. Writes
+   * nothing and confirms nothing: the pharmacist confirms each line into
+   * `capture`, and the RX-03 pharmacist sign still releases any sale.
+   */
+  draftCartFromSource: fileProcedure
+    .input(
+      z
+        .object({
+          sourceFileRef: prescriptionFileRefSchema,
+          /** The workspace's own confidence threshold; never a built-in figure. */
+          minConfidence: z.number().min(0).max(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const extraction = await readRxSource(ctx, input.sourceFileRef);
+      const medicines = await ctx.db.medicine.findMany({
+        where: { organizationId: ctx.entitlements.organizationId, saleable: true },
+        select: {
+          id: true,
+          productName: true,
+          brandName: true,
+          strengths: {
+            select: {
+              ingredientId: true,
+              value: true,
+              unit: true,
+              ingredient: { select: { name: true } },
+            },
+          },
+          presentations: { select: { id: true, presentation: true }, orderBy: { id: 'asc' } },
+        },
+        orderBy: { productName: 'asc' },
+      });
+      return buildRxDraftCart(
+        extraction,
+        medicines.map((medicine) => ({
+          ...medicine,
+          strengths: medicine.strengths.map((strength) => ({
+            ingredientId: strength.ingredientId,
+            ingredientName: strength.ingredient.name,
+            value: strength.value.toString(),
+            unit: strength.unit,
+          })),
+        })),
+        { minConfidence: input.minConfidence }
+      );
     }),
 
   capture: fileProcedure

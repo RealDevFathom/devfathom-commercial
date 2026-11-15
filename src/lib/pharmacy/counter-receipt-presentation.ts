@@ -10,6 +10,7 @@ import {
   localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
+  receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLine,
   type CounterReceiptLocale,
@@ -146,13 +147,15 @@ export function buildCounterReceiptPreview(
           ? receiptTitle(receipt, locale)
           : String(receipt.receiptNumber),
       invoiceLabel: strings.invoice,
-      issuedAt: `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
+      issuedAt: `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
+        const promotion = receiptPromotionLabel(line, locale);
         return [
           presentation.identity,
           counterLinePricing(line, locale),
           ...presentation.allocations,
+          ...(promotion ? [promotion] : []),
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
@@ -253,16 +256,14 @@ export function buildCounterZReportPreview(
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount, locale)}`),
     ...(report.tenderTotals == null
       ? []
-      : tenderTotalsSchema
-          .parse(report.tenderTotals)
-          .flatMap((row) => [
-            `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`,
-            // DEV-713: who confirmed this type's manual card or wallet payments.
-            ...(row.confirmers ?? []).map(
-              (confirmer) =>
-                `  ${locale === 'ur' ? 'تصدیق کنندہ' : 'Confirmed by'} ${confirmer.name} · ${localizeReceiptNumber(String(confirmer.count), locale)} · ${formatMinor(confirmer.amountMinor, locale)}`
-            ),
-          ])),
+      : tenderTotalsSchema.parse(report.tenderTotals).flatMap((row) => [
+          `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`,
+          // DEV-713: who confirmed this type's manual card or wallet payments.
+          ...(row.confirmers ?? []).map(
+            (confirmer) =>
+              `  ${locale === 'ur' ? 'تصدیق کنندہ' : 'Confirmed by'} ${confirmer.name} · ${localizeReceiptNumber(String(confirmer.count), locale)} · ${formatMinor(confirmer.amountMinor, locale)}`
+          ),
+        ])),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

@@ -1,3 +1,4 @@
+import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
 import {
   SOLO_OWNER_POLICY,
   APPROVAL_BLOCKED,
@@ -22,6 +23,7 @@ import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
   lockReceivablePurchaseOrder,
+  orderReceiptCostTerms,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -29,6 +31,7 @@ import {
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
 import {
   allocateCentralReceipt,
   centralDemand,
@@ -75,6 +78,11 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import {
+  isNonDrugRetail,
+  resolveReceiptBatchIdentity,
+  resolveReceiptRetailPrice,
+} from '@/lib/pharmacy/product-class';
 import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
@@ -100,6 +108,12 @@ import {
   submitPurchaseReturn,
 } from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
+import {
+  planReorderDrafts,
+  readReorderFacts,
+  REORDER_DEFAULT_COVER_DAYS,
+  REORDER_DEFAULT_WINDOW_DAYS,
+} from '@/lib/pharmacy/reorder-drafts';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { denyByDefaultProcedure, router } from '../trpc';
@@ -221,8 +235,10 @@ function serialUniqueViolation(error: unknown): boolean {
 
 type ReceiptIdentityInput = {
   medicineId: string;
-  batchNumber: string;
-  printedExpiry: Date;
+  /** #718: a non-drug item may arrive without a printed batch or expiry. */
+  productFamily: string;
+  batchNumber?: string;
+  printedExpiry?: Date;
   expiryPrecision: 'DAY' | 'MONTH';
   gtin?: string;
   serialNumber?: string;
@@ -266,6 +282,19 @@ async function resolveReceiptLineIdentity(
     throw new PharmacyReceivingError('GS1_INVALID');
   }
 
+  // #718: resolve the house batch only after the scan, so a generated non-drug batch names the
+  // expiry actually received and two deliveries with different scanned expiries never collide.
+  const resolved = resolveReceiptBatchIdentity({
+    productFamily: line.productFamily,
+    batchNumber,
+    printedExpiry,
+    expiryPrecision,
+  });
+  if (!resolved.ok) throw new PharmacyReceivingError(resolved.reason);
+  batchNumber = resolved.batchNumber;
+  printedExpiry = resolved.printedExpiry;
+  expiryPrecision = resolved.expiryPrecision;
+
   if (gtin) {
     const codes = [gtin, gtin.startsWith('0') ? gtin.slice(1) : null].filter(
       (code): code is string => Boolean(code)
@@ -282,18 +311,21 @@ async function resolveReceiptLineIdentity(
     }
   }
 
-  if (line.acceptedCanonicalUnits > 0 && packIsExpired(printedExpiry, line.receivedAt)) {
+  if (line.acceptedCanonicalUnits > 0 && packIsExpired(resolved.printedExpiry, line.receivedAt)) {
     throw new PharmacyReceivingError('EXPIRED_PACK');
   }
 
-  const near = nearExpiryWarning(printedExpiry.toISOString().slice(0, 10), line.receivedAt);
+  const near = nearExpiryWarning(
+    resolved.printedExpiry.toISOString().slice(0, 10),
+    line.receivedAt
+  );
   warnings = warnings.filter((code) => code !== 'NEAR_EXPIRY');
   if (near && line.acceptedCanonicalUnits > 0) warnings.push(near.code);
 
   return {
-    batchNumber,
-    printedExpiry,
-    expiryPrecision,
+    batchNumber: resolved.batchNumber,
+    printedExpiry: resolved.printedExpiry,
+    expiryPrecision: resolved.expiryPrecision,
     gtin,
     serialNumber,
     serialKey: serialNumber ? serialNumber.toUpperCase() : null,
@@ -1410,10 +1442,12 @@ const purchasingRouter = router({
                   purchaseOrderLineId: z.string().min(1).optional(),
                   medicineId: z.string().min(1),
                   packLevelId: z.string().min(1),
-                  batchNumber: z.string().trim().min(1).max(120),
-                  printedExpiry: z.date(),
+                  // #718: optional only for NON_DRUG_RETAIL (FRONT_SHOP) items; the server
+                  // still refuses a medicine line without its printed batch, expiry and MRP.
+                  batchNumber: z.string().trim().min(1).max(120).optional(),
+                  printedExpiry: z.date().optional(),
                   expiryPrecision: z.enum(['DAY', 'MONTH']),
-                  printedMrpMinor: z.number().int().positive(),
+                  printedMrpMinor: z.number().int().positive().optional(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   receivedPacks: z.number().int().nonnegative(),
                   bonusPacks: z.number().int().nonnegative().default(0),
@@ -1471,6 +1505,19 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          // DEV-679: one supplier bill, one receipt. Checked before any PIN is
+          // spent, and case-insensitively, so a re-typed or photo-read invoice
+          // number cannot file the same bill twice.
+          const duplicate = await findDuplicateSupplierInvoice(db, {
+            organizationId: scope.organizationId,
+            supplierId: input.supplierId,
+            supplierInvoiceRef: input.supplierInvoiceRef,
+          });
+          if (duplicate) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+          }
+          let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
+            null;
           if (input.purchaseOrderId) {
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
@@ -1478,6 +1525,11 @@ const purchasingRouter = router({
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
             });
+            costedOrder = {
+              id: input.purchaseOrderId,
+              freightMinor: order.freightMinor,
+              otherChargesMinor: order.otherChargesMinor,
+            };
             // An organization-wide order raised from a branch requisition is
             // still that branch's demand: receiving against it needs reach
             // there too, as every other order-scoped procedure does (#979).
@@ -1542,29 +1594,49 @@ const purchasingRouter = router({
             if ('blocked' in attempt) return attempt;
           }
 
-          const ownOrderLines = new Map(
-            input.purchaseOrderId
-              ? (
-                  await db.pharmacyPurchaseOrderLine.findMany({
-                    where: { purchaseOrderId: input.purchaseOrderId },
-                    select: { id: true, medicineId: true, packLevelId: true },
-                  })
-                ).map((line) => [line.id, line] as const)
-              : []
-          );
+          // PUR-03: the lot carries the landed cost the order was approved at:
+          // its line rebate and its share of the order's freight and charges.
+          const orderTerms = costedOrder
+            ? await orderReceiptCostTerms(db, scope.organizationId, costedOrder)
+            : null;
 
           const lines = [];
+          const orderCostTermsByLine: Array<{ rebateBps: number; allocatedChargeMinor: number }> =
+            [];
           const seenSerials = new Set<string>();
           for (const [index, line] of input.lines.entries()) {
-            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
-              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            const item = await db.medicine.findFirst({
+              where: { id: line.medicineId, saleable: true },
+              select: { id: true, productFamily: true, retailPriceMinor: true },
+            });
+            if (!item) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // #718: a medicine keeps PUR-02 exactly (typed printed batch, expiry and DRAP MRP). A
+            // non-drug item may arrive without a batch or expiry and is priced at the shop-set
+            // retail price, so the counter never has to ask for a batch.
+            if (!isNonDrugRetail(item.productFamily)) {
+              const typed = resolveReceiptBatchIdentity({
+                productFamily: item.productFamily,
+                batchNumber: line.batchNumber,
+                printedExpiry: line.printedExpiry,
+                expiryPrecision: line.expiryPrecision,
+              });
+              if (!typed.ok) throw new PharmacyReceivingError(typed.reason);
+            }
+            const printedMrpMinor = resolveReceiptRetailPrice({
+              productFamily: item.productFamily,
+              printedMrpMinor: line.printedMrpMinor,
+              retailPriceMinor: item.retailPriceMinor,
+            });
+            if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
             if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
               throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
+            const orderLine = line.purchaseOrderLineId
+              ? orderTerms?.orderLines.get(line.purchaseOrderLineId)
+              : undefined;
             if (line.purchaseOrderLineId) {
-              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
               if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
               // The referenced order line is the authority for item identity. Without
               // this check, unrelated goods could inherit its price and quantity terms,
@@ -1583,8 +1655,24 @@ const purchasingRouter = router({
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               rejectedCanonicalUnits: line.rejectedCanonicalUnits,
             });
+            // The order line's rebate always applies. Its share of the order's
+            // freight and other charges applies only when this receipt bills no
+            // freight of its own: the invoice is then the authority for what
+            // this delivery's freight was, and the two never stack. Either way
+            // the delivery's paid units count against the order line's share.
+            const orderLineTerms = orderTerms?.termsFor(
+              line.purchaseOrderLineId,
+              quantities.receivedCanonicalUnits
+            ) ?? { rebateBps: 0, allocatedChargeMinor: 0 };
+            const orderCostTerms = {
+              rebateBps: orderLineTerms.rebateBps,
+              allocatedChargeMinor:
+                input.freightMinor > 0 ? 0 : orderLineTerms.allocatedChargeMinor,
+            };
+            orderCostTermsByLine.push(orderCostTerms);
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
+              productFamily: item.productFamily,
               batchNumber: line.batchNumber,
               printedExpiry: line.printedExpiry,
               expiryPrecision: line.expiryPrecision,
@@ -1638,7 +1726,7 @@ const purchasingRouter = router({
               batchNumber: identity.batchNumber,
               printedExpiry: identity.printedExpiry,
               expiryPrecision: identity.expiryPrecision,
-              printedMrpMinor: line.printedMrpMinor,
+              printedMrpMinor,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
@@ -1651,10 +1739,11 @@ const purchasingRouter = router({
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // PUR-03 / DEV-77: bonus units divide the same money over more
-              // units, so a scheme lowers the landed cost and never adds revenue;
-              // the receipt freight share is added once every line is known.
+              // PUR-03 / DEV-77 / DEV-161: bonus units divide the same money over
+              // more units, so a scheme lowers the landed cost and never adds
+              // revenue; the charge shares are added once every line is known.
               allocatedFreightMinor: 0,
+              allocatedOrderChargeMinor: orderCostTerms.allocatedChargeMinor,
               unitCostMinor: 0,
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
@@ -1667,17 +1756,21 @@ const purchasingRouter = router({
 
           // DEV-77: one landed-cost pass over the whole receipt, so the freight
           // shares sum to the billed freight exactly and every lot carries
-          // (net + non-creditable tax + freight share) / (received + bonus).
+          // (net − rebate + non-creditable tax + charge share) / (received +
+          // bonus). DEV-161: each line also brings its order-line rebate and,
+          // when the invoice bills no freight, its share of the PO's charges.
           const landed = receiptLandedCosts({
             freightMinor: input.freightMinor,
-            lines: input.lines.map((line) => ({
+            lines: input.lines.map((line, index) => ({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
               discountBps: line.discountBps,
+              rebateBps: orderCostTermsByLine[index]!.rebateBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
+              allocatedChargeMinor: orderCostTermsByLine[index]!.allocatedChargeMinor,
             })),
           });
           for (const [index, line] of lines.entries()) {
@@ -2292,6 +2385,30 @@ const purchasingRouter = router({
    * POSTED receipts only. The receiving bench pre-fills the outstanding balance
    * from this, so it never asks the operator to work out what is still owed.
    */
+  /**
+   * DEV-693: read-only official-price hints for the medicines being received.
+   * An official DRAP price is price data, so only a receiver who also holds the
+   * price-page grant (pharmacy:safety) gets any; everyone else gets no hints.
+   */
+  officialPriceAlerts: purchasing
+    .meta(PROCUREMENT)
+    .input(z.object({ medicineIds: z.array(z.string().min(1)).min(1).max(500) }).strict())
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId || !ctx.session || !hasModule(ctx.entitlements, 'pharmacy-procurement'))
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy procurement access required.',
+        });
+      const actor = subjectFromSession(ctx.session.user);
+      if (!(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db }))) return [];
+      return listDrapPriceAlerts(
+        ctx.db,
+        { organizationId, actorId: ctx.session.user.id },
+        input.medicineIds
+      );
+    }),
+
   receivedAgainstOrder: purchasing
     .meta(PROCUREMENT)
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
@@ -2392,6 +2509,34 @@ const purchasingRouter = router({
     .query(async ({ ctx, input: { branchId: branch, ...bounds } }) =>
       listSupplierCredits(ctx.db, await supplierFollowUpScope(ctx, branch), bounds)
     ),
+
+  /**
+   * DEV-678 — velocity-based reorder, one draft per distributor. Read only: SQL
+   * reads the branch's sales, available stock and open orders, and the planner
+   * turns them into suggested packs. A person confirms a draft through
+   * `createPurchaseOrder`; nothing is written or sent here.
+   */
+  reorderDrafts: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z
+        .object({
+          branchId,
+          windowDays: z.number().int().min(1).max(90).default(REORDER_DEFAULT_WINDOW_DAYS),
+          coverDays: z.number().int().min(0).max(90).default(REORDER_DEFAULT_COVER_DAYS),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      const policy = { windowDays: input.windowDays, coverDays: input.coverDays };
+      const facts = await readReorderFacts(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        policy
+      );
+      return { branchId: scope.branchId, ...planReorderDrafts(facts, policy) };
+    }),
 
   /** INV-10 — exact PUR-07 demand. Branch grants see only their own rows. */
   centralDemand: purchasing

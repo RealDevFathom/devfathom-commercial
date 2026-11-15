@@ -871,7 +871,7 @@ export function RestaurantMenusConsole({
                               <h4 className="font-display font-semibold text-text-strong">
                                 {section.name}
                               </h4>
-                              <p className="font-mono text-[0.6875rem] text-text-faint">
+                              <p className="font-mono text-[0.6875rem] text-text-muted">
                                 Order {section.sortOrder} · {section.items.length} items
                               </p>
                             </div>

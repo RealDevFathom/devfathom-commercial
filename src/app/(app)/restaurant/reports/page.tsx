@@ -171,7 +171,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         <SectionCard title="Reports unavailable">
           <SectionNotice
             kind="permission"
-            detail="reports:operational or reports:financial is required."
+            detail="Operational or financial reports access is required."
           />
         </SectionCard>
       </div>
@@ -461,7 +461,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 detail="Restaurant POS, Menu and Inventory are required for theoretical food costing."
               />
             ) : !canFinancial ? (
-              <SectionNotice kind="permission" detail="reports:financial is required." />
+              <SectionNotice kind="permission" detail="Financial reports access is required." />
             ) : foodCost.failed ? (
               <SectionNotice kind="error" detail="Food-cost data could not be loaded." />
             ) : foodCost.data ? (
@@ -627,7 +627,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 detail="Restaurant POS, Menu and Inventory are required for dish profitability."
               />
             ) : !canFinancial ? (
-              <SectionNotice kind="permission" detail="reports:financial is required." />
+              <SectionNotice kind="permission" detail="Financial reports access is required." />
             ) : dishProfitability.failed ? (
               <SectionNotice kind="error" detail="Dish-profitability data could not be loaded." />
             ) : dishProfitability.data && dishProfitability.data.menuEngineering.length ? (
@@ -705,9 +705,9 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
           }
           catering={
             !canFinancial ? (
-              <SectionNotice kind="permission" detail="reports:financial is required." />
+              <SectionNotice kind="permission" detail="Financial reports access is required." />
             ) : !canCateringRead ? (
-              <SectionNotice kind="permission" detail="catering:read is required." />
+              <SectionNotice kind="permission" detail="Catering access is required." />
             ) : catering.failed ? (
               <SectionNotice kind="error" detail="Catering report data could not be loaded." />
             ) : catering.data && catering.data.totals.orderCount > 0 ? (
@@ -852,7 +852,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         ) : !canOperational ? (
           <SectionNotice
             kind="permission"
-            detail="reports:operational is required for orders, covers and item mix."
+            detail="Operational reports access is required for orders, covers and item mix."
           />
         ) : overview.failed ? (
           <SectionNotice
@@ -871,7 +871,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                     ? displayNumber(payments.data.grossSales)
                     : 'Restricted'
                 }
-                sub={!canFinancial ? 'reports:financial required' : undefined}
+                sub={!canFinancial ? 'Financial reports access required' : undefined}
               />
               <Stat
                 label="Net sales"
@@ -880,7 +880,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                     ? displayNumber(payments.data.netSales)
                     : 'Restricted'
                 }
-                sub={!canFinancial ? 'reports:financial required' : undefined}
+                sub={!canFinancial ? 'Financial reports access required' : undefined}
               />
               <Stat
                 label="Average check"
@@ -955,7 +955,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             <ExportLink section="payments" branch={exportBranch} from={from} to={to} />
           ) : undefined
         }
-        eyebrow="reports:financial"
+        eyebrow="Financial reports"
         title="Payments & tax"
         titleLevel={2}
       >
@@ -967,7 +967,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         ) : !canFinancial ? (
           <SectionNotice
             kind="permission"
-            detail="reports:financial is required for money, payment and tax totals."
+            detail="Financial reports access is required for money, payment and tax totals."
           />
         ) : payments.failed ? (
           <SectionNotice kind="error" detail="Financial close totals could not be loaded." />
@@ -1040,7 +1040,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             detail="Enable Restaurant Inventory to expose on-hand and stock-ledger reporting."
           />
         ) : !canOperational ? (
-          <SectionNotice kind="permission" detail="reports:operational is required." />
+          <SectionNotice kind="permission" detail="Operational reports access is required." />
         ) : inventory.failed ? (
           <SectionNotice kind="error" detail="Inventory read models could not be loaded." />
         ) : inventory.data ? (
@@ -1165,7 +1165,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 detail="Enable Restaurant Inventory to expose wastage reporting."
               />
             ) : !canOperational ? (
-              <SectionNotice kind="permission" detail="reports:operational is required." />
+              <SectionNotice kind="permission" detail="Operational reports access is required." />
             ) : stockLocationsResult.failed || wastage.failed ? (
               <SectionNotice kind="error" detail="Wastage totals could not be loaded." />
             ) : wastage.data && wastage.data.totals.movementCount > 0 ? (
@@ -1331,7 +1331,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 detail="Enable Restaurant Inventory to expose stock-movement reporting."
               />
             ) : !canOperational ? (
-              <SectionNotice kind="permission" detail="reports:operational is required." />
+              <SectionNotice kind="permission" detail="Operational reports access is required." />
             ) : stockLocationsResult.failed || stockMovements.failed ? (
               <SectionNotice kind="error" detail="Stock-movement totals could not be loaded." />
             ) : stockMovements.data && stockMovements.data.totals.movementCount > 0 ? (
@@ -1448,7 +1448,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             detail="Restaurant Purchasing is not included in this organization’s current package."
           />
         ) : !canOperational ? (
-          <SectionNotice kind="permission" detail="reports:operational is required." />
+          <SectionNotice kind="permission" detail="Operational reports access is required." />
         ) : purchasing.failed ? (
           <SectionNotice kind="error" detail="Purchasing read models could not be loaded." />
         ) : purchasing.data ? (
@@ -1550,7 +1550,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             detail="Enable Restaurant Workforce to expose scheduled roster reporting."
           />
         ) : !canOperational ? (
-          <SectionNotice kind="permission" detail="reports:operational is required." />
+          <SectionNotice kind="permission" detail="Operational reports access is required." />
         ) : workforce.failed ? (
           <SectionNotice kind="error" detail="Scheduled roster data could not be loaded." />
         ) : workforce.data ? (
@@ -1568,7 +1568,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 }
                 sub={
                   !workforce.data.labourCostsVisible
-                    ? 'reports:financial + workforce:rates required'
+                    ? 'Financial reports and staff pay-rate access required'
                     : undefined
                 }
               />
@@ -1601,7 +1601,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             detail="Enable Restaurant SOP to expose performance reporting."
           />
         ) : !canOperational ? (
-          <SectionNotice kind="permission" detail="reports:operational is required." />
+          <SectionNotice kind="permission" detail="Operational reports access is required." />
         ) : sop.failed ? (
           <SectionNotice kind="error" detail="SOP performance summary could not be loaded." />
         ) : sop.data && sop.data.total > 0 ? (

@@ -245,6 +245,16 @@ export async function postStockCount(
       throw new InventoryError('Count is not SUBMITTED.', 'COUNT_NOT_SUBMITTED');
 
     const at = input.now ?? new Date();
+    // Claim SUBMITTED → POSTED before posting. The conditional update takes the
+    // row lock, so a concurrent post blocks, re-checks the status, matches zero
+    // rows and fails without appending a second set of adjustments.
+    const claimed = await tx.restaurantStockCount.updateMany({
+      where: { id: count.id, status: 'SUBMITTED' },
+      data: { status: 'POSTED', postedAt: at },
+    });
+    if (claimed.count !== 1)
+      throw new InventoryError('Count is not SUBMITTED.', 'COUNT_NOT_SUBMITTED');
+
     const nonZeroLines = count.lines.filter((l) => !dec(l.varianceQuantity).equals(ZERO));
 
     if (nonZeroLines.length > 0) {
@@ -262,10 +272,6 @@ export async function postStockCount(
       });
     }
 
-    await tx.restaurantStockCount.update({
-      where: { id: count.id },
-      data: { status: 'POSTED', postedAt: at },
-    });
     return { stockCountId: count.id, movementsPosted: nonZeroLines.length };
   });
 }
@@ -354,12 +360,22 @@ export async function completeStockTransfer(
     }
 
     const at = input.now ?? new Date();
+    // Claim DRAFT → RECEIVED before posting. The conditional update takes the
+    // row lock, so a concurrent completion blocks, re-checks the status, matches
+    // zero rows and fails without appending a second pair of transfer legs.
+    const claimed = await tx.restaurantStockTransfer.updateMany({
+      where: { id: transfer.id, status: 'DRAFT' },
+      data: { status: 'RECEIVED', dispatchedAt: at, receivedAt: at },
+    });
+    if (claimed.count !== 1) {
+      throw new InventoryError(
+        'Transfer is already complete or cancelled.',
+        'TRANSFER_ALREADY_COMPLETE'
+      );
+    }
+
     const lines = transfer.lines;
     if (lines.length === 0) {
-      await tx.restaurantStockTransfer.update({
-        where: { id: transfer.id },
-        data: { status: 'RECEIVED', dispatchedAt: at, receivedAt: at },
-      });
       return { stockTransferId: transfer.id, movementsPosted: 0 };
     }
 
@@ -386,10 +402,6 @@ export async function completeStockTransfer(
       ],
     });
 
-    await tx.restaurantStockTransfer.update({
-      where: { id: transfer.id },
-      data: { status: 'RECEIVED', dispatchedAt: at, receivedAt: at },
-    });
     return { stockTransferId: transfer.id, movementsPosted: lines.length * 2 };
   });
 }

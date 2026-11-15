@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { writeOff } from './inventory-operations';
+import {
+  approveCount,
+  CYCLE_COUNT_MAX_SIZE,
+  CYCLE_COUNT_REASON_MAX,
+  dailyCycleCountList,
+  recallTrace,
+  writeOff,
+} from './inventory-operations';
 
 const scope = {
   organizationId: 'org_pharmacy',
@@ -177,5 +184,179 @@ describe('writeOff pack arrangement', () => {
       writeOff(db as unknown as ScopedDb, scope, { ...input, units: 5 })
     ).rejects.toMatchObject({ reason: 'INVALID_ARRANGEMENT' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('recallTrace sold units', () => {
+  it('leaves voided and never-completed sale allocations out of soldUnits', async () => {
+    const db = {
+      pharmacyRecallNotice: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'recall_1', batchId: 'batch_1', medicineId: null }),
+      },
+      $queryRaw: vi.fn().mockResolvedValue([]),
+    };
+
+    await recallTrace(db as unknown as ScopedDb, scope.organizationId, 'recall_1');
+
+    const sql = (db.$queryRaw.mock.calls[0]![0] as { sql: string }).sql.replace(/\s+/g, ' ');
+    // A voided draft restores its SALE movement with a linked reversal.
+    expect(sql).toContain(
+      'NOT EXISTS (SELECT 1 FROM "pharmacy_stock_movements" r WHERE r."organizationId"=m."organizationId" AND r."reversesMovementId"=m.id)'
+    );
+    // A SALE movement still held by an OPEN, HELD or VOID sale was never sold.
+    expect(sql).toContain('a."stockMovementId"=m.id AND s.status<>\'COMPLETED\'');
+  });
+});
+
+describe('DEV-682 approveCount variance reason', () => {
+  function countDb(varianceUnits: number) {
+    return {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyInventoryCount: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'count_1',
+          status: 'OPEN',
+          createdById: 'user_counter',
+          lines: [
+            {
+              id: 'line_1',
+              inventoryLotId: 'lot_1',
+              stockLocationId: 'location_1',
+              varianceUnits,
+              countedSealedPacks: 1,
+              countedLooseUnits: 0,
+              expectedSealedPacks: 1,
+              expectedLooseUnits: 0,
+            },
+          ],
+        }),
+        update: vi.fn().mockImplementation(async ({ data }: { data: object }) => ({
+          id: 'count_1',
+          ...data,
+        })),
+      },
+      pharmacyStockMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
+    };
+  }
+
+  it.each([undefined, '', '   '])(
+    'refuses to post a variance without a reason (%j) and writes nothing',
+    async (reason) => {
+      const db = countDb(-3);
+      await expect(
+        approveCount(db as unknown as ScopedDb, scope, 'count_1', 'approve', reason)
+      ).rejects.toMatchObject({ reason: 'VARIANCE_REASON_REQUIRED' });
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyInventoryCount.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a reason longer than the stored limit', async () => {
+    const db = countDb(-3);
+    await expect(
+      approveCount(
+        db as unknown as ScopedDb,
+        scope,
+        'count_1',
+        'approve',
+        'x'.repeat(CYCLE_COUNT_REASON_MAX + 1)
+      )
+    ).rejects.toMatchObject({ reason: 'VARIANCE_REASON_REQUIRED' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('approves a count that matches the book without a reason', async () => {
+    const db = countDb(0);
+    await approveCount(db as unknown as ScopedDb, scope, 'count_1', 'approve');
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryCount.update).toHaveBeenCalledWith({
+      where: { id: 'count_1' },
+      data: expect.objectContaining({ status: 'APPROVED', varianceReason: null }),
+    });
+  });
+});
+
+describe('DEV-682 dailyCycleCountList', () => {
+  const at = new Date('2026-11-15T09:00:00.000Z');
+
+  it('ranks fast movers and high-value positions in SQL, within the branch', async () => {
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          inventoryLotId: 'lot_fast',
+          stockLocationId: 'location_1',
+          medicineName: 'Medicine A',
+          batchNumber: 'B-1',
+          locationName: 'Rack',
+          unitsPerPack: 10,
+          soldUnits: BigInt(120),
+          stockValueMinor: BigInt(50_000),
+          fastRank: BigInt(1),
+          valueRank: BigInt(4),
+        },
+        {
+          inventoryLotId: 'lot_dear',
+          stockLocationId: 'location_1',
+          medicineName: 'Medicine B',
+          batchNumber: 'B-2',
+          locationName: 'Safe',
+          unitsPerPack: 1,
+          soldUnits: BigInt(0),
+          stockValueMinor: BigInt(9_000_000),
+          fastRank: BigInt(1),
+          valueRank: BigInt(1),
+        },
+      ]),
+    };
+
+    const list = await dailyCycleCountList(db as unknown as ScopedDb, scope, at, 6);
+
+    expect(list).toEqual([
+      expect.objectContaining({
+        inventoryLotId: 'lot_fast',
+        soldUnits: 120,
+        stockValueMinor: 50_000,
+        basis: ['FAST_MOVER'],
+      }),
+      // A position with no sales is never called a fast mover.
+      expect.objectContaining({
+        inventoryLotId: 'lot_dear',
+        soldUnits: 0,
+        stockValueMinor: 9_000_000,
+        basis: ['HIGH_VALUE'],
+      }),
+    ]);
+    // The list is for a blind count: no book quantity is returned.
+    expect(Object.keys(list[0]!)).not.toContain('onHandUnits');
+
+    const query = db.$queryRaw.mock.calls[0]![0] as { sql: string; values: unknown[] };
+    const sql = query.sql.replace(/\s+/g, ' ');
+    expect(sql).toContain(`b.disposition = 'AVAILABLE'`);
+    expect(sql).toContain(`mv.kind = 'SALE'`);
+    // Unfinished baskets already hold SALE movements but sold nothing yet.
+    expect(sql).toContain(`a."stockMovementId" = mv.id AND s.status <> 'COMPLETED'`);
+    // A reversed sale (and the reversal itself) is not a sale.
+    expect(sql).toContain(`mv."reversesMovementId" IS NULL`);
+    expect(sql).toContain('"pharmacy_inventory_count_lines"');
+    expect(query.values).toEqual(
+      expect.arrayContaining([
+        scope.organizationId,
+        scope.branchId,
+        new Date('2026-10-16T09:00:00.000Z'),
+        new Date('2026-11-08T09:00:00.000Z'),
+        3,
+        6,
+      ])
+    );
+  });
+
+  it.each([0, -1, 1.5, CYCLE_COUNT_MAX_SIZE + 1])('refuses list size %s', async (size) => {
+    const db = { $queryRaw: vi.fn() };
+    await expect(
+      dailyCycleCountList(db as unknown as ScopedDb, scope, at, size)
+    ).rejects.toMatchObject({ reason: 'INVALID_QUANTITY' });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 });

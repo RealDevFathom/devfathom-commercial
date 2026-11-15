@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   chunkReferenceRows,
+  DRAP_REGISTRY_RIGHTS,
+  DrapRegistryFileConnector,
+  drapRegistryMapping,
   formulaSafeCell,
   ManualFileConnector,
   REFERENCE_BATCH_MAX_ROWS,
@@ -150,5 +153,105 @@ describe('reference file chunking', () => {
     expect(() => chunkReferenceRows('file-batch', rows)).toThrow(
       'A reference file is limited to 20,000 rows'
     );
+  });
+});
+
+describe('DRAP registry auto-fill', () => {
+  const headers = [
+    'Registration No.',
+    'Brand Name',
+    'Generic Name',
+    'Strength',
+    'Dosage Form',
+    'Pack Size',
+    'Manufacturer',
+    'Prescription Status',
+    'Controlled',
+  ];
+
+  it('maps DRAP export headers without manual column picking', () => {
+    expect(drapRegistryMapping(headers)).toEqual({
+      drapRegistrationNumber: 'Registration No.',
+      productName: 'Brand Name',
+      brandName: 'Brand Name',
+      alias: 'Generic Name',
+      strength: 'Strength',
+      dosageForm: 'Dosage Form',
+      pack: 'Pack Size',
+      manufacturer: 'Manufacturer',
+      rx: 'Prescription Status',
+      controlled: 'Controlled',
+    });
+  });
+
+  it('pre-fills name, strength, form and schedule flags as regulator provenance', async () => {
+    const result = await new DrapRegistryFileConnector().fetch({
+      batchId: 'drap-1',
+      fileName: 'drap-registered-products.csv',
+      mapping: drapRegistryMapping(headers),
+      retrievedAt: '2030-01-01T00:00:00.000Z',
+      rows: [
+        {
+          'Registration No.': '012345',
+          'Brand Name': 'Amoxil',
+          'Generic Name': 'Amoxicillin',
+          Strength: '500 mg',
+          'Dosage Form': 'Capsule',
+          'Pack Size': '2 x 10',
+          Manufacturer: 'GSK',
+          'Prescription Status': 'Prescription Only',
+          Controlled: 'No',
+        },
+        {
+          'Registration No.': '067890',
+          'Brand Name': 'Panadol',
+          Strength: '500 mg',
+          'Dosage Form': 'Tablet',
+          'Pack Size': '10 x 10',
+          'Prescription Status': 'OTC',
+        },
+      ],
+    });
+
+    expect(result.connectorId).toBe('drap-registry');
+    expect(result.rows[0]).toMatchObject({
+      rowSourceKey: 'drap-012345',
+      values: {
+        productName: 'Amoxil',
+        strength: '500 mg',
+        dosageForm: 'Capsule',
+        rx: 'true',
+        controlled: 'false',
+      },
+      blockingIssues: [],
+    });
+    expect(result.rows[1]?.values.rx).toBe('false');
+    for (const assertion of result.rows[0]!.assertions) {
+      expect(assertion).toMatchObject({
+        sourceType: 'REGULATOR',
+        rights: DRAP_REGISTRY_RIGHTS,
+        rowSourceKey: 'drap-012345',
+      });
+    }
+  });
+
+  it('blocks a row whose schedule wording is not explicit instead of guessing a flag', async () => {
+    const result = await new DrapRegistryFileConnector().fetch({
+      batchId: 'drap-2',
+      fileName: 'drap.csv',
+      mapping: drapRegistryMapping(headers),
+      rows: [
+        {
+          'Registration No.': '1',
+          'Brand Name': 'Unclear',
+          Strength: '1 mg',
+          'Dosage Form': 'Tablet',
+          'Pack Size': '10 tablets',
+          'Prescription Status': 'maybe',
+        },
+      ],
+    });
+
+    expect(result.rows[0]?.blockingIssues).toEqual(['INVALID_SCHEDULE_CLASSIFICATION']);
   });
 });

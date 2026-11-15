@@ -416,7 +416,7 @@ function NotificationsView(props: NotificationsViewProps) {
           <div className="mt-4 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-4">
             <p className="font-semibold text-text-strong">Permission denied</p>
             <p className="mt-1 text-sm text-text-muted">
-              The staff:manage permission is required to configure or inspect webhook delivery.
+              Staff management access is required to configure or inspect webhook delivery.
             </p>
           </div>
         ) : (
@@ -496,8 +496,8 @@ function NotificationsView(props: NotificationsViewProps) {
                   </p>
                 </div>
                 <label className="flex items-start gap-2 text-sm text-text-body">
-                  <input className="mt-1" name="confirmed" required type="checkbox" />
-                  I understand that the endpoint and signing secret will be deleted.
+                  <input className="mt-1" name="confirmed" required type="checkbox" />I understand
+                  that the endpoint and signing secret will be deleted.
                 </label>
                 <Button type="submit" variant="destructive">
                   Remove webhook
@@ -866,7 +866,7 @@ function NotificationsView(props: NotificationsViewProps) {
               <div className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-4">
                 <h3 className="font-semibold text-text-strong">Permission denied</h3>
                 <p className="mt-2 text-sm leading-relaxed text-text-muted">
-                  The staff:manage permission is required to view or change organization and branch
+                  Staff management access is required to view or change organization and branch
                   routing.
                 </p>
               </div>

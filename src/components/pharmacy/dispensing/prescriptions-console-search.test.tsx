@@ -5,16 +5,21 @@ const mocks = vi.hoisted(() => ({
   workspace: { data: undefined as unknown, isLoading: false, error: null },
   mutation: { mutateAsync: vi.fn(), isPending: false, error: null },
   upload: { mutateAsync: vi.fn(), isPending: false, error: null },
+  createPatient: { mutateAsync: vi.fn(), isPending: false, error: null },
+  createPrescriber: { mutateAsync: vi.fn(), isPending: false, error: null },
+  invalidate: vi.fn(),
 }));
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ pharmacyPrescriptions: { workspace: { invalidate: vi.fn() } } }),
+    useUtils: () => ({ pharmacyPrescriptions: { workspace: { invalidate: mocks.invalidate } } }),
     pharmacyPrescriptions: {
       workspace: { useQuery: () => mocks.workspace },
       capture: { useMutation: () => mocks.mutation },
       uploadSource: { useMutation: () => mocks.upload },
       captureRefillReminder: { useMutation: () => mocks.mutation },
+      createPatient: { useMutation: () => mocks.createPatient },
+      createPrescriber: { useMutation: () => mocks.createPrescriber },
     },
   },
 }));
@@ -216,8 +221,10 @@ describe('prescription capture prerequisites and copy', () => {
     render(<PrescriptionsConsole />);
     const capture = within(captureForm()).getByRole('button', { name: 'Capture prescription' });
     expect(capture).toBeDisabled();
-    expect(capture).toHaveAccessibleDescription(/administrator to add a patient, then reload/);
-    expect(capture).toHaveAccessibleDescription(/administrator to add a prescriber, then reload/);
+    expect(capture).toHaveAccessibleDescription(/Add the patient under Patients and prescribers/);
+    expect(capture).toHaveAccessibleDescription(
+      /Add the prescribing doctor under Patients and prescribers/
+    );
     expect(capture).toHaveAccessibleDescription(/administrator to add a medicine with a medicine form/);
   });
 
@@ -355,5 +362,89 @@ describe('multiple prescription lines', () => {
     expect(mocks.mutation.mutateAsync.mock.calls[1][0]).toEqual(failedPayload);
     expect(mocks.upload.mutateAsync).toHaveBeenCalledOnce();
     await waitFor(() => expect(within(form).getByRole('status')).toHaveTextContent('Prescription captured.'));
+  });
+});
+
+describe('DEV-626 inline patient and prescriber registration', () => {
+  type Workspace = {
+    patients: { id: string; displayName: string }[];
+    prescribers: { id: string; name: string; registrationNumber: string }[];
+  };
+  const data = () => mocks.workspace.data as Workspace;
+
+  it('adds a patient from an empty directory and selects it for capture', async () => {
+    data().patients = [];
+    mocks.createPatient.mutateAsync.mockResolvedValue({ id: 'patient-new', displayName: 'Sana' });
+    mocks.invalidate.mockImplementation(async () => {
+      data().patients = [{ id: 'patient-new', displayName: 'Sana' }];
+    });
+    render(<PrescriptionsConsole />);
+    const add = within(screen.getByRole('form', { name: 'Add patient' }));
+    fireEvent.change(add.getByLabelText('Patient name'), { target: { value: ' Sana ' } });
+    fireEvent.change(add.getByLabelText('Phone (optional)'), { target: { value: '0300' } });
+    fireEvent.click(add.getByRole('button', { name: 'Add patient' }));
+
+    await waitFor(() =>
+      expect(within(captureForm()).getByRole('combobox', { name: /^Patient$/ })).toHaveValue(
+        'patient-new'
+      )
+    );
+    expect(mocks.createPatient.mutateAsync).toHaveBeenCalledWith({
+      displayName: 'Sana',
+      phone: '0300',
+      cnic: '',
+    });
+    expect(add.getByRole('status')).toHaveTextContent('Sana added and selected for capture.');
+    expect(add.getByLabelText('Patient name')).toHaveValue('');
+  });
+
+  it('adds a prescriber and selects it in the capture form', async () => {
+    mocks.createPrescriber.mutateAsync.mockResolvedValue({ id: 'dr-new', name: 'Dr B' });
+    mocks.invalidate.mockImplementation(async () => {
+      data().prescribers.push({ id: 'dr-new', name: 'Dr B', registrationNumber: 'PMDC-9' });
+    });
+    render(<PrescriptionsConsole />);
+    const add = within(screen.getByRole('form', { name: 'Add prescriber' }));
+    fireEvent.change(add.getByLabelText('Doctor name'), { target: { value: 'Dr B' } });
+    fireEvent.change(add.getByLabelText('Registration number', { exact: false }), {
+      target: { value: 'PMDC-9' },
+    });
+    fireEvent.click(add.getByRole('button', { name: 'Add prescriber' }));
+
+    await waitFor(() =>
+      expect(within(captureForm()).getByRole('combobox', { name: 'Prescriber' })).toHaveValue(
+        'dr-new'
+      )
+    );
+    expect(mocks.createPrescriber.mutateAsync).toHaveBeenCalledWith({
+      name: 'Dr B',
+      registrationNumber: 'PMDC-9',
+      phone: '',
+      facility: '',
+    });
+  });
+
+  it('keeps entries and flags the registration number when it is already registered', async () => {
+    mocks.createPrescriber.mutateAsync.mockRejectedValue(
+      Object.assign(
+        new Error('A prescriber with this registration number is already in the directory.'),
+        {
+          data: { code: 'CONFLICT' },
+        }
+      )
+    );
+    render(<PrescriptionsConsole />);
+    const add = within(screen.getByRole('form', { name: 'Add prescriber' }));
+    const registration = add.getByLabelText('Registration number', { exact: false });
+    fireEvent.change(add.getByLabelText('Doctor name'), { target: { value: 'Dr A' } });
+    fireEvent.change(registration, { target: { value: '123' } });
+    fireEvent.click(add.getByRole('button', { name: 'Add prescriber' }));
+
+    await waitFor(() =>
+      expect(add.getByRole('alert')).toHaveTextContent(/already in the directory/)
+    );
+    expect(registration).toHaveAttribute('aria-invalid', 'true');
+    expect(registration).toHaveValue('123');
+    expect(mocks.invalidate).not.toHaveBeenCalled();
   });
 });

@@ -40,6 +40,8 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
 }
 
 const safety = capabilityProcedure('pharmacy:safety');
+/** DEV-96: 100 years. Matches the cap in pharmacy_retention_days(). */
+const MAX_RETENTION_DAYS = 36_525;
 
 export const pharmacySafetyRouter = router({
   access: protectedProcedure.query(async ({ ctx }) => {
@@ -271,17 +273,51 @@ export const pharmacySafetyRouter = router({
         .object({
           id: z.string().min(1),
           recordClass: z.enum(['PRESCRIPTION', 'CONTROLLED_REGISTER', 'FISCAL', 'AUDIT']),
-          retentionDays: z.number().int().positive(),
+          retentionDays: z
+            .number()
+            .int()
+            .positive()
+            .max(MAX_RETENTION_DAYS, 'A retention period cannot exceed 100 years (36525 days).'),
           effectiveFrom: z.date(),
           reason: z.string().trim().min(1),
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyRetentionClass.create({
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      // DEV-96: a retention period may only ever be lengthened. The database
+      // resolves the longest row of a class, so a shorter row would be ignored
+      // anyway; refusing it here keeps the owner from believing it took effect.
+      const longest = await ctx.db.pharmacyRetentionClass.aggregate({
+        where: { organizationId, recordClass: input.recordClass },
+        _max: { retentionDays: true },
+      });
+      const previousDays = longest._max.retentionDays ?? null;
+      if (previousDays !== null && input.retentionDays < previousDays) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `A retention period can only be lengthened: ${input.recordClass} is already ${previousDays} days.`,
+        });
+      }
+      const row = await ctx.db.pharmacyRetentionClass.create({
         data: { ...input, createdByUserId: ctx.session!.user.id },
-      })
-    ),
+      });
+      annotateAudit(ctx, {
+        category: 'PHARMACY_SAFETY',
+        operation: 'CREATE',
+        action: 'pharmacy.retentionClass.set',
+        targetType: 'PharmacyRetentionClass',
+        targetId: row.id,
+        metadata: {
+          recordClass: input.recordClass,
+          previousDays,
+          retentionDays: input.retentionDays,
+          effectiveFrom: input.effectiveFrom.toISOString(),
+        },
+      });
+      return row;
+    }),
   recordLegalHold: safety
     .input(
       z

@@ -14,6 +14,36 @@ import {
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 
+const programVersion = (rule: Partial<Record<string, unknown>> = {}) => ({
+  id: 'program-1',
+  version: 1,
+  earnMode: 'PERCENT_OF_SPEND',
+  earnPoints: 1,
+  perSpendMinor: 100,
+  ...rule,
+});
+
+/** An owner-set program version and a customer whose LOYALTY consent stands. */
+function earningFixture(
+  options: { program?: ReturnType<typeof programVersion> | null; granted?: boolean } = {}
+) {
+  return {
+    $queryRaw: vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 'patient-a' }])
+      .mockResolvedValueOnce([{ patientId: 'patient-a' }]),
+    pharmacyLoyaltyProgramVersion: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue(options.program === undefined ? programVersion() : options.program),
+    },
+    pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }) },
+    patientConsent: {
+      findFirst: vi.fn().mockResolvedValue({ granted: options.granted ?? true, revokedAt: null }),
+    },
+  };
+}
+
 describe('CRM-L01 pharmacy loyalty', () => {
   it('links a retail customer only with current purpose-specific LOYALTY consent', async () => {
     const update = vi.fn();
@@ -44,6 +74,8 @@ describe('CRM-L01 pharmacy loyalty', () => {
     expect(pointsForNetPaid(10_099)).toBe(100);
     const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
     const db = {
+      // DEV-746: earning needs an owner-set rate and current consent; 1 point per PKR 1 here.
+      ...earningFixture(),
       pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
       pharmacySale: {
         findFirst: vi.fn().mockResolvedValue({
@@ -59,6 +91,84 @@ describe('CRM-L01 pharmacy loyalty', () => {
     await accrueSalePoints(db as never, scope, 'sale-a');
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({ points: 100, netPaidMinor: 10_099, kind: 'EARN' }),
+    });
+  });
+
+  describe('DEV-746 owner-set earning rate', () => {
+    const saleWith = (tenders: Array<{ type: string; amountMinor: number }>) => ({
+      findFirst: vi.fn().mockResolvedValue({ id: 'sale-a', customerId: 'customer-a', tenders }),
+    });
+
+    it('earns at the current program version and stamps it on the entry', async () => {
+      const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
+      const db = {
+        ...earningFixture({
+          program: programVersion({ id: 'program-2', earnPoints: 200, perSpendMinor: 1_000_000 }),
+        }),
+        pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+        pharmacySale: saleWith([{ type: 'CASH', amountMinor: 250_000 }]),
+      };
+      await accrueSalePoints(db as never, scope, 'sale-a');
+      // 2% of PKR 2,500 is PKR 50 = 50 points, not the 2,500 the fixed 1:1 curve paid.
+      expect(create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kind: 'EARN',
+          points: 50,
+          netPaidMinor: 250_000,
+          programVersionId: 'program-2',
+        }),
+      });
+    });
+
+    it('earns nothing on khata (CREDIT) at sale time', async () => {
+      const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
+      const db = {
+        ...earningFixture(),
+        pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+        pharmacySale: saleWith([
+          { type: 'CASH', amountMinor: 1_000 },
+          { type: 'CREDIT', amountMinor: 9_000 },
+        ]),
+      };
+      await accrueSalePoints(db as never, scope, 'sale-a');
+      expect(create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ points: 10, netPaidMinor: 1_000 }),
+      });
+      create.mockClear();
+      const creditOnly = {
+        ...earningFixture(),
+        pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+        pharmacySale: saleWith([{ type: 'CREDIT', amountMinor: 9_000 }]),
+      };
+      await expect(accrueSalePoints(creditOnly as never, scope, 'sale-a')).resolves.toBeNull();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('earns nothing until the owner sets a rate', async () => {
+      const create = vi.fn();
+      const db = {
+        ...earningFixture({ program: null }),
+        pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+        pharmacySale: saleWith([{ type: 'CASH', amountMinor: 10_000 }]),
+      };
+      await expect(accrueSalePoints(db as never, scope, 'sale-a')).resolves.toBeNull();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('earns nothing once the customer has withdrawn loyalty consent', async () => {
+      const create = vi.fn();
+      const db = {
+        ...earningFixture({ granted: false }),
+        pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+        pharmacySale: saleWith([{ type: 'CASH', amountMinor: 10_000 }]),
+      };
+      await expect(accrueSalePoints(db as never, scope, 'sale-a')).resolves.toBeNull();
+      expect(db.patientConsent.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-a', patientId: 'patient-a', purpose: 'LOYALTY' },
+        })
+      );
+      expect(create).not.toHaveBeenCalled();
     });
   });
 
@@ -147,14 +257,33 @@ describe('CRM-L01 pharmacy loyalty', () => {
         ]),
       },
     };
-    const snapshot = await readCustomerSnapshot(db as never, scope, 'customer-a');
+    const snapshot = await readCustomerSnapshot(
+      {
+        ...db,
+        pharmacyLoyaltyProgramVersion: earningFixture({ program: null })
+          .pharmacyLoyaltyProgramVersion,
+      } as never,
+      scope,
+      'customer-a'
+    );
     expect(snapshot).toMatchObject({
       pointsBalance: 35,
+      earnRateSet: false,
       creditBalanceMinor: 800,
       availableCreditMinor: 19_200,
       history: [{ receiptNumber: 7, totalMinor: 900 }],
     });
     expect(JSON.stringify(snapshot)).not.toMatch(/patient|cnic|prescription/i);
+    await expect(
+      readCustomerSnapshot(
+        {
+          ...db,
+          pharmacyLoyaltyProgramVersion: earningFixture().pharmacyLoyaltyProgramVersion,
+        } as never,
+        scope,
+        'customer-a'
+      )
+    ).resolves.toMatchObject({ pointsBalance: 35, earnRateSet: true });
     expect(db.pharmacySale.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),

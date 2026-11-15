@@ -8,6 +8,7 @@ import { workspaceToday } from '@/lib/timezone';
 import { readCustomerSnapshot } from './customer-loyalty';
 import { readKhataBalance } from './family-khata';
 import { recordKhataRepayment } from './khata-repayment';
+import { requireCurrentPharmacyBusinessDate } from './settlement';
 import { manualPaymentSettingsSchema } from './manual-payments';
 import { isNonDrugOfferCopy } from './rfm-winback';
 import type { LedgerScope } from './stock-ledger';
@@ -53,7 +54,6 @@ export class PharmacyPortalError extends Error {
       | 'REQUEST_NOT_FOUND'
       | 'INVALID_STATE'
       | 'KIND_NOT_ALLOWED'
-      | 'BUSINESS_DATE_NOT_CURRENT'
   ) {
     super(reason);
     this.name = 'PharmacyPortalError';
@@ -585,16 +585,17 @@ export async function confirmPortalKhataPayment(
   now: Date = new Date()
 ) {
   const request = await pendingRequest(db, scope, input.requestId);
-  // Money confirmed now books on today in the workspace zone (the DEV-630 rule),
-  // never on a past or future day the client chose.
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  const today = workspaceToday(organization?.timezone, now);
-  if (input.businessDate && input.businessDate.toISOString().slice(0, 10) !== today)
-    throw new PharmacyPortalError('BUSINESS_DATE_NOT_CURRENT');
-  const businessDate = new Date(`${today}T00:00:00.000Z`);
+  // Money confirmed now books on today in the workspace zone (DEV-630), never on a
+  // past or future day the client chose. Without a client date the server uses today.
+  let businessDate = input.businessDate;
+  if (!businessDate) {
+    const organization = await db.organization.findUnique({
+      where: { id: scope.organizationId },
+      select: { timezone: true },
+    });
+    businessDate = new Date(`${workspaceToday(organization?.timezone, now)}T00:00:00.000Z`);
+  }
+  await requireCurrentPharmacyBusinessDate(db, scope, businessDate, now);
   if (
     request.kind !== 'KHATA_PAYMENT' ||
     !request.familyAccountId ||

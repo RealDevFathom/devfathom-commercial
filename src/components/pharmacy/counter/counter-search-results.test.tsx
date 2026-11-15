@@ -315,6 +315,35 @@ describe('CounterSearchResults safety flags', () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(unavailable);
   });
 
+  it('labels a medicine with no stock at this branch as out of stock, not unsellable', () => {
+    const empty: CounterSearchRow = {
+      ...row,
+      printedMrpMinor: null,
+      batchNumber: null,
+      nearestSafeExpiry: null,
+      onHandUnits: 0,
+      recommendedLotId: null,
+      saleUnits: [],
+      saleableUnits: [],
+      storage: { coldChain: false, locationKind: null, locationCode: null },
+      blocked: [],
+    };
+    render(
+      <CounterSearchResults
+        rows={[empty]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const medicine = screen.getByRole('button', { name: /Paracetamol/ });
+    expect(medicine).toHaveTextContent('Out of stock');
+    expect(medicine).not.toHaveTextContent('Not sellable');
+  });
+
   it('disables selection while the counter is busy or branch access is unavailable', () => {
     const onSelect = vi.fn();
     render(

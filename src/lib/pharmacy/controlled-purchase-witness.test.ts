@@ -100,7 +100,7 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({
-      blocked: 'A different qualified person must enter their PIN.',
+      blocked: 'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.',
     });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'cred' },

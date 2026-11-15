@@ -108,6 +108,17 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       listCredentials: { useQuery: () => mocks.credentials },
+      // DEV-253: the invite dialog mounts only once "Invite staff member" is clicked.
+      listInviteRoles: {
+        useQuery: () => ({
+          data: [{ id: 'role_server', key: 'server', name: 'Server' }],
+          error: null,
+          isLoading: false,
+        }),
+      },
+      invite: {
+        useMutation: () => ({ mutate: mocks.noopMutate, isPending: false, error: null }),
+      },
       // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
       // hooks must resolve even though these cases never open it.
       listJobRoles: {
@@ -389,6 +400,20 @@ describe('Restaurant staff credential UI', () => {
     expect(type).toHaveValue('BADGE');
     expect(deviceId).toHaveValue('device_1');
     expect(screen.getByRole('alert')).toHaveTextContent('Credential rejected.');
+  });
+
+  it('invites a brand-new staff member instead of only linking existing accounts', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite staff member' });
+    expect(within(dialog).getByRole('option', { name: 'Server' })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Primary branch')).toBeInTheDocument();
   });
 
   it('shows loading instead of a false zero staff count', () => {

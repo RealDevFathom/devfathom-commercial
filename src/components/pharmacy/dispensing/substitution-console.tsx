@@ -26,7 +26,7 @@ export function SubstitutionConsole() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-04"
+        eyebrow="Pharmacy · Substitutions"
         heading="Substitution"
         description="Make prescribed-versus-supplied differences visible and record the patient conversation."
       />
@@ -38,7 +38,8 @@ export function SubstitutionConsole() {
       {workspace.error ? (
         isAccessDenied(workspace.error) ? (
           <AccessDeniedState title="You do not have substitution access">
-            Substitution evidence is restricted to users holding the dispensing permission.
+            Substitution evidence is restricted to users holding the dispensing or Pharmacy Safety
+            permission.
           </AccessDeniedState>
         ) : (
           <WorkspaceState title="Substitution workspace could not be loaded" tone="danger">
@@ -68,7 +69,11 @@ export function SubstitutionConsole() {
               </select>
             </Field>
           </div>
-          {item ? (
+          {item && !workspace.data.canRecord ? (
+            <WorkspaceState title="Review only">
+              Recording substitution evidence needs the pharmacist dispensing permission.
+            </WorkspaceState>
+          ) : item ? (
             <SubstitutionForm
               prescribed={{
                 id: item.line.presentation.id,

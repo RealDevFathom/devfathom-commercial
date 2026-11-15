@@ -149,6 +149,11 @@ export function isNonDrugOfferCopy(body: string): boolean {
   return text.length > 0 && !PROHIBITED_OFFER_CONTENT.test(text);
 }
 
+/** True when copy names a drug, salt, dose or medicine category (WhatsApp-unsafe). */
+export function namesDrugContent(text: string): boolean {
+  return PROHIBITED_OFFER_CONTENT.test(text);
+}
+
 /** Rejects unreviewed copy and any drug, salt or medicine-category content. */
 export function validateNonDrugOffer(offer: ReviewedNonDrugOffer): string {
   const body = typeof offer?.body === 'string' ? offer.body.trim() : '';

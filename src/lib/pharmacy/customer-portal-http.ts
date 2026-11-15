@@ -82,7 +82,6 @@ const PORTAL_ERROR_MESSAGES: Record<PharmacyPortalError['reason'], string> = {
   REQUEST_NOT_FOUND: 'This request can no longer be changed.',
   INVALID_STATE: 'This request can no longer be changed.',
   KIND_NOT_ALLOWED: 'This request could not be completed.',
-  BUSINESS_DATE_NOT_CURRENT: 'This request could not be completed.',
 };
 
 export async function readPortalRequestBody(request: Request): Promise<unknown> {

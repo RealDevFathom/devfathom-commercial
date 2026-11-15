@@ -10,6 +10,9 @@ import { PageHeader } from '@/components/ui/page-header';
 vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
   ManualPaymentSettingsPanel: () => null,
 }));
+vi.mock('@/components/pharmacy/counter/khata-reminder-settings-panel', () => ({
+  KhataReminderSettingsPanel: () => null,
+}));
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
@@ -258,5 +261,46 @@ describe('shared Finance posting window', () => {
       branchId: 'branch_1',
       at: '2026-09-12T00:00:00.000Z',
     });
+  });
+});
+
+describe('DEV-103 native AP payments in recent transactions', () => {
+  it('offers no generic reverse for an invoice-directed supplier payment', async () => {
+    const posted = {
+      id: 'txn_generic',
+      reference: 'PAY-GENERIC',
+      kind: 'SUPPLIER_PAYMENT',
+      counterpartyName: 'Distributor',
+      amountMinor: 1_000,
+      status: 'POSTED',
+      idempotencyKey: 'browser-uuid-1',
+    };
+    mocks.workspace.mockResolvedValue({
+      settlementCandidates: [],
+      settlementBatches: [],
+      bankLines: [],
+      taxProfiles: [],
+      periods: [],
+      transactions: [
+        posted,
+        {
+          ...posted,
+          id: 'txn_native',
+          reference: 'PAY-NATIVE',
+          idempotencyKey: 'ap-invoice-payment:pay-command-0001',
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(
+      (await PharmacyFinancePage({
+        searchParams: Promise.resolve({ branch: 'branch_1' }),
+      })) as ReactElement
+    );
+    const rows = html.split('<tr').filter((row) => row.includes('PAY-'));
+    const generic = rows.find((row) => row.includes('PAY-GENERIC'))!;
+    const native = rows.find((row) => row.includes('PAY-NATIVE'))!;
+    expect(generic).toContain('value="txn_generic"');
+    expect(native).not.toContain('value="txn_native"');
+    expect(native).toContain('reverse it through the invoice settlement');
   });
 });

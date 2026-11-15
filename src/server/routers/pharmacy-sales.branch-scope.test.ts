@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The drawer and close family, and the tender and refund that move cash through
 // the same drawer, take their branch from the input. `scopeFor` refuses a branch
@@ -59,6 +59,26 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
       // rules lets the session ADMIN reach the branch scope check.
       db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
       return c.saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {} });
+    },
+    OUTSIDE,
+  ],
+  [
+    'khataReminderSettings',
+    (c) => {
+      db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+      return c.khataReminderSettings({ branchId: BRANCH });
+    },
+    OUTSIDE,
+  ],
+  [
+    'saveKhataReminderSettings',
+    (c) => {
+      db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+      return c.saveKhataReminderSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: { enabled: true, cadenceDays: 7, minBalanceMinor: 10_000 },
+      });
     },
     OUTSIDE,
   ],
@@ -154,6 +174,7 @@ let db: {
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
+  organization: { findUnique: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn> };
 };
 
@@ -190,17 +211,45 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     user: { findUnique: vi.fn().mockResolvedValue(null) },
   };
+});
+
+// DEV-630: money writes book on the branch's current business day, so the clock is
+// pinned to the fixture's day (14:00 in Karachi).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-20T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('pharmacy drawer, close and cash procedures: the branch in the input', () => {
   it('refuses non-admin changes to reference-skip policy before accessing the branch', async () => {
     // A real member row, so the refusal is the ADMIN policy, not a missing user.
     db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
-    await expect(caller('EMPLOYEE').saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {
-      RAAST: { destination: 'Till', allowReferenceSkip: true },
-    } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('EMPLOYEE').saveManualPaymentSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: {
+          RAAST: { destination: 'Till', allowReferenceSkip: true },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses non-admin changes to the khata reminder schedule before accessing the branch', async () => {
+    db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+    await expect(
+      caller('EMPLOYEE').saveKhataReminderSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: { enabled: true, cadenceDays: 1, minBalanceMinor: 100 },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
   it.each(procedures)(

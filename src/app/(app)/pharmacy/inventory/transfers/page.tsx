@@ -35,7 +35,7 @@ export const metadata: Metadata = { title: 'Stock transfers' };
 
 const route = '/pharmacy/inventory/transfers';
 const header = {
-  eyebrow: 'Pharmacy operations · INV-07',
+  eyebrow: 'Pharmacy operations',
   heading: 'Stock transfers',
   description:
     'Allocate, approve, dispatch and receive stock between branches, with a printed slip.',

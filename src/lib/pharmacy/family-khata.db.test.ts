@@ -207,7 +207,7 @@ suite('family Khata restricted PostgreSQL', () => {
       khata.authorizeKhataCharge(
         db,
         a,
-        { ...a, amountMinor: 200, ownerOverride: true },
+        { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Paying on Friday' },
         { authorized: true, passwordAuthenticatedAt: Date.now() }
       )
     );
@@ -217,7 +217,10 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      reasons: expect.objectContaining({
+        ownerAuthorizedByUserId: 'owner',
+        overrideReason: 'Paying on Friday',
+      }),
     });
     await expect(
       inScope(a, (db) =>
@@ -395,6 +398,84 @@ suite('khata reminder PostgreSQL balance and idempotency', () => {
       readDueKhataAccounts(db, orgB, new Date('2026-10-21T08:00:00Z'), 500)
     );
     expect(rows.map((row) => row.familyAccountId)).toEqual([`cap_${suffix}_500`]);
+  });
+
+  it('DEV-76: applies each branch owner schedule and the recent-reminder cadence in the scan', async () => {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    const { readDueKhataAccounts } = await import('./whatsapp/khata-reminders');
+    const orgC = `org_khata_c_${suffix}`;
+    const now = new Date();
+    const scope = await fixture(orgC, 'Schedule', new Date(now.getTime() - 30 * 86_400_000));
+    await inScope(scope, (db) =>
+      db.pharmacyKhataEvent.create({
+        data: {
+          organizationId: orgC,
+          branchId: scope.branchId,
+          familyAccountId: scope.familyAccountId,
+          kind: 'CHARGE',
+          memberId: scope.memberId,
+          dueAt: new Date(now.getTime() - 10 * 86_400_000),
+          amountMinor: 20_000,
+          actorId: scope.actorId,
+        },
+      })
+    );
+    const due = async () =>
+      (await withPlatformDb((db) => readDueKhataAccounts(db, orgC, now, 100))).map(
+        (row) => row.familyAccountId
+      );
+    const schedule = (data: {
+      khataReminderEnabled?: boolean;
+      khataReminderCadenceDays?: number;
+      khataReminderMinBalanceMinor?: number;
+    }) => inScope(scope, (db) => db.pharmacyBranch.update({ where: { id: scope.branchId }, data }));
+    const rows = await withPlatformDb((db) => readDueKhataAccounts(db, orgC, now, 100));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ cadenceDays: 7, minBalanceMinor: 10_000 });
+
+    // The owner's floor (20,600 owed) and the on/off switch are enforced in SQL.
+    await schedule({ khataReminderMinBalanceMinor: 30_000 });
+    expect(await due()).toEqual([]);
+    await schedule({ khataReminderMinBalanceMinor: 20_000, khataReminderEnabled: false });
+    expect(await due()).toEqual([]);
+    // An owner's one-account send (DEV-730) is not held back by the schedule switch.
+    const owner = await withPlatformDb((db) =>
+      readDueKhataAccounts(db, orgC, now, 1, undefined, {
+        branchId: scope.branchId,
+        familyAccountId: scope.familyAccountId,
+      })
+    );
+    expect(owner.map((row) => row.familyAccountId)).toEqual([scope.familyAccountId]);
+    await schedule({ khataReminderEnabled: true });
+    expect(await due()).toEqual([scope.familyAccountId]);
+    await expect(schedule({ khataReminderCadenceDays: 0 })).rejects.toThrow();
+    await expect(schedule({ khataReminderMinBalanceMinor: 99 })).rejects.toThrow();
+
+    const log = (dedupeKey: string, status: string, daysAgo: number) =>
+      inScope(scope, (db) =>
+        db.pharmacyMessageLog.create({
+          data: {
+            organizationId: orgC,
+            branchId: scope.branchId,
+            direction: 'OUTBOUND',
+            kind: 'KHATA_REMINDER',
+            status,
+            dedupeKey,
+            createdAt: new Date(now.getTime() - daysAgo * 86_400_000),
+          },
+        })
+      );
+    // A permanently failed send does not count as a reminder.
+    await log(`khata:${scope.familyAccountId}:failed`, 'FAILED', 1);
+    expect(await due()).toEqual([scope.familyAccountId]);
+    // An SMS reminder two days ago holds the account back for a weekly cadence...
+    await log(`sms:khata:${scope.familyAccountId}:w1`, 'SENT', 2);
+    expect(await due()).toEqual([]);
+    // ...but not once the owner chooses a two-day cadence.
+    await schedule({ khataReminderCadenceDays: 2 });
+    expect(await due()).toEqual([scope.familyAccountId]);
+    await log(`khata:${scope.familyAccountId}:c2:1`, 'SENT', 1);
+    expect(await due()).toEqual([]);
   });
 
   it('allows only one concurrent customer/day claim, even with different account keys', async () => {
