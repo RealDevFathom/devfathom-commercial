@@ -186,6 +186,17 @@ const assertionIdsPayload = z
   })
   .strict();
 
+// Manually created assertions store a plain value; connector assertions store an envelope.
+const manualAssertedValue = z.string().trim().min(1).max(1_000);
+
+function assertedValueText(value: unknown): string {
+  const envelope = assertedEnvelope.safeParse(value);
+  if (envelope.success) return envelope.data.value;
+  const manual = manualAssertedValue.safeParse(value);
+  if (manual.success) return manual.data;
+  throw new TRPCError({ code: 'BAD_REQUEST', message: 'Asserted value is malformed.' });
+}
+
 function jsonConnectorRights(rights: ConnectorRights): Prisma.InputJsonObject {
   return {
     acquisition: rights.acquisition,
@@ -1080,7 +1091,7 @@ export const pharmacyMedicineRouter = router({
         for (const assertion of assertions) {
           const value = corrections.get(assertion.id);
           if (!value) continue;
-          const envelope = assertedEnvelope.parse(assertion.assertedValue);
+          const envelope = assertedEnvelope.safeParse(assertion.assertedValue);
           created.push(
             await tx.medicineProvenance.create({
               data: {
@@ -1093,7 +1104,7 @@ export const pharmacyMedicineRouter = router({
                 reviewer: ctx.session.user.id,
                 status: 'CORRECTED',
                 supersedesId: assertion.id,
-                assertedValue: { ...envelope, value },
+                assertedValue: envelope.success ? { ...envelope.data, value } : value,
               },
             })
           );
@@ -1188,21 +1199,25 @@ export const pharmacyMedicineRouter = router({
           assertion,
         ]);
       for (const [medicineId, selected] of byMedicine) {
+        const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
         const values = new Map(
-          selected.map((assertion) => [
-            assertion.field,
-            assertedEnvelope.parse(assertion.assertedValue).value,
-          ])
+          selected.map((assertion) => [assertion.field, assertedValueText(assertion.assertedValue)])
         );
-        for (const field of ['productName', 'strength', 'dosageForm', 'pack'] as const) {
+        // Front-shop items are exempt from strength rules, so strength is optional for them.
+        const strengthRequired = medicine.productFamily !== 'FRONT_SHOP';
+        const requiredFields = strengthRequired
+          ? (['productName', 'strength', 'dosageForm', 'pack'] as const)
+          : (['productName', 'dosageForm', 'pack'] as const);
+        for (const field of requiredFields) {
           if (!values.get(field))
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: `Publication requires ${field}.`,
             });
         }
-        const parsedStrength = parseSimpleMedicineStrength(values.get('strength')!);
-        if (!parsedStrength)
+        const strengthText = values.get('strength');
+        const parsedStrength = strengthText ? parseSimpleMedicineStrength(strengthText) : null;
+        if (strengthText && !parsedStrength)
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Strength cannot be safely structured; correct it before publication.',
@@ -1216,7 +1231,6 @@ export const pharmacyMedicineRouter = router({
             message:
               'Pack size cannot be safely structured; correct it to a unit count such as "10 tablets" or "3 x 10" before publication.',
           });
-        const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
         const ingredientName = values.get('alias') ?? values.get('productName')!;
         const ingredient = await tx.ingredient.upsert({
           where: {
@@ -1270,7 +1284,7 @@ export const pharmacyMedicineRouter = router({
         assertSaleable({
           productFamily: medicine.productFamily,
           hasPresentation: true,
-          hasStrength: true,
+          hasStrength: Boolean(parsedStrength),
           hasRegistration: Boolean(
             values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
           ),
@@ -1341,6 +1355,13 @@ export const pharmacyMedicineRouter = router({
           });
           await tx.medicinePublicationEntry.create({
             data: { batchId: reversal.id, assertionId: restored.id, priorAssertionId: current.id },
+          });
+        }
+        return reversal;
+      })
+    ),
+});
+assertionId: restored.id, priorAssertionId: current.id },
           });
         }
         return reversal;
