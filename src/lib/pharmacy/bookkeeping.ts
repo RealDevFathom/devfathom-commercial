@@ -62,7 +62,26 @@ function positiveMinor(value: number) {
     throw new PharmacyBookkeepingError('INVALID_AMOUNT');
 }
 
-async function assertPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
+/**
+ * CEO-JVCORE-20261025: one transaction-scoped lock per org+branch ledger, taken
+ * FIRST by every command that posts, reverses, closes or reopens. A post can
+ * then never pass its open-period check while a concurrent close is committing
+ * the period that would have refused it.
+ */
+export function pharmacyLedgerLockKey(scope: { organizationId: string; branchId: string }) {
+  return `pharmacy-ledger:${scope.organizationId}:${scope.branchId}`;
+}
+
+export async function lockPharmacyLedgerScope(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string }
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${pharmacyLedgerLockKey(scope)}, 0))`
+  );
+}
+
+export async function assertPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
   const closed = await db.pharmacyAccountingPeriod.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -117,6 +136,7 @@ export async function postBookkeepingTransaction(
   input: PostBookkeepingInput
 ) {
   positiveMinor(input.amountMinor);
+  await lockPharmacyLedgerScope(db, scope);
   await assertPeriodOpen(db, scope, input.occurredAt);
   if (input.kind === 'CHEQUE' && !input.chequeNumber?.trim())
     throw new PharmacyBookkeepingError('INVALID_CHEQUE');
@@ -193,6 +213,7 @@ export async function reverseBookkeepingTransaction(
   input: { transactionId: string; at: Date; reason: string; idempotencyKey: string }
 ) {
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
+  await lockPharmacyLedgerScope(db, scope);
   await assertPeriodOpen(db, scope, input.at);
   const transaction = await db.pharmacyBookkeepingTransaction.findFirst({
     where: {
@@ -248,6 +269,7 @@ export async function closeAccountingPeriod(
   input: { startsAt: Date; endsAt: Date }
 ) {
   if (input.startsAt >= input.endsAt) throw new PharmacyBookkeepingError('INVALID_STATE');
+  await lockPharmacyLedgerScope(db, scope);
   return db.pharmacyAccountingPeriod.create({
     data: {
       organizationId: scope.organizationId,
@@ -267,6 +289,7 @@ export async function reopenAccountingPeriod(
   input: { periodId: string; reason: string }
 ) {
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
+  await lockPharmacyLedgerScope(db, scope);
   const period = await db.pharmacyAccountingPeriod.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.periodId },
   });

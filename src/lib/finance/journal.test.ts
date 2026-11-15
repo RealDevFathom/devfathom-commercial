@@ -6,12 +6,15 @@
  * at-most-one reversal, tenant isolation) are in `journal.db.test.ts`; those
  * are claims about PostgreSQL and cannot be shown here.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   ACCOUNT_NORMAL_SIDE,
   assertBalanced,
   FinancePostingError,
+  postJournalEntry,
+  REPLAY_IDENTITY_CHECKED_SOURCES,
   signedMinor,
   type JournalLineInput,
 } from './journal';
@@ -91,5 +94,81 @@ describe('signedMinor — the FIN-03 sign convention', () => {
     for (const side of Object.values(ACCOUNT_NORMAL_SIDE)) {
       expect(['DEBIT', 'CREDIT']).toContain(side);
     }
+  });
+});
+
+describe('CEO-JVCORE-20261025 — journal voucher compatibility', () => {
+  function replayDb(existing: Record<string, unknown> | null) {
+    return {
+      financeJournalEntry: {
+        findFirst: vi.fn().mockResolvedValue(existing),
+        create: vi.fn(),
+        findFirstOrThrow: vi.fn(),
+      },
+      financeJournalLine: { create: vi.fn() },
+    };
+  }
+  const scope = { organizationId: 'org_1', actorId: 'owner_1' };
+  const voucherLines = [
+    leg('OPERATING_EXPENSE', 'DEBIT', 2_500),
+    leg('MANUAL_NONTRADE_ACCRUAL', 'CREDIT', 2_500),
+  ];
+  const voucherInput = {
+    sourceKind: 'PHARMACY_JOURNAL_VOUCHER' as const,
+    sourceId: 'jv_1',
+    description: 'Journal voucher JV-1',
+    occurredAt: new Date('2026-11-10T00:00:00Z'),
+    idempotencyKey: 'journal-voucher:jv_1',
+    lines: voucherLines,
+  };
+
+  it('treats the non-trade accrual as a credit-normal liability', () => {
+    expect(ACCOUNT_NORMAL_SIDE.MANUAL_NONTRADE_ACCRUAL).toBe('CREDIT');
+    expect(signedMinor(voucherLines[1]!)).toBe(2_500);
+    expect(() => assertBalanced(voucherLines)).not.toThrow();
+  });
+
+  it('keeps legacy Int32-sized balanced postings valid', () => {
+    expect(() =>
+      assertBalanced([
+        leg('INVENTORY', 'DEBIT', 2_147_483_647),
+        leg('CASH', 'CREDIT', 2_147_483_647),
+      ])
+    ).not.toThrow();
+  });
+
+  it('replays a voucher key only for the same voucher source', async () => {
+    const same = { id: 'entry_1', sourceKind: 'PHARMACY_JOURNAL_VOUCHER', sourceId: 'jv_1' };
+    const db = replayDb(same);
+    await expect(postJournalEntry(db as unknown as ScopedDb, scope, voucherInput)).resolves.toBe(
+      same
+    );
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a voucher key that already belongs to another source row', async () => {
+    for (const existing of [
+      { id: 'entry_1', sourceKind: 'PHARMACY_JOURNAL_VOUCHER', sourceId: 'jv_other' },
+      { id: 'entry_1', sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION', sourceId: 'jv_1' },
+    ]) {
+      const db = replayDb(existing);
+      await expect(
+        postJournalEntry(db as unknown as ScopedDb, scope, voucherInput)
+      ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+      expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('leaves legacy adapters on their existing key-only replay', async () => {
+    const existing = { id: 'entry_1', sourceKind: 'PHARMACY_TENDER', sourceId: 'other' };
+    const db = replayDb(existing);
+    await expect(
+      postJournalEntry(db as unknown as ScopedDb, scope, {
+        ...voucherInput,
+        sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+        lines: [leg('OPERATING_EXPENSE', 'DEBIT', 10), leg('BANK', 'CREDIT', 10)],
+      })
+    ).resolves.toBe(existing);
+    expect(REPLAY_IDENTITY_CHECKED_SOURCES.has('PHARMACY_BOOKKEEPING_TRANSACTION')).toBe(false);
   });
 });

@@ -20,6 +20,7 @@ import {
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
 import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
+import type { CounterCartTender } from '@/lib/pharmacy/counter';
 
 /**
  * The tenders POS-05 recognises, in button order. `offer` decides which
@@ -63,6 +64,8 @@ export type KhataSignupInput =
   | { patientId: string; displayName: string; consentGranted: true }
   | { displayName: string; phone: string; consentGranted: true };
 export type CounterTenderPanelProps = {
+  /** #722: payments already recorded on this bill, in the order taken. */
+  tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
   manualSettings?: ManualPaymentSettings;
@@ -150,6 +153,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      tenders = [],
       confirmedChangeMinor,
       state,
       blocked,
@@ -544,6 +548,29 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
+        {tenders.length > 0 ? (
+          <ol aria-label="Recorded tenders" className="space-y-2">
+            {tenders.map((tender, index) => (
+              <li
+                key={tender.tenderId}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border-subtle bg-surface-card px-3 py-2 text-sm"
+              >
+                <span className="text-text-body">
+                  {index + 1}.{' '}
+                  {tender.type === 'CREDIT' || tender.type === 'KHATA'
+                    ? 'Khata'
+                    : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
+                      tender.type)}{' '}
+                  · Recorded
+                </span>
+                <span className="font-mono tabular-nums text-text-strong">
+                  {formatMinor(tender.amountMinor)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+
         <p
           ref={statusRef}
           tabIndex={-1}
@@ -674,6 +701,15 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
               Enter an amount between 0.01 and the balance due.
+            </p>
+          ) : null}
+          {editable && amountValid && amountMinor! < balanceMinor! ? (
+            <p className="text-sm text-text-body" aria-live="polite">
+              {tenders.length > 0 ? `Tender ${tenders.length + 1}. ` : ''}Remaining after this
+              tender{' '}
+              <span className="font-mono tabular-nums text-text-strong">
+                {formatMinor(balanceMinor! - amountMinor!)}
+              </span>
             </p>
           ) : null}
         </div>
