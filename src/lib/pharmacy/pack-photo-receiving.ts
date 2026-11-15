@@ -129,8 +129,9 @@ export function defaultReceivingLocationId(
 
 export type ReceivedLotIdentity = {
   purchaseOrderLineId?: string | null;
-  batchNumber: string;
-  printedExpiry: Date;
+  /** #718: a non-drug lot may omit its batch and expiry. */
+  batchNumber?: string | null;
+  printedExpiry?: Date | null;
   serialNumber?: string | null;
   gs1Payload?: string | null;
 };
@@ -144,8 +145,8 @@ export function findRepeatedLot<T extends ReceivedLotIdentity>(lines: readonly T
   for (const line of lines) {
     if (line.serialNumber || line.gs1Payload) continue;
     const key = `${line.purchaseOrderLineId ?? ''}|${sameLotKey(
-      line.batchNumber,
-      line.printedExpiry.toISOString().slice(0, 10)
+      line.batchNumber ?? '',
+      line.printedExpiry ? line.printedExpiry.toISOString().slice(0, 10) : ''
     )}`;
     if (seen.has(key)) return line;
     seen.add(key);

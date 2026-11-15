@@ -106,7 +106,7 @@ describe('PharmacyDashboardContent states', () => {
   it('fails financial widgets closed while keeping operational widgets usable', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.getAllByText('Restricted').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/reports:financial is required/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Financial reports access is required/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
     expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
   });
@@ -118,7 +118,7 @@ describe('PharmacyDashboardContent states', () => {
     state.command = query(undefined, { isLoading: false });
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.queryByText('Restricted')).not.toBeInTheDocument();
-    expect(screen.queryByText(/reports:financial is required/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Financial reports access is required/i)).not.toBeInTheDocument();
     expect(screen.getAllByRole('status', { name: /^Loading /i }).length).toBeGreaterThan(0);
   });
 
@@ -205,5 +205,84 @@ describe('PharmacyDashboardContent states', () => {
     expect(
       screen.queryByRole('link', { name: 'Review license and modules' })
     ).not.toBeInTheDocument();
+  });
+
+  it('labels cards and sources in plain language, never as tables or permission keys (DEV-594)', () => {
+    state.catalog = query({
+      metrics: [
+        {
+          ...CATALOG_METRICS[0],
+          source: 'pharmacy_stock_signals',
+        },
+        {
+          ...CATALOG_METRICS[1],
+          source: 'pharmacy_stock_signals + pharmacy_stock_signal_actions',
+        },
+      ],
+      reports: [],
+      permissions: { operational: true, financial: false, owner: true },
+    });
+    state.command = query({
+      freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
+      permissions: { operational: true, financial: false },
+      metrics: { openStockSignals: 3, recommendedOrders: 1 },
+    });
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByText('Based on stock alerts and linked requisitions')).toBeVisible();
+    expect(screen.getAllByText('Operational reports').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Financial reports').length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/pharmacy_[a-z_]+/);
+    expect(container.textContent).not.toMatch(/reports:(operational|financial)/);
+  });
+
+  it('says operational report access is required in words when branches are refused', () => {
+    state.branches = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.command = query(undefined);
+    const { container } = render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.getByText(/Operational reports access is required/)).toBeVisible();
+    expect(container.textContent).not.toMatch(/reports:operational/);
+  });
+
+  it('gives the owner one entry point to reorder, expiry and growth advice (DEV-594)', () => {
+    state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports', 'pharmacy-crm'];
+    state.catalog = query({
+      metrics: CATALOG_METRICS,
+      reports: [],
+      permissions: { operational: true, financial: true, owner: true },
+    });
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByRole('heading', { level: 2, name: 'AI advice' })).toBeVisible();
+    expect(screen.getByRole('link', { name: /Reorder advice/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports/replenishment'
+    );
+    expect(screen.getByRole('link', { name: /Expiry advice/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports#expiry-advisor'
+    );
+    expect(screen.getByRole('link', { name: /Growth/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/marketing'
+    );
+  });
+
+  it('offers a member only the advice their access admits (DEV-594)', () => {
+    state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports', 'pharmacy-crm'];
+    state.catalog = query({
+      metrics: CATALOG_METRICS,
+      reports: [],
+      permissions: { operational: true, financial: false, owner: false },
+    });
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.getByRole('link', { name: /Reorder advice/ })).toBeVisible();
+    expect(screen.queryByRole('link', { name: /Expiry advice/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Growth/ })).not.toBeInTheDocument();
+  });
+
+  it('offers no advice links when report branches are refused', () => {
+    state.branches = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.command = query(undefined);
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.queryByRole('heading', { name: 'AI advice' })).not.toBeInTheDocument();
   });
 });

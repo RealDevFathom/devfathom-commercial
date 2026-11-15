@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 import { PackPhotoReader } from '../_components/pack-photo-reader';
+import { ScanSearch } from '../_components/scan-search';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -17,6 +18,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isNonDrugRetail, receivingLotArrived } from '@/lib/pharmacy/product-class';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
@@ -67,6 +69,7 @@ import {
   integerField,
   money,
   moneyFieldMinor,
+  optionalMoneyFieldMinor,
   noticeFrom,
   NO_ACTOR,
   optionalField,
@@ -270,8 +273,18 @@ export default async function PharmacyReceivingPage({
         [1, ...EXTRA_LOT_SLOTS].flatMap((slot) => {
           const key = lotSlotKey(line.id, slot);
           // A lot with no batch number was not delivered on this consignment.
-          // It stays outstanding rather than being filed as a zero receipt.
-          if (!field(form, `batchNumber:${key}`)) return [];
+          // It stays outstanding rather than being filed as a zero receipt. A non-drug
+          // item (#718) carries no batch, so its first lot arrives with its packs.
+          if (
+            !receivingLotArrived({
+              productFamily: line.medicine.productFamily,
+              primaryLot: slot === 1,
+              batchNumber: field(form, `batchNumber:${key}`),
+              printedExpiry: field(form, `printedExpiry:${key}`),
+              receivedPacks: field(form, `receivedPacks:${key}`),
+            })
+          )
+            return [];
           return [
             {
               ...readCaptureFields(form, key),
@@ -294,7 +307,7 @@ export default async function PharmacyReceivingPage({
       if (lines.length === 0) {
         throw Object.assign(
           new PurchasingValidationError(
-            'Enter a batch number on at least one line — that is what marks it as arrived.'
+            'Enter a batch number on at least one line — that is what marks it as arrived. A non-drug item arrives with its packs.'
           ),
           { field: 'batchNumber' }
         );
@@ -312,6 +325,7 @@ export default async function PharmacyReceivingPage({
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
         qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'freight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -382,6 +396,7 @@ export default async function PharmacyReceivingPage({
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'directFreight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -541,18 +556,15 @@ export default async function PharmacyReceivingPage({
         <input name="branch" type="hidden" value={branchId} />
         {selectedOrder ? <input name="order" type="hidden" value={selectedOrder.id} /> : null}
         {selectedReceipt ? <input name="receipt" type="hidden" value={selectedReceipt.id} /> : null}
-        <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
-          Scan or search
-          <input
-            autoComplete="off"
-            autoFocus
-            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
-            defaultValue={scanTerm ?? ''}
-            id="scan"
-            name="scan"
-            placeholder="Scan a 2D or linear code, or type a product name"
-          />
-        </label>
+        <ScanSearch
+          key={scanTerm ?? ''}
+          defaultValue={scanTerm ?? ''}
+          medicines={workspace.medicines.map(({ id, productName, brandName }) => ({
+            id,
+            productName,
+            brandName,
+          }))}
+        />
         <SubmitButton variant="secondary">Find line</SubmitButton>
       </form>
       {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
@@ -749,7 +761,7 @@ export default async function PharmacyReceivingPage({
                     hint="Required: stock is not saleable without its source invoice."
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Invoice date"
                     name="supplierInvoiceDate"
                     notice={notice}
@@ -757,7 +769,7 @@ export default async function PharmacyReceivingPage({
                     type="date"
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Received on"
                     name="receivedAt"
                     notice={notice}
@@ -783,6 +795,13 @@ export default async function PharmacyReceivingPage({
                     notice={notice}
                     required
                     hint="Where the warranty or source declaration for this consignment is filed."
+                  />
+                  <TextField
+                    inputMode="decimal"
+                    label="Freight on this supplier invoice (PKR)"
+                    name="freight"
+                    notice={notice}
+                    hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
                   />
                 </div>
 
@@ -851,6 +870,7 @@ export default async function PharmacyReceivingPage({
                           suggestedPriceMinor={line.listPricePerPackMinor}
                           title={line.medicine.productName}
                           unitsPerPack={line.canonicalUnitsPerPack}
+                          nonDrugRetail={isNonDrugRetail(line.medicine.productFamily)}
                         />
                         <details className="rounded-[var(--radius-sm)] border border-border-subtle px-4 py-2">
                           <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-text-body focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
@@ -874,6 +894,7 @@ export default async function PharmacyReceivingPage({
                                 suggestedPriceMinor={line.listPricePerPackMinor}
                                 title={`${line.medicine.productName} — lot ${slot}`}
                                 unitsPerPack={line.canonicalUnitsPerPack}
+                                nonDrugRetail={isNonDrugRetail(line.medicine.productFamily)}
                               />
                             ))}
                           </div>
@@ -962,7 +983,7 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase invoice date"
                 name="directInvoiceDate"
                 notice={notice}
@@ -970,7 +991,7 @@ export default async function PharmacyReceivingPage({
                 type="date"
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase received on"
                 name="directReceivedAt"
                 notice={notice}
@@ -994,6 +1015,13 @@ export default async function PharmacyReceivingPage({
                 name="directDistributorStrn"
                 notice={notice}
                 hint="As printed on this purchase bill."
+              />
+              <TextField
+                inputMode="decimal"
+                label="Freight on this supplier invoice (PKR)"
+                name="directFreight"
+                notice={notice}
+                hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
               />
               <TextAreaField
                 className="sm:col-span-2"
@@ -1196,6 +1224,7 @@ function CaptureFieldset({
   prefill,
   photoReader,
   defaultLocationId,
+  nonDrugRetail,
 }: {
   keyPrefix: string;
   title: string;
@@ -1210,6 +1239,8 @@ function CaptureFieldset({
   /** DEV-752: the pack-photo shortcut that fills this line's lot fields. */
   photoReader?: React.ReactNode;
   defaultLocationId?: string;
+  /** #718: batch, expiry and MRP are optional for a non-drug retail item. */
+  nonDrugRetail?: boolean;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
@@ -1234,7 +1265,11 @@ function CaptureFieldset({
           label="Batch number"
           name={`batchNumber:${keyPrefix}`}
           notice={notice}
-          hint="Leave blank if this line did not arrive. A 2D scan fills this in."
+          hint={
+            nonDrugRetail
+              ? 'Optional for a non-drug item. Set packs to 0 if it did not arrive.'
+              : 'Leave blank if this line did not arrive. A 2D scan fills this in.'
+          }
         />
         <TextField
           defaultValue={prefill?.printedExpiry}
@@ -1245,7 +1280,9 @@ function CaptureFieldset({
           hint={
             prefill?.printedExpiry
               ? 'Filled from the scan. Confirm it against the supplier invoice.'
-              : undefined
+              : nonDrugRetail
+                ? 'Optional for a non-drug item.'
+                : undefined
           }
         />
         <TextField
@@ -1285,7 +1322,11 @@ function CaptureFieldset({
           label="Printed MRP (PKR)"
           name={`printedMrp:${keyPrefix}`}
           notice={notice}
-          hint="Per pack, as printed on the carton."
+          hint={
+            nonDrugRetail
+              ? 'Optional for a non-drug item. Blank uses the shop retail price.'
+              : 'Per pack, as printed on the carton.'
+          }
         />
         <TextField
           defaultValue={suggestedPacks && suggestedPacks > 0 ? suggestedPacks : undefined}
@@ -1454,7 +1495,7 @@ function ReceiptDetail({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium text-text-strong">{line.medicine.productName}</span>
               <span className="font-mono text-sm tabular-nums text-text-strong">
-                {money(line.unitCostMinor)} / unit
+                {money(line.unitCostMinor)} / unit landed
               </span>
             </div>
             <p className="mt-1 text-xs text-text-muted">
@@ -1466,6 +1507,9 @@ function ReceiptDetail({
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
               {line.canonicalUnitsPerPack} ={' '}
               {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}
+              {line.allocatedFreightMinor > 0
+                ? ` · freight share ${money(line.allocatedFreightMinor)}`
+                : ''}
             </p>
             <p className="mt-1 text-xs text-text-muted">
               Accepted {units(line.acceptedCanonicalUnits)} into {line.stockLocation.name}
@@ -1685,8 +1729,12 @@ function readCaptureFields(form: FormData, key: string) {
     0
   );
   return {
-    batchNumber: field(form, `batchNumber:${key}`),
-    printedExpiry: dateField(form, `printedExpiry:${key}`, 'Printed expiry'),
+    // #718: blank batch, expiry and MRP pass through as omitted; the server still refuses a
+    // medicine lot without them and fills a non-drug lot from the shop retail price.
+    batchNumber: optionalField(form, `batchNumber:${key}`),
+    printedExpiry: field(form, `printedExpiry:${key}`)
+      ? dateField(form, `printedExpiry:${key}`, 'Printed expiry')
+      : undefined,
     gtin: optionalField(form, `gtin:${key}`),
     serialNumber: optionalField(form, `serialNumber:${key}`),
     gs1Payload: optionalField(form, `gs1Payload:${key}`),
@@ -1694,7 +1742,9 @@ function readCaptureFields(form: FormData, key: string) {
     gs1Warnings: warningCodes(form, key),
     expiryPrecision: (field(form, `expiryPrecision:${key}`) === 'DAY' ? 'DAY' : 'MONTH') as
       'DAY' | 'MONTH',
-    printedMrpMinor: moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP'),
+    printedMrpMinor: field(form, `printedMrp:${key}`)
+      ? moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP')
+      : undefined,
     receivedPacks: integerField(form, `receivedPacks:${key}`, 'Packs received'),
     bonusPacks: optionalIntegerField(form, `bonusPacks:${key}`, 'Free packs', 0),
     rejectedCanonicalUnits,

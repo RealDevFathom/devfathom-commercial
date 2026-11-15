@@ -1388,6 +1388,58 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('names a non-drug house batch after the expiry scanned from GS1 (#718)', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+    });
+    db.medicineBarcode.findFirst.mockResolvedValue({ presentation: { medicineId: 'medicine_a' } });
+    const { batchNumber, printedExpiry, printedMrpMinor, ...retailLine } = RECEIPT_LINE;
+    void [batchNumber, printedExpiry, printedMrpMinor];
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        { ...retailLine, gs1Payload: ']d2010896123456789417271231' },
+        { ...retailLine, gs1Payload: ']d2010896123456789417281130' },
+      ],
+    });
+    const lines = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(lines[0]).toMatchObject({
+      batchNumber: 'RETAIL-2027-12-31-D',
+      printedExpiry: new Date('2027-12-31T00:00:00.000Z'),
+    });
+    expect(lines[1]).toMatchObject({
+      batchNumber: 'RETAIL-2028-11-30-D',
+      printedExpiry: new Date('2028-11-30T00:00:00.000Z'),
+    });
+  });
+
+  it('DEV-77: spreads receipt freight into the landed unit cost and records each share', async () => {
+    await caller().createGoodsReceipt({ ...RECEIPT, freightMinor: 20_000 });
+    const data = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data;
+    // (100_000 invoice + 20_000 freight) over 100 paid + 20 bonus units.
+    expect(data.freightMinor).toBe(20_000);
+    expect(data.lines.create[0]).toMatchObject({
+      allocatedFreightMinor: 20_000,
+      unitCostMinor: 1_000,
+    });
+  });
+
+  it('DEV-77: a receipt without freight keeps its landed unit cost unchanged', async () => {
+    await caller().createGoodsReceipt(RECEIPT);
+    const data = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data;
+    expect(data.freightMinor).toBe(0);
+    expect(data.lines.create[0]).toMatchObject({ allocatedFreightMinor: 0, unitCostMinor: 833 });
+  });
+
+  it('DEV-77: refuses negative freight before anything is drafted', async () => {
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, freightMinor: -1 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('locks the purchase order in the receipt transaction until the draft is created', async () => {
     await caller().createGoodsReceipt(RECEIPT);
 

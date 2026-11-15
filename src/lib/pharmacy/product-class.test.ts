@@ -5,6 +5,7 @@ import {
   NON_DRUG_NO_EXPIRY,
   PharmacyProductClassError,
   productClassForFamily,
+  receivingLotArrived,
   resolveReceiptBatchIdentity,
   resolveReceiptRetailPrice,
   validateRetailFields,
@@ -107,5 +108,31 @@ describe('pharmacy product class (#718)', () => {
       'MEDICINE_NOT_PROMOTABLE'
     );
     expect(() => assertPromotableProducts(['ghost'], products)).toThrow('PROMOTED_ITEM_NOT_FOUND');
+  });
+});
+
+describe('receiving bench lot arrival (#718)', () => {
+  const lot = {
+    primaryLot: true,
+    batchNumber: '',
+    printedExpiry: '',
+    receivedPacks: '12',
+  };
+  it('keeps a medicine lot without a batch outstanding', () => {
+    expect(receivingLotArrived({ ...lot, productFamily: 'PHARMACEUTICAL' })).toBe(false);
+    expect(
+      receivingLotArrived({ ...lot, productFamily: 'PHARMACEUTICAL', batchNumber: 'B1' })
+    ).toBe(true);
+  });
+  it('lets a non-drug first lot arrive with its packs and no batch', () => {
+    expect(receivingLotArrived({ ...lot, productFamily: 'FRONT_SHOP' })).toBe(true);
+    expect(receivingLotArrived({ ...lot, productFamily: 'FRONT_SHOP', receivedPacks: '0' })).toBe(
+      false
+    );
+  });
+  it('needs a batch or expiry to tell further non-drug lots apart', () => {
+    const extra = { ...lot, primaryLot: false, productFamily: 'FRONT_SHOP' };
+    expect(receivingLotArrived(extra)).toBe(false);
+    expect(receivingLotArrived({ ...extra, printedExpiry: '2027-06-30' })).toBe(true);
   });
 });

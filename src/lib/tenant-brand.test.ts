@@ -45,6 +45,16 @@ describe('tenantBrandTokens', () => {
   });
 });
 
+describe('tenantBrandTokens in the dark theme', () => {
+  it('leaves the dark --primary family to the theme so primary text stays readable', () => {
+    const tokens = tenantBrandTokens(brand('#FF684F', '#246B5A'), 'dark');
+    expect(tokens).not.toHaveProperty('--primary');
+    expect(tokens).not.toHaveProperty('--primary-hover');
+    expect(tokens).not.toHaveProperty('--primary-foreground');
+    expect(tokens).toMatchObject({ '--sidebar': '#FF684F', '--accent-brand': '#246B5A' });
+  });
+});
+
 describe('isTenantIdentityMismatch', () => {
   it('accepts chrome that names the same organization as the session', () => {
     expect(isTenantIdentityMismatch({ organizationId: 'org_a' }, 'org_a')).toBe(false);

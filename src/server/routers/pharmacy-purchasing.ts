@@ -76,6 +76,7 @@ import {
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import {
+  isNonDrugRetail,
   resolveReceiptBatchIdentity,
   resolveReceiptRetailPrice,
 } from '@/lib/pharmacy/product-class';
@@ -83,8 +84,8 @@ import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
+  receiptLandedCosts,
   receiptLineQuantities,
-  receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -225,8 +226,10 @@ function serialUniqueViolation(error: unknown): boolean {
 
 type ReceiptIdentityInput = {
   medicineId: string;
-  batchNumber: string;
-  printedExpiry: Date;
+  /** #718: a non-drug item may arrive without a printed batch or expiry. */
+  productFamily: string;
+  batchNumber?: string;
+  printedExpiry?: Date;
   expiryPrecision: 'DAY' | 'MONTH';
   gtin?: string;
   serialNumber?: string;
@@ -270,6 +273,19 @@ async function resolveReceiptLineIdentity(
     throw new PharmacyReceivingError('GS1_INVALID');
   }
 
+  // #718: resolve the house batch only after the scan, so a generated non-drug batch names the
+  // expiry actually received and two deliveries with different scanned expiries never collide.
+  const resolved = resolveReceiptBatchIdentity({
+    productFamily: line.productFamily,
+    batchNumber,
+    printedExpiry,
+    expiryPrecision,
+  });
+  if (!resolved.ok) throw new PharmacyReceivingError(resolved.reason);
+  batchNumber = resolved.batchNumber;
+  printedExpiry = resolved.printedExpiry;
+  expiryPrecision = resolved.expiryPrecision;
+
   if (gtin) {
     const codes = [gtin, gtin.startsWith('0') ? gtin.slice(1) : null].filter(
       (code): code is string => Boolean(code)
@@ -286,18 +302,21 @@ async function resolveReceiptLineIdentity(
     }
   }
 
-  if (line.acceptedCanonicalUnits > 0 && packIsExpired(printedExpiry, line.receivedAt)) {
+  if (line.acceptedCanonicalUnits > 0 && packIsExpired(resolved.printedExpiry, line.receivedAt)) {
     throw new PharmacyReceivingError('EXPIRED_PACK');
   }
 
-  const near = nearExpiryWarning(printedExpiry.toISOString().slice(0, 10), line.receivedAt);
+  const near = nearExpiryWarning(
+    resolved.printedExpiry.toISOString().slice(0, 10),
+    line.receivedAt
+  );
   warnings = warnings.filter((code) => code !== 'NEAR_EXPIRY');
   if (near && line.acceptedCanonicalUnits > 0) warnings.push(near.code);
 
   return {
-    batchNumber,
-    printedExpiry,
-    expiryPrecision,
+    batchNumber: resolved.batchNumber,
+    printedExpiry: resolved.printedExpiry,
+    expiryPrecision: resolved.expiryPrecision,
     gtin,
     serialNumber,
     serialKey: serialNumber ? serialNumber.toUpperCase() : null,
@@ -1405,6 +1424,8 @@ const purchasingRouter = router({
             .optional(),
           note: z.string().trim().max(2000).optional(),
           qualifiedPersonUserId: z.string().trim().min(1).optional(),
+          /** DEV-77: freight the supplier billed on this invoice, spread into lot landed cost. */
+          freightMinor: z.number().int().nonnegative().max(999_999_999).default(0),
           lines: z
             .array(
               z
@@ -1565,16 +1586,18 @@ const purchasingRouter = router({
               select: { id: true, productFamily: true, retailPriceMinor: true },
             });
             if (!item) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-            // #718: a medicine keeps PUR-02 exactly (printed batch, expiry and DRAP MRP). A
+            // #718: a medicine keeps PUR-02 exactly (typed printed batch, expiry and DRAP MRP). A
             // non-drug item may arrive without a batch or expiry and is priced at the shop-set
             // retail price, so the counter never has to ask for a batch.
-            const receiptBatch = resolveReceiptBatchIdentity({
-              productFamily: item.productFamily,
-              batchNumber: line.batchNumber,
-              printedExpiry: line.printedExpiry,
-              expiryPrecision: line.expiryPrecision,
-            });
-            if (!receiptBatch.ok) throw new PharmacyReceivingError(receiptBatch.reason);
+            if (!isNonDrugRetail(item.productFamily)) {
+              const typed = resolveReceiptBatchIdentity({
+                productFamily: item.productFamily,
+                batchNumber: line.batchNumber,
+                printedExpiry: line.printedExpiry,
+                expiryPrecision: line.expiryPrecision,
+              });
+              if (!typed.ok) throw new PharmacyReceivingError(typed.reason);
+            }
             const printedMrpMinor = resolveReceiptRetailPrice({
               productFamily: item.productFamily,
               printedMrpMinor: line.printedMrpMinor,
@@ -1608,9 +1631,10 @@ const purchasingRouter = router({
             });
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
-              batchNumber: receiptBatch.batchNumber,
-              printedExpiry: receiptBatch.printedExpiry,
-              expiryPrecision: receiptBatch.expiryPrecision,
+              productFamily: item.productFamily,
+              batchNumber: line.batchNumber,
+              printedExpiry: line.printedExpiry,
+              expiryPrecision: line.expiryPrecision,
               gtin: line.gtin,
               serialNumber: line.serialNumber,
               gs1Warnings: line.gs1Warnings,
@@ -1674,17 +1698,11 @@ const purchasingRouter = router({
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // PUR-03: bonus units divide the same money over more units, so a
-              // scheme lowers the landed cost and never adds revenue.
-              unitCostMinor: receiptLineUnitCostMinor({
-                receivedPacks: line.receivedPacks,
-                bonusPacks: line.bonusPacks,
-                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-                discountBps: line.discountBps,
-                taxBps: line.taxBps,
-                taxCreditable: line.taxCreditable,
-              }),
+              // PUR-03 / DEV-77: bonus units divide the same money over more
+              // units, so a scheme lowers the landed cost and never adds revenue;
+              // the receipt freight share is added once every line is known.
+              allocatedFreightMinor: 0,
+              unitCostMinor: 0,
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
               gtin: identity.gtin,
@@ -1694,11 +1712,32 @@ const purchasingRouter = router({
             });
           }
 
+          // DEV-77: one landed-cost pass over the whole receipt, so the freight
+          // shares sum to the billed freight exactly and every lot carries
+          // (net + non-creditable tax + freight share) / (received + bonus).
+          const landed = receiptLandedCosts({
+            freightMinor: input.freightMinor,
+            lines: input.lines.map((line) => ({
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+              discountBps: line.discountBps,
+              taxBps: line.taxBps,
+              taxCreditable: line.taxCreditable,
+            })),
+          });
+          for (const [index, line] of lines.entries()) {
+            line.allocatedFreightMinor = landed[index]!.allocatedFreightMinor;
+            line.unitCostMinor = landed[index]!.unitCostMinor;
+          }
+
           const receipt = await db.pharmacyGoodsReceipt.create({
             data: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
               reference: input.reference,
+              freightMinor: input.freightMinor,
               supplierId: input.supplierId,
               purchaseOrderId: input.purchaseOrderId ?? null,
               supplierInvoiceRef: input.supplierInvoiceRef,

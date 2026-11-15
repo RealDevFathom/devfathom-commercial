@@ -52,7 +52,39 @@ export default async function PlatformAuditPage({
   const pageSize = 100;
   const success =
     query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
-  const { rows, platformActorsById, tenantActorsById } = await withPlatformDb(async (db) => {
+  const actorSearchLimit = 1000;
+  const ledger = await withPlatformDb(async (db) => {
+    // Free-text search also matches actors by name or email. Resolve matching
+    // identities first because audit rows store only actor IDs. Tenant actors are
+    // scoped to the selected organization, and overflow is reported, never hidden.
+    const actorMatch = {
+      OR: [
+        { name: { contains: q, mode: 'insensitive' as const } },
+        { email: { contains: q, mode: 'insensitive' as const } },
+      ],
+    };
+    const [searchPlatformActors, searchTenantActors] =
+      q && !invalid
+        ? await Promise.all([
+            db.platformUser.findMany({
+              where: actorMatch,
+              select: { id: true },
+              orderBy: { id: 'asc' },
+              take: actorSearchLimit + 1,
+            }),
+            db.user.findMany({
+              where: { ...actorMatch, ...(organizationId ? { organizationId } : {}) },
+              select: { id: true },
+              orderBy: { id: 'asc' },
+              take: actorSearchLimit + 1,
+            }),
+          ])
+        : [[], []];
+    const actorSearchTruncated =
+      searchPlatformActors.length > actorSearchLimit ||
+      searchTenantActors.length > actorSearchLimit;
+    const platformMatchIds = searchPlatformActors.slice(0, actorSearchLimit).map(({ id }) => id);
+    const tenantMatchIds = searchTenantActors.slice(0, actorSearchLimit).map(({ id }) => id);
     const where: Prisma.PlatformAuditLogWhereInput = {
       ...(invalid ? { id: { in: [] } } : {}),
       ...(organizationId ? { organizationId } : {}),
@@ -88,6 +120,10 @@ export default async function PlatformAuditPage({
               { targetType: { contains: q, mode: 'insensitive' } },
               { targetId: { contains: q, mode: 'insensitive' } },
               { reason: { contains: q, mode: 'insensitive' } },
+              ...(platformMatchIds.length
+                ? [{ actorPlatformUserId: { in: platformMatchIds } }]
+                : []),
+              ...(tenantMatchIds.length ? [{ actorTenantUserId: { in: tenantMatchIds } }] : []),
             ],
           }
         : {}),
@@ -121,8 +157,10 @@ export default async function PlatformAuditPage({
       rows: logs,
       platformActorsById: new Map(platformActors.map((actor) => [actor.id, actor])),
       tenantActorsById: new Map(tenantActors.map((actor) => [actor.id, actor])),
+      actorSearchTruncated,
     };
   });
+  const { rows, platformActorsById, tenantActorsById, actorSearchTruncated } = ledger;
 
   const logs = rows.slice(0, pageSize);
   const last = logs.at(-1);
@@ -192,7 +230,7 @@ export default async function PlatformAuditPage({
           <input
             name="q"
             defaultValue={q}
-            placeholder="Search action, target, or reason"
+            placeholder="Search actor name or email, action, target, or reason"
             className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
           />
         </label>
@@ -236,6 +274,13 @@ export default async function PlatformAuditPage({
       {invalid ? (
         <p role="alert" className="mt-4 text-sm text-destructive">
           Invalid date range or pagination cursor. Correct the dates or return to the first page.
+        </p>
+      ) : null}
+      {actorSearchTruncated ? (
+        <p role="status" className="mt-4 text-sm text-text-body">
+          This search matched more than {actorSearchLimit} actor accounts, so only the first{' '}
+          {actorSearchLimit} are included in actor matching. Narrow the search, pick an
+          organization, or use the Actor ID filter to see every record for one actor.
         </p>
       ) : null}
       <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">

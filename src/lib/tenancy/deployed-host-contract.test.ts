@@ -7,9 +7,10 @@ import { isReservedHostLabel } from './host-routing';
 
 /**
  * The other tenancy suites pick a base domain by hand, so none of them exercise the
- * values we actually ship. This one reads infra/*.bicepparam at test time and runs
- * classifyHost against them: change a host in a param file without changing the
- * deployment's routing story and this fails.
+ * values we actually ship. This one reads the AWS environment template
+ * (infra/aws/environment.yaml) at test time and runs classifyHost against its hosts:
+ * change a host there without changing the deployment's routing story and this fails.
+ * Production is not created on AWS yet; its stack takes these hosts as parameters.
  */
 
 type DeployedHosts = {
@@ -18,23 +19,34 @@ type DeployedHosts = {
   baseDomain: string;
 };
 
-function readDeployedHosts(paramFile: string): DeployedHosts {
-  const source = readFileSync(join(process.cwd(), 'infra', paramFile), 'utf8');
-  const read = (name: string) => {
-    const match = source.match(new RegExp(`^param ${name} = '([^']*)'$`, 'm'));
-    if (!match) throw new Error(`infra/${paramFile} does not set a literal ${name}.`);
-    return match[1];
-  };
+function readTemplateDefault(name: string): string {
+  const source = readFileSync(join(process.cwd(), 'infra', 'aws', 'environment.yaml'), 'utf8');
+  const parameter = source.match(new RegExp(`^  ${name}:\\n((?:    .*\\n)+)`, 'm'));
+  const value = parameter?.[1].match(/^    Default: (\S+)$/m)?.[1];
+  if (!value) throw new Error(`infra/aws/environment.yaml does not default ${name}.`);
+  return value;
+}
+
+/** The web task gets PLATFORM_BASE_DOMAIN=BaseDomain; the console is admin.<BaseDomain>. */
+function readStagingHosts(): DeployedHosts {
+  const baseDomain = readTemplateDefault('BaseDomain');
   return {
-    tenantHost: read('tenantHost'),
-    platformHost: read('platformHost'),
-    baseDomain: read('baseDomain'),
+    tenantHost: readTemplateDefault('TenantHost'),
+    platformHost: `admin.${baseDomain}`,
+    baseDomain,
   };
 }
 
 const ENVIRONMENTS = [
-  { name: 'production', hosts: readDeployedHosts('production.bicepparam') },
-  { name: 'staging', hosts: readDeployedHosts('staging.bicepparam') },
+  {
+    name: 'production',
+    hosts: {
+      tenantHost: 'www.devfathom.com',
+      platformHost: 'admin.devfathom.com',
+      baseDomain: 'devfathom.com',
+    },
+  },
+  { name: 'staging', hosts: readStagingHosts() },
 ];
 
 const ORIGINAL_ENV = {
@@ -51,7 +63,7 @@ afterEach(() => {
   }
 });
 
-/** Mirror the container environment infra/environment.bicep builds from these parameters. */
+/** Mirror the web task environment infra/aws/environment.yaml builds from these parameters. */
 function applyDeployedEnvironment({ tenantHost, baseDomain }: DeployedHosts) {
   process.env.AUTH_URL = `https://${tenantHost}`;
   process.env.NEXT_PUBLIC_APP_URL = `https://${tenantHost}`;

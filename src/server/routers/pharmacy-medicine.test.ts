@@ -42,6 +42,8 @@ function makeDb() {
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
+    medicineBarcode: model(),
+    medicineAlias: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -71,6 +73,141 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+const catalogueEdits = [
+  ['createIngredient', { name: 'Paracetamol' }, 'ingredient'],
+  ['createMedicine', { productName: 'Medicine', productFamily: 'PHARMACEUTICAL' }, 'medicine'],
+  [
+    'createPackLevel',
+    {
+      presentationId: 'presentation_a',
+      versionGroupId: 'box',
+      level: 'BOX',
+      unitsPerParent: 20,
+      effectiveFrom: new Date('2030-01-01'),
+    },
+    'packLevel',
+  ],
+  [
+    'revisePackLevel',
+    { id: 'pack_a', unitsPerParent: 30, effectiveFrom: new Date('2030-01-01') },
+    'packLevel',
+  ],
+  [
+    'recordPrintedMrp',
+    { packLevelId: 'pack_a', batchReference: 'B1', printedMrpMinor: 1000 },
+    'medicinePackMrp',
+  ],
+  [
+    'addBarcode',
+    { presentationId: 'presentation_a', type: 'GTIN', code: '123' },
+    'medicineBarcode',
+  ],
+  ['addAlias', { medicineId: 'medicine_a', type: 'BRAND', value: 'Panadol' }, 'medicineAlias'],
+] as const;
+
+describe('catalogue edits require catalogue administration (DEV-19)', () => {
+  it.each(catalogueEdits)(
+    'refuses a cashier %s before any catalogue write',
+    async (name, input, model) => {
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: {
+          permissions: [
+            { capability: 'pharmacy:counter', effect: 'ALLOW' },
+            { capability: 'pharmacy:orders', effect: 'ALLOW' },
+          ],
+        },
+        permissionOverrides: [],
+      });
+      db.presentation.findFirst.mockResolvedValue({ id: 'presentation_a' });
+      db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', version: 1 });
+      const procedure = caller(['pharmacy-core'], 'EMPLOYEE')[name] as (
+        value: typeof input
+      ) => Promise<unknown>;
+
+      await expect(procedure(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db[model].create).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a pharmacy-wide role grant that lacks catalogue administration', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      caller(['pharmacy-core'], 'EMPLOYEE').addAlias({
+        medicineId: 'medicine_a',
+        type: 'BRAND',
+        value: 'Panadol',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicineAlias.create).not.toHaveBeenCalled();
+  });
+
+  it('lets a catalogue administrator add an alias', async () => {
+    await expect(
+      caller().addAlias({ medicineId: 'medicine_a', type: 'BRAND', value: 'Panadol' })
+    ).resolves.toMatchObject({ id: 'new', normalizedValue: expect.any(String) });
+  });
+
+  it.each(['ACCEPTED', 'CORRECTED', 'REJECTED'])(
+    'refuses a new medicine whose author declares its own %s review',
+    async (status) => {
+      await expect(
+        caller().createMedicine({
+          productName: 'Medicine',
+          productFamily: 'PHARMACEUTICAL',
+          provenance: [
+            {
+              field: 'productName',
+              source: 'manual',
+              sourceType: 'USER',
+              retrievedAt: new Date('2026-01-01'),
+              status: status as 'UNREVIEWED',
+            },
+          ],
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.medicine.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a self-named reviewer and direct publication on creation', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        provenance: [
+          {
+            field: 'productName',
+            source: 'manual',
+            sourceType: 'USER',
+            retrievedAt: new Date('2026-01-01'),
+            status: 'UNREVIEWED',
+            reviewer: 'user_a',
+          } as never,
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'FRONT_SHOP',
+        saleable: true as never,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a new medicine as an unreviewed, unsaleable review candidate', async () => {
+    await expect(
+      caller().createMedicine({ productName: 'Medicine', productFamily: 'FRONT_SHOP' })
+    ).resolves.toMatchObject({ id: 'new', saleable: false });
+  });
 });
 
 describe('pharmacy medicine tenant and entitlement boundaries', () => {
@@ -375,7 +512,6 @@ describe('non-drug retail catalogue fields (#718)', () => {
       retailPriceMinor: 45_000,
       retailCategory: ' Baby care ',
       ean13: '4006381333931',
-      saleable: true,
     });
     const data = db.medicine.create.mock.calls[0]![0].data;
     expect(data).toMatchObject({

@@ -538,7 +538,8 @@ export async function listPurchaseOrders(db: ScopedDb, scope: PurchasingOrderSco
       lines: {
         orderBy: { lineNumber: 'asc' },
         include: {
-          medicine: { select: { id: true, productName: true } },
+          // #718: the receiving bench lets non-drug lines arrive without batch, expiry or MRP.
+          medicine: { select: { id: true, productName: true, productFamily: true } },
           packLevel: { select: { id: true, level: true } },
         },
       },
@@ -1042,15 +1043,19 @@ export async function resolveScan(
     };
   }
 
-  const medicine = await db.medicine.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      saleable: true,
-      productName: { contains: term, mode: 'insensitive' },
-    },
-    orderBy: [{ productName: 'asc' }, { id: 'asc' }],
-    select: { id: true, productName: true },
-  });
+  // DEV-734: a product chosen from the live list submits its full name, so an exact
+  // name wins over an earlier-sorting name that merely contains it.
+  const byName = (productName: { equals: string } | { contains: string }) =>
+    db.medicine.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        productName: { ...productName, mode: 'insensitive' },
+      },
+      orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+      select: { id: true, productName: true },
+    });
+  const medicine = (await byName({ equals: term })) ?? (await byName({ contains: term }));
   if (medicine) {
     return {
       kind: 'medicine',

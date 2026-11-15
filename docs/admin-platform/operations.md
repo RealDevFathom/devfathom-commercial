@@ -1,30 +1,30 @@
-# Azure Deployment and Operations
+# AWS ECS Deployment and Operations
 
-Azure is the current deployment platform. Provider-specific deployment records elsewhere are retained as legacy implementation evidence only, not deployment procedure.
+AWS is the current deployment platform; see [`docs/deploy/aws.md`](../deploy/aws.md). Provider-specific deployment records elsewhere are retained as legacy implementation evidence only, not deployment procedure.
 
 ## Process model
 
-Web/API runs on Next.js Node.js in an Azure Container App. PostgreSQL is the durable source of truth. Platform jobs are durable database records processed by:
+Web/API runs on Next.js Node.js in an AWS ECS Fargate service. PostgreSQL is the durable source of truth. Platform jobs are durable database records processed by:
 
 - an operator-triggered `POST /api/platform/jobs/process` request when a bearer secret is configured; or
 - CLI: `bun run platform:jobs -- --max-jobs=<n>`.
 
-The route requires `CRON_SECRET`. An Azure scheduler/recurring trigger is a production gate; do not claim five-minute processing until that trigger exists and is verified. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
+The route requires `CRON_SECRET`. On AWS the scheduler is the `platform-jobs` EventBridge schedule, created only when the stack parameter `EnableJobsSchedule=true` (see [`docs/deploy/aws.md`](../deploy/aws.md)); it is a production gate, so do not claim five-minute processing in an environment until that schedule exists and is verified. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
 
 `POST /api/cron/outbound-effects` drains every organization's pending outbox so a retry does not wait for that organization's next enqueue. Send `Authorization: Bearer <CRON_SECRET>`. The comparison is constant-time, and a missing or mismatched secret returns 401. Retries start at 30 seconds. Staging calls this route every minute from an EventBridge Scheduler, and `CRON_SECRET` is kept in Secrets Manager. That wiring will be added in the infra/aws pull request #110. A claim left in `PROCESSING` returns to the queue after 5 minutes. Dead-lettered email rows drop the recipient email, name, and HTML. Delivered and dead-lettered rows are deleted after 7 days.
 
 ## Job types
 
-| Type                  | Behavior                                                 | Required external configuration            |
-| --------------------- | -------------------------------------------------------- | ------------------------------------------ |
-| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain |
-| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout       |
-| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                      |
-| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                       |
-| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                     |
-| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                    |
-| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time              |
-| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                       |
+| Type                  | Behavior                                                 | Required external configuration          |
+| --------------------- | -------------------------------------------------------- | ---------------------------------------- |
+| `PROVISION_SHARED`    | records/updates shared deployment state                  | AWS environment and approved base domain |
+| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved AWS resources and rollout       |
+| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and AWS load balancer                |
+| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                     |
+| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                   |
+| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                  |
+| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time            |
+| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                     |
 
 Jobs are idempotency-keyed where commands can be retried. Operators can inspect payload/result/error, retry failed jobs, or cancel queued/running work.
 
@@ -32,7 +32,7 @@ Jobs are idempotency-keyed where commands can be retried. Operators can inspect 
 
 Shared is the default. The worker records:
 
-- provider `AZURE`;
+- provider `AWS_ECS` (recorded by production bootstrap; the worker's own upsert in `src/lib/platform/jobs.ts` still writes the legacy `VERCEL` value);
 - production environment;
 - shared mode;
 - project ID/region when configured;
@@ -44,7 +44,7 @@ All organizations share application compute and PostgreSQL while RLS isolates da
 
 ## Dedicated deployment (enterprise gate)
 
-Dedicated environments are not part of the current staging deployment. Define the Azure resource topology, tenant isolation proof, domain/SSO rollout, backup policy, and owner approval before implementing or advertising an enterprise environment. No dedicated production environment is currently verified.
+Dedicated environments are not part of the current staging deployment. Define the AWS resource topology, tenant isolation proof, domain/SSO rollout, backup policy, and owner approval before implementing or advertising an enterprise environment. No dedicated production environment is currently verified.
 
 ## Configuration reference
 
@@ -107,7 +107,7 @@ Operational evidence is available in:
 - tenant audit and SCIM events;
 - provider deployment logs.
 
-Azure platform logs are available in staging through capped Log Analytics. Application error tracking, request metrics, and production alerting are not implemented; add and verify them before production launch.
+AWS platform logs are available in staging through the ECS log groups (see [`docs/deploy/aws.md`](../deploy/aws.md)). Application error tracking, request metrics, and production alerting are not implemented; add and verify them before production launch.
 
 ## Backup and recovery
 

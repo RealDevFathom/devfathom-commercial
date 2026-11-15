@@ -69,7 +69,7 @@ export async function generateBasketInsights(
 ) {
   const input = basketGenerateInput.parse(raw);
   if (input.branchId !== scope.branchId) throw new MarketingWorkflowError('Branch mismatch.');
-  growthPeriods(input.from, input.cutoff);
+  growthPeriods(input.from, input.cutoff, new Date(), scope.timezone);
   const sales = await db.pharmacySale.findMany({
     where: {
       organizationId: scope.organizationId,

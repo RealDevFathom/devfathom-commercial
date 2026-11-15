@@ -169,3 +169,22 @@ export function assertPromotableProducts(
       throw new PharmacyProductClassError('MEDICINE_NOT_PROMOTABLE');
   }
 }
+
+/**
+ * Receiving bench: whether one lot slot of an ordered line arrived. A medicine lot arrives only
+ * with its printed batch. A non-drug item has no batch, so its first lot arrives with any packs
+ * received; further lots still need a batch or an expiry to tell them apart.
+ */
+export function receivingLotArrived(input: {
+  productFamily: string | null | undefined;
+  primaryLot: boolean;
+  batchNumber: string;
+  printedExpiry: string;
+  receivedPacks: string;
+}): boolean {
+  if (input.batchNumber.trim()) return true;
+  if (!isNonDrugRetail(input.productFamily)) return false;
+  if (input.printedExpiry.trim()) return true;
+  const packs = Number(input.receivedPacks.trim() || '0');
+  return input.primaryLot && Number.isFinite(packs) && packs > 0;
+}
