@@ -127,6 +127,12 @@ import {
   recordPharmacyCashMovement,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
+import {
+  actorMayRefund,
+  authenticateRefundPin,
+  REFUND_FORBIDDEN,
+  REFUND_PIN_POLICY,
+} from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
 import {
@@ -1043,6 +1049,8 @@ export const pharmacySalesRouter = router({
           // true additionally caps a refund on a sale that is not settled.
           requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-647: the signed-in manager's or owner's own PIN, re-entered for every refund.
+          managerPin: z.string().regex(/^\d{4,8}$/),
         })
         .strict()
     )
@@ -1054,6 +1062,26 @@ export const pharmacySalesRouter = router({
           // The stored tender selects the permission boundary after member/branch checks.
           return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
         });
+        // DEV-647: cashiers cannot start refunds; a manager or owner re-enters their PIN.
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: REFUND_FORBIDDEN });
+        // The PIN never reaches the refund's idempotency payload hash.
+        const { managerPin, ...refund } = input;
+        // An independent transaction, so a refused PIN commits its lockout strike.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.refundTender',
+        });
+        annotateAudit(ctx, {
+          metadata: {
+            policy: REFUND_PIN_POLICY,
+            approverId: scope.actorId,
+            pinVerified: 'verified' in pin,
+          },
+        });
+        if ('blocked' in pin) return pin;
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const tender = await db.pharmacyTender.findFirst({
@@ -1070,7 +1098,7 @@ export const pharmacySalesRouter = router({
                 code: 'FORBIDDEN',
                 message: 'You do not have permission for this action.',
               });
-            return refundPharmacyTender(db, scope, input);
+            return refundPharmacyTender(db, scope, refund);
           }
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
@@ -1086,7 +1114,7 @@ export const pharmacySalesRouter = router({
               Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
             );
           }
-          const result = await refundPharmacyTender(db, scope, input);
+          const result = await refundPharmacyTender(db, scope, refund);
           if (charge && 'refundId' in result && typeof result.refundId === 'string') {
             const id = `khata-refund:${result.refundId}`;
             const prior = await db.pharmacyKhataEvent.findFirst({
@@ -1929,6 +1957,11 @@ export const pharmacySalesRouter = router({
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
+
+  /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
+  refundAccess: protectedProcedure.query(async ({ ctx }) => ({
+    authorized: await actorMayRefund(ctx.db, ctx.session.user),
+  })),
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {

@@ -160,6 +160,7 @@ vi.mock('@/lib/trpc', async () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'refundAccess',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -441,6 +442,7 @@ beforeEach(() => {
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'refundAccess',
   ])
     mocks.queries[name] = query();
   // A counter taking cash has an open drawer; tests about a closed drawer say so.

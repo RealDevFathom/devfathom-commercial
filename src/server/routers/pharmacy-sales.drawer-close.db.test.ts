@@ -273,6 +273,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             amountMinor: 500,
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
+            managerPin: '1234',
           }),
         OUTSIDE,
       ],
