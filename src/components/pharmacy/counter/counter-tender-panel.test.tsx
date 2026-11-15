@@ -33,11 +33,11 @@ const TENDER_LABELS: Record<string, string> = {
 };
 
 function tenderButtons() {
-  return within(screen.getByRole('group', { name: 'Tender' })).getAllByRole('button');
+  return within(screen.getByRole('group', { name: 'Payment method' })).getAllByRole('button');
 }
 
 function tenderButton(type: string) {
-  return within(screen.getByRole('group', { name: 'Tender' })).getByRole('button', {
+  return within(screen.getByRole('group', { name: 'Payment method' })).getByRole('button', {
     name: TENDER_LABELS[type],
   });
 }
@@ -57,7 +57,7 @@ describe('DEV-618 payment panel', () => {
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('250.00');
     expect(screen.getByText('PKR')).toBeVisible();
     expect(screen.getByLabelText('Amount')).toHaveAccessibleDescription(
-      /Leave blank to pay the balance due. Enter a smaller amount to split payment across tenders./
+      /Leave blank to pay the balance due. Enter a smaller amount to split payment across payment methods./
     );
     expect(tenderButtons().map((button) => button.textContent)).toEqual([
       'Cash',
@@ -67,7 +67,7 @@ describe('DEV-618 payment panel', () => {
     ]);
     expect(tenderButton('CASH')).toHaveAttribute('aria-pressed', 'true');
     expect(tenderButton('CARD')).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.queryByRole('combobox', { name: 'Tender' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Payment method' })).not.toBeInTheDocument();
   });
 
   it('keeps split payments available after the parent supplies the remaining balance', async () => {
@@ -167,7 +167,7 @@ describe('DEV-714 tender buttons', () => {
   it('still renders a restored Wallet attempt so it can be resolved', () => {
     setup({ initialDraft: { type: 'WALLET', amount: '', cashReceived: '' } });
     expect(tenderButton('WALLET')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(/Requires a certified payment provider/)).toBeVisible();
+    expect(screen.getByText(/A payment provider must be connected/)).toBeVisible();
   });
 
   it('flags only the Cash button when the drawer is closed and keeps other tenders usable', async () => {
@@ -387,7 +387,7 @@ describe('DEV-713 manual card tender', () => {
   it('takes a terminal card with reference and approval code, no provider wording', async () => {
     const { props } = setup();
     chooseTender('CARD');
-    expect(screen.queryByText(/certified payment provider/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/A payment provider must be connected/)).not.toBeInTheDocument();
     expect(screen.getByText(/recorded as the person who confirmed this payment/)).toBeVisible();
     const button = screen.getByRole('button', { name: 'Take payment' });
     expect(button).toBeDisabled();
@@ -1166,5 +1166,42 @@ describe('DEV-499 tender speed', () => {
     });
     fireEvent.keyDown(payer, { key: 'Enter' });
     expect(props.onTender).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-41 disabled payment explanations', () => {
+  it.each([
+    [{ disabled: true }, /Wait for the current counter action/],
+    [{ balanceMinor: null }, /Refresh the bill/],
+    [{ state: 'settled' as const, balanceMinor: 0 }, /already paid/],
+    [{ blocked: true }, /Resolve the safety block/],
+  ])('explains the payment lock %j', (props, reason) => {
+    setup(props);
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(reason);
+    expect(screen.getByText(reason)).toBeVisible();
+  });
+
+  it('explains missing card slip details until they are entered', () => {
+    setup();
+    chooseTender('CARD');
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/Enter the card reference and approval code/);
+  });
+
+  it('explains missing manual payment details until they are valid', () => {
+    setup({ manualSettings: { RAAST: { destination: 'merchant', allowReferenceSkip: false } } });
+    chooseTender('RAAST');
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/Enter the payer/);
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Customer' } });
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      target: { value: '1234' },
+    });
+    expect(button).toBeEnabled();
+    expect(screen.queryByText(/Enter the payer/)).not.toBeInTheDocument();
   });
 });

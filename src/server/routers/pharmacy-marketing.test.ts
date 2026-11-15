@@ -360,3 +360,32 @@ describe('campaign generation and approval stay owner-only (DEV-31)', () => {
     expect(mocks.growthSave).not.toHaveBeenCalled();
   });
 });
+
+describe('marketing send policy procedures (DEV-24)', () => {
+  const settings = {
+    branchId: 'branch-a',
+    weeklyMax: 1,
+    monthlyMax: 2,
+    quietStartHour: 22,
+    quietEndHour: 9,
+    blockRatePauseBps: 200,
+    blockRateMinSample: 50,
+  };
+  it.each(['MANAGER', 'CASHIER', 'PHARMACIST'])(
+    'refuses %s before reading, changing or resuming the policy',
+    async (role) => {
+      await expect(caller(role).sendPolicy(input)).rejects.toThrow('An owner account is required');
+      await expect(caller(role).updateSendPolicy(settings)).rejects.toThrow(
+        'An owner account is required'
+      );
+      await expect(caller(role).resumeSending(input)).rejects.toThrow(
+        'An owner account is required'
+      );
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    }
+  );
+  it('rejects a weekly cap above the monthly cap before any transaction', async () => {
+    await expect(caller().updateSendPolicy({ ...settings, weeklyMax: 3 })).rejects.toThrow();
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+});

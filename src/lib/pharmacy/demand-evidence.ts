@@ -1,4 +1,13 @@
 /** Pure, calendar-preserving scenarios. Caller provenance is not a verified live adapter. */
+import {
+  learnSeasonalUplift,
+  seasonalWindowFor,
+  seasonalWindowKey,
+  type SeasonalUplift,
+  type SeasonalUpliftConfig,
+  type SeasonalWindow,
+} from './seasonal-calendar';
+
 export type DemandScope = { organizationId: string; branchId: string; medicineId: string };
 
 export type DemandSource = {
@@ -30,13 +39,23 @@ export type DemandEvidenceInput = {
   days: readonly DemandEvidenceDay[];
   /** Only closures already known at origin may override a future day's demand. */
   closures?: readonly { date: string; knownAt: string }[];
+  /**
+   * DEV-74: branch seasonal windows. Uplift is learned only from eligible history before
+   * origin and applied to forecast days inside a window with the same season key.
+   */
+  seasonalCalendar?: {
+    windows: readonly SeasonalWindow[];
+    config?: Partial<SeasonalUpliftConfig>;
+  };
 };
 
 export type DemandForecastDay = {
   date: string;
   units: number | null;
-  method: DemandMethod | 'KNOWN_CLOSED' | 'UNAVAILABLE';
+  method: DemandMethod | 'KNOWN_CLOSED' | 'UNAVAILABLE' | 'SEASONAL_CALENDAR';
   evidenceDates: readonly string[];
+  /** Present only when a learned seasonal uplift set this day's units. */
+  seasonal?: { key: string; label: string; upliftBps: number; baselineMeanUnits: number };
 };
 
 export type DemandForecast = {
@@ -57,6 +76,12 @@ export type DemandForecast = {
   days: readonly DemandForecastDay[];
   assumptions: readonly string[];
   unknowns: readonly string[];
+  /** Present only when the input carried a seasonal calendar. */
+  seasonalCalendar?: {
+    baselineDays: number;
+    baselineMeanUnits: number | null;
+    uplifts: readonly SeasonalUplift[];
+  };
 };
 
 const DAY_MS = 86_400_000;
@@ -187,11 +212,39 @@ export function forecastDemandEvidence(input: DemandEvidenceInput): DemandForeca
     closureDates.add(closure.date);
     if (demandInstantMs(closure.knownAt) <= cutoff) closures.add(closure.date);
   }
+  // Learned from the same eligible (observed, known-by-cutoff, pre-origin) days as the mean.
+  const calendar = input.seasonalCalendar
+    ? learnSeasonalUplift({
+        days: [...observed.entries()].map(([date, units]) => ({ date, units })),
+        windows: input.seasonalCalendar.windows,
+        config: input.seasonalCalendar.config,
+      })
+    : null;
+  const uplifts = new Map(calendar?.uplifts.map((uplift) => [uplift.key, uplift]));
   const days: DemandForecastDay[] = [];
   for (let i = 0; i < input.horizonDays; i += 1) {
     const date = demandDateAfter(input.originDate, i);
     if (closures.has(date)) {
       days.push({ date, units: 0, method: 'KNOWN_CLOSED', evidenceDates: [] });
+      continue;
+    }
+    const window = calendar ? seasonalWindowFor(input.seasonalCalendar!.windows, date) : null;
+    const uplift = window ? uplifts.get(seasonalWindowKey(window)) : undefined;
+    if (uplift?.upliftBps != null && calendar!.baseline.meanUnits !== null) {
+      // Baseline excludes every window day, so the uplift is never applied twice.
+      const units = BigInt(calendar!.baseline.meanUnits) * BigInt(uplift.upliftBps);
+      days.push({
+        date,
+        units: Number((units + BigInt(9_999)) / BigInt(10_000)),
+        method: 'SEASONAL_CALENDAR',
+        evidenceDates: uplift.evidenceDates,
+        seasonal: {
+          key: uplift.key,
+          label: uplift.label,
+          upliftBps: uplift.upliftBps,
+          baselineMeanUnits: calendar!.baseline.meanUnits,
+        },
+      });
       continue;
     }
     // Preserve weekday distance even across unknown, closed and censored dates.
@@ -229,6 +282,11 @@ export function forecastDemandEvidence(input: DemandEvidenceInput): DemandForeca
       'Weekly seasonal naive uses the latest matching weekday before origin; unavailable matches fall back to recent mean.',
       'Source kind and known-at version timestamps are caller assertions; this pure function does not verify a live reader.',
       'No calibrated intervals, service probabilities, latent-demand recovery or profit guarantees.',
+      ...(calendar
+        ? [
+            "Seasonal calendar days use the out-of-window mean times the uplift learned from this scope's own earlier in-window days; unlearned windows keep the base method.",
+          ]
+        : []),
     ],
     unknowns: [
       ...(coverage.unknownDays ? ['Missing or unavailable demand days are not zero.'] : []),
@@ -237,7 +295,19 @@ export function forecastDemandEvidence(input: DemandEvidenceInput): DemandForeca
       ...(input.source.kind !== 'OBSERVED_TRANSACTIONS'
         ? ['Demand inputs are a manual or synthetic scenario, not observed transactions.']
         : []),
+      ...(calendar?.uplifts.some((uplift) => uplift.status === 'INSUFFICIENT_HISTORY')
+        ? ['Some seasonal windows lack enough branch history; their days use the base method.']
+        : []),
     ],
+    ...(calendar
+      ? {
+          seasonalCalendar: {
+            baselineDays: calendar.baseline.days,
+            baselineMeanUnits: calendar.baseline.meanUnits,
+            uplifts: calendar.uplifts,
+          },
+        }
+      : {}),
   };
 }
 
