@@ -25,6 +25,7 @@ vi.mock('@/lib/restaurant/terminal-auth', () => ({
 }));
 import { GET, POST, PUT } from './route';
 import { PrintRoutingError } from '@/lib/restaurant/printing/registered-routing';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 
 const document = {
   type: 'BAR_TICKET',
@@ -33,7 +34,35 @@ const document = {
   createdAt: '2026-09-05T12:00:00Z',
   lines: [{ quantity: 1, label: 'Soda' }],
 };
-const job = { branchId: 'branch-b', stationId: null, idempotencyKey: 'manual-test', document };
+const fabricatedReceipt = {
+  type: 'RECEIPT',
+  reference: 'INV-0001',
+  title: 'RECEIPT',
+  createdAt: '2026-09-05T12:00:00Z',
+  lines: [{ quantity: 1, label: 'Grand total PKR 0.00 - PAID' }],
+};
+const legacyJob = {
+  branchId: 'branch-b',
+  stationId: null,
+  idempotencyKey: 'manual-test',
+  document,
+};
+const job = { branchId: 'branch-b', idempotencyKey: 'receipt-test:0123456789abcdef' };
+const serverJob = {
+  branchId: 'branch-b',
+  stationId: null,
+  idempotencyKey: 'receipt-test:0123456789abcdef',
+  document: {
+    type: 'RECEIPT',
+    reference: 'PRINTER TEST',
+    title: 'RECEIPT PRINTER TEST',
+    createdAt: expect.any(String),
+    lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
+    footer: 'Confirm this test at the selected printer. No financial transaction.',
+  },
+};
+const configureOnly = () =>
+  mocks.can.mockImplementation(async (_user, action) => action === 'restaurant:configure');
 const request = (method: string, body?: unknown, bridge = false) =>
   new Request('http://localhost/api/restaurant/print-bridge?wait=0', {
     method,
@@ -87,13 +116,54 @@ describe('print bridge authorization boundary', () => {
     expect(db.restaurantBranch.findUnique).not.toHaveBeenCalled();
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
-  it.each(['primary', 'assignment'])('allows %s branch submission', async (kind) => {
-    (kind === 'primary'
-      ? db.restaurantStaffProfile
-      : db.restaurantBranchAssignment
-    ).findFirst.mockResolvedValue({ id: 'allowed' });
+  it.each(['primary', 'assignment'])(
+    'rejects read-only %s branch staff without printer configuration authority',
+    async (kind) => {
+      (kind === 'primary'
+        ? db.restaurantStaffProfile
+        : db.restaurantBranchAssignment
+      ).findFirst.mockResolvedValue({ id: 'allowed' });
+      expect((await POST(request('POST', job))).status).toBe(403);
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    ['fabricated receipt', { ...legacyJob, document: fabricatedReceipt }],
+    ['kitchen ticket', { ...legacyJob, document: { ...document, type: 'KITCHEN_TICKET' } }],
+    ['bar ticket', legacyJob],
+  ])('rejects a %s from a money:read/orders:read branch user', async (_label, body) => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    mocks.can.mockImplementation(async (_user, action) =>
+      ['money:read', 'orders:read'].includes(action)
+    );
+    const response = await POST(request('POST', body));
+    expect(response.status).toBe(403);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+  it('lets a printer configurator queue only the server-authored receipt test', async () => {
+    configureOnly();
     expect((await POST(request('POST', job))).status).toBe(202);
     expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      'org',
+      { branchId: 'branch-b', routes: [] },
+      serverJob,
+      undefined
+    );
+  });
+  it.each([
+    ['caller-authored receipt', { ...job, document: fabricatedReceipt }],
+    ['caller-authored ticket', { ...job, document }],
+    ['legacy job shape', legacyJob],
+    ['station-routed test', { ...job, stationId: 'hot' }],
+    ['producer idempotency key', { ...job, idempotencyKey: 'order:abc:receipt' }],
+  ])('rejects a %s even for a printer configurator', async (_label, body) => {
+    configureOnly();
+    expect((await POST(request('POST', body))).status).toBe(400);
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
   it('allows organization configurator routing and rejects unauthorized routing', async () => {
     expect((await PUT(request('PUT', { branchId: 'branch-b', routes: [] }))).status).toBe(403);
@@ -101,8 +171,30 @@ describe('print bridge authorization boundary', () => {
     mocks.can.mockResolvedValue(true);
     expect((await PUT(request('PUT', { branchId: 'branch-b', routes: [] }))).status).toBe(200);
   });
-  it('returns actionable raw Unicode fallback without persisting through the real enqueue service', async () => {
-    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+  it('rejects caller-supplied Unicode print text before the enqueue service runs', async () => {
+    configureOnly();
+    const response = await POST(
+      request('POST', {
+        ...job,
+        document: { ...document, lines: [{ quantity: 1, label: 'اردو' }] },
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+  it('maps raw print validation from the service to an actionable 422', async () => {
+    configureOnly();
+    mocks.enqueue.mockRejectedValue(new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT'));
+    const response = await POST(request('POST', job));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      code: 'UNSUPPORTED_PRINT_TEXT',
+      fallback: 'BROWSER_OS',
+      retryable: false,
+    });
+  });
+  it('validates the server-authored test document with the real enqueue service', async () => {
+    configureOnly();
     const { PrintBridgeService } = await vi.importActual<
       typeof import('@/lib/restaurant/printing/service')
     >('@/lib/restaurant/printing/service');
@@ -115,7 +207,7 @@ describe('print bridge authorization boundary', () => {
       branchId: 'branch-b',
       routes: [
         {
-          documentType: 'BAR_TICKET' as const,
+          documentType: 'RECEIPT' as const,
           stationId: null,
           printerId: 'printer-a',
           enabled: true,
@@ -127,19 +219,17 @@ describe('print bridge authorization boundary', () => {
         serviceDb as unknown as import('@/lib/tenancy/scoped-db').ScopedDb
       ).enqueue('org', config, input)
     );
-    const response = await POST(
-      request('POST', {
-        ...job,
-        document: { ...document, lines: [{ quantity: 1, label: 'اردو' }] },
-      })
-    );
-    expect(response.status).toBe(422);
-    expect(await response.json()).toMatchObject({
-      code: 'UNSUPPORTED_PRINT_TEXT',
-      fallback: 'BROWSER_OS',
-      retryable: false,
-    });
+    const response = await POST(request('POST', { ...job, document: fabricatedReceipt }));
+    expect(response.status).toBe(400);
     expect(create).not.toHaveBeenCalled();
+    expect((await POST(request('POST', job))).status).toBe(202);
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].data).toMatchObject({
+      documentType: 'RECEIPT',
+      stationId: null,
+      idempotencyKey: 'receipt-test:0123456789abcdef',
+      document: serverJob.document,
+    });
   });
   it('passes authenticated device identity when claiming', async () => {
     const response = await GET(request('GET', undefined, true));
@@ -211,8 +301,8 @@ describe('registered routing REST compatibility', () => {
     const response = await GET(request('GET'));
     expect((await response.json()).branches[0].config.routes).toEqual([route]);
   });
-  it('selects and forwards the registered reference for manual enqueue', async () => {
-    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+  it('selects and forwards the registered reference for a receipt printer test', async () => {
+    configureOnly();
     db.restaurantPrintRoute.findMany.mockResolvedValue([route]);
     expect((await POST(request('POST', job))).status).toBe(202);
     expect(db.restaurantPrintRoute.findMany).toHaveBeenCalledWith({
@@ -228,7 +318,7 @@ describe('registered routing REST compatibility', () => {
     expect(mocks.enqueue).toHaveBeenCalledWith(
       'org',
       { branchId: 'branch-b', routes: [route] },
-      job,
+      serverJob,
       undefined
     );
   });
@@ -277,14 +367,14 @@ describe('guarded routing HTTP boundary', () => {
     expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
   });
   it('passes the destination to the service and leaves fresh route selection inside its locked transaction', async () => {
-    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    configureOnly();
     expect((await POST(request('POST', { ...job, expectedDestination }))).status).toBe(202);
     expect(db.$transaction.mock.calls[0][1]).toEqual({ isolationLevel: 'ReadCommitted' });
     expect(db.restaurantPrintRoute.findMany).not.toHaveBeenCalled();
-    expect(mocks.enqueue).toHaveBeenCalledWith('org', baseline, job, expectedDestination);
+    expect(mocks.enqueue).toHaveBeenCalledWith('org', baseline, serverJob, expectedDestination);
   });
   it('maps the service destination conflict to a definite 409', async () => {
-    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    configureOnly();
     mocks.enqueue.mockRejectedValue(
       new PrintRoutingError('REFRESH_REQUIRED', 'Destination changed')
     );
@@ -299,6 +389,7 @@ describe('guarded routing HTTP boundary', () => {
     expect(db.$transaction.mock.calls.map((call) => call[1])).toEqual([undefined, undefined]);
   });
   it('does not let a destination guard bypass branch authorization', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
     expect((await POST(request('POST', { ...job, expectedDestination }))).status).toBe(403);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { bookkeepingJournalLines, createSettlementBatch, reconcileSettlementBankLine } from './bookkeeping';
+import {
+  bookkeepingJournalLines,
+  createSettlementBatch,
+  reconcileSettlementBankLine,
+  reverseBookkeepingTransaction,
+} from './bookkeeping';
 
 const base = {
   reference: 'REF-1',
@@ -106,5 +111,33 @@ describe('#710 POS settlement statement matching', () => {
     db.pharmacySettlementBatch.findFirst.mockResolvedValue(null);
     await expect(reconcileSettlementBankLine(scoped, scope, { statementLineId: 'line', settlementBatchId: 'batch', amountMinor: 100 })).rejects.toMatchObject({ reason: 'NOT_FOUND' });
     expect(db.pharmacyBankReconciliation.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('counter khata repayment receipts (DEV-731)', () => {
+  it('refuses a journal-only reversal that would desync the khata ledger and drawer', async () => {
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyBookkeepingTransaction: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'txn-1',
+          status: 'POSTED',
+          journalEntryId: 'entry-1',
+          idempotencyKey: 'khata-repayment:abc',
+          bankMatches: [],
+        }),
+        update: vi.fn(),
+      },
+      financeJournalEntry: { findFirst: vi.fn(), create: vi.fn() },
+    };
+    await expect(
+      reverseBookkeepingTransaction(
+        db as unknown as ScopedDb,
+        { organizationId: 'org', branchId: 'branch', actorId: 'owner' },
+        { transactionId: 'txn-1', at: new Date(), reason: 'Wrong amount', idempotencyKey: 'k' }
+      )
+    ).rejects.toMatchObject({ reason: 'COUNTER_KHATA_RECEIPT' });
+    expect(db.pharmacyBookkeepingTransaction.update).not.toHaveBeenCalled();
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
   });
 });

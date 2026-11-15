@@ -184,6 +184,15 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
           reason: 'DEV-279 drawer test',
         },
       });
+      // DEV-31: floats, cash movements and drawer close are manager or owner actions.
+      await db.userPermissionOverride.create({
+        data: {
+          userId: ACTOR,
+          capability: 'pharmacy:manage',
+          effect: 'ALLOW',
+          reason: 'DEV-31 drawer test',
+        },
+      });
       await db.pharmacyBranchAssignment.createMany({
         data: [
           { userId: ACTOR, branchId: ACTIVE },
@@ -273,6 +282,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             amountMinor: 500,
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
+            managerPin: '1234',
           }),
         OUTSIDE,
       ],

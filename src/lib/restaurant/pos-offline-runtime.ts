@@ -152,7 +152,8 @@ export class PosOfflineRuntime {
         this.queue(),
         draftId,
         decision,
-        this.state.catalog?.version ?? ''
+        this.state.catalog?.version ?? '',
+        this.state.catalog ?? null
       ),
     };
     await this.persist();

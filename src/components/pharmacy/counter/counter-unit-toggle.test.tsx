@@ -46,6 +46,28 @@ function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnit
 }
 
 describe('CounterUnitToggle (POS-03)', () => {
+  it('keys a standalone pack and its loose unit apart when they share a pack level', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const standalone = saleUnitOptions({
+      packLevels: [{ id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 }],
+      rootPackLevelId: 'flat',
+      unitsPerPack: 10,
+    });
+    const props = {
+      selected: 'UNIT' as SaleUnitKind | null,
+      quantity: '1',
+      preview: null,
+      onSelect: vi.fn(),
+      onQuantityChange: vi.fn(),
+    };
+    const view = render(<CounterUnitToggle {...props} options={standalone} />);
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    view.rerender(<CounterUnitToggle {...props} options={OPTIONS} />);
+    expect(screen.getAllByRole('radio')).toHaveLength(3);
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    errors.mockRestore();
+  });
+
   it('renders one radio per sale unit the lot actually supports', () => {
     renderToggle();
     const radios = screen.getAllByRole('radio');
@@ -53,34 +75,6 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByRole('radio', { name: /Pack/ })).toBeTruthy();
     expect(screen.getByRole('radio', { name: /Strip/ })).toBeTruthy();
     expect(screen.getByRole('radio', { name: /Unit/ })).toBeTruthy();
-  });
-
-  it('offers a loose unit beside a standalone strip so one tablet can be sold (DEV-705)', () => {
-    const options = saleUnitOptions({
-      packLevels: [{ id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 }],
-      rootPackLevelId: 'flat',
-      unitsPerPack: 10,
-    });
-    const onSelect = vi.fn();
-    renderToggle({
-      options,
-      selected: 'PACK',
-      quantity: '1',
-      preview: previewSaleLine({
-        option: options[0]!,
-        quantity: 1,
-        printedMrpMinor: 1_000,
-        unitsPerPack: 10,
-        availableUnits: 10,
-      }),
-      onSelect,
-    });
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
-    expect(screen.getByRole('radio', { name: /Pack/ }).textContent).toContain('10 units');
-    const unit = screen.getByRole('radio', { name: /Unit/ });
-    expect(unit.textContent).toContain('1 units');
-    fireEvent.click(unit);
-    expect(onSelect).toHaveBeenCalledWith('UNIT');
   });
 
   it('marks only the selected unit as checked', () => {

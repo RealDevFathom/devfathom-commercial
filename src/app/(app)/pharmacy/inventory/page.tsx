@@ -28,6 +28,7 @@ import {
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
 } from '@/lib/pharmacy/action-error-message';
+import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -231,6 +232,25 @@ export default async function PharmacyInventoryPage({
         include: {
           batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
           balances: { include: { location: true } },
+          // DEV-727: the received pack hierarchy, so stock reads as boxes + strips.
+          packLevel: {
+            select: {
+              presentation: {
+                select: {
+                  dosageForm: true,
+                  packLevels: {
+                    where: { organizationId },
+                    select: {
+                      id: true,
+                      level: true,
+                      parentPackLevelId: true,
+                      unitsPerParent: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       }),
       ctx.db.pharmacyInventoryCount.findMany({
@@ -298,8 +318,14 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'QUARANTINE' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
+  // Damaged holds can only leave inventory; they are never released back to sale.
+  const damaged = lots.flatMap((lot) =>
+    lot.balances
+      .filter((balance) => balance.disposition === 'DAMAGED' && balance.onHandUnits > 0)
+      .map((balance) => ({ lot, balance }))
+  );
   const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
-  const writeOffPositions = [...available, ...quarantined];
+  const writeOffPositions = [...available, ...quarantined, ...damaged];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -369,7 +395,8 @@ export default async function PharmacyInventoryPage({
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
-          disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
+          disposition: field(data, 'position').split(':')[2] as
+            'AVAILABLE' | 'QUARANTINE' | 'DAMAGED',
         });
       else if (action === 'release-quarantine')
         await actionCaller.releaseQuarantinedPart({
@@ -596,8 +623,14 @@ export default async function PharmacyInventoryPage({
                       />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {balance.onHandUnits} units · {balance.sealedPacks} sealed +{' '}
-                      {balance.looseUnits} loose
+                      {lotStockBreakdown({
+                        onHandUnits: balance.onHandUnits,
+                        rootPackLevelId: lot.packLevelId,
+                        unitsPerPack: lot.unitsPerPack,
+                        packLevels: lot.packLevel?.presentation.packLevels,
+                        dosageForm: lot.packLevel?.presentation.dosageForm,
+                      })}{' '}
+                      · {balance.sealedPacks} sealed + {balance.looseUnits} loose
                     </TableCell>
                     <TableCell className="whitespace-normal align-top text-right">
                       <BreakPackForm

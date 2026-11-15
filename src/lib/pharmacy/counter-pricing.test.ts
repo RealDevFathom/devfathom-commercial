@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   incrementRepeatScan,
+  looseSaleUnitOption,
+  lotSaleUnitOptions,
   previewSaleLine,
   saleUnitOptions,
   type PackLevelNode,
@@ -35,35 +37,14 @@ describe('saleUnitOptions (POS-03 toggle)', () => {
       saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 20 })
     ).toThrowError(PharmacyMedicineError);
   });
-  it('offers a loose single tablet from a standalone multi-unit pack (DEV-705)', () => {
-    const box = { id: 'box-100', level: 'BOX', parentPackLevelId: null, unitsPerParent: 100 };
-    const options = saleUnitOptions({
-      packLevels: [box],
-      rootPackLevelId: 'box-100',
-      unitsPerPack: 100,
-    });
-    expect(options.map((option) => option.kind)).toEqual(['PACK', 'UNIT']);
-    const loose = options.find((option) => option.kind === 'UNIT')!;
-    expect(loose.canonicalUnitsPerSaleUnit).toBe(1);
-    const preview = previewSaleLine({
-      option: loose,
-      quantity: 3,
-      printedMrpMinor: 25_000,
-      unitsPerPack: 100,
-      availableUnits: 100,
-    });
-    expect(preview.canonicalUnits).toBe(3);
-    expect(preview.unitPriceMinor).toBe(250);
-    expect(preview.grossMinor).toBe(750);
-    expect(preview.sufficient).toBe(true);
-  });
-  it('offers no loose unit from a standalone pack that is already one unit', () => {
-    const bottle = { id: 'bottle', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 };
+
+  it('offers no separate loose unit for a standalone pack of one canonical unit', () => {
+    const pack = { id: 'vial', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 };
     expect(
-      saleUnitOptions({ packLevels: [bottle], rootPackLevelId: 'bottle', unitsPerPack: 1 }).map(
-        (option) => option.kind
-      )
-    ).toEqual(['PACK']);
+      saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'vial', unitsPerPack: 1 })
+    ).toEqual([
+      { kind: 'PACK', packLevelId: 'vial', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 1 },
+    ]);
   });
   it('sells a receipt at the hierarchy leaf as one canonical unit', () => {
     const options = saleUnitOptions({
@@ -332,5 +313,77 @@ describe('incrementRepeatScan (POS-03: repeat scan increments the same unit)', (
     });
     expect(next[0]!.quantity).toBe(5);
     expect(source[0]!.quantity).toBe(1);
+  });
+});
+
+describe('lotSaleUnitOptions (pack table disagrees with the lot)', () => {
+  it('keeps the sealed pack and the loose unit from the lot’s frozen conversion', () => {
+    expect(lotSaleUnitOptions({ packLevelId: 'box', levelLabel: 'BOX', unitsPerPack: 60 })).toEqual(
+      [
+        { kind: 'PACK', packLevelId: 'box', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 60 },
+        { kind: 'UNIT', packLevelId: 'box', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+      ]
+    );
+  });
+
+  it('prices the loose unit pro rata, never above the printed MRP share', () => {
+    const [, loose] = lotSaleUnitOptions({
+      packLevelId: 'box',
+      levelLabel: 'BOX',
+      unitsPerPack: 60,
+    });
+    expect(
+      previewSaleLine({
+        option: loose!,
+        quantity: 3,
+        printedMrpMinor: 6000,
+        unitsPerPack: 60,
+        availableUnits: 60,
+      })
+    ).toMatchObject({ canonicalUnits: 3, unitPriceMinor: 100, grossMinor: 300 });
+  });
+
+  it('rejects a non-positive conversion', () => {
+    expect(() =>
+      lotSaleUnitOptions({ packLevelId: 'box', levelLabel: 'BOX', unitsPerPack: 0 })
+    ).toThrowError(PharmacyMedicineError);
+  });
+});
+
+describe('looseSaleUnitOption (F5 / sell loose)', () => {
+  it('picks the UNIT option when one is offered', () => {
+    const options = saleUnitOptions({
+      packLevels: THREE_LEVEL,
+      rootPackLevelId: 'box',
+      unitsPerPack: 100,
+    });
+    expect(looseSaleUnitOption(options)).toMatchObject({ kind: 'UNIT', packLevelId: 'unit' });
+  });
+
+  it('picks the one-unit option of a lot received at the base level', () => {
+    const options = saleUnitOptions({
+      packLevels: THREE_LEVEL,
+      rootPackLevelId: 'unit',
+      unitsPerPack: 1,
+    });
+    expect(looseSaleUnitOption(options)).toMatchObject({ packLevelId: 'unit' });
+  });
+
+  it('finds a loose unit for a standalone pack', () => {
+    const pack = { id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 };
+    expect(
+      looseSaleUnitOption(
+        saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 10 })
+      )
+    ).toMatchObject({ kind: 'UNIT', canonicalUnitsPerSaleUnit: 1 });
+  });
+
+  it('returns null when nothing sells one canonical unit', () => {
+    expect(looseSaleUnitOption([])).toBeNull();
+    expect(
+      looseSaleUnitOption([
+        { kind: 'PACK', packLevelId: 'p', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 10 },
+      ])
+    ).toBeNull();
   });
 });
