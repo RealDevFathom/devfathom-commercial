@@ -1454,3 +1454,42 @@ describe('purchasing PIN controls', () => {
     expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
   });
 });
+
+describe('reorder advice in context (DEV-594)', () => {
+  const REPORT_GRANTS = [
+    'pharmacy.procurement',
+    'pharmacy:procurement-approve',
+    'reports:operational',
+  ];
+
+  it('offers reorder advice on Purchasing to a member who can read Pharmacy Reports', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement', 'pharmacy-reports'], REPORT_GRANTS)
+    );
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.getByRole('heading', { name: 'Reorder advice' })).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Open reorder advice' }).getAttribute('href')).toBe(
+      '/pharmacy/reports/replenishment?branch=branch-1'
+    );
+  });
+
+  it('offers no dead-end link when Pharmacy Reports is not in the package', async () => {
+    mocks.createTRPCContext.mockResolvedValue(contextStub(['pharmacy-procurement'], REPORT_GRANTS));
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.queryByRole('link', { name: 'Open reorder advice' })).toBeNull();
+  });
+
+  it('offers no link to a buyer without operational report access', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement', 'pharmacy-reports'])
+    );
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.queryByRole('heading', { name: 'Reorder advice' })).toBeNull();
+  });
+});
