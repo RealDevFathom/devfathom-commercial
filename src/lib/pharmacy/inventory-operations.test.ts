@@ -86,6 +86,31 @@ describe('writeOff witness validation', () => {
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 
+  it('records a solo self-witness only when the PIN-verified solo flag is passed (DEV-628)', async () => {
+    const db = database(null);
+
+    await expect(
+      writeOff(
+        db as unknown as ScopedDb,
+        scope,
+        { ...input, witnessId: scope.actorId },
+        { soloSelfWitness: true }
+      )
+    ).resolves.toEqual({ movement: { id: 'movement_1' }, custody: { id: 'custody_1' } });
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ actorId: scope.actorId, witnessId: scope.actorId }),
+    });
+  });
+
+  it('refuses the solo flag for a write-off that names someone else (DEV-628)', async () => {
+    const db = database({ id: input.witnessId });
+
+    await expect(
+      writeOff(db as unknown as ScopedDb, scope, input, { soloSelfWitness: true })
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
   it('records the write-off when the active tenant witness is assigned to the branch', async () => {
     const db = database({ id: input.witnessId });
 

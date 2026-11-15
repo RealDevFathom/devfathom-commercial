@@ -57,13 +57,17 @@ export function receiveInput(data: FormData) {
   if (lines.length === 0) throw new Error('INVALID_UNITS');
   const reason = text(data, 'varianceReason');
   const witnessId = text(data, 'witnessId');
+  const witnessPin = text(data, 'witnessPin');
   const evidenceRef = text(data, 'evidenceRef');
   return {
     branchId: text(data, 'branchId'),
     transferId,
     lines,
-    // Partial evidence is no evidence: the router refuses a shortfall without all three.
-    variance: reason && witnessId && evidenceRef ? { reason, witnessId, evidenceRef } : undefined,
+    // Partial evidence is no evidence: the router refuses a shortfall without all four.
+    variance:
+      reason && witnessId && witnessPin && evidenceRef
+        ? { reason, witnessId, witnessPin, evidenceRef }
+        : undefined,
     idempotencyKeyPrefix: `ui-receive-close:${transferId}`,
   };
 }

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   cycleList: vi.fn(),
   createCount: vi.fn(),
   approveCount: vi.fn(),
+  witnessOptions: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
@@ -35,6 +36,12 @@ vi.mock('./break-pack-form', () => ({
     return null;
   },
 }));
+// DEV-628: the real witness query runs against ctx.db unless a test overrides it.
+vi.mock('@/lib/pharmacy/write-off-witness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/write-off-witness')>();
+  mocks.witnessOptions.mockImplementation(actual.writeOffWitnessOptions);
+  return { ...actual, writeOffWitnessOptions: mocks.witnessOptions };
+});
 // Async server-component verification belongs to the migrated DB/browser lane.
 vi.mock('@/components/camera/cold-chain-camera-section', () => ({
   ColdChainCameraSection: () => null,
@@ -91,7 +98,8 @@ function makeContext() {
       pharmacyInterbranchTransfer: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyRecallNotice: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockSignal: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      // A colleague without a PIN is still assigned, so nobody is solo by default.
+      user: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(1) },
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -426,6 +434,9 @@ describe('Quarantine resolution forms', () => {
       fireEvent.change(within(form).getByLabelText('Reason'), {
         target: { value: 'Damaged stock' },
       });
+      fireEvent.change(within(form).getByLabelText(/Witness PIN/), {
+        target: { value: '2468' },
+      });
       fireEvent.submit(form);
       await waitFor(() =>
         expect(mocks.writeOff).toHaveBeenCalledExactlyOnceWith({
@@ -435,6 +446,7 @@ describe('Quarantine resolution forms', () => {
           disposition,
           units: 10,
           witnessId: 'witness',
+          witnessPin: '2468',
           reason: 'Damaged stock',
           evidenceRef: 'certificate-1',
           idempotencyKey: expect.stringMatching(/^ui-writeoff:/),
@@ -443,6 +455,46 @@ describe('Quarantine resolution forms', () => {
       await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
     }
   );
+
+  it('offers only assigned colleagues with a PIN and asks for the witness PIN (DEV-628)', async () => {
+    ctx.db.user.findMany.mockResolvedValue([
+      { id: 'witness', name: 'Witness', title: 'Pharmacist' },
+    ]);
+    await show();
+    expect(ctx.db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: { not: 'user' },
+          pharmacyBranchAssignments: {
+            some: { organizationId: 'org', branchId: branch.id, active: true },
+          },
+          restaurantStaffProfiles: expect.anything(),
+        }),
+      })
+    );
+    const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+    const pin = within(form).getByLabelText(/Witness PIN/);
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toBeRequired();
+  });
+
+  it('lets a solo owner or sole pharmacist witness with their own PIN (DEV-628)', async () => {
+    mocks.witnessOptions.mockResolvedValueOnce({ witnesses: [], soloSelfWitness: true });
+    await show();
+    const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+    expect(within(form).getByRole('combobox', { name: 'Co-authorizing witness' })).toHaveValue(
+      'user'
+    );
+    expect(within(form).getByText(/Confirm with your own PIN/)).toBeInTheDocument();
+  });
+
+  it('explains who can witness when nobody eligible is assigned (DEV-628)', async () => {
+    await show();
+    expect(screen.queryByRole('button', { name: 'Record write-off' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/colleague assigned to\s+this branch who has a PIN/)
+    ).toBeInTheDocument();
+  });
 
   it('submits a manual hold release even when no available stock remains', async () => {
     lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }]);

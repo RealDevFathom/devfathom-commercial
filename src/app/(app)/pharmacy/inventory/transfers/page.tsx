@@ -24,6 +24,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { writeOffWitnessOptions } from '@/lib/pharmacy/write-off-witness';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -148,7 +149,7 @@ export default async function PharmacyTransfersPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const transfers = await caller.transferBoard({ branchId: branch.id });
-  const [balances, destinationLocations, witnesses] = await Promise.all([
+  const [balances, destinationLocations, witnessOptions] = await Promise.all([
     ctx.db.pharmacyStockBalance.findMany({
       where: {
         organizationId,
@@ -178,12 +179,14 @@ export default async function PharmacyTransfersPage({
       orderBy: { name: 'asc' },
       select: { id: true, name: true, branchId: true },
     }),
-    ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: currentUserId } },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, title: true },
-    }),
+    // DEV-628: a shortfall is witnessed like a write-off, so offer only people the
+    // receipt will accept: colleagues assigned to this branch with a PIN, or the
+    // solo owner/pharmacist themself.
+    writeOffWitnessOptions(ctx.db, { organizationId, branchId: branch.id, actorId: currentUserId }),
   ]);
+  const witnesses = witnessOptions.soloSelfWitness
+    ? [{ id: currentUserId, name: 'You (solo witness)', title: null }]
+    : witnessOptions.witnesses;
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const stock = balances.map((balance) => ({
     value: `${balance.inventoryLotId}:${balance.stockLocationId}`,
