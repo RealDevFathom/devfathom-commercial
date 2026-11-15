@@ -2732,6 +2732,318 @@ describe('PharmacyCounterConsole barcode safety', () => {
   );
 });
 
+describe('DEV-712 the counter advances to a new bill after payment', () => {
+  const settled = () =>
+    cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+
+  function scan(value = '123456') {
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+  }
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-b' });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  it('pays, then puts the very next scan on a new bill without a refresh', async () => {
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    mocks.refetch.mockImplementation(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.receiptRefetch).toHaveBeenCalled());
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.create).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      quotation: false,
+      deviceId: expect.any(String),
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleId: 'sale-b', medicineId: 'med-barcode' })
+    );
+    expect(mocks.mutations.addLine).not.toHaveBeenCalledWith(
+      expect.objectContaining({ saleId: 'sale-a' })
+    );
+  });
+
+  it('re-reads a bill the server says moved on and carries the scan to a new bill', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.addLine.mock.calls.map(([input]) => input.saleId)).toEqual([
+      'sale-a',
+      'sale-b',
+    ]);
+    expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    const notice = await screen.findByText(
+      'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.'
+    );
+    expect(notice.closest('[role="status"]')).not.toBeNull();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  // A bill of Rs 251.00 whose recorded tenders total `paidMinor`.
+  const billPaid = (paidMinor: number) =>
+    cart({
+      tenders: paidMinor ? [{ tenderId: 'tender-a', type: 'CASH', amountMinor: paidMinor }] : [],
+      totals: { grossMinor: 25100, discountMinor: 0, netMinor: 25100, tenderedMinor: paidMinor },
+    });
+
+  it('records a second payment of the same type and amount instead of replaying the first', async () => {
+    mocks.queries.counterCart!.data = billPaid(0);
+    mocks.refetch.mockImplementation(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: billPaid(12550), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText('Payment recorded.');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    enterPayment();
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.tender!.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      'counter-tender:sale-a:CASH:12550',
+      'counter-tender:sale-a:CASH:12550:after:12550',
+    ]);
+  });
+
+  function controlledScanSetup() {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, controlled: true } }],
+      truncated: false,
+    });
+  }
+
+  function patientPanel(patientId: string) {
+    return query({
+      patientId,
+      displayName: `Patient ${patientId}`,
+      address: 'Patient address',
+      dispensingConsent: true,
+      prescriptions: [],
+      cnic: null,
+      phone: null,
+    });
+  }
+
+  function authorize() {
+    const props = mocks.rxPanelProps.mock.lastCall![0];
+    props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+    props.controlled!.onChange('pin', '1234');
+    props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+  }
+
+  it('keeps a patient picked for the next customer after the bill was paid', async () => {
+    controlledScanSetup();
+    mocks.queries.counterCart!.data = settled();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => authorize());
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        saleId: 'sale-b',
+        controlledAuthorization: expect.objectContaining({ patientId: 'patient-b' }),
+      })
+    );
+  });
+
+  it("drops the paid bill's prescriber details when a new patient is kept", async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.onSelectPatient('patient-a');
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('emergency', true);
+      props.controlled!.onChange('prescriberName', 'Old prescriber');
+      props.controlled!.onChange('refSerial', '77');
+    });
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.controlled!.onChange('staffProfileId', 'pharmacist-b');
+      props.controlled!.onChange('pin', '1234');
+      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+    });
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    const sent = mocks.mutations.addLine!.mock.calls[0]![0].controlledAuthorization;
+    expect(sent).toMatchObject({
+      patientId: 'patient-b',
+      staffProfileId: 'pharmacist-b',
+      prescriptionLineId: 'rx-line-b',
+      emergency: false,
+    });
+    expect(sent.prescriberName).toBeUndefined();
+    expect(sent.refSerial).toBeUndefined();
+  });
+
+  it('keeps a field re-entered for the new patient with the same value', async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.onSelectPatient('patient-a');
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('rxSerialWritten', true);
+    });
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('rxSerialWritten', true);
+      props.controlled!.onChange('pin', '1234');
+      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+    });
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.addLine!.mock.calls[0]![0].controlledAuthorization).toMatchObject({
+      patientId: 'patient-b',
+      staffProfileId: 'pharmacist-a',
+      rxSerialWritten: true,
+      prescriptionLineId: 'rx-line-b',
+    });
+  });
+
+  it("never carries the paid bill's patient onto the next bill", async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    act(() => authorize());
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(/Controlled medicine needs the patient address/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('keeps a bill held on another screen instead of replacing it', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, {
+        data: cart({ status: 'HELD' }),
+        isSuccess: true,
+      });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(
+      'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.'
+    );
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the next payment a new key after Check payment outcome confirms the last one', async () => {
+    mocks.queries.counterCart!.data = billPaid(0);
+    mocks.mutations.tender!.mockRejectedValueOnce(new Error('Connection lost'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment outcome is unknown/);
+    mocks.outcomeQuery.mockResolvedValue({
+      status: 'ACCEPTED',
+      replayUnsafe: true,
+      result: accepted(),
+    });
+    mocks.refetch.mockImplementation(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: billPaid(12550), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText('Payment recorded.');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    enterPayment();
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.tender!.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      'counter-tender:sale-a:CASH:12550',
+      'counter-tender:sale-a:CASH:12550:after:12550',
+    ]);
+  });
+
+  it('never abandons a bill whose payment outcome is still unknown', async () => {
+    mocks.queries.counterCart!.data = settled();
+    persistTenderAttempt(savedAttempt());
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(/Payment outcome is unknown/);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+});
+
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {
   it('hides the controlled authorization panel from an actor who cannot dispense', () => {
     Object.assign(mocks.queries.controlledPharmacists!, {
