@@ -12,6 +12,7 @@ import {
   type PurchasingReadPage,
 } from '@/lib/pharmacy/purchasing-console';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
+import { workspaceDateRange, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { tenantContext } from '../../purchasing/_lib/console';
@@ -207,7 +208,9 @@ export default async function SupplierCreditFollowUpPage({
   }
   const { ctx, branches } = access;
 
-  const today = new Date().toISOString().slice(0, 10);
+  // The owner's business day, not the UTC one (00:00–04:59 PKT is still "today").
+  const timeZone = ctx.organization?.timezone;
+  const today = workspaceToday(timeZone);
   const start = new Date(`${today}T00:00:00.000Z`);
   start.setUTCDate(start.getUTCDate() - 29);
   const from = value(query.from) ?? start.toISOString().slice(0, 10);
@@ -225,13 +228,15 @@ export default async function SupplierCreditFollowUpPage({
   let sourcePages: SourcePages | null = null;
   let readFailed = false;
   if (branch && !invalidRange && !invalidQuery && !invalidPage) {
+    const returnWindow = workspaceDateRange(from, to, timeZone);
     try {
       const caller = pharmacyPurchasingRouter.createCaller(ctx);
       const [returnPage, creditPage] = await Promise.all([
         caller.purchaseReturns({
           branchId: branch.id,
-          from: new Date(`${from}T00:00:00.000Z`),
-          to: new Date(`${to}T23:59:59.999Z`),
+          // Inclusive: the last millisecond before the day after `to` starts on the workspace clock.
+          from: returnWindow.from,
+          to: new Date(returnWindow.to.getTime() - 1),
           page: { limit: PAGE_LIMIT, after: returnsAfter },
         }),
         // Candidate credits can predate/follow the return period; current allocations are reused.
@@ -243,8 +248,8 @@ export default async function SupplierCreditFollowUpPage({
       const returns = returnPage.rows;
       const credits = creditPage.rows;
       const asOf = new Date();
-      const fromTime = Date.parse(`${from}T00:00:00.000Z`);
-      const untilTime = Date.parse(`${to}T00:00:00.000Z`) + 86_400_000;
+      const fromTime = returnWindow.from.getTime();
+      const untilTime = returnWindow.to.getTime();
       const selected = returns.filter((row) => {
         const at = row.createdAt.getTime();
         return at >= fromTime && at < untilTime;
@@ -317,8 +322,9 @@ export default async function SupplierCreditFollowUpPage({
       {heading}
       <SectionCard title="Prepare follow-up" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted" id="follow-up-period">
-          Dates select return creation dates, inclusive UTC. Balances use current recorded
-          allocations, not historical closing balances. Each Prepare rereads the source records.
+          Dates select return creation dates, inclusive, in {workspaceZoneLabel(timeZone)}. Balances
+          use current recorded allocations, not historical closing balances. Each Prepare rereads
+          the source records.
         </p>
         <form action={ROUTE} method="get" className="flex flex-wrap items-end gap-4">
           <div className="min-w-0 flex-1 basis-48">

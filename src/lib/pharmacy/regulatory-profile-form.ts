@@ -34,8 +34,51 @@ export const PAKISTAN_PROVINCES: Record<string, string> = {
   'PK-AJK': 'Azad Jammu and Kashmir',
 };
 
+/**
+ * A province code compared without its country prefix or case, so a branch
+ * stored as `SD` and a rule set published as `PK-SD` name the same province.
+ * The operation guard, the save procedure and the form all compare through this.
+ */
+export function normalizeRegulatoryProvince(value: string): string {
+  return value.trim().toUpperCase().replace(/^PK-/, '');
+}
+
+export function sameProvince(left: string, right: string): boolean {
+  return normalizeRegulatoryProvince(left) === normalizeRegulatoryProvince(right);
+}
+
 export function provinceName(code: string): string {
-  return PAKISTAN_PROVINCES[code] ?? code;
+  return (
+    PAKISTAN_PROVINCES[code] ??
+    PAKISTAN_PROVINCES[`PK-${normalizeRegulatoryProvince(code)}`] ??
+    code
+  );
+}
+
+/**
+ * What the operator reads when their branch's province has no published rules
+ * (#977): said plainly, instead of offering another province's rules — a
+ * profile on the wrong province can never put the branch in force.
+ */
+export function rulesNotPublishedMessage(provinceCode: string): string {
+  return `${provinceName(provinceCode)} rules are not published yet. No jurisdiction rules are published for this branch's province on the date you chose, so its profile can be recorded once DevFathom publishes them.`;
+}
+
+export type RegulatoryVersionStatusLabel = 'In force' | 'Not in force' | 'Scheduled' | 'Superseded';
+
+/**
+ * The honest label for one effective-dated version (#977). Only a version whose
+ * effective window has closed is superseded; the open version that cannot
+ * operate (provisional rules, expired licence, a province that is not the
+ * branch's) is "Not in force", and a future-dated one is "Scheduled".
+ */
+export function regulatoryVersionStatusLabel(
+  version: { inForce: boolean; effective: boolean; effectiveFrom: Date | string },
+  now: Date
+): RegulatoryVersionStatusLabel {
+  if (version.inForce) return 'In force';
+  if (version.effective) return 'Not in force';
+  return new Date(version.effectiveFrom) > now ? 'Scheduled' : 'Superseded';
 }
 
 /** Fiscal registration states, with the sentence the operator picks by. */

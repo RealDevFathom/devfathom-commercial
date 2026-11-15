@@ -23,7 +23,12 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/stock-ledger')>()),
   onHand: vi.fn(),
 }));
+vi.mock('@/lib/abac', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/abac')>()),
+  can: vi.fn(),
+}));
 
+import { can } from '@/lib/abac';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { addSaleLine, PharmacySaleError } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
@@ -47,7 +52,6 @@ const line = {
 const override = {
   inventoryLotId: 'lot-later',
   reason: 'Customer travelling; wants longer dating',
-  approvalPolicy: 'PHARMACIST_ON_DUTY',
 };
 
 function fixture() {
@@ -62,12 +66,19 @@ function fixture() {
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     },
     // DEV-607: addLine admits only an active counter member assigned to the branch.
+    // #520: the override approver is the session actor, resolved from the database.
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
         permissionOverrides: [],
+      })),
+      findFirst: vi.fn(async () => ({
+        id: 'actor-1',
+        organizationId: 'org-1',
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
       })),
     },
     pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
@@ -99,6 +110,8 @@ function lastAudit() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The actor is the pharmacist on duty unless a test says otherwise.
+  vi.mocked(can).mockResolvedValue(true);
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
@@ -114,7 +127,14 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     expect(addSaleLine).toHaveBeenCalledOnce();
     const [, scope, input] = vi.mocked(addSaleLine).mock.calls[0]!;
     expect(scope).toEqual({ organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' });
-    expect(input.override).toEqual(override);
+    // The approval policy is derived on the server, never taken from the caller.
+    expect(input.override).toEqual({ ...override, approvalPolicy: 'PHARMACIST_ON_DUTY' });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'actor-1' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.anything()
+    );
 
     const audit = lastAudit();
     expect(audit.outcome).toBe('SUCCESS');
@@ -133,8 +153,88 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
         saleLineId: 'line-1',
         reason: override.reason,
         approvalPolicy: 'PHARMACIST_ON_DUTY',
+        approvedByUserId: 'actor-1',
       },
     });
+  });
+
+  it('refuses a caller-supplied override approval policy before any stock is touched (#520)', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.addLine({
+        ...line,
+        override: { ...override, approvalPolicy: 'PHARMACIST_ON_DUTY' },
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-pharmacist override without a pharmacist PIN (#520)', async () => {
+    const f = fixture();
+    vi.mocked(can).mockResolvedValue(false);
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
+    });
+    // Approval is settled before the sale transaction takes a connection.
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(lastAudit()).toMatchObject({
+      outcome: 'FAILURE',
+      detail: { action: 'fefo_override' },
+    });
+  });
+
+  it('re-checks the approver inside the sale transaction before any stock is touched (#520)', async () => {
+    const f = fixture();
+    // Authorized before the transaction, revoked by the time the sale re-checks.
+    vi.mocked(can).mockResolvedValueOnce(true).mockResolvedValue(false);
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
+    });
+    expect(f.transaction).toHaveBeenCalledOnce();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacySales.addLine discount approval (#520)', () => {
+  it.each([
+    ['approver id and policy text', { approvedByUserId: 'actor-1', approvalPolicy: 'ANY' }],
+    ['approver id alone', { approvedByUserId: 'manager-1' }],
+    ['policy text alone', { approvalPolicy: 'MANAGER_APPROVED' }],
+  ])('refuses a caller-supplied %s before any stock is touched', async (_label, fields) => {
+    const f = fixture();
+    await expect(
+      f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1, ...fields } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('refuses a discount with no manager PIN approval', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A discount needs a manager to approve it with their PIN.',
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('adds an undiscounted line with no approver recorded', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
+    } as never);
+    await f.caller.addLine(line);
+    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
+    expect(input.approvedByUserId).toBeUndefined();
+    expect(input.approvalPolicy).toBeUndefined();
+    expect(can).not.toHaveBeenCalled();
   });
 
   it('leaves a plain FEFO add unlabelled', async () => {
@@ -191,7 +291,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 
   it('refuses an override with no reason field at all', async () => {
     const f = fixture();
-    const withoutReason = { inventoryLotId: override.inventoryLotId, approvalPolicy: 'X' };
+    const withoutReason = { inventoryLotId: override.inventoryLotId };
     await expect(
       f.caller.addLine({ ...line, override: withoutReason } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });

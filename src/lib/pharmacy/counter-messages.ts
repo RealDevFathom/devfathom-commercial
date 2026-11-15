@@ -64,6 +64,14 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  SALE_REDEEMED_BY_OTHER_CUSTOMER:
+    'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
+  PATIENT_AMBIGUOUS:
+    'More than one patient has this name and phone. Select the patient on the counter, then open Khata.',
+  PHONE_REQUIRED: 'Enter the customer’s phone number to open a Khata account.',
+  PATIENT_NOT_FOUND: 'That patient is not available in this workspace. Select the patient again.',
+  PRESCRIPTION_PATIENT_MISMATCH:
+    'This bill carries a prescription for a different patient. Link that patient instead.',
   SALE_NOT_OPEN:
     'That bill is no longer open for payment: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
@@ -72,14 +80,12 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
   UNCERTIFIED_PROVIDER:
-    'This card terminal is not certified for live payments. Take another tender.',
+    'This tender needs a connected provider. Take another tender.',
+  INVALID_MANUAL_CAPTURE:
+    'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
-  // Raised for bad payer or reference details AND for a branch that has no
-  // merchant details for this tender, so the sentence names both remedies.
-  INVALID_MANUAL_CAPTURE:
-    'This transfer could not be recorded. Check the payer name and transaction reference. If they are correct, ask a manager to set up this payment method for the branch.',
   INVALID_RECEIPT_LEASE:
     "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
   LEASE_REQUIRES_SETTLEMENT:

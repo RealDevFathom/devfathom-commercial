@@ -118,6 +118,12 @@ describe('counterErrorMessage', () => {
       expect(message, `${reason} reads as a code`).not.toMatch(/^[A-Z][A-Z0-9_]*$/);
     }
   });
+
+  it('DEV-713 names the provider gap without blaming a card terminal', () => {
+    const message = counterErrorMessage(new PharmacySettlementError('UNCERTIFIED_PROVIDER'));
+    expect(message).toBe('This tender needs a connected provider. Take another tender.');
+    expect(message).not.toMatch(/card terminal/i);
+  });
 });
 
 /**
@@ -163,9 +169,9 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
 
   it('names both remedies for a refused manual transfer', () => {
     const message = counterErrorMessage(new PharmacySettlementError('INVALID_MANUAL_CAPTURE'));
-    expect(message).toMatch(/payer name and transaction reference/);
+    expect(message).toMatch(/payment reference/);
     // The same code covers a branch with no merchant details for the tender.
-    expect(message).toMatch(/set up this payment method/);
+    expect(message).toMatch(/enabled at this branch/);
   });
 
   it('shows a correctable mapped refusal as a warning', () => {

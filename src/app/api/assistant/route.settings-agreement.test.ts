@@ -7,23 +7,15 @@ const sdk = vi.hoisted(() => {
   const select = vi.fn(() => ({ specificationVersion: 'v3' }));
   return {
     select,
-    azure: vi.fn(() => select),
     google: vi.fn(() => select),
     vertex: vi.fn(() => select),
     groq: vi.fn(() => select),
-    credential: vi.fn(function () {}),
-    token: vi.fn(),
     stream: vi.fn(),
   };
 });
-vi.mock('@ai-sdk/azure', () => ({ createAzure: sdk.azure }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
 vi.mock('@ai-sdk/groq', () => ({ createGroq: sdk.groq }));
-vi.mock('@azure/identity', () => ({
-  DefaultAzureCredential: sdk.credential,
-  getBearerTokenProvider: sdk.token,
-}));
 vi.mock('ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('ai')>()),
   streamText: sdk.stream,
@@ -86,7 +78,7 @@ const environments: Array<[string, Record<string, string>]> = [
   ['groq without key', { AI_PROVIDER: 'groq', ...model }],
   ['google without key', { AI_PROVIDER: 'google', ...model }],
   ['vertex without location', { AI_PROVIDER: 'vertex', ...model, GOOGLE_VERTEX_PROJECT: 'p' }],
-  ['azure without resource', { AI_PROVIDER: 'azure', ...model }],
+  ['removed azure selector', { AI_PROVIDER: 'azure', ...model, AZURE_OPENAI_RESOURCE_NAME: 'r' }],
   ['placeholder model', { AI_PROVIDER: 'groq', AI_MODEL: '${AI_MODEL}', GROQ_API_KEY: 'inert' }],
   ['groq configured', { AI_PROVIDER: 'groq', ...model, GROQ_API_KEY: 'inert' }],
   ['google configured', { AI_PROVIDER: 'google', ...model, GOOGLE_GENERATIVE_AI_API_KEY: 'k' }],
@@ -100,7 +92,6 @@ const environments: Array<[string, Record<string, string>]> = [
       GOOGLE_VERTEX_LOCATION: 'l',
     },
   ],
-  ['azure configured', { AI_PROVIDER: 'azure', ...model, AZURE_OPENAI_RESOURCE_NAME: 'r' }],
 ];
 
 function context(): TRPCContext {

@@ -15,7 +15,7 @@
 1. browser ↔ tenant/custom/dedicated host;
 2. browser ↔ admin host;
 3. Next.js ↔ PostgreSQL pool;
-4. worker ↔ Azure/DNS/Blob/IdP;
+4. worker ↔ AWS/DNS/Blob/IdP;
 5. directory ↔ SCIM;
 6. platform operator ↔ audited tenant support identity;
 7. tenant API client ↔ REST scope boundary.
@@ -48,9 +48,9 @@
 
 - `PLATFORM_ENCRYPTION_KEY` rotation requires re-encryption; losing it loses encrypted configuration.
 - Real OIDC/SAML interoperability must be tested per provider.
-- Dedicated provisioning needs a least-privilege Azure identity, isolated resources, and a controlled image source; this path is not yet verified.
+- Dedicated provisioning needs a least-privilege AWS IAM role, isolated resources, and a controlled image source; this path is not yet verified.
 - The in-memory rate limiter is per process unless Upstash configuration is used; production distributed limits should use shared storage. **This now gates a cross-tenant surface.** Shared-host login discovery, intent minting, and workspace selection are each limited separately, but on a multi-replica deployment every replica keeps its own counters, so the effective limit is the configured value multiplied by the replica count. Configure Upstash before the shared host carries production traffic.
-- `login:acct` is keyed on the email address and is therefore global across organizations, which is deliberate — discovery is global too. It does mean a user in one organization can rate-limit a same-address user in another. That was already true before the shared host; it is simply reachable more often now.
+- On the shared host, `login:acct` is keyed on the email address and is therefore global across organizations, which is deliberate — discovery is global too. It does mean failures there can rate-limit the shared-host login for a same-address user in another organization. A tenant host keys its own account budget on organization + email (`login:acct:<organizationId>:<email>`, DEV-640), so neither the shared host nor another tenant can lock a user out of their own workspace host, and a throttled tenant sign-in returns the `rate_limited` code rather than posing as a wrong password.
 - `DEFAULT_ORGANIZATION_ID` is dangerous on a shared host. It exists for local development, and the `shared` host classification short-circuits before the default-host fallback so it can never be reached there. Never add a shared host to `configuredDefaultHosts()` expecting it to be ignored.
 - Database purge does not automatically prove deletion in every external provider. The runbook requires reconciliation.
 - Audit is append-oriented through product APIs, but database administrators remain a privileged trust role.
