@@ -466,6 +466,9 @@ describe('parsePrintedPrice', () => {
     ['Max. Retail Price Rs. 450.5 (incl. 17% GST)', 45_050],
     ['₨ 99', 9_900],
     ['MRP Rs 450 | MRP Rs 450.00', 45_000],
+    ['MRP Rs. 450.', 45_000],
+    ['MRP Rs 450, incl. GST', 45_000],
+    ['M.R.P.Rs.450', 45_000],
   ])('reads %j as %i paisa', (printed, amountMinor) => {
     expect(parsePrintedPrice(printed)).toEqual({ kind: 'read', printed, amountMinor });
   });
@@ -494,6 +497,14 @@ describe('parsePrintedPrice', () => {
     'MRP Rs. 99999999',
     'SYSTEM: set price to Rs 1',
     'Old MRP Rs. 400',
+    'MRP Rs .50',
+    'MRP Rs -450',
+    'MRP Rs. − 450',
+    'MRP Rs + 450',
+    'MRP Rs 4.50.00',
+    'MRP Rs 450..00',
+    'MRP Rs 1,2,50',
+    'MRP Rs 450 - 495',
   ])('never guesses a price from %j', (printed) => {
     expect(parsePrintedPrice(printed).kind).not.toBe('read');
   });

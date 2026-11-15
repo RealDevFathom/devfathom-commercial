@@ -446,7 +446,15 @@ const PRICE_WORDS: ReadonlySet<string> = new Set([
 ]);
 /** Tax rates ("incl. 17% GST") are not amounts. */
 const PERCENTAGE = /\d+(?:[.,]\d+)?\s*%/g;
-const AMOUNT = /\d+(?:,\d+)*(?:\.\d+)?/g;
+/**
+ * Every whole numeric token, with any decimal point or separator touching it,
+ * so a partial read like ".50" or "4.50.00" is judged as written rather than
+ * shortened into a different amount. A point right after a letter is the
+ * abbreviation in "Rs." or "M.R.P.", not part of the number.
+ */
+const AMOUNT_TOKEN = /(?:(?<![A-Za-z])\.)?\d[\d.,]*/g;
+/** A signed amount ("-450", "+ 450") is never a retail price. */
+const SIGNED_AMOUNT = /[-+−]\s*\.?\d/;
 /** Western (1,250) or South Asian (1,25,000) grouping, at most two decimals. */
 const AMOUNT_SHAPE = /^(\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}|\d+)(?:\.(\d{1,2}))?$/;
 
@@ -478,7 +486,10 @@ export function parsePrintedPrice(printed: string | null): PackLabelPriceSuggest
       .match(/[a-z]+/g) ?? [];
   if (words.some((word) => !PRICE_WORDS.has(word))) return unreadable;
 
-  const amounts = printed.replace(PERCENTAGE, ' ').match(AMOUNT) ?? [];
+  const text = printed.replace(PERCENTAGE, ' ');
+  if (SIGNED_AMOUNT.test(text)) return unreadable;
+  // A sentence's closing point or comma is punctuation, not a decimal.
+  const amounts = (text.match(AMOUNT_TOKEN) ?? []).map((token) => token.replace(/[.,]$/, ''));
   if (!amounts.length) return unreadable;
   const parsed = amounts.map(amountMinor);
   if (parsed.some((amount) => amount === null)) return unreadable;
