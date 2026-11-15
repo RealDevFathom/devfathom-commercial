@@ -212,6 +212,15 @@ export default async function PharmacyExpiryBoardPage({
   return (
     <main className="min-w-0 space-y-6">
       {header}
+      {query.branch && query.branch !== branch.id ? (
+        <p
+          className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning/10 p-3 text-sm text-text-body print:hidden"
+          role="status"
+        >
+          The requested branch is not one of your inventory branches, so this board shows{' '}
+          {branch.name} instead.
+        </p>
+      ) : null}
       {query.notice ? (
         <div
           className={`rounded-[var(--radius-sm)] border p-3 text-sm print:hidden ${query.kind === 'error' ? 'border-destructive bg-destructive-background text-destructive-foreground' : 'border-success bg-success-background text-success-foreground'}`}

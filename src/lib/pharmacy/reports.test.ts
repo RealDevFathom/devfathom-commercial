@@ -18,6 +18,16 @@ describe('PH-RPT metric contract', () => {
     }
   });
 
+  it.each([30, 60, 90, 180])(
+    'drills expiry value within %i days into the expiry board filtered to that window',
+    (days) => {
+      const metric = PHARMACY_METRIC_CONTRACT.find(
+        (item) => item.key === `expiryValueMinor${days}`
+      );
+      expect(metric?.drillThrough).toBe(`/pharmacy/inventory/expiry?within=${days}`);
+    }
+  );
+
   it('catalog references only declared metrics', () => {
     const keys = new Set(PHARMACY_METRIC_CONTRACT.map((metric) => metric.key));
     for (const report of pharmacyReportCatalog()) {
