@@ -479,6 +479,14 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
+  it('shows the counter skeleton while branches load', () => {
+    mocks.queries.counterBranches = { ...query(), isLoading: true };
+    const { container } = render(<PharmacyCounterConsole />);
+    expect(screen.getByRole('status', { name: 'Loading pharmacy counter' })).toBeInTheDocument();
+    expect(container.querySelector('[data-counter-skeleton-bill]')).toBeInTheDocument();
+    expect(container.querySelector('[data-counter-skeleton-total]')).toBeInTheDocument();
+  });
+
   it.each([
     'missing',
     'loading',
