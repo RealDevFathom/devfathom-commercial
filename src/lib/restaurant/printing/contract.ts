@@ -163,6 +163,44 @@ export const PrintJobRequestSchema = PrintJobSchema.extend({
   expectedDestination: ExpectedPrintDestinationSchema.optional(),
 });
 
+/**
+ * Web sessions may only request a receipt printer test. The caller never
+ * supplies printable content: production receipts and kitchen/bar tickets are
+ * enqueued by server producers from issued records, and the test page below is
+ * authored by the server. The key namespace keeps tests away from producer keys.
+ */
+export const PrinterTestRequestSchema = z
+  .object({
+    branchId: z.string().trim().min(1).max(128),
+    idempotencyKey: z
+      .string()
+      .trim()
+      .max(160)
+      .regex(/^receipt-test:[A-Za-z0-9-]{8,128}$/),
+    expectedDestination: ExpectedPrintDestinationSchema.optional(),
+  })
+  .strict();
+export type PrinterTestRequest = z.infer<typeof PrinterTestRequestSchema>;
+
+export function receiptPrinterTestJob(
+  request: Pick<PrinterTestRequest, 'branchId' | 'idempotencyKey'>,
+  now: Date = new Date()
+): PrintJob {
+  return {
+    branchId: request.branchId,
+    stationId: null,
+    idempotencyKey: request.idempotencyKey,
+    document: {
+      type: 'RECEIPT',
+      reference: 'PRINTER TEST',
+      title: 'RECEIPT PRINTER TEST',
+      createdAt: now.toISOString(),
+      lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
+      footer: 'Confirm this test at the selected printer. No financial transaction.',
+    },
+  };
+}
+
 export type PrintResult =
   | { status: 'PRINTED'; printerId: string; bytes: number; replayed: boolean }
   | { status: 'OFFLINE' | 'NO_PRINTER'; retryable: true; replayed: boolean };
