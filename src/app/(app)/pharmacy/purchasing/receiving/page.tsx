@@ -677,8 +677,13 @@ export default async function PharmacyReceivingPage({
               .filter((row) => row.flagged)
               .map((row) => (
                 <li className="flex flex-wrap items-center justify-between gap-2 p-3" key={row.id}>
-                  <span className="text-sm text-text-strong">
-                    {row.reference} · invoice {row.supplierInvoiceRef}
+                  <span className="min-w-0 break-words">
+                    <span className="block text-sm font-medium text-text-strong">
+                      {row.supplierName}
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      {row.reference} · invoice {row.supplierInvoiceRef}
+                    </span>
                   </span>
                   <span className="text-sm font-medium text-warning">
                     Missing {row.missing.join(' and ')} · claim {money(row.claimMinor)}
@@ -687,7 +692,9 @@ export default async function PharmacyReceivingPage({
               ))}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-text-muted">Every recorded bill has both NTN and STRN.</p>
+          <p className="mt-3 text-sm text-text-muted">
+            No bills with a positive input-tax claim are missing NTN or STRN.
+          </p>
         )}
       </SectionCard>
 
