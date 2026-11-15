@@ -49,7 +49,7 @@ function caller() {
       expires: 'later',
       user: { id: 'owner_1', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_1' },
     },
-    organization: { id: 'org_1' },
+    organization: { id: 'org_1', timezone: 'Asia/Karachi' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -71,6 +71,7 @@ describe('command-centre transaction-local Khata context', () => {
     expect(mocks.read).toHaveBeenCalledWith(mocks.tx, {
       ...input,
       branchIds: ['branch_1'],
+      timeZone: 'Asia/Karachi',
     });
     expect(result.permissions).toEqual({ operational: true, financial: true });
     expect(result.metrics.khataAgingMinor).toBe(4200);

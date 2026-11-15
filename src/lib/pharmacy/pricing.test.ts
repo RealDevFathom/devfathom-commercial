@@ -7,6 +7,7 @@ import {
   priceIntelligence,
   priceOverrides,
   resolveNoticePack,
+  setManualPackPrice,
 } from './pricing';
 import { confirmPriceChange, FileDrapNoticeSource, ingestDrapNotice } from './drap-monitoring';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -195,6 +196,45 @@ describe('WHA-1606 pack pricing', () => {
         priceNotice: expect.objectContaining({ presentation: 'Tablet', packLevel: 'BOX' }),
       }),
     });
+  });
+});
+
+describe('manual pack price', () => {
+  const input = {
+    packLevelId: 'box',
+    mrpMinor: 10000,
+    sellingPriceMinor: 10001 as number | null,
+    effectiveFrom: new Date('2027-01-01'),
+  };
+  it('rejects a selling price above the declared MRP before any write', async () => {
+    const { db, scoped } = fake();
+    await expect(setManualPackPrice(scoped, scope, input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Selling price cannot exceed MRP',
+    });
+    await expect(
+      setManualPackPrice(scoped, scope, { ...input, branchId: 'branch' })
+    ).rejects.toThrow('Selling price cannot exceed MRP');
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+  it.each([10000, 9999, 0, null])('accepts selling price %s at or below MRP', async (selling) => {
+    const { db, scoped } = fake();
+    Object.assign(db, {
+      packLevel: {
+        findFirst: vi.fn(async () => ({
+          id: 'box',
+          presentationId: 'presentation',
+          presentation: { organizationId: scope.organizationId },
+        })),
+      },
+    });
+    await setManualPackPrice(scoped, scope, { ...input, sellingPriceMinor: selling });
+    expect(db.pharmacyPackPrice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ mrpMinor: 10000, sellingPriceMinor: selling }),
+    });
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
   });
 });
 

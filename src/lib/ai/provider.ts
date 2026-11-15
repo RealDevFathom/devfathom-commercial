@@ -1,11 +1,9 @@
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGroq } from '@ai-sdk/groq';
 import { createOpenAI } from '@ai-sdk/openai';
-import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import type { LanguageModel } from 'ai';
 
@@ -23,11 +21,11 @@ import type { TurnBudget } from './turn-budget';
 type Env = Record<string, string | undefined>;
 
 /** Explicit-only providers with their original single-model path. Never routed. */
-export type LegacyAIProviderName = 'azure' | 'groq' | 'google' | 'vertex';
+export type LegacyAIProviderName = 'groq' | 'google' | 'vertex';
 /** `auto` is the routed chain (Anthropic → OpenAI → Bedrock by default). */
 export type AIProviderName = LegacyAIProviderName | TieredAIProviderName | 'auto';
 
-const LEGACY_PROVIDERS: ReadonlySet<string> = new Set(['azure', 'groq', 'google', 'vertex']);
+const LEGACY_PROVIDERS: ReadonlySet<string> = new Set(['groq', 'google', 'vertex']);
 
 export type AISelector =
   | { kind: 'disabled' }
@@ -42,7 +40,7 @@ export type AISelector =
  *                                    until it is set up; develop opts in with `auto`)
  *   `auto`                         → routed chain, if any routed provider is configured
  *   `anthropic` / `openai` / `bedrock` → routed chain with that provider first
- *   `azure` / `groq` / `google` / `vertex` → the legacy single-provider path, unchanged
+ *   `groq` / `google` / `vertex` → the legacy single-provider path, unchanged
  *   `disabled`                     → off
  */
 export function readAISelector(env: Env = process.env): AISelector {
@@ -127,7 +125,6 @@ export class AIUnavailableError extends Error {
 }
 
 export type AIConfig =
-  | { provider: 'azure'; model: string; resourceName: string }
   | { provider: 'groq'; model: string; apiKey: string }
   | { provider: 'google'; model: string; apiKey: string }
   | {
@@ -172,7 +169,6 @@ function present(env: Env, name: string): boolean {
 
 /** Settings each legacy provider needs beyond AI_PROVIDER and AI_MODEL, in the order they are read. */
 const LEGACY_PROVIDER_SETTINGS: Record<LegacyAIProviderName, (env: Env) => string[]> = {
-  azure: () => ['AZURE_OPENAI_RESOURCE_NAME'],
   groq: () => ['GROQ_API_KEY'],
   google: () => ['GOOGLE_GENERATIVE_AI_API_KEY'],
   // An API key replaces the project/location pair.
@@ -262,12 +258,6 @@ export function readAIConfig(env: Env = process.env): AIConfig {
   const model = readiness.modelId;
 
   switch (provider) {
-    case 'azure':
-      return {
-        provider,
-        model,
-        resourceName: env.AZURE_OPENAI_RESOURCE_NAME!.trim(),
-      };
     case 'groq':
       return { provider, model, apiKey: env.GROQ_API_KEY!.trim() };
     case 'google':
@@ -316,18 +306,6 @@ export function createAIModel(
         }),
         provider: 'auto',
         modelId: `auto:${tier}`,
-      };
-    }
-    case 'azure': {
-      const tokenProvider = getBearerTokenProvider(
-        new DefaultAzureCredential(),
-        'https://cognitiveservices.azure.com/.default'
-      );
-      return {
-        model: createAzure({ resourceName: config.resourceName, tokenProvider })(config.model),
-        provider: config.provider,
-        modelId: config.model,
-        providerOptions: { azure: { parallelToolCalls: false } },
       };
     }
     case 'groq':

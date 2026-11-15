@@ -25,12 +25,31 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 }));
 
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'original-witness' };
+/** Another member as `isSolePharmacist` reads them: their grants, no `can()` call. */
+function member(id: string, capability: string, effect: 'ALLOW' | 'DENY' = 'ALLOW') {
+  return {
+    id,
+    organizationRole: { permissions: [{ capability, effect }] },
+    permissionOverrides: [],
+  };
+}
 const input = {
   goodsReceiptId: 'receipt',
   reason: 'Wrong consignment',
   at: new Date(),
   controlledWitness: { staffProfileId: 'staff', pin: '1234' },
 };
+
+function shelfBalance(onHandUnits: number, sealedPacks: number, looseUnits: number) {
+  return {
+    inventoryLotId: 'lot',
+    stockLocationId: 'shelf',
+    disposition: 'AVAILABLE',
+    onHandUnits,
+    sealedPacks,
+    looseUnits,
+  };
+}
 
 function fixture() {
   const purchase = {
@@ -45,7 +64,12 @@ function fixture() {
   };
   const db = {
     $queryRaw: vi.fn(),
-    user: { findFirst: vi.fn().mockResolvedValue({ id: scope.actorId, status: 'ACTIVE' }) },
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: scope.actorId, status: 'ACTIVE' }),
+      // Another pharmacist exists unless a test makes the branch solo.
+      findMany: vi.fn().mockResolvedValue([member('second-pharmacist', 'pharmacy:dispense')]),
+    },
+    auditLog: { create: vi.fn() },
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch' }) },
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch' }]) },
     restaurantOperatorCredential: {
@@ -79,7 +103,17 @@ function fixture() {
       create: vi.fn(),
     },
     pharmacyStockMovement: {
-      findMany: vi.fn().mockResolvedValue([{ id: 'receipt-movement' }]),
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'receipt-movement',
+          inventoryLotId: 'lot',
+          stockLocationId: 'shelf',
+          disposition: 'AVAILABLE',
+          quantityUnits: 2,
+          sealedPackDelta: 2,
+          looseUnitDelta: 0,
+        },
+      ]),
       findFirst: vi.fn().mockImplementation(async ({ where }) =>
         where.reversesMovementId
           ? { id: 'reversal', quantityUnits: -2 }
@@ -93,7 +127,10 @@ function fixture() {
       ),
       create: vi.fn().mockResolvedValue({ id: 'reversal' }),
     },
-    pharmacyStockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }) },
+    pharmacyStockBalance: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      findMany: vi.fn().mockResolvedValue([shelfBalance(2, 2, 0)]),
+    },
   };
   vi.mocked(withTenantDb).mockImplementation(async (_organizationId, run) => run(db as never));
   return {
@@ -105,7 +142,8 @@ function fixture() {
 
 describe('controlled goods receipt reversal authorization', () => {
   beforeEach(() => {
-    vi.mocked(can).mockResolvedValue(true);
+    vi.clearAllMocks();
+    vi.mocked(can).mockReset().mockResolvedValue(true);
     vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
   });
 
@@ -219,7 +257,17 @@ describe('controlled goods receipt reversal authorization', () => {
     let onHand = 5;
     let running = 5;
     const reversed: Record<string, number> = {};
-    db.pharmacyStockMovement.findMany.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
+    const posted = (id: string, units: number) => ({
+      id,
+      inventoryLotId: 'lot',
+      stockLocationId: 'shelf',
+      disposition: 'AVAILABLE',
+      quantityUnits: units,
+      sealedPackDelta: units,
+      looseUnitDelta: 0,
+    });
+    db.pharmacyStockMovement.findMany.mockResolvedValue([posted('m1', 2), posted('m2', 3)]);
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(5, 5, 0)]);
     db.pharmacyStockMovement.findFirst.mockImplementation(async ({ where }) =>
       where.reversesMovementId
         ? reversed[where.reversesMovementId] === undefined
@@ -265,10 +313,259 @@ describe('controlled goods receipt reversal authorization', () => {
     });
   });
 
+  describe('solo pharmacy', () => {
+    function soloFixture() {
+      const f = fixture();
+      f.db.user.findMany.mockResolvedValue([]);
+      f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+        id: 'own-credential',
+        credentialHash: 'hash',
+        staffProfile: {
+          status: 'ACTIVE',
+          user: { id: scope.actorId, organizationId: 'org', status: 'ACTIVE' },
+        },
+      });
+      return f;
+    }
+
+    it('lets the sole pharmacist self-witness with a fresh PIN and audits it', async () => {
+      const { db, run } = soloFixture();
+      await expect(run()).resolves.toMatchObject({ reversalMovementIds: ['reversal'] });
+      expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+      expect(db.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            organizationId: 'org',
+            id: { not: scope.actorId },
+            status: { in: ['ACTIVE', 'ON_LEAVE'] },
+          },
+        })
+      );
+      expect(db.pharmacyControlledRegisterEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          correctsEntryId: 'purchase',
+          restorationMovementId: 'reversal',
+          recordedByUserId: scope.actorId,
+          witnessedByUserId: scope.actorId,
+          signatureRef: expect.stringMatching(/^solo-pin:own-credential:/),
+        }),
+      });
+      expect(db.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          organizationId: 'org',
+          actorId: scope.actorId,
+          action: 'pharmacy.controlledReceiptReversalSelfWitness',
+          targetType: 'PharmacyGoodsReceipt',
+          targetId: 'receipt',
+          metadata: expect.objectContaining({
+            policy: 'PHARMACY_SOLO_PHARMACIST_PIN',
+            pinVerified: true,
+          }),
+        }),
+      });
+      expect(db.auditLog.create.mock.invocationCallOrder[0]).toBeLessThan(
+        db.pharmacyStockMovement.create.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it('refuses a self-witness while another pharmacist could witness', async () => {
+      const { db, run } = soloFixture();
+      db.user.findMany.mockResolvedValue([member('second-pharmacist', 'pharmacy:dispense')]);
+      await expect(run()).rejects.toThrow(/different pharmacist/);
+      expect(verifyOperatorCredential).not.toHaveBeenCalled();
+      expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('counts an exact dispensing grant held as a personal override', async () => {
+      const { db, run } = soloFixture();
+      db.user.findMany.mockResolvedValue([
+        {
+          id: 'second-pharmacist',
+          organizationRole: null,
+          permissionOverrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        },
+      ]);
+      await expect(run()).rejects.toThrow(/different pharmacist/);
+      expect(db.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            permissionOverrides: expect.objectContaining({
+              where: { OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }] },
+            }),
+          }),
+        })
+      );
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    });
+
+    it('matches ABAC: wildcard holders cannot dispense, so they are not a second pharmacist', async () => {
+      const { db, run } = soloFixture();
+      // `pharmacy:dispense` is exact-grant-only; `*` and `pharmacy:*` never grant it.
+      db.user.findMany.mockResolvedValue([member('admin', '*'), member('manager', 'pharmacy:*')]);
+      await expect(run()).resolves.toMatchObject({ reversalMovementIds: ['reversal'] });
+    });
+
+    it('counts a pharmacist who has no PIN yet without asking can()', async () => {
+      const { db, run } = soloFixture();
+      // Grants decide, not credentials, and no per-member `can()` lookup runs.
+      db.user.findMany.mockResolvedValue([member('pharmacist-without-pin', 'pharmacy:dispense')]);
+      await expect(run()).rejects.toThrow(/different pharmacist/);
+      expect(can).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pharmacist-without-pin' }),
+        expect.anything(),
+        undefined,
+        expect.anything()
+      );
+    });
+
+    it('fails closed when the member lookup errors', async () => {
+      const { db, run } = soloFixture();
+      db.user.findMany.mockRejectedValue(new Error('lookup failed'));
+      await expect(run()).rejects.toThrow('lookup failed');
+      expect(verifyOperatorCredential).not.toHaveBeenCalled();
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('treats non-dispensing staff and DENY-only members as no witness', async () => {
+      const { db, run } = soloFixture();
+      db.user.findMany.mockResolvedValue([
+        member('cashier', 'pharmacy.counter'),
+        member('blocked', 'pharmacy:dispense', 'DENY'),
+      ]);
+      await expect(run()).resolves.toMatchObject({ reversalMovementIds: ['reversal'] });
+      expect(db.auditLog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a sole user who cannot dispense', async () => {
+      const { db, run } = soloFixture();
+      vi.mocked(can).mockImplementation(async (_subject, action) => action !== 'pharmacy:dispense');
+      await expect(run()).rejects.toThrow(/different pharmacist/);
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('records a wrong solo PIN as a failed attempt and writes nothing', async () => {
+      const { db, run } = soloFixture();
+      vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+      // The sole pharmacist is told their PIN was refused, not to find someone else.
+      await expect(run()).rejects.toThrow(/Your PIN was not accepted/);
+      expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+        where: { id: 'own-credential' },
+        data: { failedAttempts: 1 },
+      });
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('reports stock that moved on since posting as a domain error', async () => {
     const { db, run } = fixture();
     db.pharmacyStockBalance.aggregate.mockResolvedValue({ _sum: { onHandUnits: 1 } });
     await expect(run()).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
     expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-610: reversing a receipt whose stock has moved on', () => {
+  beforeEach(() => {
+    vi.mocked(can).mockResolvedValue(true);
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+  });
+
+  function expectNothingWritten(db: ReturnType<typeof fixture>['db']) {
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+  }
+
+  function ordinary() {
+    const harness = fixture();
+    harness.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue(null as never);
+    return harness;
+  }
+
+  it('refuses with REVERSAL_STOCK_MOVED once received units were sold or transferred', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(1, 0, 1)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses with REVERSAL_STOCK_MOVED when the receiving location holds nothing', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses with REVERSAL_PACKS_OPENED when the units remain only as loose units', async () => {
+    const { db, run } = ordinary();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(2, 0, 2)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_PACKS_OPENED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('adds up every posted line that landed in the same lot and location', async () => {
+    const { db, run } = ordinary();
+    const line = {
+      inventoryLotId: 'lot',
+      stockLocationId: 'shelf',
+      disposition: 'AVAILABLE',
+      quantityUnits: 2,
+      sealedPackDelta: 2,
+      looseUnitDelta: 0,
+    };
+    // Each line alone (2) fits the shelf (3); together (4) they do not.
+    db.pharmacyStockMovement.findMany.mockResolvedValue([
+      { ...line, id: 'm1' },
+      { ...line, id: 'm2' },
+    ]);
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(3, 3, 0)]);
+    await expect(run({ ...input, controlledWitness: undefined })).rejects.toMatchObject({
+      reason: 'REVERSAL_STOCK_MOVED',
+    });
+    expectNothingWritten(db);
+  });
+
+  it('refuses a controlled receipt the same way, after the register lock', async () => {
+    const { db, run } = fixture();
+    db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(0, 0, 0)]);
+    await expect(run()).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
+    expectNothingWritten(db);
+    const sql = db.$queryRaw.mock.calls.map(([strings]) => String(strings));
+    const registerLock = sql.findIndex((text) => text.includes('pg_advisory_xact_lock'));
+    const balanceLock = sql.findIndex((text) => text.includes('pharmacy_stock_balances'));
+    expect(registerLock).toBeGreaterThanOrEqual(0);
+    expect(balanceLock).toBeGreaterThan(registerLock);
+  });
+
+  it('locks the balance row before reading it', async () => {
+    const { db, run } = fixture();
+    await run();
+    const balanceLock = db.$queryRaw.mock.calls.findIndex(([strings]) =>
+      String(strings).includes('pharmacy_stock_balances')
+    );
+    expect(balanceLock).toBeGreaterThanOrEqual(0);
+    expect(db.$queryRaw.mock.calls[balanceLock]!.slice(1)).toEqual([
+      'org',
+      'lot',
+      'shelf',
+      'AVAILABLE',
+    ]);
+    expect(db.$queryRaw.mock.invocationCallOrder[balanceLock]).toBeLessThan(
+      db.pharmacyStockBalance.findMany.mock.invocationCallOrder[0]!
+    );
   });
 });

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
@@ -482,6 +483,25 @@ export function RestaurantStaffConsole() {
               Profile details control restaurant access and branch assignment.
             </DialogDescription>
           </DialogHeader>
+          {!editingStaff && (
+            <div className="space-y-2 rounded-md bg-surface-sunken p-4">
+              <p className="text-sm text-text-strong">New waiter or manager?</p>
+              <p className="text-sm text-text-muted">
+                An organization administrator can send their invitation from Team. After they
+                accept, return here to link their organization account, save the staff member, and
+                use Job roles to assign their restaurant access.
+              </p>
+              <Button
+                variant="outline"
+                className="min-h-11"
+                nativeButton={false}
+                role="link"
+                render={<Link href="/team" />}
+              >
+                Invite from Team
+              </Button>
+            </div>
+          )}
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
             {(createStaff.error || updateStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">

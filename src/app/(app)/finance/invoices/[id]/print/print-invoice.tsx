@@ -92,7 +92,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           </Link>
           <button
             onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <Printer className="h-3.5 w-3.5" /> Print / Save as PDF
           </button>

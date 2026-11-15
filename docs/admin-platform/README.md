@@ -2,7 +2,7 @@
 
 This handbook is the source of truth for the implemented DevFathom control plane and customer-agency administration. The product remains manually sold and activated: it does not expose self-service signup, checkout, or automatic organization activation.
 
-Current platform note: Azure is the deployment platform. Any Vercel package/reference describes disabled legacy repository code, not current deployment guidance. Use [`docs/azure-deployment.md`](../azure-deployment.md) for staging and production operations.
+Current platform note: AWS is the deployment platform. Any Vercel package/reference describes disabled legacy repository code, not current deployment guidance. Use [`docs/deploy/aws.md`](../deploy/aws.md) for staging and production operations.
 
 ## What shipped
 

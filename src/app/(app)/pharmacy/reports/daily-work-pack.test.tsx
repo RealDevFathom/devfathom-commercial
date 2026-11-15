@@ -68,12 +68,13 @@ it('gives an explicit scoped empty state when no eligible expiry stock is return
   expect(source.queryByRole('alert')).not.toBeInTheDocument();
 });
 
-it('explains failed expiry reads, retains partial coverage and offers a scoped refresh', async () => {
+it('explains failed expiry reads in one plain note and offers a scoped refresh', async () => {
   const { source } = await show(pack('unavailable', null));
   expect(source.getByText('Could not load')).toBeVisible();
   expect(source.getByRole('alert')).toHaveTextContent(failure);
-  expect(source.getByText('partial coverage')).toBeVisible();
-  expect(source.getByText(/Returned rows: Unavailable/)).toBeVisible();
+  expect(source.queryByText(/coverage/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/not an all-clear/i)).not.toBeInTheDocument();
+  expect(screen.getByText(/Could not check expiry advice just now/)).toBeVisible();
   expect(source.queryByText('No eligible stock')).not.toBeInTheDocument();
   expect(source.queryByText('unavailable', { exact: true })).not.toBeInTheDocument();
   const form = screen.getByRole('button', { name: 'Refresh daily work pack' }).closest('form')!;

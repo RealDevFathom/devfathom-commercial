@@ -209,7 +209,9 @@ export const teamRouter = router({
       const profile = {
         name: input.name,
         role: input.role,
-        organizationRoleId: organizationRole?.id ?? null,
+        // An unselected template (including the form's null) must not clear a
+        // pending invite's staff role. New users default to no template in DB.
+        ...(organizationRole ? { organizationRoleId: organizationRole.id } : {}),
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,

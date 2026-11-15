@@ -1,10 +1,13 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
+import { workspaceDateRange } from '@/lib/timezone';
 
 export type PharmacyBranchComparisonInput = {
   branches: readonly { id: string; name: string }[];
   from: string;
   to: string;
+  /** Workspace zone: demand-event timestamps are bounded by its midnights (UTC when absent). */
+  timeZone?: string | null;
 };
 
 /**
@@ -17,19 +20,18 @@ export async function readPharmacyBranchComparison(
   input: PharmacyBranchComparisonInput
 ) {
   const rows = [];
+  const eventWindow = workspaceDateRange(input.from, input.to, input.timeZone);
   for (const branch of input.branches) {
     const report = await readPharmacyOwnerCommandCentre(db, {
       branchIds: [branch.id],
       from: input.from,
       to: input.to,
+      timeZone: input.timeZone,
     });
     const demand = await db.unfulfilledDemandEvent.aggregate({
       where: {
         branchId: branch.id,
-        createdAt: {
-          gte: new Date(`${input.from}T00:00:00.000Z`),
-          lt: new Date(new Date(`${input.to}T00:00:00.000Z`).getTime() + 86_400_000),
-        },
+        createdAt: { gte: eventWindow.from, lt: eventWindow.to },
       },
       _sum: { estimatedValueMinor: true },
       _count: { _all: true },

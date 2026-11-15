@@ -38,6 +38,8 @@ import {
   provinceName,
   regulatoryProfileInput,
   ruleSetOptions,
+  rulesNotPublishedMessage,
+  sameProvince,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import {
@@ -593,14 +595,14 @@ export const pharmacyOnboardingRouter = router({
       }
 
       const jurisdictions = await jurisdictionsInForce(ctx, effectiveFrom);
-      const jurisdiction = jurisdictions.find(
-        (candidate) => candidate.provinceCode === input.provinceCode
+      // #977 — only the branch's own province can carry its profile (checked
+      // above), so a province without published rules is reported as exactly
+      // that rather than inviting the operator to pick another province.
+      const jurisdiction = jurisdictions.find((candidate) =>
+        sameProvince(candidate.provinceCode, branch.provinceCode)
       );
       if (!jurisdiction) {
-        throw badRequest(
-          'provinceCode',
-          'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
-        );
+        throw badRequest('provinceCode', rulesNotPublishedMessage(branch.provinceCode));
       }
       if (
         jurisdiction.licenceCategories.length > 0 &&

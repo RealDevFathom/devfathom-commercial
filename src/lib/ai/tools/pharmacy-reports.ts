@@ -550,6 +550,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             branchIds: selected.map(({ id }) => id),
             from: from ?? workspaceToday('Asia/Karachi'),
             to: to ?? from ?? workspaceToday('Asia/Karachi'),
+            // The same PKT day as the defaults above bounds event timestamps.
+            timeZone: 'Asia/Karachi',
           };
           const report = await readPharmacyOwnerCommandCentre(h.db, filters);
           const values = report.metrics as Record<string, number | null>;

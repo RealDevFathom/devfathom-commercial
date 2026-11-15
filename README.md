@@ -110,8 +110,7 @@ Front-desk operations (reservations, check-in/out, folios) are not built yet.
   contracts and licenses, catalog, deployments, jobs, operators, support,
   health and audit, with its own MFA.
 - **AI** — "Ask Fathom" assistant with tools, AI menu import, and growth
-  recommendations. Providers are Groq, Google and Google Vertex. Azure OpenAI remains a
-  deprecated compatibility adapter and must not be used for new deployments.
+  recommendations. Providers are Groq, Google and Google Vertex.
 - **Cameras** — gateway-based cameras with encrypted credentials and
   short-lived stream grants (pharmacy and restaurant).
 - **Workspace** — dashboard, projects/Kanban (Trello import), clients, finance,
@@ -170,12 +169,11 @@ grant its runtime role access to migrated tables and sequences as shown in
 
 AI routes through Anthropic, OpenAI and Bedrock, with per-provider caps and a SuperAdmin
 switch. Keys come from AWS Secrets Manager at runtime. Every variable and the IAM policy are in
-[AI providers](./docs/ai-providers.md). The legacy `groq`, `google`, `vertex` and deprecated
-`azure` selectors still take a provider-specific `AI_MODEL`.
+[AI providers](./docs/ai-providers.md). The legacy `groq`, `google` and `vertex` selectors
+still take a provider-specific `AI_MODEL`.
 For durable uploads, use `STORAGE_ADAPTER=s3` with `S3_UPLOADS_BUCKET` and
 `AWS_REGION`; credentials come from the runtime role. Unset/`disabled` disables
-uploads; `local` is permitted only in development/test. The legacy `azure` adapter
-and both `AZURE_STORAGE_*` variables are deprecated (Azure), not for new deployments.
+uploads; `local` is permitted only in development/test.
 These selection rules are implemented in [storage.ts](./src/lib/storage.ts).
 For optional self-hosted meetings, configure `NEXT_PUBLIC_LIVEKIT_URL`
 (for example `wss://livekit.example.com`) and server-only `LIVEKIT_API_KEY` and

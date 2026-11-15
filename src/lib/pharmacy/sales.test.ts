@@ -13,6 +13,11 @@ import {
   validateDiscount,
 } from './sales';
 
+// The persisted regulatory gate has its own suites (regulatory.test.ts, sale-regulatory-gate.test.ts).
+vi.mock('./regulatory', async () => ({
+  ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
