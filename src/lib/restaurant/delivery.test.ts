@@ -4,8 +4,17 @@ import { createHash } from 'node:crypto';
 
 vi.mock('server-only', () => ({}));
 
+const { serveDeliveredOrderItems } = vi.hoisted(() => ({
+  serveDeliveredOrderItems: vi.fn(),
+}));
+vi.mock('./orders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./orders')>()),
+  serveDeliveredOrderItems,
+}));
+
 import { Prisma } from '@/generated/prisma/client';
 
+import { OrderCommandError } from './orders';
 import {
   DeliveryError,
   createDeliveryFulfillment,
@@ -294,16 +303,19 @@ describe('delivery fulfillment transitions', () => {
   ) => {
     const update = vi.fn().mockImplementation(({ data }) => Promise.resolve(data));
     const findFirstOrThrow = vi.fn().mockResolvedValue({ status: currentStatus });
-    const queryRaw = vi
-      .fn()
-      .mockResolvedValueOnce([
-        {
-          status: currentStatus,
-          orderId: 'order-1',
-          paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
-        },
-      ])
-      .mockResolvedValueOnce([]);
+    const queryRaw = vi.fn().mockImplementation((query: Prisma.Sql) =>
+      Promise.resolve(
+        query.sql.startsWith('SELECT "status", "orderId", "paymentMode"')
+          ? [
+              {
+                status: currentStatus,
+                orderId: 'order-1',
+                paymentMode: currentStatus === 'PENDING' ? null : 'PREPAID',
+              },
+            ]
+          : []
+      )
+    );
     const tx = {
       $queryRaw: queryRaw,
       restaurantBill: { findMany: vi.fn().mockResolvedValue(bills) },
@@ -405,6 +417,58 @@ describe('delivery fulfillment transitions', () => {
       })
     ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
     expect(pending.update).not.toHaveBeenCalled();
+  });
+
+  it('serves the order once, in the same transaction, when the delivery is delivered', async () => {
+    serveDeliveredOrderItems.mockReset().mockResolvedValue(['item-1']);
+    const at = new Date('2026-08-31T12:30:00.000Z');
+    const dispatched = dbFor('DISPATCHED');
+    await transitionDeliveryFulfillment(dispatched.db, {
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      fulfillmentId: 'ful-1',
+      status: 'DELIVERED',
+      now: at,
+      actor: { staffProfileId: 'staff-1', deviceId: 'device-1' },
+    });
+    const lockOrder = (dispatched.queryRaw.mock.calls[0]![0] as Prisma.Sql).sql;
+    expect(lockOrder).toContain('FOR UPDATE OF o');
+    expect(serveDeliveredOrderItems).toHaveBeenCalledOnce();
+    expect(serveDeliveredOrderItems).toHaveBeenCalledWith(expect.anything(), 'order-1', {
+      staffProfileId: 'staff-1',
+      deviceId: 'device-1',
+    });
+    expect(dispatched.update).toHaveBeenCalledWith({
+      where: { id: 'ful-1' },
+      data: { status: 'DELIVERED', paymentMode: 'PREPAID', deliveredAt: at },
+    });
+
+    serveDeliveredOrderItems.mockClear();
+    const replay = dbFor('DELIVERED');
+    await transitionDeliveryFulfillment(replay.db, {
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      fulfillmentId: 'ful-1',
+      status: 'DELIVERED',
+    });
+    expect(serveDeliveredOrderItems).not.toHaveBeenCalled();
+    expect(replay.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects the delivered hand-off while a live item is still in the kitchen', async () => {
+    serveDeliveredOrderItems
+      .mockReset()
+      .mockRejectedValue(new OrderCommandError('Kitchen handoff is not complete.', 'ITEM_STATE'));
+    const dispatched = dbFor('DISPATCHED');
+    await expect(
+      transitionDeliveryFulfillment(dispatched.db, {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        fulfillmentId: 'ful-1',
+        status: 'DELIVERED',
+      })
+    ).rejects.toMatchObject({ name: 'DeliveryError', reason: 'INVALID_TRANSITION' });
+    expect(dispatched.update).not.toHaveBeenCalled();
   });
 
   it.each([
