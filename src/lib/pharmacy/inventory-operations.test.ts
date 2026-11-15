@@ -29,6 +29,8 @@ const input = {
 
 function database(witness: { id: string } | null) {
   return {
+    // DEV-825: the written-off balance is locked before it is read.
+    $queryRaw: vi.fn().mockResolvedValue([]),
     user: { findFirst: vi.fn().mockResolvedValue(witness) },
     pharmacyInventoryLot: {
       findFirst: vi.fn().mockResolvedValue({ id: input.inventoryLotId, unitsPerPack: 10 }),

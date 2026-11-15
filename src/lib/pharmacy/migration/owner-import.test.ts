@@ -183,6 +183,23 @@ describe('owner opening import dry run', () => {
     await expect(commitOwnerImport(scoped(), scope, { ...input(), stockLocationId: 'another-location', previewHash: preview.previewHash })).rejects.toThrow('changed');
     expect(db.pharmacyOpeningSession.create).not.toHaveBeenCalled();
   });
+  it('DEV-825: locks medicines, then the branch lots, before the locked preview re-enters them', async () => {
+    const preview = await previewOwnerImport(scoped(), scope, input());
+    db.$queryRaw.mockClear();
+    await expect(commitOwnerImport(scoped(), scope, { ...input(), stockLocationId: 'another-location', previewHash: preview.previewHash })).rejects.toThrow('changed');
+    const stock = db.$queryRaw.mock.calls
+      .map(([sql]) => sql as { strings?: string[]; values: unknown[] })
+      .map((sql) => ({ text: sql.strings?.join('') ?? '', values: sql.values }))
+      .filter(({ text }) => text.includes('stock_lock:'));
+    // Draft medicine, then every lot (FOR UPDATE fences first movements), then the
+    // locked preview's own medicine lock, which only re-enters the one already held.
+    expect(stock.map(({ text }) => /stock_lock:(\w+)/.exec(text)![1])).toEqual(['medicine', 'lot', 'medicine']);
+    expect(stock[0]!.text).toContain('FOR SHARE');
+    expect(stock[1]!.text).toContain('FOR UPDATE');
+    expect(stock[1]!.text).not.toContain('NO KEY');
+    expect(stock[0]!.values).toEqual(expect.arrayContaining([['medicine']]));
+    expect(stock[2]!.values).toEqual(expect.arrayContaining(['medicine']));
+  });
   it('pins replay identity to the tenant, branch and original bytes', () => {
     const bytes = Buffer.from('source');
     expect(openingImportIdentity('org_a', 'branch_a', bytes)).toEqual(openingImportIdentity('org_a', 'branch_a', bytes));

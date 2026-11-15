@@ -64,6 +64,8 @@ describe('POS sale voiding', () => {
     const reversals: Array<Record<string, unknown>> = [];
     let allocationQuery: Record<string, unknown> | undefined;
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
         // Keeps this regression runnable against the original implementation:
@@ -157,6 +159,8 @@ describe('POS sale voiding', () => {
     const events: Array<Record<string, unknown>> = [];
     const claims: Array<Record<string, unknown>> = [];
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
         updateMany: async ({
@@ -224,6 +228,8 @@ describe('POS sale voiding', () => {
     const events: Array<Record<string, unknown>> = [];
     const claims: Array<Record<string, unknown>> = [];
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
         updateMany: async ({

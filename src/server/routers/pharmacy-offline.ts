@@ -49,7 +49,8 @@ import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import { manualTenderCaptureSchema, validateManualTenderPolicy, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
 import { counterOperatorDenial } from '@/lib/pharmacy/counter-capability';
-import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -349,6 +350,19 @@ export async function replayCounterCommand(
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
   const sale = await createSale(db, scope);
+  // DEV-825: one transaction adds every line and then tenders, so take the stock
+  // locks for all of them up front in the global order (stock-lock-order.ts):
+  // the batches the tender's safety check shares, then every candidate balance.
+  // The per-line allocation and the tender then only re-enter held locks.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT lot."manufacturingBatchId" AS "batchId" FROM pharmacy_inventory_lots lot
+      WHERE lot."organizationId" = ${scope.organizationId}
+        AND lot.id IN (${Prisma.join(command.lines.map((line) => line.inventoryLotId))})`,
+    { batch: 'share' }
+  );
+  await lockSaleCandidates(db, scope, [...new Set(command.lines.map((line) => line.medicineId))]);
   // DEV-830: a pack level revised after the signed sale must not refuse that sale.
   const saleUnitAt = new Date(command.leasedReceipt.originalSaleAt);
   for (const [index, line] of command.lines.entries()) {
