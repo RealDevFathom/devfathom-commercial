@@ -16,6 +16,9 @@ import { Prisma } from '@/generated/prisma/client';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   confirmPriceChange,
+  confirmDrapRecall,
+  dismissDrapRecall,
+  drapRecallReviewQueue,
   FileDrapNoticeSource,
   ingestDrapSource,
   ManualDrapNoticeSource,
@@ -868,6 +871,38 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ proposalId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       confirmPriceChange(ctx.db, actorFor(ctx), input.proposalId)
+    ),
+
+  /** DEV-692: parsed DRAP recall alerts waiting for a person, plus recent decisions. */
+  drapRecallQueue: regulatory.query(async ({ ctx }) =>
+    drapRecallReviewQueue(ctx.db, actorFor(ctx))
+  ),
+
+  /** DEV-692: the only path from a recall draft to a recall notice and quarantine. */
+  confirmDrapRecall: regulatory
+    .input(
+      z
+        .object({ ingestId: z.string().min(1), note: z.string().trim().max(500).optional() })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db
+        .$transaction(async (tx) =>
+          confirmDrapRecall(txDb(tx), actorFor(ctx), input.ingestId, input.note)
+        )
+        .catch(domainError)
+    ),
+
+  dismissDrapRecall: regulatory
+    .input(
+      z.object({ ingestId: z.string().min(1), reason: z.string().trim().min(1).max(500) }).strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db
+        .$transaction(async (tx) =>
+          dismissDrapRecall(txDb(tx), actorFor(ctx), input.ingestId, input.reason)
+        )
+        .catch(domainError)
     ),
 
   drapRecallActions: auditedProtectedProcedure

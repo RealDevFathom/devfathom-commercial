@@ -195,6 +195,126 @@ describe('strict inputs', () => {
   });
 });
 
+describe('quantity/cost decimal domain (DEV-774)', () => {
+  const invalid: Array<[string, string | number]> = [
+    ['NaN text', 'NaN'],
+    ['Infinity text', 'Infinity'],
+    ['-Infinity text', '-Infinity'],
+    ['NaN number', Number.NaN],
+    ['Infinity number', Number.POSITIVE_INFINITY],
+    ['-Infinity number', Number.NEGATIVE_INFINITY],
+    ['malformed text', '1.2.3'],
+    ['exponent text', '1e3'],
+    ['whitespace', ' 1'],
+    ['empty text', ''],
+    ['negative text', '-1'],
+    ['negative number', -1],
+    ['explicit plus sign', '+1'],
+    ['excess scale', '1.1234567'],
+    ['excess scale number', 0.1 + 0.2],
+    ['excess range', '1000000000000'],
+  ];
+
+  it.each(invalid)('rejects a %s receive quantity before receiving', async (_label, value) => {
+    await expect(
+      caller().receivePurchaseOrder({
+        purchaseOrderId: 'po1',
+        idempotencyKey: 'idem-nan',
+        lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: value }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it.each(invalid)('rejects a %s receive cost or discrepancy quantity', async (_label, value) => {
+    await expect(
+      caller().receivePurchaseOrder({
+        purchaseOrderId: 'po1',
+        lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: '1', unitCost: value }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().receivePurchaseOrder({
+        purchaseOrderId: 'po1',
+        lines: [
+          {
+            purchaseOrderLineId: 'l1',
+            receivedQuantity: '1',
+            discrepancies: [{ kind: 'DAMAGED', expectedQuantity: '1', receivedQuantity: value }],
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(invalid)('rejects a %s order quantity or cost', async (_label, value) => {
+    await expect(
+      caller().createPurchaseOrder({
+        supplierId: 's1',
+        branchId: 'b1',
+        lines: [{ ...lineInput(), orderedQuantity: value }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().addPurchaseOrderLine({
+        purchaseOrderId: 'po1',
+        line: { ...lineInput(), unitCost: value },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().updatePurchaseOrderLine({
+        purchaseOrderId: 'po1',
+        lineId: 'l1',
+        orderedQuantity: value,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.addPurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.updatePurchaseOrderLine).not.toHaveBeenCalled();
+  });
+
+  it.each([...invalid, ['zero', '0'] as [string, string]])(
+    'rejects a %s supplier-return quantity',
+    async (_label, value) => {
+      await expect(
+        caller().createSupplierReturn({
+          locationId: 'loc1',
+          lines: [{ stockItemId: 'si1', quantity: value }],
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.createSupplierReturn).not.toHaveBeenCalled();
+    }
+  );
+
+  it('passes valid finite quantities and costs through exactly', async () => {
+    mocks.receivePurchaseOrder.mockResolvedValue({
+      receiptId: 'r1',
+      purchaseOrderId: 'po1',
+      purchaseOrderStatus: 'PARTIALLY_RECEIVED',
+      discrepancyIds: [],
+      replayed: false,
+      movements: [],
+    });
+    await caller().receivePurchaseOrder({
+      purchaseOrderId: 'po1',
+      lines: [
+        {
+          purchaseOrderLineId: 'l1',
+          receivedQuantity: '999999999999.999999',
+          unitCost: 2.5,
+          discrepancies: [{ kind: 'SHORTAGE', expectedQuantity: '10', receivedQuantity: '0' }],
+        },
+      ],
+    });
+    const [line] = mocks.receivePurchaseOrder.mock.calls[0]![1].lines;
+    expect(line.receivedQuantity).toBe('999999999999.999999');
+    expect(line.unitCost).toBe('2.5');
+    expect(line.discrepancies[0]).toMatchObject({ expectedQuantity: '10', receivedQuantity: '0' });
+  });
+});
+
 describe('Decimal-as-string serialization (D07)', () => {
   it('serializes every quantity/cost on a purchase order as a string', async () => {
     mocks.getPurchaseOrder.mockResolvedValue({

@@ -367,6 +367,16 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // DEV-86: a regulated line added inside pharmacist-presence hours cannot be paid for,
+  // and the sale completed, after those hours close.
+  if (
+    sale.lines.some(({ medicine }) => medicine?.rx || medicine?.restricted || medicine?.controlled)
+  )
+    await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+      name: 'pharmacy.sale.tender_regulated',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: true,
+    });
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
   await assertRxSaleAllowed(
     db,
