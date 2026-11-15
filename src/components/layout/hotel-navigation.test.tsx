@@ -177,7 +177,7 @@ describe('Hotel navigation composition', () => {
     expect(navigation).toHaveLength(67);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
-    expect(new Set(hrefs).size).toBe(66);
+    expect(new Set(hrefs).size).toBe(67);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({
