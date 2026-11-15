@@ -776,7 +776,12 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
           it rather than replacing it.
         </p>
       ) : (
-        <div className="min-w-0 overflow-x-auto">
+        <div
+          role="region"
+          aria-label="Regulatory version history"
+          tabIndex={0}
+          className="min-w-0 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
           <table className="w-full min-w-[40rem] text-sm">
             <thead>
               <tr className="border-b border-border-subtle text-left">
