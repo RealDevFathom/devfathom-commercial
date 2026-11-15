@@ -131,24 +131,13 @@ describe('counter discount approval (#520)', () => {
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
   });
 
-  it('lets the sole approver self-approve with a fresh PIN, recorded as self-approved', async () => {
+  it('refuses self-approval even when the operator is the sole approver', async () => {
     const self = { ...actor };
     const db = fixture(self, ['cashier'], [{ ...actor, id: 'other-cashier' }]);
-    await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)).resolves.toEqual({
-      approvedByUserId: 'cashier',
-      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
-      selfApproved: true,
-    });
-    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
-  });
-
-  it('refuses a sole approver whose fresh PIN is wrong', async () => {
-    const self = { ...actor };
-    const db = fixture(self, ['cashier'], []);
-    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
   });
 });
 

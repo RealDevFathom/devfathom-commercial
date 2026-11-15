@@ -27,8 +27,7 @@ export type CounterApproval = {
  * resolved here from a credential the server verifies; callers never name the approver.
  *
  * - DISCOUNT needs a different active member holding `pharmacy:manage`, proven by their PIN.
- *   Solo rule: when nobody else active in the organization holds that capability, the actor
- *   may approve their own discount by re-entering their own PIN (recorded as self-approved).
+ *   The operator can never approve their own discount, even when they are the only holder.
  * - FEFO_OVERRIDE is a pharmacist's decision: an actor holding `pharmacy:dispense` approves it
  *   as the pharmacist on duty; anyone else needs an active pharmacist's PIN.
  */
@@ -115,8 +114,8 @@ async function verifyApproverPin(
   ) {
     return null;
   }
-  const selfApproved = approver.id === scope.actorId;
-  if (selfApproved && !(await isSoleApprover(db, scope, capability, now))) return null;
+  // The operator may never approve their own discount or override.
+  if (approver.id === scope.actorId) return null;
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
@@ -128,21 +127,6 @@ async function verifyApproverPin(
     where: { id: credential.id },
     data: clearLockout(),
   });
-  const approvalPolicy = selfApproved
-    ? 'SOLE_APPROVER_PIN_REAUTH'
-    : kind === 'DISCOUNT'
-      ? 'MANAGER_PIN'
-      : 'PHARMACIST_PIN';
-  return { approvedByUserId: approver.id, approvalPolicy, selfApproved };
-}
-
-/** True when no other active member of the organization holds the approval capability. */
-async function isSoleApprover(db: ScopedDb, scope: LedgerScope, capability: Action, now: Date) {
-  const others = await db.user.findMany({
-    where: { organizationId: scope.organizationId, status: 'ACTIVE', id: { not: scope.actorId } },
-  });
-  for (const other of others) {
-    if (await can(other as ActiveUser, capability, undefined, { db, now })) return false;
-  }
-  return true;
+  const approvalPolicy = kind === 'DISCOUNT' ? 'MANAGER_PIN' : 'PHARMACIST_PIN';
+  return { approvedByUserId: approver.id, approvalPolicy, selfApproved: false };
 }
