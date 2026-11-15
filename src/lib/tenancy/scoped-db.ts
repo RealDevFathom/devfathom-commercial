@@ -146,7 +146,12 @@ export async function withTenantDb<T>(
 
 export async function withPlatformDb<T>(
   run: (tx: ScopedDb) => Promise<T>,
-  options: { maxWait?: number; timeout?: number } = {}
+  options: {
+    maxWait?: number;
+    timeout?: number;
+    /** Set when every read in `run` must see one snapshot (e.g. a data export). */
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+  } = {}
 ): Promise<T> {
   return db.$transaction(
     async (tx) => {
@@ -159,6 +164,7 @@ export async function withPlatformDb<T>(
     {
       maxWait: options.maxWait ?? 10_000,
       timeout: options.timeout ?? 30_000,
+      ...(options.isolationLevel ? { isolationLevel: options.isolationLevel } : {}),
     }
   );
 }
