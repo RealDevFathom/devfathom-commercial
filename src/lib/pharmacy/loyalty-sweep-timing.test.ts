@@ -51,7 +51,7 @@ function world() {
       if (key === 'tender') return tenders.get(row.tenderId)?.type !== value.type.not;
       return row[key] === value;
     });
-  const decorate = (row: Row) => ({
+  const decorate = (row: Row): Row => ({
     ...row,
     closedBy: closedBy(row.id),
     tender: row.tenderId ? tenders.get(row.tenderId) : null,
