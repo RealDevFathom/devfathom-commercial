@@ -973,6 +973,10 @@ export type ScanResolution =
       expiryDate: string | null;
       rawExpiry: string | null;
       serial: string | null;
+      /** SSCC of a GS1-128 tertiary carton, when the label carries one. */
+      sscc: string | null;
+      /** Packs in a GS1-128 logistic unit (AI 37), when the label carries one. */
+      cartonCount: number | null;
       warnings: readonly Gs1Warning[];
     }
   | { kind: 'medicine'; medicineId: string; packLevelId: null; label: string }
@@ -1018,6 +1022,8 @@ export async function resolveScan(
       expiryDate: parsed.fields.expiryDate,
       rawExpiry: parsed.fields.expiry,
       serial: parsed.fields.serial,
+      sscc: parsed.fields.sscc ?? null,
+      cartonCount: parsed.fields.count ?? null,
       warnings: parsed.fields.warnings,
     };
   }

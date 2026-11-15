@@ -59,6 +59,7 @@ export class PharmacyReceivingError extends Error {
       | 'PURCHASE_ORDER_LINE_ITEM_MISMATCH'
       | 'EXPIRED_PACK'
       | 'SERIALIZED_PACK_QUANTITY'
+      | 'CARTON_PACK_COUNT'
   ) {
     super(reason);
   }

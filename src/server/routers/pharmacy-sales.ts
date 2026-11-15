@@ -121,6 +121,7 @@ import {
   returnSaleLine,
   readReturnHistory,
 } from '@/lib/pharmacy/sales';
+import { PharmacySerializedPackError } from '@/lib/pharmacy/serialized-pack-sale';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
@@ -320,6 +321,13 @@ function fail(error: unknown): never {
   }
   if (error instanceof PharmacyCounterKeymapError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  }
+  if (error instanceof PharmacySerializedPackError) {
+    // A pack that was already sold is a state conflict the operator must see.
+    throw new TRPCError({
+      code: error.reason === 'SERIAL_ALREADY_SOLD' ? 'CONFLICT' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   }
   if (error instanceof PharmacySaleError) {
     throw new TRPCError({
@@ -1380,6 +1388,11 @@ export const pharmacySalesRouter = router({
             })
             .strict()
             .optional(),
+          // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
+          scannedPack: z
+            .object({ payload: z.string().trim().min(1).max(256) })
+            .strict()
+            .optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
@@ -2367,7 +2380,9 @@ export const pharmacySalesRouter = router({
   /** Allocate a browser/OS receipt copy. A separate call records dialog handoff. */
   counterReceiptBrowserPrint: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2413,7 +2428,9 @@ export const pharmacySalesRouter = router({
   /** Failed browser preflight is durable evidence, without claiming a copy. */
   counterReceiptBrowserPrintFailed: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2586,7 +2603,10 @@ export const pharmacySalesRouter = router({
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       if (!COUNTER_KEYMAP_PRESETS[input.preset].confirmed && ctx.session.user.role !== 'ADMIN') {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'This preset is not available to staff.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'This preset is not available to staff.',
+        });
       }
       try {
         const resolved = resolveCounterKeymap({

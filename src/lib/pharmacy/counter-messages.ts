@@ -46,6 +46,14 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
   INVALID_STATE: 'This bill has already moved on. Refresh the counter and try again.',
+  // DEV-92: a serialized pack (2D code on the bottle, tube or box) is sold once.
+  SERIAL_ALREADY_SOLD:
+    'This pack’s serial is already on a sale. Do not sell it again; set the pack aside and check it with the pharmacist.',
+  SERIAL_MEDICINE_MISMATCH: 'This 2D code is not the barcode of the medicine being sold.',
+  SERIAL_NOT_READABLE:
+    'This 2D code has no readable pack serial. Search the medicine by name instead.',
+  SERIAL_LOT_UNAVAILABLE:
+    'The batch this pack came from cannot be sold from this counter. Check the pack against stock in Inventory.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',

@@ -86,3 +86,39 @@ describe('resolveScan stock-in', () => {
     });
   });
 });
+
+describe('DEV-92 tertiary carton stock-in', () => {
+  it('carries the SSCC and the pack count of a GS1-128 logistic label', async () => {
+    const db = database({ barcode: linked });
+    const scan = await resolveScan(
+      db,
+      scope,
+      `]C100008961234000001233${'02'}${GTIN}1727123110ABCD1234${GS}3712`
+    );
+    expect(scan).toMatchObject({
+      kind: 'gs1',
+      medicineId: 'med_a',
+      packLevelId: 'pack_a',
+      gtin: GTIN,
+      batch: 'ABCD1234',
+      expiryDate: '2027-12-31',
+      serial: null,
+      sscc: '008961234000001233',
+      cartonCount: 12,
+    });
+  });
+
+  it('reports no carton fields for a primary-pack DataMatrix', async () => {
+    const scan = await resolveScan(
+      database({ barcode: linked }),
+      scope,
+      `(01)${GTIN}(21)A1B2C3D4E5F6`
+    );
+    expect(scan).toMatchObject({
+      kind: 'gs1',
+      serial: 'A1B2C3D4E5F6',
+      sscc: null,
+      cartonCount: null,
+    });
+  });
+});

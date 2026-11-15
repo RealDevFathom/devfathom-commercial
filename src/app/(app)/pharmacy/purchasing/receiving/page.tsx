@@ -846,7 +846,8 @@ export default async function PharmacyReceivingPage({
                             prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
                             line.canonicalUnitsPerPack > 0
                               ? Math.floor(remaining / line.canonicalUnitsPerPack)
-                              : 0
+                              : 0,
+                            prefillId === line.id && scan?.kind === 'gs1' ? scan.cartonCount : null
                           )}
                           suggestedPriceMinor={line.listPricePerPackMinor}
                           title={line.medicine.productName}
@@ -1048,8 +1049,8 @@ export default async function PharmacyReceivingPage({
                     notice={notice}
                     prefill={slot === 0 ? gs1Prefill(scan, scanTerm) : undefined}
                     suggestedPacks={
-                      slot === 0 && scan?.kind === 'gs1' && scan.serial
-                        ? receivedPacksForScan(scan.serial, 0)
+                      slot === 0 && scan?.kind === 'gs1' && (scan.serial || scan.cartonCount)
+                        ? receivedPacksForScan(scan.serial, 0, scan.cartonCount)
                         : undefined
                     }
                     subtitle="Fill this only if you chose a medicine above. A pack with no 2D code is entered by hand."

@@ -86,10 +86,13 @@ describe('POS sale voiding', () => {
         },
       },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: vi.fn(async () => ({ count: 0 })) },
       pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
     };
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
+    expect(db.pharmacySoldPackSerial.updateMany).toHaveBeenCalledTimes(1);
 
     expect(allocationQuery).toMatchObject({
       where: {

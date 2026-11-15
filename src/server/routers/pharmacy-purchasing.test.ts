@@ -1815,6 +1815,25 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  // DEV-92: a GS1-128 logistic label (AI 00 + 02 + 37) states its pack count.
+  it('refuses a GS1-128 carton received as a different number of packs', async () => {
+    db.medicineBarcode.findFirst.mockResolvedValue({ presentation: { medicineId: 'medicine_a' } });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          {
+            ...RECEIPT_LINE,
+            receivedPacks: 6,
+            bonusPacks: 0,
+            gs1Payload: ']C100008961234000001233020896123456789417271231|10ABCD1234|3724',
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'CARTON_PACK_COUNT' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('drafts a mixed-lot delivery as separate lines against one order line', async () => {
     await caller().createGoodsReceipt({
       ...RECEIPT,

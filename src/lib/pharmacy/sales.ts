@@ -22,6 +22,15 @@ import {
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  claimSoldPackSerial,
+  PharmacySerializedPackError,
+  releaseSoldPackSerials,
+  resolveSerializedPackForSale,
+  SERIALIZED_PACK_APPROVAL_POLICY,
+  serializedPackOverrideReason,
+  type ResolvedSerializedPack,
+} from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 
@@ -259,6 +268,8 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
+  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
+  scannedPack?: { payload: string };
   idempotencyKey: string;
 };
 
@@ -273,7 +284,7 @@ export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSa
 export async function addReservedSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
-  input: Omit<AddSaleLineInput, 'override'>,
+  input: Omit<AddSaleLineInput, 'override' | 'scannedPack'>,
   reservation: ReservedSaleAllocation
 ) {
   return addSaleLineWithAllocation(db, scope, input, reservation);
@@ -315,12 +326,32 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-92: a scanned serial names exactly one sealed pack of one lot.
+  let pack: ResolvedSerializedPack | null = null;
+  let override = input.override;
+  if (input.scannedPack) {
+    if (reservation || input.saleUnit !== 'PACK' || input.quantity !== 1)
+      throw new PharmacySaleError('INVALID_QUANTITY');
+    pack = await resolveSerializedPackForSale(db, scope, {
+      medicineId: input.medicineId,
+      payload: input.scannedPack.payload,
+    });
+    if (pack.inventoryLotId) {
+      if (override && override.inventoryLotId !== pack.inventoryLotId)
+        throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+      override ??= {
+        inventoryLotId: pack.inventoryLotId,
+        reason: serializedPackOverrideReason(pack.serialNumber),
+        approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+      };
+    }
+  }
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
-    override: input.override,
+    override,
   };
   const allocation = reservation
     ? await allocateReservedForSale(db, scope, allocationInput, input.packLevelId, reservation)
@@ -334,6 +365,18 @@ async function addSaleLineWithAllocation(
     include: { batch: { select: { batchNumber: true } } },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  if (pack) {
+    // The whole line must come out of the scanned pack's own lot, as one sealed pack.
+    const pinned = pack.inventoryLotId;
+    if (
+      allocation.allocations.some(
+        (part) =>
+          (pinned !== null && part.inventoryLotId !== pinned) ||
+          lotById.get(part.inventoryLotId)?.unitsPerPack !== input.canonicalUnitsPerSaleUnit
+      )
+    )
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+  }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
   const mrpRules = lots.length
@@ -422,6 +465,13 @@ async function addSaleLineWithAllocation(
       })
     )
   );
+  if (pack) {
+    await claimSoldPackSerial(db, scope, pack, {
+      saleId: input.saleId,
+      saleLineId: line.id,
+      inventoryLotId: pack.inventoryLotId ?? allocation.allocations[0]?.inventoryLotId ?? null,
+    });
+  }
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
   return { line, allocation };
 }
@@ -494,6 +544,7 @@ export async function changeSaleStatus(
         restoreSellable: true,
       })),
     });
+    await releaseSoldPackSerials(db, scope, saleId);
   }
 
   await event(db, scope, saleId, kind, reason);

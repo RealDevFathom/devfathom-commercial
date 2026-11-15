@@ -1,9 +1,14 @@
 /**
- * Pure GS1 element-string parser for DRAP secondary-pack DataMatrix scans.
+ * Pure GS1 element-string parser for DRAP pack DataMatrix scans and GS1-128
+ * carton labels.
  *
- * Stock-in uses AIs 01 (GTIN), 17 (expiry), 10 (batch) and 21 (serial). Other
- * known AIs are accepted and kept aside. An AI that is not in the table is an
- * error so the bench can fall back to manual entry.
+ * Stock-in uses AIs 01 (GTIN), 17 (expiry), 10 (batch) and 21 (serial). The
+ * same payload is read from a secondary box or, under SRO 963(I)/2026 r.3A(4),
+ * from a primary bottle or tube sold without one. A homogeneous tertiary
+ * carton adds AI 00 (SSCC); its GS1-128 logistic form may carry the contained
+ * GTIN as AI 02 with the pack count in AI 37 instead of AI 01. Other known AIs
+ * are accepted and kept aside. An AI that is not in the table is an error so
+ * the bench can fall back to manual entry.
  */
 
 export type Gs1WarningCode = 'EXPIRY_END_OF_MONTH' | 'SERIAL_FORMAT' | 'NEAR_EXPIRY';
@@ -29,6 +34,10 @@ export type Gs1DataMatrixFields = {
   /** Calendar date. Day 00 is the last day of the month. */
   expiryDate: string | null;
   serial: string | null;
+  /** SSCC (AI 00) of a tertiary carton. Present only when the label carries one. */
+  sscc?: string;
+  /** Packs in a GS1-128 logistic unit (AI 37 with AI 02). Present only with AI 02. */
+  count?: number;
   unknownAis: ReadonlyArray<{ ai: string; value: string }>;
   warnings: readonly Gs1Warning[];
 };
@@ -40,6 +49,8 @@ export type Gs1DataMatrixParseResult =
 
 const GROUP_SEPARATOR = '\u001d';
 const CORE_AIS = new Set(['01', '10', '17', '21']);
+/** Carton AIs read into named fields rather than kept aside. */
+const CARTON_AIS = new Set(['00', '02', '37']);
 const GS1_TEXT = /^[0-9A-Za-z!"%&'()*+,\-./:;<=>?_]+$/;
 
 /** Fixed length, or a variable maximum. Variable AIs end at the next separator. */
@@ -238,9 +249,17 @@ export function nearExpiryWarning(expiryDate: string, now: Date): Gs1Warning | n
   return null;
 }
 
-/** One serialized pack is one unit. A scan without a serial keeps the outstanding order quantity. */
-export function receivedPacksForScan(serial: string | null | undefined, outstandingPacks: number) {
+/**
+ * One serialized pack is one unit. A GS1-128 carton with AI 37 is that many
+ * packs. A scan without either keeps the outstanding order quantity.
+ */
+export function receivedPacksForScan(
+  serial: string | null | undefined,
+  outstandingPacks: number,
+  cartonCount?: number | null
+) {
   if (serial) return 1;
+  if (cartonCount && cartonCount > 0) return cartonCount;
   return outstandingPacks;
 }
 
@@ -250,7 +269,7 @@ function build(
 ): Gs1DataMatrixParseResult {
   const seen = new Set<string>();
   for (const element of elements) {
-    if (CORE_AIS.has(element.ai) && seen.has(element.ai)) {
+    if ((CORE_AIS.has(element.ai) || CARTON_AIS.has(element.ai)) && seen.has(element.ai)) {
       return { kind: 'invalid', reason: `GS1 AI ${element.ai} is repeated.` };
     }
     seen.add(element.ai);
@@ -268,7 +287,31 @@ function build(
     }
   }
 
-  const gtin = first.get('01');
+  const sscc = first.get('00');
+  if (sscc !== undefined && gtinCheckDigit(sscc.slice(0, 17)) !== Number(sscc[17])) {
+    return { kind: 'invalid', reason: 'SSCC (AI 00) check digit does not match.' };
+  }
+  const contentGtin = first.get('02');
+  if (first.has('01') && contentGtin !== undefined) {
+    return { kind: 'invalid', reason: 'A label cannot carry both AI 01 and AI 02.' };
+  }
+  let count: number | undefined;
+  if (contentGtin !== undefined) {
+    const rawCount = first.get('37');
+    count = rawCount === undefined ? 0 : Number(rawCount);
+    if (sscc === undefined || !Number.isSafeInteger(count) || count < 1) {
+      return {
+        kind: 'invalid',
+        reason: 'A carton GTIN (AI 02) needs its SSCC (AI 00) and a pack count (AI 37).',
+      };
+    }
+  }
+
+  // AI 37 is a named field only beside AI 02; otherwise it is kept aside.
+  const named = (ai: string) =>
+    CORE_AIS.has(ai) || (CARTON_AIS.has(ai) && (ai !== '37' || contentGtin !== undefined));
+
+  const gtin = first.get('01') ?? contentGtin;
   if (!gtin) return { kind: 'invalid', reason: 'A pack-level GTIN (AI 01) is required.' };
   if (!/^\d{14}$/.test(gtin)) return { kind: 'invalid', reason: 'GTIN must contain 14 digits.' };
   if (gtinCheckDigit(gtin.slice(0, 13)) !== Number(gtin[13])) {
@@ -295,6 +338,12 @@ function build(
   if (serial !== null && (serial.length < 1 || serial.length > 20)) {
     return { kind: 'invalid', reason: 'Serial (AI 21) exceeds 20 characters.' };
   }
+  if (serial !== null && contentGtin !== undefined) {
+    return {
+      kind: 'invalid',
+      reason: 'A carton of several packs cannot carry one serial (AI 21).',
+    };
+  }
   if (serial !== null && !/^[0-9A-Fa-f]{12,20}$/.test(serial)) {
     warnings.push({
       code: 'SERIAL_FORMAT',
@@ -312,7 +361,9 @@ function build(
       expiry: rawExpiry,
       expiryDate,
       serial,
-      unknownAis: elements.filter((element) => !CORE_AIS.has(element.ai)),
+      ...(sscc !== undefined ? { sscc } : {}),
+      ...(count !== undefined ? { count } : {}),
+      unknownAis: elements.filter((element) => !named(element.ai)),
       warnings,
     },
   };

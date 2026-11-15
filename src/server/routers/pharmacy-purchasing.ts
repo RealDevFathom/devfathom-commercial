@@ -247,6 +247,7 @@ async function resolveReceiptLineIdentity(
   let expiryPrecision = line.expiryPrecision;
   let gtin = line.gtin ?? null;
   let serialNumber = line.serialNumber ?? null;
+  let cartonCount: number | null = null;
   let warnings: Gs1WarningCode[] = [...(line.gs1Warnings ?? [])];
 
   if (line.gs1Payload) {
@@ -254,6 +255,7 @@ async function resolveReceiptLineIdentity(
     if (parsed.kind !== 'parsed') throw new PharmacyReceivingError('GS1_INVALID');
     gtin = parsed.fields.gtin;
     serialNumber = parsed.fields.serial;
+    cartonCount = parsed.fields.count ?? null;
     warnings = parsed.fields.warnings.map((warning) => warning.code);
     if (!line.invoiceCorrection) {
       if (parsed.fields.batch) batchNumber = parsed.fields.batch;
@@ -297,6 +299,7 @@ async function resolveReceiptLineIdentity(
     gtin,
     serialNumber,
     serialKey: serialNumber ? serialNumber.toUpperCase() : null,
+    cartonCount,
     gs1Warnings: warnings,
   };
 }
@@ -1598,6 +1601,13 @@ const purchasingRouter = router({
             // packs; a serial never does, so it cannot be cloned onto a count.
             if (identity.serialKey && line.receivedPacks + line.bonusPacks !== 1) {
               throw new PharmacyReceivingError('SERIALIZED_PACK_QUANTITY');
+            }
+            // A GS1-128 logistic label (AI 02 + 37) states how many packs it holds.
+            if (
+              identity.cartonCount !== null &&
+              line.receivedPacks + line.bonusPacks !== identity.cartonCount
+            ) {
+              throw new PharmacyReceivingError('CARTON_PACK_COUNT');
             }
             // Fail at draft time, not post time, when a shelf is not this branch's.
             for (const locationId of [line.stockLocationId, line.quarantineLocationId]) {

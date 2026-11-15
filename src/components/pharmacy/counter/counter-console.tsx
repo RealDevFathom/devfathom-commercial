@@ -1071,7 +1071,7 @@ function ScopedPharmacyCounterConsole({
       const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
       if (!looksLikeGs1) {
         setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
-        return { query: trimmed, revision, blocked: false };
+        return { query: trimmed, revision, blocked: false, serializedPack: null };
       }
       setPending('authenticatePack');
       try {
@@ -1091,6 +1091,10 @@ function ScopedPharmacyCounterConsole({
           query: verdict.parsed?.gtin ?? trimmed,
           revision,
           blocked: verdict.status === 'BLOCKED_RECALL',
+          // DEV-92: a serialized pack is sold as itself, so the server can pin its lot.
+          serializedPack: verdict.parsed?.serial
+            ? { payload: trimmed, serial: verdict.parsed.serial }
+            : null,
         };
       } catch (error) {
         if (revision !== scannerRevision.current) return;
@@ -1117,12 +1121,21 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(
-    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+    async (
+      scannedRow?: CounterSearchRow,
+      scanRevision?: number,
+      scannedPack?: { payload: string; serial: string } | null
+    ) => {
       const scanIsCurrent = () =>
         scanRevision === undefined || scanRevision === scannerRevision.current;
       if (!scanIsCurrent()) return;
       const row = scannedRow ?? activeRow;
-      const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
+      // One serialized pack is one sealed pack, whatever unit the counter last staged.
+      const option = scannedPack
+        ? (scannedRow?.saleUnits.find((unit) => unit.kind === 'PACK') ?? null)
+        : scannedRow
+          ? (scannedRow.saleUnits[0] ?? null)
+          : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
         setNotice({
@@ -1206,7 +1219,8 @@ function ScopedPharmacyCounterConsole({
           canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
           // A stable key per (sale, medicine, unit, quantity) so a double-press of
           // the add chord cannot post the same line twice.
-          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
+          ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
           ...(overrideLotId && batchOverride
             ? {
                 override: {
@@ -1302,6 +1316,7 @@ function ScopedPharmacyCounterConsole({
         if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
           return;
         const row = result.rows[0]!;
+        const serialized = search.serializedPack;
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
@@ -1312,7 +1327,10 @@ function ScopedPharmacyCounterConsole({
         const scanPreview = restage
           ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
           : preview;
-        if (scanPreview?.sufficient) {
+        if (serialized) {
+          // The server pins the scanned pack's own lot and refuses a pack already sold.
+          await addToCart(row, revision, serialized);
+        } else if (scanPreview?.sufficient) {
           await addToCart(restage ? row : undefined, revision);
         }
       } catch (error) {
