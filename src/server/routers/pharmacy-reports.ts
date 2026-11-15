@@ -50,6 +50,12 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
+import {
+  DEFAULT_STAFFING_CONFIG,
+  readStaffingSuggestions,
+  STAFFING_LIMITS,
+  StaffingSuggestionError,
+} from '@/lib/pharmacy/staffing-suggestions';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import {
   PHARMACY_GROWTH_CATEGORIES,
@@ -701,6 +707,50 @@ export const pharmacyReportsRouter = router({
           timeZone: ctx.organization?.timezone,
         })
       );
+    }),
+  // DEV-14: suggestions only. Reads completed receipts for one in-scope branch; writes nothing.
+  staffingSuggestions: reports
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          from: z.iso.date(),
+          to: z.iso.date(),
+          receiptsPerStaffHour: z
+            .number()
+            .int()
+            .min(STAFFING_LIMITS.receiptsPerStaffHour.min)
+            .max(STAFFING_LIMITS.receiptsPerStaffHour.max)
+            .default(DEFAULT_STAFFING_CONFIG.receiptsPerStaffHour),
+          minimumStaff: z
+            .number()
+            .int()
+            .min(STAFFING_LIMITS.minimumStaff.min)
+            .max(STAFFING_LIMITS.minimumStaff.max)
+            .default(DEFAULT_STAFFING_CONFIG.minimumStaff),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      if (!available.branches.some((branch) => branch.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      try {
+        return await readStaffingSuggestions(ctx.db, available.organizationId, {
+          branchId: input.branchId,
+          from: input.from,
+          to: input.to,
+          timeZone: ctx.organization?.timezone,
+          config: {
+            receiptsPerStaffHour: input.receiptsPerStaffHour,
+            minimumStaff: input.minimumStaff,
+          },
+        });
+      } catch (error) {
+        if (error instanceof StaffingSuggestionError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
     }),
   repeatPurchasing: reports
     .input(
