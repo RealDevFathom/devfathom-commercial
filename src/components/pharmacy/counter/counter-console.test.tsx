@@ -2404,6 +2404,19 @@ describe('PharmacyCounterConsole browser print audit', () => {
   });
 });
 describe('DEV-618 counter composition', () => {
+  it('shows the auto-print copy only beside the auto-print checkbox, reworded', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    const dialog = screen.getByRole('dialog', { name: 'Payment' });
+    const checkbox = within(dialog).getByRole('checkbox', {
+      description: 'Opens the print window after each payment on this computer.',
+    });
+    expect(checkbox).toHaveAttribute('id', 'counter-auto-print');
+    expect(within(dialog).getAllByText(/print window/i)).toHaveLength(1);
+    expect(dialog).not.toHaveTextContent('This counter session only');
+    expect(dialog).not.toHaveTextContent('Physical printing is not confirmed');
+  });
+
   it.each(['F9', 'desktop', 'phone'])('uses the same payment flow from %s', async (entry) => {
     const scroll = vi.fn();
     const previous = HTMLElement.prototype.scrollIntoView;
