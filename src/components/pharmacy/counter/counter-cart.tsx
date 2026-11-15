@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
@@ -319,6 +321,7 @@ export function CounterLotOverride({
   onChange,
   onRetry,
 }: CounterLotOverrideProps) {
+  const [applied, setApplied] = useState(false);
   const buttonClass =
     'inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50';
 
@@ -326,10 +329,13 @@ export function CounterLotOverride({
     return (
       <button
         type="button"
-        className="inline-flex min-h-11 items-center text-xs font-semibold text-text-strong underline underline-offset-4 hover:text-text-body focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+        className={buttonClass}
         aria-expanded={false}
         disabled={disabled}
-        onClick={() => onChange({ inventoryLotId: null, reason: '' })}
+        onClick={() => {
+          setApplied(false);
+          onChange({ inventoryLotId: null, reason: '' });
+        }}
       >
         Sell a different batch
       </button>
@@ -340,6 +346,42 @@ export function CounterLotOverride({
     (lot) => lot.blockedBy === null && lot.sellableUnits > 0
   )?.inventoryLotId;
   const reasonMissing = value.inventoryLotId !== null && value.reason.trim() === '';
+  const chosenLot =
+    value.inventoryLotId === null
+      ? undefined
+      : lots.find((lot) => lot.inventoryLotId === value.inventoryLotId);
+
+  if (applied && chosenLot && !reasonMissing) {
+    return (
+      <div className="space-y-2" role="status" data-testid="counter-lot-override-applied">
+        <p className="text-sm font-semibold text-text-strong">
+          Batch {chosenLot.batchNumber} will be sold on this line (not the earliest-expiry batch).
+        </p>
+        <p className="text-xs text-text-muted">Reason: {value.reason.trim()}</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={disabled}
+            onClick={() => setApplied(false)}
+          >
+            Change batch
+          </button>
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={disabled}
+            onClick={() => {
+              setApplied(false);
+              onChange(null);
+            }}
+          >
+            Use earliest-expiry batch
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -425,15 +467,27 @@ export function CounterLotOverride({
         </div>
       ) : null}
 
-      <button
-        type="button"
-        className={buttonClass}
-        aria-expanded={true}
-        disabled={disabled}
-        onClick={() => onChange(null)}
-      >
-        Use earliest-expiry batch
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {value.inventoryLotId !== null ? (
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={disabled || reasonMissing}
+            onClick={() => setApplied(true)}
+          >
+            Use batch {chosenLot?.batchNumber ?? ''}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={buttonClass}
+          aria-expanded={true}
+          disabled={disabled}
+          onClick={() => onChange(null)}
+        >
+          Use earliest-expiry batch
+        </button>
+      </div>
     </div>
   );
 }

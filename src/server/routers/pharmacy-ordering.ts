@@ -122,7 +122,8 @@ export const pharmacyOrderingRouter = router({
       return await ctx.db.$transaction(async (tx) => {
         const scope = await scopeFor(ctx, input.branchId);
         return recordDeliveryCommand(txDb(tx), scope, input, {
-          // DEV-647: a physical return that refunds cash needs a manager or owner PIN.
+          // DEV-647 / DEV-786: a physical return that refunds cash or returns a completed sale
+          // needs a manager or owner PIN.
           authorizeRefund: async () => {
             if (!(await actorMayRefund(ctx.db, ctx.session.user)))
               throw new TRPCError({ code: 'FORBIDDEN', message: REFUND_FORBIDDEN });

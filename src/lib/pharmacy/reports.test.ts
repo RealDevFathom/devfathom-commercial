@@ -123,6 +123,32 @@ describe('PH-RPT metric contract', () => {
     expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);
   });
 
+  it('re-opens charges for dishonoured cheques so aging matches the Khata balance', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    const sql = queryRaw.mock.calls
+      .map(([query]) => (query as { strings: readonly string[] }).strings.join('?'))
+      .find((text) => text.includes('FROM "pharmacy_khata_events" charge'));
+    expect(sql).toContain(`e."kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
+    // A dishonour of a payment re-opens that payment's charge.
+    expect(sql).toContain('COALESCE(bounced."settlesChargeId", e."settlesChargeId") AS "chargeId"');
+    expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN amount ELSE -amount END`);
+    // A dishonour linked to no charge is still owed and counts as overdue.
+    expect(sql).toContain(`s."kind"='DISHONOURED_CHEQUE' AND NOT EXISTS`);
+    expect(sql).toContain('+(SELECT owed FROM unlinked))::bigint AS value');
+  });
+
   it('adds branch-scoped bigint results above the PostgreSQL integer limit', async () => {
     const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) => {
       const sql = query.strings.join('?');

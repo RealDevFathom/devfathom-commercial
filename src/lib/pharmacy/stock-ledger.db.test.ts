@@ -262,6 +262,10 @@ async function recalledLot(db: ScopedDb, fixture: Scenario, manualUnits = 0) {
       matchStatus: 'MATCHED',
       matchDetails: { batchIds: [batch.id] },
       recallNoticeId: recall.id,
+      // DEV-692: a recall ingest that holds a recall notice was confirmed by a person.
+      reviewStatus: 'CONFIRMED',
+      reviewedById: ACTOR,
+      reviewedAt: NOW,
       ingestedById: ACTOR,
     },
   });
@@ -751,7 +755,8 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   ] as const)(
     'keeps a DRAP recall reversible after manual %s of %s stock',
     async (operation, manualArrangement) => {
-      const { ingestDrapNotice, reverseRecallQuarantine } = await import('./drap-monitoring');
+      const { confirmDrapRecall, ingestDrapNotice, reverseRecallQuarantine } =
+        await import('./drap-monitoring');
       const fixture = await scenario(ORG_A, BRANCH_A, 'mixed-recall-arrangement');
       const scope = scopeOf(fixture);
       const { lot, recallId } = await inOrg(ORG_A, async (db) => {
@@ -788,12 +793,17 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           where: { id: fixture.medicineId },
           data: { drapRegistrationNumber: registration },
         });
-        const ingest = await ingestDrapNotice(db, scope, 'MANUAL', {
+        const draft = await ingestDrapNotice(db, scope, 'MANUAL', {
           kind: 'RECALL',
           sourceReference: tag('mixed-arrangement-recall'),
           drapRegistrationNumber: registration,
           reason: 'Regulatory recall',
         });
+        // DEV-692: nothing is quarantined until a person confirms the draft.
+        expect(
+          await db.pharmacyRecallQuarantineAction.count({ where: { ingestId: draft.id } })
+        ).toBe(0);
+        const ingest = await confirmDrapRecall(db, scope, draft.id);
         const action = await db.pharmacyRecallQuarantineAction.findFirstOrThrow({
           where: { ingestId: ingest.id },
         });
@@ -2909,14 +2919,17 @@ async function recallFixture() {
 
 type RecallFixture = Awaited<ReturnType<typeof recallFixture>>;
 
-function drapRecall(db: ScopedDb, fixture: RecallFixture, scope: 'batch' | 'medicine') {
-  return deps.drap.ingestDrapNotice(db, scopeOf(fixture), 'MANUAL', {
+async function drapRecall(db: ScopedDb, fixture: RecallFixture, scope: 'batch' | 'medicine') {
+  const draft = await deps.drap.ingestDrapNotice(db, scopeOf(fixture), 'MANUAL', {
     kind: 'RECALL',
     sourceReference: tag('drap-overlap'),
     drapRegistrationNumber: fixture.registration,
     ...(scope === 'batch' ? { batchNumbers: [fixture.first.batch.batchNumber] } : {}),
     reason: 'Regulator recall',
   });
+  // DEV-692: a matched alert is only a draft until a person confirms it.
+  expect(draft).toMatchObject({ reviewStatus: 'PENDING_REVIEW', recallNoticeId: null });
+  return deps.drap.confirmDrapRecall(db, scopeOf(fixture), draft.id);
 }
 
 async function closeAcknowledgedRecall(db: ScopedDb, fixture: RecallFixture, noticeId: string) {

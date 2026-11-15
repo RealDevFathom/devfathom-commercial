@@ -10,6 +10,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import { isUtilityReminderQuietHour, reminderLocalHour } from './reminder-quiet-hours';
 import {
   emptySmsFallbackCounts,
   sendUtilitySmsFallback,
@@ -257,15 +258,11 @@ async function deliverRefillReminder(
       )
     )
       return null;
-    const hour = Number(
-      // A stored zone Intl refuses reads as UTC rather than failing the run.
-      new Intl.DateTimeFormat('en-GB', {
-        timeZone: workspaceTimezone(organization.timezone),
-        hour: '2-digit',
-        hourCycle: 'h23',
-      }).format(now)
-    );
-    if (hour >= 22 || hour < 8) return null;
+    // A stored zone Intl refuses reads as UTC rather than failing the run.
+    if (
+      isUtilityReminderQuietHour(reminderLocalHour(now, workspaceTimezone(organization.timezone)))
+    )
+      return null;
     await lockPatientConsent(db, item.organizationId, item.patientId);
     const [customer, consent] = await Promise.all([
       db.pharmacyCustomer.findFirst({

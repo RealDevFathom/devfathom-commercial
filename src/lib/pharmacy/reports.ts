@@ -4,6 +4,11 @@ import { Prisma } from '@/generated/prisma/client';
 import { workspaceDateRange } from '@/lib/timezone';
 
 import { grossMarginQuery } from './finance-reports';
+import {
+  hasPharmacyReportDimension,
+  lotDimension,
+  medicineHasIngredient,
+} from './report-dimensions';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -284,45 +289,10 @@ type MoneyCounts = {
   cashVarianceMinor: number | null;
 };
 
-type DimensionFilters = Pick<PharmacyReportFilters, 'supplierId' | 'ingredientId' | 'batchId'>;
-
-/** True when a supplier, ingredient or batch filter narrows the report. */
-export function hasPharmacyReportDimension(filters: DimensionFilters) {
-  return Boolean(filters.supplierId || filters.ingredientId || filters.batchId);
-}
-
-/** The medicine at `medicineId` contains the ingredient (catalogue strength components). */
-function medicineHasIngredient(
-  organizationId: Prisma.Sql,
-  medicineId: Prisma.Sql,
-  ingredientId: string
-) {
-  return Prisma.sql`EXISTS (SELECT 1 FROM "pharmacy_medicine_strength_components" dim_ingredient WHERE dim_ingredient."organizationId"=${organizationId} AND dim_ingredient."medicineId"=${medicineId} AND dim_ingredient."ingredientId"=${ingredientId})`;
-}
-
-/**
- * `AND ...` predicates narrowing an inventory-lot alias to the selected batch (manufacturing
- * batch), supplier and, when asked, ingredient. A lot belongs to a supplier through the goods
- * receipt that created it; lots without a receipt (inter-branch transfers, opening stock) carry
- * the supplier's name snapshot instead, which is unique per organization.
- */
-function lotDimension(lot: Prisma.Sql, filters: DimensionFilters, withIngredient: boolean) {
-  const clauses: Prisma.Sql[] = [];
-  if (filters.batchId) clauses.push(Prisma.sql`${lot}."manufacturingBatchId"=${filters.batchId}`);
-  if (withIngredient && filters.ingredientId)
-    clauses.push(
-      Prisma.sql`EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches" dim_batch WHERE dim_batch."organizationId"=${lot}."organizationId" AND dim_batch."id"=${lot}."manufacturingBatchId" AND ${medicineHasIngredient(Prisma.sql`dim_batch."organizationId"`, Prisma.sql`dim_batch."medicineId"`, filters.ingredientId)})`
-    );
-  if (filters.supplierId) {
-    const receiptLine = Prisma.sql`SELECT 1 FROM "pharmacy_goods_receipt_lines" dim_line JOIN "pharmacy_goods_receipts" dim_receipt ON dim_receipt."organizationId"=dim_line."organizationId" AND dim_receipt."branchId"=dim_line."branchId" AND dim_receipt."id"=dim_line."goodsReceiptId" WHERE dim_line."organizationId"=${lot}."organizationId" AND dim_line."branchId"=${lot}."branchId" AND dim_line."inventoryLotId"=${lot}."id"`;
-    clauses.push(
-      Prisma.sql`(EXISTS (${receiptLine} AND dim_receipt."supplierId"=${filters.supplierId}) OR (NOT EXISTS (${receiptLine}) AND EXISTS (SELECT 1 FROM "pharmacy_suppliers" dim_supplier WHERE dim_supplier."organizationId"=${lot}."organizationId" AND dim_supplier."id"=${filters.supplierId} AND dim_supplier."name"=${lot}."supplierName")))`
-    );
-  }
-  return clauses.length ? Prisma.sql`AND ${Prisma.join(clauses, ' AND ')}` : Prisma.empty;
-}
-
-async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: readonly string[]): Promise<number> {
+async function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[]
+): Promise<number> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -335,7 +305,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
-        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+        // A dishonoured cheque re-opens what it bounced, exactly as readKhataBalance counts it:
+        // linked to a payment it re-opens that payment's charge, linked to a charge it re-opens
+        // that charge, and otherwise it is owed now with no due date of its own.
+        Prisma.sql`WITH settlements AS (SELECT e."organizationId", e."branchId", e."kind", e."amountMinor"::bigint AS amount, COALESCE(bounced."settlesChargeId", e."settlesChargeId") AS "chargeId" FROM "pharmacy_khata_events" e LEFT JOIN "pharmacy_khata_events" bounced ON e."kind"='DISHONOURED_CHEQUE' AND bounced."kind"='PAYMENT' AND bounced."organizationId"=e."organizationId" AND bounced."branchId"=e."branchId" AND bounced."id"=e."settlesChargeId" WHERE e."organizationId"=current_setting('app.current_organization_id',true) AND e."branchId"=${branchId} AND e."kind" IN ('PAYMENT','DISHONOURED_CHEQUE')), payments AS (SELECT "organizationId", "branchId", "chargeId" AS "settlesChargeId", SUM(CASE WHEN "kind"='PAYMENT' THEN amount ELSE -amount END) AS paid FROM settlements WHERE "chargeId" IS NOT NULL GROUP BY "organizationId", "branchId", "chargeId"), unlinked AS (SELECT COALESCE(SUM(s.amount),0) AS owed FROM settlements s WHERE s."kind"='DISHONOURED_CHEQUE' AND NOT EXISTS (SELECT 1 FROM "pharmacy_khata_events" c WHERE c."organizationId"=s."organizationId" AND c."branchId"=s."branchId" AND c."id"=s."chargeId" AND c."kind"='CHARGE')) SELECT (COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)+(SELECT owed FROM unlinked))::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
       total += rows[0]?.value ?? BigInt(0);
     }
@@ -352,7 +325,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
   return value;
 }
 
-export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
+export async function readPharmacyOwnerCommandCentre(
+  db: Prisma.TransactionClient,
+  filters: PharmacyReportFilters
+) {
   const parsed = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
   // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.

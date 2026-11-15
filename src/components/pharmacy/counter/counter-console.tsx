@@ -99,7 +99,7 @@ import {
   counterErrorTone,
   counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
-import { PaymentSandboxPanel } from './payment-sandbox-panel';
+import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
   counterUnitNoun,
@@ -594,6 +594,27 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  // DEV-97: the drawer and payment controls belong to whoever takes payment
+  // (`pharmacy:counter`). A pharmacist builds the bill and counter staff take it.
+  // Only a confirmed answer for this account counts; a failed read withholds
+  // payment. The server stays the authority for every drawer and tender write.
+  const settlementAccess = trpc.pharmacySales.settlementAccess.useQuery(undefined, {
+    retry: false,
+  });
+  const settlementIdentityMatches =
+    settlementAccess.data?.userId === accountId &&
+    settlementAccess.data.organizationId === organizationId;
+  const canSettlePayments =
+    settlementIdentityMatches &&
+    settlementAccess.data?.authorized === true &&
+    !settlementAccess.isError;
+  // Only a confirmed "no" lifts the opening-drawer step (DEV-725): while access is
+  // unknown, a cashier still opens the drawer before the first bill.
+  const settlementDenied =
+    settlementIdentityMatches &&
+    settlementAccess.data?.authorized === false &&
+    !settlementAccess.isError;
   const savedReceiptFormat = trpc.pharmacySales.counterReceiptFormat.useQuery(
     { branchId },
     { enabled: branchAuthorized, staleTime: 60_000, retry: false }
@@ -745,7 +766,7 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
-  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
+  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
   const deviceUnavailable = useHydrated() && deviceId === null;
@@ -753,7 +774,8 @@ function ScopedPharmacyCounterConsole({
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
-  const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
+  // A disabled query still returns cached data, so a revoked grant drops it here.
+  const openDrawerSession = settlementDenied ? null : (drawerQuery.data?.openDrawer ?? null);
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
   // DEV-725: opening the drawer is the first step of the shift. Until the server
   // reports an OPEN drawer for this device, the opening-cash step replaces
@@ -761,7 +783,8 @@ function ScopedPharmacyCounterConsole({
   // keeps the step, with a retry, rather than offering a bill the server refuses.
   // A failed read is an unknown drawer, even when older data says it was open.
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
-  const drawerRequired = branchAuthorized && !drawerOpen;
+  // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
+  const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -825,9 +848,12 @@ function ScopedPharmacyCounterConsole({
       retry: false,
     }
   );
+  const sendWhatsAppReceipt = trpc.pharmacySales.counterReceiptWhatsApp.useMutation({
+    retry: false,
+  });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
-    { enabled: Boolean(branchId) }
+    { enabled: Boolean(branchId) && canSettlePayments }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
@@ -933,9 +959,16 @@ function ScopedPharmacyCounterConsole({
    */
   const alerts = useMemo(() => {
     const lines: CounterAlertLine[] = (cart?.lines ?? []).map((line) => {
+      // DEV-629: a non-controlled line is covered only by the prescription the server attached
+      // to it, because that is what settlement checks; a controlled line keeps its register gate.
       const prescriptionLine = patient?.prescriptions
         .flatMap((prescription) => prescription.lines.map((entry) => ({ prescription, entry })))
-        .find(({ entry }) => entry.medicineId === line.medicineId);
+        .find(({ entry }) =>
+          line.controlled
+            ? entry.medicineId === line.medicineId
+            : Boolean(line.prescriptionLineId) &&
+              entry.prescriptionLineId === line.prescriptionLineId
+        );
       return {
         ref: line.saleLineId,
         medicine: {
@@ -954,7 +987,10 @@ function ScopedPharmacyCounterConsole({
         prescription: prescriptionLine
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
-              verified: prescriptionLine.entry.verified,
+              // DEV-629: settlement needs the signed review of this sale line, not any earlier one.
+              verified: line.controlled
+                ? prescriptionLine.entry.verified
+                : (line.prescriptionSigned ?? false),
               validFrom: new Date(prescriptionLine.prescription.validFrom),
               validUntil: new Date(prescriptionLine.prescription.validUntil),
               remainingAuthorizedUnits:
@@ -1071,6 +1107,38 @@ function ScopedPharmacyCounterConsole({
     rememberActiveBill(activeBillScope, saleId);
   }, [activeBillKey, activeBillScope, recoveryReady, saleId, setActiveSale, utils]);
 
+  // DEV-41: both Pay buttons say why they are disabled, in cashier words.
+  const payDisabledReason = !canSettlePayments
+    ? settlementAccess.isError
+      ? "Couldn't check payment access."
+      : settlementDenied
+        ? 'Payments are taken by counter staff.'
+        : 'Checking payment access…'
+    : unknownTender || attempt !== null
+      ? 'Check the payment outcome before taking more money.'
+      : storageError
+        ? 'Browser recovery is unavailable. Review payment status before continuing.'
+        : tenderReadRequired
+          ? 'Refresh this bill to verify payment before taking more money.'
+          : blocked
+            ? 'Resolve the safety block in the prescription panel before taking payment.'
+            : billState === 'idle'
+              ? 'Add an item to start a sale before taking payment.'
+              : billState === 'loading'
+                ? 'Checking the bill. Please wait before taking payment.'
+                : billState === 'error' || billState === 'stale'
+                  ? 'Refresh the bill to check the balance before taking payment.'
+                  : billState === 'settled'
+                    ? 'This bill is already paid. Start a new sale.'
+                    : billState === 'unavailable'
+                      ? cart?.status === 'HELD'
+                        ? 'Resume this bill before taking payment.'
+                        : currentBill && lineCount === 0
+                          ? 'Add an item to this bill before taking payment.'
+                          : 'Refresh the bill or start a new sale before taking payment.'
+                      : busy
+                        ? 'Wait for the current counter action to finish before taking payment.'
+                        : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -1265,8 +1333,8 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const openPayment = useCallback(() => {
-    setPaymentOpen(true);
-  }, []);
+    if (canSettlePayments) setPaymentOpen(true);
+  }, [canSettlePayments]);
 
   // Leave the settled bill and everything tied to its patient behind.
   const clearBill = useCallback(() => {
@@ -1456,9 +1524,32 @@ function ScopedPharmacyCounterConsole({
           openChecks();
           return;
         }
+        // DEV-629: the server refuses to take payment for an Rx/restricted line without a
+        // prescription reference, so the counter sends the selected patient's current
+        // prescription line for this medicine. Without one the line still shows its safety block.
+        const needsPrescription = !controlled && (row.restriction.rx || row.restriction.restricted);
+        const prescriptionLine = needsPrescription
+          ? patient?.prescriptions
+              .filter((prescription) => prescription.inDate)
+              .flatMap((prescription) => prescription.lines)
+              .find(
+                (line) =>
+                  line.medicineId === row.medicineId &&
+                  line.presentationId === row.presentationId &&
+                  line.remainingAuthorizedUnits >= units * option.canonicalUnitsPerSaleUnit
+              )
+          : undefined;
         const refSerial = Number(billAuth.refSerial);
         const postLine = (lineSaleId: string) =>
           addLine.mutateAsync({
+            ...(patient && prescriptionLine
+              ? {
+                  prescription: {
+                    prescriptionLineId: prescriptionLine.prescriptionLineId,
+                    patientId: patient.patientId,
+                  },
+                }
+              : {}),
             controlledAuthorization:
               controlled && patient
                 ? {
@@ -1504,8 +1595,15 @@ function ScopedPharmacyCounterConsole({
           // screen, or this copy was stale. Re-read it and, once it is confirmed
           // paid or voided, carry the scan onto a new bill. A held bill keeps its
           // ID so it can still be resumed. A controlled line is never re-sent:
-          // its authorization belonged to the old bill's patient.
-          if (!counterBillMovedOn(error) || freshBill || controlled || attemptRef.current)
+          // its authorization belonged to the old bill's patient. DEV-629: nor is a line
+          // carrying that patient's prescription reference.
+          if (
+            !counterBillMovedOn(error) ||
+            freshBill ||
+            controlled ||
+            prescriptionLine ||
+            attemptRef.current
+          )
             throw error;
           const read = await cartQuery.refetch();
           if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
@@ -1877,6 +1975,7 @@ function ScopedPharmacyCounterConsole({
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
       if (
+        !canSettlePayments ||
         !saleId ||
         busy ||
         blocked ||
@@ -2005,6 +2104,7 @@ function ScopedPharmacyCounterConsole({
       blocked,
       branchId,
       busy,
+      canSettlePayments,
       discardReceiptIntent,
       paidMinor,
       recoveryScope,
@@ -2640,6 +2740,9 @@ function ScopedPharmacyCounterConsole({
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          <CounterSignOut
+            hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
+          />
           {presentedReceipt && (
             <Button
               variant="outline"
@@ -2729,13 +2832,15 @@ function ScopedPharmacyCounterConsole({
               deviceId={counterDeviceId}
               businessDate={todayBusinessDate}
             />
-            <CounterKhataPaymentPanel
-              branchId={branchId}
-              organizationId={organizationId}
-              accountId={accountId}
-              deviceId={counterDeviceId}
-              businessDate={todayBusinessDate}
-            />
+            {canSettlePayments ? (
+              <CounterKhataPaymentPanel
+                branchId={branchId}
+                organizationId={organizationId}
+                accountId={accountId}
+                deviceId={counterDeviceId}
+                businessDate={todayBusinessDate}
+              />
+            ) : null}
             <Link
               className={buttonVariants({
                 variant: 'outline',
@@ -2871,7 +2976,7 @@ function ScopedPharmacyCounterConsole({
 
               {drawerRequired ? (
                 <CounterOpenDrawerStep
-                  disabled={busy || !drawerStatusKnown}
+                  disabled={busy || !drawerStatusKnown || !canSettlePayments}
                   statusError={drawerQuery.isError}
                   deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
@@ -3238,7 +3343,8 @@ function ScopedPharmacyCounterConsole({
             ) : (
               <Button
                 className="h-14 w-full justify-between"
-                disabled={billState !== 'ready' || blocked || busy}
+                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+                aria-describedby="counter-pay-reason"
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -3248,18 +3354,31 @@ function ScopedPharmacyCounterConsole({
                 </kbd>
               </Button>
             )}
-            <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
-              {blocked
-                ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
-                : unknownTender
-                  ? 'Payment locked until its outcome is checked. Review payment status before taking more money.'
-                  : storageError
-                    ? 'Browser recovery is unavailable. Review payment status before continuing.'
-                    : tenderReadRequired
-                      ? 'Refresh this bill to verify payment before taking more money.'
-                      : 'Cash, card, bank transfer, wallet or khata.'}
-            </p>
-            {billState !== 'ready' && billState !== 'settled' && saleId ? (
+            {!canSettlePayments ? (
+              <div
+                role="status"
+                className={`mt-2 text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
+              >
+                <p id="counter-pay-reason">{payDisabledReason}</p>
+                {settlementAccess.isError ? (
+                  <Button
+                    variant="outline"
+                    className="mt-2 min-h-11"
+                    onClick={() => void settlementAccess.refetch()}
+                  >
+                    Retry payment access
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <p
+                id="counter-pay-reason"
+                className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}
+              >
+                {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
+              </p>
+            )}
+            {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
                 Review payment status
               </Button>
@@ -3304,8 +3423,10 @@ function ScopedPharmacyCounterConsole({
         className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
       >
         <div className="min-w-0 flex-1">
-          <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+          <p id="counter-phone-pay-reason" className="text-xs text-text-muted">
+            {canSettlePayments || settlementDenied
+              ? (payDisabledReason ?? 'Balance due')
+              : 'Balance due'}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
@@ -3322,7 +3443,13 @@ function ScopedPharmacyCounterConsole({
         </Button>
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
-          disabled={billState !== 'ready' || blocked || busy}
+          disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+          // While payment access is unresolved, the reason (with its retry) sits in the bill panel.
+          aria-describedby={
+            canSettlePayments || settlementDenied
+              ? 'counter-phone-pay-reason'
+              : 'counter-pay-reason'
+          }
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
@@ -3330,6 +3457,7 @@ function ScopedPharmacyCounterConsole({
       </div>
       <CounterOverlay
         title="Payment"
+        enabled={canSettlePayments}
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         initialFocus={tenderRef}
@@ -3356,17 +3484,6 @@ function ScopedPharmacyCounterConsole({
             Opens the print window after each payment on this computer.
           </p>
         </div>
-        {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
-          <PaymentSandboxPanel
-            key={`${branchId}:${saleId}`}
-            branchId={branchId}
-            saleId={saleId}
-            deviceId={counterDeviceId()}
-            businessDate={todayBusinessDate()}
-            disabled={busy || blocked}
-            onRecorded={refreshCart}
-          />
-        ) : null}
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
@@ -3515,7 +3632,6 @@ function ScopedPharmacyCounterConsole({
       >
         <SectionCard
           compact
-          eyebrow="CRM-L01"
           title="Customer loyalty and khata"
           actions={
             <Button
@@ -3721,6 +3837,27 @@ function ScopedPharmacyCounterConsole({
               : null
           }
           onSettlementPresented={receiptPresented}
+          onSendWhatsApp={async (receiptSaleId) => {
+            try {
+              const sent = await sendWhatsAppReceipt.mutateAsync({
+                branchId,
+                saleId: receiptSaleId,
+                customerRequested: true,
+              });
+              // Delivery runs after the request commits; never claim it was delivered.
+              return sent.outcome === 'DUPLICATE'
+                ? {
+                    ok: true,
+                    message: 'A WhatsApp receipt for this sale was already requested today.',
+                  }
+                : {
+                    ok: true,
+                    message: 'WhatsApp receipt queued. Delivery is not confirmed at the counter.',
+                  };
+            } catch (error) {
+              return { ok: false, message: messageFrom(error) };
+            }
+          }}
         />
       </CounterOverlay>
       <p className="sr-only" aria-live="polite">
@@ -3734,6 +3871,7 @@ function ScopedPharmacyCounterConsole({
 function CounterOverlay({
   title,
   open,
+  enabled = true,
   onOpenChange,
   initialFocus,
   finalFocus,
@@ -3744,6 +3882,8 @@ function CounterOverlay({
 }: {
   title: string;
   open: boolean;
+  /** False unmounts even the normally retained, closed contents (DEV-97: lost access). */
+  enabled?: boolean;
   onOpenChange: (open: boolean) => void;
   initialFocus?: RefObject<HTMLDivElement | null>;
   finalFocus: RefObject<HTMLInputElement | null>;
@@ -3752,6 +3892,7 @@ function CounterOverlay({
   drawer?: boolean;
   children: ReactNode;
 }) {
+  if (!enabled) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal keepMounted>
