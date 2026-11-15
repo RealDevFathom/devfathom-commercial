@@ -66,7 +66,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'cashVarianceMinor',
     'Cash variance',
-    'Counted cash less expected cash on final daily closes.',
+    'Counted cash less expected cash on final daily closes; unavailable when the period has no final close.',
     'pharmacy_daily_closes',
     'selected branches and business dates',
     '/pharmacy/reports?section=finance',
@@ -287,6 +287,7 @@ type MoneyCounts = {
   marginMinor: number | null;
   cashMinor: number | null;
   refundsMinor: number | null;
+  /** Null when no final close exists in the period: no variance was computed, not zero. */
   cashVarianceMinor: number | null;
 };
 
@@ -368,7 +369,7 @@ export async function readPharmacyOwnerCommandCentre(
     : Prisma.sql`COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)}),0)::int`;
   const tenderMoney = dimensional
     ? Prisma.sql`NULL::int AS "cashMinor", NULL::int AS "refundsMinor", NULL::int AS "cashVarianceMinor"`
-    : Prisma.sql`COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`;
+    : Prisma.sql`COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", (SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence"))::int AS "cashVarianceMinor"`;
   const signalScope = Prisma.sql`${ingredientOf(Prisma.sql`s."organizationId"`, Prisma.sql`s."medicineId"`)} ${
     lotScoped
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" lot WHERE lot."organizationId"=s."organizationId" AND lot."branchId"=s."branchId" AND lot."id"=s."inventoryLotId" ${lotDimension(lot, filters, false)})`
@@ -455,7 +456,7 @@ export async function readPharmacyOwnerCommandCentre(
     marginMinor: null,
     cashMinor: dimensional ? null : 0,
     refundsMinor: dimensional ? null : 0,
-    cashVarianceMinor: dimensional ? null : 0,
+    cashVarianceMinor: null,
   };
   const s = stock[0] ?? { open: 0, recommended: 0 };
   // Stock signals and recommended orders are only a count once every selected

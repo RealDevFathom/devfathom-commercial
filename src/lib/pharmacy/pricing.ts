@@ -253,6 +253,8 @@ export async function priceIntelligence(db: ScopedDb, scope: PriceScope) {
       packLevelId: pack?.id ?? null,
       units,
       status: !mapped ? 'NEEDS_MAPPING' : proposal!.status,
+      // DEV-803: the proposal's own end state, kept even when the notice is unmapped.
+      proposalStatus: proposal?.status ?? null,
       // DEV-693: DRAP notices are information only; none can be confirmed.
       eligible: false,
       effectiveDate:

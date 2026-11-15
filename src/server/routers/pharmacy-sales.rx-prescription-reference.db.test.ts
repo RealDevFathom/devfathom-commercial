@@ -63,7 +63,7 @@ type SalesCaller = {
     branchId: string;
     saleId: string;
     action: 'void';
-    reason: string;
+    voidReason: { code: 'OTHER'; note: string };
   }) => Promise<unknown>;
 };
 
@@ -597,7 +597,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
         branchId: ids.branch,
         saleId: added.saleId,
         action: 'void',
-        reason: 'Patient cancelled before payment',
+        // DEV-508: a counter void carries a reason code.
+        voidReason: { code: 'OTHER', note: 'Patient cancelled before payment' },
       })
     );
     await expect(

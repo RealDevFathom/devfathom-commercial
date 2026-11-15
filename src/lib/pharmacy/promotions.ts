@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PharmacyPromotion } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { receiptTextSchema } from '@/lib/receipts/configuration';
 import { Decimal } from '@/lib/restaurant/money-arithmetic';
 import type { PromotionRule } from '@/lib/restaurant/promotion-contracts';
@@ -198,12 +199,64 @@ export async function priceCounterPromotion(
       OR: [{ medicineId: null }, { medicineId: input.medicineId }],
     },
   });
+  // The creating manager authorizes every discount, so exactly what creation required is
+  // re-checked now: a promotion whose creator no longer qualifies is not applied.
+  const creatorMay = new Map<string, boolean>();
+  const standing: typeof promotions = [];
+  for (const promotion of promotions) {
+    let may = creatorMay.get(promotion.createdByUserId);
+    if (may === undefined) {
+      may = await promotionCreatorMayManage(
+        db,
+        scope.organizationId,
+        promotion.branchId,
+        promotion.createdByUserId
+      );
+      creatorMay.set(promotion.createdByUserId, may);
+    }
+    if (may) standing.push(promotion);
+  }
   return evaluatePharmacyPromotion({
     ...input,
     organizationId: scope.organizationId,
     branchId: scope.branchId,
-    promotions,
+    promotions: standing,
   });
+}
+
+/**
+ * QA-8: the creator must still satisfy what creating a promotion required: an active member
+ * holding `pharmacy:manage` (a custom deny wins) and, unless an organization ADMIN, an active
+ * assignment to the promotion's branch. Any lookup failure fails closed: the discount is not
+ * applied, but the sale line is never blocked.
+ */
+export async function promotionCreatorMayManage(
+  db: ScopedDb,
+  organizationId: string,
+  branchId: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    const user = await db.user.findFirst({
+      where: { id: userId, organizationId, status: 'ACTIVE' },
+    });
+    if (!user || user.organizationId !== organizationId || user.status !== 'ACTIVE') return false;
+    if (!(await can(subjectFromSession(user), 'pharmacy:manage', undefined, { db }))) return false;
+    if (user.role === 'ADMIN') return true;
+    const assignment = await db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId,
+        userId,
+        branchId,
+        active: true,
+        branch: { organizationId, active: true },
+      },
+      select: { branchId: true },
+    });
+    return assignment?.branchId === branchId;
+  } catch {
+    return false;
+  }
 }
 
 /** The approval policy stamped on a line priced by a promotion. */

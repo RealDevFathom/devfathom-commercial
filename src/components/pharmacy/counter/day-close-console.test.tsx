@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   mutationError: null as Error | null,
   drawerId: 'd',
   branches: [{ id: 'b', name: 'Main' }],
+  /** The server's day-close refusal, if any (DEV-505). */
+  branchesError: null as { message: string; data?: { code: string } } | null,
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -88,11 +90,14 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     pharmacySales: {
-      counterBranches: {
-        useQuery: () => ({
-          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
-          isSuccess: true,
-        }),
+      dayCloseBranches: {
+        useQuery: () =>
+          mocks.branchesError
+            ? { error: mocks.branchesError, isSuccess: false, refetch: vi.fn() }
+            : {
+                data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
+                isSuccess: true,
+              },
       },
       closePreview: {
         useQuery: (input: unknown) => {
@@ -182,6 +187,7 @@ beforeEach(() => {
   mocks.sessionRevoked = false;
   mocks.organizationId = 'org';
   mocks.branches = [{ id: 'b', name: 'Main' }];
+  mocks.branchesError = null;
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -427,14 +433,28 @@ describe('day-close console', () => {
 
   it('DEV-713 lists who confirmed manual card and wallet tenders, by type', () => {
     mocks.close = {
-      id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, grossSalesMinor: 1300,
-      refundTotalMinor: 0, netSalesMinor: 1300, cashExpectedMinor: 0, cashCountedMinor: 0,
-      cashVarianceMinor: 0, isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 1300,
+      refundTotalMinor: 0,
+      netSalesMinor: 1300,
+      cashExpectedMinor: 0,
+      cashCountedMinor: 0,
+      cashVarianceMinor: 0,
+      isFinal: true,
       tenderTotals: [
-        { type: 'CARD', amountMinor: 1300, refundMinor: 0, netMinor: 1300, confirmers: [
-          { name: 'Ayesha Karim', count: 1, amountMinor: 250 },
-          { name: 'Bilal Shah', count: 2, amountMinor: 1050 },
-        ] },
+        {
+          type: 'CARD',
+          amountMinor: 1300,
+          refundMinor: 0,
+          netMinor: 1300,
+          confirmers: [
+            { name: 'Ayesha Karim', count: 1, amountMinor: 250 },
+            { name: 'Bilal Shah', count: 2, amountMinor: 1050 },
+          ],
+        },
         { type: 'CASH', amountMinor: 500, refundMinor: 0, netMinor: 500 },
       ],
     };
@@ -447,14 +467,28 @@ describe('day-close console', () => {
 
   it('DEV-713 lists two confirmers who share a name as separate rows', () => {
     mocks.close = {
-      id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, grossSalesMinor: 300,
-      refundTotalMinor: 0, netSalesMinor: 300, cashExpectedMinor: 0, cashCountedMinor: 0,
-      cashVarianceMinor: 0, isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 300,
+      refundTotalMinor: 0,
+      netSalesMinor: 300,
+      cashExpectedMinor: 0,
+      cashCountedMinor: 0,
+      cashVarianceMinor: 0,
+      isFinal: true,
       tenderTotals: [
-        { type: 'CARD', amountMinor: 300, refundMinor: 0, netMinor: 300, confirmers: [
-          { id: 'u1', name: 'Ali', count: 1, amountMinor: 100 },
-          { id: 'u2', name: 'Ali', count: 1, amountMinor: 200 },
-        ] },
+        {
+          type: 'CARD',
+          amountMinor: 300,
+          refundMinor: 0,
+          netMinor: 300,
+          confirmers: [
+            { id: 'u1', name: 'Ali', count: 1, amountMinor: 100 },
+            { id: 'u2', name: 'Ali', count: 1, amountMinor: 200 },
+          ],
+        },
       ],
     };
     render(<PharmacyDayCloseConsole />);
@@ -557,7 +591,7 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
+  it('shows permission denial when the server refuses day close', () => {
     mocks.role = 'MEMBER';
     mocks.accessCapabilities = ['pharmacy:dispense', 'pharmacy:counter'];
     render(<PharmacyDayCloseConsole />);
@@ -565,9 +599,41 @@ describe('day-close console', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.'
     );
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
     expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  // DEV-505: a Manager (not ADMIN) closes the day for the branches the server
+  // scopes them to, and is offered no other branch.
+  it('opens for a Manager on only the branches the server allows', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:procurement', 'pharmacy:close'];
+    mocks.branches = [{ id: 'assigned', name: 'Assigned branch' }];
+    render(<PharmacyDayCloseConsole />);
+    const branch = screen.getByRole('combobox');
+    expect(branch).toHaveValue('assigned');
+    expect(Array.from((branch as HTMLSelectElement).options).map((o) => o.value)).toEqual([
+      'assigned',
+    ]);
+    expect(mocks.previewInput).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'assigned' })
+    );
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
+  it('shows permission denial when the server refuses the day-close branch list (DEV-505)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.branchesError = {
+      message: 'Day-close permission is required to reconcile and close a day.',
+      data: { code: 'FORBIDDEN' },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.'
+    );
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
   });
   it('opens the close for a Pharmacist the server grants pharmacy:close (DEV-127)', () => {
     mocks.role = 'EMPLOYEE';
@@ -771,7 +837,9 @@ describe('day-close console', () => {
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
       screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
-    ).toHaveTextContent(/re-record this close report with a reason, but that never reopens the day/);
+    ).toHaveTextContent(
+      /re-record this close report with a reason, but that never reopens the day/
+    );
   });
   it('totals counted cash live from the drawers entered so far', () => {
     mocks.extraDrawers = [

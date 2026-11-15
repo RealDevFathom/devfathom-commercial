@@ -55,6 +55,26 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
+  it('reports cash variance as unavailable, not zero, when the period has no final close (DEV-733)', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    expect(result.metrics.cashVarianceMinor).toBeNull();
+    const sql = (queryRaw.mock.calls[0]?.[0] as { strings: readonly string[] }).strings.join('?');
+    expect(sql).toContain('(SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c');
+    expect(sql).not.toContain('COALESCE((SELECT SUM(c."cashVarianceMinor")');
+  });
+
   it('counts pharmacist coverage only during the qualified person validity window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
