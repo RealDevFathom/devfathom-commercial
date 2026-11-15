@@ -12,7 +12,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -622,6 +622,29 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
     );
     expect(bill?.status).toBe('OPEN');
     expect(bill?.receiptNumber).toBeNull();
+  });
+
+  it('refuses a MOCK card tender in production and saves nothing', async () => {
+    const { billId } = await openBill(2);
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      await expect(
+        deps.tenders.applyTender(deps.createTenantDb(orgId), {
+          billId,
+          tender: { type: 'CARD', amount: '10.00' },
+          actor: actor(),
+          now: AT,
+        })
+      ).rejects.toMatchObject({ reason: 'CARD_DECLINED' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+      events: await tx.restaurantPaymentEvent.count({ where: { payment: { billId } } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
   });
 
   it('rejects an over-tender beyond the bill balance', async () => {

@@ -19,7 +19,9 @@ import {
   MOCK_PROVIDER,
   PAYMENT_CAPABILITIES,
   PaymentAdapterError,
+  MOCK_IN_PRODUCTION_CODE,
   REGISTERED_PROVIDERS,
+  isExplicitApproval,
   appendPaymentEvent,
   getPaymentProvider,
   type PaymentCapability,
@@ -160,17 +162,32 @@ describe('MOCK — deterministic references and scriptable declines', () => {
     ).toBe('EXPIRED_CARD');
   });
 
-  it('never scripts a decline from the amount cents in production', () => {
+  it('refuses every SALE/AUTH in production: the MOCK never approves a card sale', () => {
     vi.stubEnv('NODE_ENV', 'production');
     try {
-      for (const amount of ['10.13', '5.51', '99.54']) {
-        const outcome = MOCK_PROVIDER.execute({ capability: 'SALE', amount, operationRef: 'p' });
-        expect(outcome.approved).toBe(true);
-        expect(outcome.declineCode).toBeNull();
+      for (const amount of ['10.00', '10.13', '5.51', '99.54']) {
+        for (const capability of ['SALE', 'AUTH'] as const) {
+          const outcome = MOCK_PROVIDER.execute({ capability, amount, operationRef: 'p' });
+          expect(outcome.approved).toBe(false);
+          expect(outcome.status).toBe('DECLINED');
+          expect(outcome.declineCode).toBe(MOCK_IN_PRODUCTION_CODE);
+        }
       }
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('counts only an explicit approved outcome as approval', () => {
+    const base = { approved: true, declineCode: null, status: 'CAPTURED' };
+    expect(isExplicitApproval(base)).toBe(true);
+    expect(isExplicitApproval({ ...base, status: 'AUTHORIZED' })).toBe(true);
+    expect(isExplicitApproval({ ...base, approved: undefined })).toBe(false);
+    expect(isExplicitApproval({ ...base, approved: 'true' })).toBe(false);
+    expect(isExplicitApproval({ ...base, declineCode: 'SOMETHING_NEW' })).toBe(false);
+    expect(isExplicitApproval({ ...base, status: 'DECLINED' })).toBe(false);
+    expect(isExplicitApproval({ ...base, status: 'WHO_KNOWS' })).toBe(false);
+    expect(isExplicitApproval(null)).toBe(false);
   });
 
   it('never declines a post-authorization operation on a designated amount', () => {

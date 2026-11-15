@@ -156,20 +156,38 @@ function centsComponent(amount: Prisma.Decimal): number {
   return amount.times(100).mod(100).abs().toNumber();
 }
 
-/**
- * The scripted cent-code declines are a test/demo hook only. They must never run in
- * a production build: a genuine charge of 10.13, 5.51 or 99.54 would otherwise be
- * refused on the amount alone, and the same hook would be a trap once a real card
- * provider is wired behind this contract.
- */
-function declineScriptingEnabled(): boolean {
-  return process.env.NODE_ENV !== 'production';
-}
+/** The decline code the MOCK returns for any funds-authorizing operation in production. */
+export const MOCK_IN_PRODUCTION_CODE = 'MOCK_PROVIDER_IN_PRODUCTION';
 
+/**
+ * Fail closed. The MOCK provider is a test/demo stand-in: in a production build it
+ * must never approve a card sale (no money moved), and the scripted cent-code
+ * declines are not applied to real amounts. A SALE/AUTH in production is refused;
+ * the cashier uses the manual terminal confirmation flow instead.
+ */
 function declineCodeFor(capability: PaymentCapability, amount: Prisma.Decimal): string | null {
   if (!AUTHORIZING.has(capability)) return null;
-  if (!declineScriptingEnabled()) return null;
+  if (process.env.NODE_ENV === 'production') return MOCK_IN_PRODUCTION_CODE;
   return DECLINE_CODES[centsComponent(amount)] ?? null;
+}
+
+const APPROVED_STATUSES: ReadonlySet<PaymentStatus> = new Set(['AUTHORIZED', 'CAPTURED']);
+
+/**
+ * A card sale counts as approved ONLY on an explicit approved outcome: `approved`
+ * is literally true, no decline code is present, and the status is an approved
+ * one. A missing, unknown or unrecognised value is treated as declined.
+ */
+export function isExplicitApproval(
+  outcome: { approved?: unknown; declineCode?: unknown; status?: unknown } | null | undefined
+): boolean {
+  return (
+    !!outcome &&
+    outcome.approved === true &&
+    (outcome.declineCode === null || outcome.declineCode === undefined) &&
+    typeof outcome.status === 'string' &&
+    APPROVED_STATUSES.has(outcome.status as PaymentStatus)
+  );
 }
 
 /** A deterministic provider reference: SHA-256 over the capability + the caller's

@@ -29,7 +29,7 @@ import {
   ZERO,
 } from './money';
 import { closeOrderAfterSettlement } from './orders';
-import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
+import { appendPaymentEvent, getPaymentProvider, isExplicitApproval } from './payment-adapter';
 import {
   quoteTaxSettlement,
   splitFractionalMoney,
@@ -1179,7 +1179,7 @@ async function persistCardTender(
         },
       }
     : getPaymentProvider('MOCK').execute({ capability: 'SALE', amount, tipAmount, operationRef });
-  if (!outcome.approved) {
+  if (!isExplicitApproval(outcome)) {
     // Abort the whole transaction: a decline leaves no tender/movement/payment/receipt.
     throw new TenderError(
       `The card sale was declined (${outcome.declineCode ?? 'DECLINED'}).`,
