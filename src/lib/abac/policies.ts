@@ -117,6 +117,21 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
 
+// Mandatory resource constraints apply before either persisted capabilities or
+// static policies can grant access. A capability establishes action eligibility,
+// but cannot authorize an invalid resource or state transition.
+export const RESOURCE_CONSTRAINTS: Partial<Record<Action, Policy>> = {
+  'resignation:review': ({ subject, resource }) =>
+    resource?.type === 'Resignation' &&
+    resource.status === 'PENDING' &&
+    typeof resource.userId === 'string' &&
+    resource.userId.length > 0 &&
+    resource.userId !== subject.id &&
+    typeof resource.targetRole === 'string' &&
+    resource.targetRole.length > 0 &&
+    !(subject.role === 'HR' && resource.targetRole === 'ADMIN'),
+};
+
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
@@ -137,16 +152,9 @@ export const POLICIES: Record<Action, Policy[]> = {
   // Any currently-employed member may resign.
   'resignation:request': [isActiveMember],
 
-  // Reviewing a resignation requires HR/admin, a still-PENDING request, that it
-  // isn't your own, and — for HR reviewers — that the resignee isn't an admin
-  // (an admin's departure is reviewed by another admin).
-  'resignation:review': [
-    ({ subject, resource }) =>
-      (subject.role === 'ADMIN' || subject.role === 'HR') &&
-      resource?.status === 'PENDING' &&
-      resource?.userId !== subject.id &&
-      !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
-  ],
+  // Default eligibility is HR/admin. RESOURCE_CONSTRAINTS enforces PENDING,
+  // non-self review and the HR/admin target boundary for every grant source.
+  'resignation:review': [isHrOrAdmin],
 
   // Restaurant M2 (§8): staff & operator-credential management is granted through
   // an organization role/override carrying the `staff:manage` capability (or `*`,
