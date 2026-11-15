@@ -8,6 +8,7 @@ import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { claimUploadOrThrow } from '../upload-claims';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
 // the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
@@ -386,7 +387,15 @@ export const clientsRouter = router({
       await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       // IMP-CLI-05: validate a supplied project link before persisting.
       if (input.projectId) await assertProjectExists(ctx.db, input.projectId);
-      const contract = await ctx.db.contract.create({ data: input });
+      // DEV-837: only the caller's own upload can become the signed document.
+      const contract = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.contract.create({ data: input });
+        await claimUploadOrThrow(tx, input.fileUrl, ctx.session.user.id, {
+          type: 'CONTRACT',
+          id: created.id,
+        });
+        return created;
+      });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_created',
         message: `added contract "${contract.title}"`,
@@ -433,7 +442,17 @@ export const clientsRouter = router({
         });
         if (!existing?.signedAt) data.signedAt = new Date();
       }
-      const contract = await ctx.db.contract.update({ where: { id }, data });
+      // DEV-837: a new signed document must be the caller's own upload; the one
+      // already bound to this contract re-saves unchanged. One transaction, so a
+      // failed update leaves no binding behind.
+      const contract = await ctx.db.$transaction(async (tx) => {
+        const updated = await tx.contract.update({ where: { id }, data });
+        await claimUploadOrThrow(tx, data.fileUrl, ctx.session.user.id, {
+          type: 'CONTRACT',
+          id: updated.id,
+        });
+        return updated;
+      });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_updated',
         message: `updated contract "${contract.title}"`,

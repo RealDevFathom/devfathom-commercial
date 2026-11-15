@@ -30,9 +30,10 @@ const db = {
   restaurantStaffProfile: { findMany: vi.fn() },
   restaurantStaffJobRole: { findMany: vi.fn() },
   restaurantSopTemplateVersion: { findFirst: vi.fn() },
-  projectFile: { findFirst: vi.fn() },
-  taskAttachment: { findFirst: vi.fn() },
-  contract: { findFirst: vi.fn() },
+  uploadedFile: { findFirst: vi.fn() },
+  projectFile: { findUnique: vi.fn() },
+  taskAttachment: { findUnique: vi.fn() },
+  contract: { findUnique: vi.fn() },
   projectMember: { findUnique: vi.fn() },
   task: { findUnique: vi.fn() },
 };
@@ -52,9 +53,11 @@ beforeEach(() => {
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
-  db.projectFile.findFirst.mockResolvedValue(null);
-  db.taskAttachment.findFirst.mockResolvedValue(null);
-  db.contract.findFirst.mockResolvedValue(null);
+  // A registered upload no record has bound yet (DEV-837).
+  db.uploadedFile.findFirst.mockResolvedValue({ ownerType: null, ownerId: null });
+  db.projectFile.findUnique.mockResolvedValue(null);
+  db.taskAttachment.findUnique.mockResolvedValue(null);
+  db.contract.findUnique.mockResolvedValue(null);
   db.projectMember.findUnique.mockResolvedValue(null);
   db.task.findUnique.mockResolvedValue(null);
   mocks.granted = new Set();
@@ -276,24 +279,37 @@ describe('private attachment delivery', () => {
     });
   });
 
-  describe('DEV-837: owner bindings are re-checked at download (F15)', () => {
-    const T1 = new Date('2026-11-01T10:00:00.000Z');
-    const T2 = new Date('2026-11-02T10:00:00.000Z');
-    const earliest = (where: Record<string, string>, select: Record<string, true>) => ({
-      where,
-      orderBy: { createdAt: 'asc' },
-      select,
+  describe('DEV-837: server-recorded upload ownership at download (F15)', () => {
+    const bound = (ownerType: string, ownerId: string) =>
+      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId });
+
+    it('looks the object up in the upload registry by name', async () => {
+      expect((await read('plan.pdf')).status).toBe(200);
+      expect(db.uploadedFile.findFirst).toHaveBeenCalledWith({
+        where: { name: 'plan.pdf' },
+        select: { ownerType: true, ownerId: true },
+      });
+    });
+
+    it('denies an object the registry does not know, even to admins', async () => {
+      db.uploadedFile.findFirst.mockResolvedValue(null);
+      for (const role of ['EMPLOYEE', 'ADMIN']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read('legacy-orphan.pdf')).status).toBe(404);
+      }
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
 
     it('denies a removed project member a saved project file URL and allows members', async () => {
-      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_1', createdAt: T1 });
+      bound('PROJECT_FILE', 'pf_1');
+      db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
 
-      const response = await read('plan.pdf');
-      expect(response.status).toBe(404);
+      expect((await read('plan.pdf')).status).toBe(404);
       expect(mocks.getUpload).not.toHaveBeenCalled();
-      expect(db.projectFile.findFirst).toHaveBeenCalledWith(
-        earliest({ url: '/api/files/plan.pdf' }, { projectId: true, createdAt: true })
-      );
+      expect(db.projectFile.findUnique).toHaveBeenCalledWith({
+        where: { id: 'pf_1' },
+        select: { projectId: true },
+      });
       expect(db.projectMember.findUnique).toHaveBeenCalledWith({
         where: { projectId_userId: { projectId: 'project_1', userId: 'user_1' } },
         select: { role: true },
@@ -307,16 +323,12 @@ describe('private attachment delivery', () => {
       expect((await read('plan.pdf')).status).toBe(200);
     });
 
-    it('resolves a task attachment to its project and denies unresolved bindings', async () => {
-      db.taskAttachment.findFirst.mockResolvedValue({ taskId: 'task_1', createdAt: T1 });
-      db.task.findUnique.mockResolvedValue({
-        column: { board: { projectId: 'project_2' } },
-      });
+    it('resolves a task attachment to its project and denies a removed member', async () => {
+      bound('TASK_ATTACHMENT', 'ta_1');
+      db.taskAttachment.findUnique.mockResolvedValue({ taskId: 'task_1' });
+      db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_2' } } });
       expect((await read('spec.png')).status).toBe(404);
       expect(mocks.getUpload).not.toHaveBeenCalled();
-      expect(db.taskAttachment.findFirst).toHaveBeenCalledWith(
-        earliest({ url: '/api/files/spec.png' }, { taskId: true, createdAt: true })
-      );
 
       db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
       expect((await read('spec.png')).status).toBe(200);
@@ -324,80 +336,63 @@ describe('private attachment delivery', () => {
         where: { projectId_userId: { projectId: 'project_2', userId: 'user_1' } },
         select: { role: true },
       });
-
-      db.task.findUnique.mockResolvedValue(null);
-      mocks.getUpload.mockClear();
-      expect((await read('spec.png')).status).toBe(404);
-      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
 
     it('denies a demoted administrator a signed contract document', async () => {
-      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
+      bound('CONTRACT', 'contract_1');
+      db.contract.findUnique.mockResolvedValue({ id: 'contract_1' });
       for (const role of ['EMPLOYEE', 'MANAGER']) {
         mocks.actor.mockResolvedValue(actor(role));
         expect((await read('signed-contract.pdf')).status).toBe(404);
       }
       expect(mocks.getUpload).not.toHaveBeenCalled();
-      expect(db.contract.findFirst).toHaveBeenCalledWith(
-        earliest({ fileUrl: '/api/files/signed-contract.pdf' }, { id: true, createdAt: true })
-      );
 
       mocks.actor.mockResolvedValue(actor('ADMIN'));
       expect((await read('signed-contract.pdf')).status).toBe(200);
     });
 
-    it('does not let a later project binding widen access to a contract document', async () => {
-      // A former admin re-attaches a saved contract URL to a project they lead.
-      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
-      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_mine', createdAt: T2 });
-      db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
-      expect((await read('signed-contract.pdf')).status).toBe(404);
-      expect(mocks.getUpload).not.toHaveBeenCalled();
+    it.each([
+      ['project file', 'PROJECT_FILE', 'projectFile'],
+      ['task attachment', 'TASK_ATTACHMENT', 'taskAttachment'],
+      ['contract', 'CONTRACT', 'contract'],
+    ] as const)(
+      'keeps denying after the owning %s is deleted, even to admins',
+      async (_label, ownerType, model) => {
+        bound(ownerType, 'deleted_owner');
+        db[model].findUnique.mockResolvedValue(null);
+        db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
+        for (const role of ['EMPLOYEE', 'ADMIN']) {
+          mocks.actor.mockResolvedValue(actor(role));
+          expect((await read('was-attached.pdf')).status).toBe(404);
+        }
+        expect(mocks.getUpload).not.toHaveBeenCalled();
+      }
+    );
+
+    it('denies an object bound to an owner kind it does not know', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      bound('SOMETHING_ELSE', 'x');
+      expect((await read('odd.pdf')).status).toBe(404);
     });
 
-    it('does not let a later binding to another project restrict the original readers', async () => {
-      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_a', createdAt: T1 });
-      db.taskAttachment.findFirst.mockResolvedValue({ taskId: 'task_in_b', createdAt: T2 });
-      db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_b' } } });
-      db.projectMember.findUnique.mockImplementation(
-        async ({ where }: { where: { projectId_userId: { projectId: string } } }) =>
-          where.projectId_userId.projectId === 'project_a' ? { role: 'MEMBER' } : null
-      );
-      // A member of the original project keeps access; project B is never consulted.
+    it('lets the binding alone decide: other rows naming the URL are not consulted', async () => {
+      bound('PROJECT_FILE', 'pf_1');
+      db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
+      db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
       expect((await read('plan.pdf')).status).toBe(200);
-      expect(db.task.findUnique).not.toHaveBeenCalled();
+      expect(db.contract.findUnique).not.toHaveBeenCalled();
+      expect(db.taskAttachment.findUnique).not.toHaveBeenCalled();
     });
 
-    it('leaves a chat or SOP file to its own checks when attached to a project later', async () => {
-      db.messageAttachment.findFirst.mockResolvedValue({
-        createdAt: T1,
-        message: { channelId: 'channel_1' },
-      });
-      db.channelMember.findUnique.mockResolvedValue({ id: 'member_1' });
-      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_x', createdAt: T2 });
-      expect((await read('chat.png')).status).toBe(200);
-      expect(db.projectMember.findUnique).not.toHaveBeenCalled();
-      expect(db.messageAttachment.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ orderBy: { createdAt: 'asc' } })
-      );
-
-      db.messageAttachment.findFirst.mockResolvedValue(null);
+    it('leaves SOP proof to its own rules and never to the registry', async () => {
       db.restaurantSopEvidence.findFirst.mockResolvedValue({
         serverCaptured: true,
-        createdAt: T1,
         occurrence: { branchId: 'branch_a' },
       });
       db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'assignment_1' });
+      db.uploadedFile.findFirst.mockResolvedValue(null);
       expect((await read('sop-proof.jpg')).status).toBe(200);
-      expect(db.projectMember.findUnique).not.toHaveBeenCalled();
-    });
-
-    it('denies an ambiguous file owned by two kinds of record at the same instant', async () => {
-      mocks.actor.mockResolvedValue(actor('ADMIN'));
-      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_1', createdAt: T1 });
-      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
-      expect((await read('both.pdf')).status).toBe(404);
-      expect(mocks.getUpload).not.toHaveBeenCalled();
+      expect(db.uploadedFile.findFirst).not.toHaveBeenCalled();
     });
 
     it.each([

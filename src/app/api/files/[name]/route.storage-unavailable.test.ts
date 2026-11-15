@@ -35,10 +35,8 @@ beforeEach(() => {
       pharmacySopSite: { findFirst: m.site },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
-      // DEV-837: unbound uploads (no project, task or contract owner).
-      projectFile: { findFirst: async () => null },
-      taskAttachment: { findFirst: async () => null },
-      contract: { findFirst: async () => null },
+      // DEV-837: a registered upload that no record has bound.
+      uploadedFile: { findFirst: async () => ({ ownerType: null, ownerId: null }) },
     })
   );
   m.get.mockRejectedValue(new StorageUnavailableError('disabled'));

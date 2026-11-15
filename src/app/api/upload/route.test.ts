@@ -1,10 +1,18 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ actor: vi.fn(), put: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  actor: vi.fn(),
+  put: vi.fn(),
+  remove: vi.fn(),
+  tenant: vi.fn(),
+  register: vi.fn(),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.tenant }));
 vi.mock('@/lib/storage', async (original) => ({
   ...(await original<typeof import('@/lib/storage')>()),
   putUpload: mocks.put,
+  deleteUpload: mocks.remove,
 }));
 import { StorageUnavailableError } from '@/lib/storage';
 import { PasswordChangeRequiredError } from '@/lib/auth/session-state';
@@ -20,6 +28,11 @@ beforeEach(() => {
     organization: { id: 'org-a' },
     session: { user: { id: 'user-a' } },
   });
+  mocks.tenant.mockImplementation(async (_org, run) =>
+    run({ uploadedFile: { create: mocks.register } })
+  );
+  mocks.register.mockResolvedValue({ id: 'upl_1' });
+  mocks.remove.mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 test('authorized unavailable upload returns 503 without a link or sensitive details', async () => {
@@ -69,4 +82,26 @@ test('generic failures are sanitized in response and logging', async () => {
   expect(response.status).toBe(500);
   expect(await response.text()).not.toContain('sensitive');
   expect(log).toHaveBeenCalledWith('[upload] failed');
+});
+// DEV-837: the server records who uploaded every object, in the uploader's
+// tenant, so ownership is never inferred from a later client-supplied URL.
+test('registers the stored object with the session uploader', async () => {
+  const response = await POST(request());
+  const { url } = await response.json();
+  const name = url.slice('/api/files/'.length);
+  expect(mocks.tenant).toHaveBeenCalledWith('org-a', expect.any(Function));
+  expect(mocks.register).toHaveBeenCalledWith({
+    data: { name, uploadedById: 'user-a' },
+    select: { id: true },
+  });
+  expect(mocks.put).toHaveBeenCalledWith('org-a', name, expect.any(Buffer), 'image/png');
+});
+test('a failed registration removes the stored object and returns no link', async () => {
+  mocks.register.mockRejectedValue(new Error('registry unavailable'));
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const response = await POST(request());
+  expect(response.status).toBe(500);
+  expect(await response.text()).not.toContain('/api/files/');
+  const stored = mocks.put.mock.calls[0]![1];
+  expect(mocks.remove).toHaveBeenCalledWith('org-a', stored);
 });

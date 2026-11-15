@@ -16552,3 +16552,26 @@ model PharmacySeasonalWindow {
   @@index([organizationId, branchId, startDate], map: "pharmacy_seasonal_windows_org_branch_start_idx")
   @@map("pharmacy_seasonal_windows")
 }
+
+/// DEV-837 (F15/F17): the server's record of every object written by
+/// `/api/upload`. The uploader is recorded at upload time and never taken from
+/// a client. The first authorized attach binds the object to the record it was
+/// uploaded for (`ownerType`/`ownerId`); the binding is write-once (a database
+/// trigger refuses changes) and has no foreign key, so it outlives a deleted
+/// owner as a tombstone and the object is then denied, never served
+/// tenant-wide. Rows are never deleted (no DELETE policy). `uploadedById` is
+/// null for files registered from references that predate this table.
+model UploadedFile {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  uploadedById   String?
+  ownerType      String?
+  ownerId        String?
+  boundAt        DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([organizationId, name], map: "uploaded_files_org_name_key")
+  @@index([organizationId])
+  @@map("uploaded_files")
+}

@@ -8,7 +8,7 @@
 // per-channel membership enforcement for chat attachments below; signed-URL
 // delivery against object storage remains the linked production enhancement.
 
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
@@ -17,7 +17,7 @@ import {
   pharmacySopEvidenceReadDecision,
 } from '@/lib/pharmacy/sop-evidence';
 import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
-import { canAccessProject, projectIdOfTask } from '@/lib/authz';
+import { canReadBoundUpload } from '@/lib/uploads/registry';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -51,65 +51,6 @@ function isSopCaptureName(name: string): boolean {
   return (
     RESTAURANT_SOP_CAPTURE_NAME.test(name) || name.startsWith(PHARMACY_SOP_EVIDENCE_FILE_PREFIX)
   );
-}
-
-/**
- * DEV-837 (F15): re-check the current read policy of the record that owns this
- * file reference. The owner is the EARLIEST record that references the file —
- * the upload it was created for, since only its uploader knew the URL then.
- * Project files and task attachments need project access now (admin or current
- * member); a client contract's signed document needs a current admin (the client
- * detail read rule). A later reference (someone attaching a known URL to their
- * own project) is an annotation: it can neither widen nor restrict who may read
- * the original. Chat attachments and SOP proof keep their own checks, so when
- * one of those came first no owner check applies here. Equally early records of
- * different kinds are ambiguous and denied.
- */
-async function ownerBindingAllows(
-  db: ScopedDb,
-  user: { id: string; role?: string | null },
-  fileRef: string,
-  /** When the chat attachment / SOP proof referencing this file was recorded. */
-  otherOwnersAt: readonly (Date | null | undefined)[]
-): Promise<boolean> {
-  const earliest = { orderBy: { createdAt: 'asc' as const } };
-  const [projectFile, taskAttachment, contract] = await Promise.all([
-    db.projectFile.findFirst({
-      where: { url: fileRef },
-      ...earliest,
-      select: { projectId: true, createdAt: true },
-    }),
-    db.taskAttachment.findFirst({
-      where: { url: fileRef },
-      ...earliest,
-      select: { taskId: true, createdAt: true },
-    }),
-    db.contract.findFirst({
-      where: { fileUrl: fileRef },
-      ...earliest,
-      select: { id: true, createdAt: true },
-    }),
-  ]);
-  const owners = [
-    projectFile && { kind: 'project' as const, at: projectFile.createdAt.getTime() },
-    taskAttachment && { kind: 'task' as const, at: taskAttachment.createdAt.getTime() },
-    contract && { kind: 'contract' as const, at: contract.createdAt.getTime() },
-    ...otherOwnersAt.map((at) => at && { kind: 'other' as const, at: at.getTime() }),
-  ].filter((owner): owner is NonNullable<typeof owner> => Boolean(owner));
-  if (owners.length === 0) return true;
-  const firstAt = Math.min(...owners.map((owner) => owner.at));
-  const first = owners.filter((owner) => owner.at === firstAt);
-  if (new Set(first.map((owner) => owner.kind)).size > 1) return false;
-  const owner = first[0]!;
-  if (owner.kind === 'other') return true;
-  if (owner.kind === 'contract') return user.role === 'ADMIN';
-  const projectId =
-    owner.kind === 'project'
-      ? projectFile!.projectId
-      : await projectIdOfTask(db, taskAttachment!.taskId);
-  // An attachment whose task no longer resolves to a project is unbound: deny.
-  if (!projectId) return false;
-  return canAccessProject(db, user.id, user.role, projectId);
 }
 
 export async function GET(request: Request, ctx: { params: Promise<{ name: string }> }) {
@@ -165,7 +106,6 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       orderBy: [{ serverCaptured: 'desc' }, { createdAt: 'asc' }],
       select: {
         serverCaptured: true,
-        createdAt: true,
         uploaderStaffProfileId: true,
         occurrence: {
           select: {
@@ -214,22 +154,39 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     if (!branchAccess) return new Response('Not found', { status: 404 });
   }
 
+  // DEV-837 (F15): every object other than SOP proof must be one that
+  // /api/upload registered. An object bound to a project file, task attachment
+  // or contract follows that record's CURRENT read policy, and a deleted owner
+  // leaves a tombstone binding that denies. Client-supplied references never
+  // bind or re-bind an object. An object the registry does not know (a legacy
+  // file nothing references any more) is unresolved and is never served.
+  if (!sopEvidence) {
+    const upload = await withTenantDb(organization.id, (db) =>
+      db.uploadedFile.findFirst({
+        where: { name },
+        select: { ownerType: true, ownerId: true },
+      })
+    );
+    if (!upload) return new Response('Not found', { status: 404 });
+    const ownerType = upload.ownerType;
+    if (ownerType !== null) {
+      const allowed = await withTenantDb(organization.id, (db) =>
+        canReadBoundUpload(db, session.user, { ownerType, ownerId: upload.ownerId })
+      );
+      if (!allowed) return new Response('Not found', { status: 404 });
+    }
+  }
+
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
-  // leaks a private-channel/DM file to any signed-in user. Project files, task
-  // attachments and contract documents are re-checked by their owning record
-  // (DEV-837); other uploads (avatars, client logos) keep the session-only gate.
+  // leaks a private-channel/DM file to any signed-in user. Uploads no record has
+  // bound (client logos, licence evidence) keep their existing rules.
   const attachment = await withTenantDb(organization.id, (db) =>
     db.messageAttachment.findFirst({
       where: { url: fileRef },
-      orderBy: { createdAt: 'asc' },
-      select: { createdAt: true, message: { select: { channelId: true } } },
+      select: { message: { select: { channelId: true } } },
     })
   );
-  const ownerAllowed = await withTenantDb(organization.id, (db) =>
-    ownerBindingAllows(db, session.user, fileRef, [attachment?.createdAt, sopEvidence?.createdAt])
-  );
-  if (!ownerAllowed) return new Response('Not found', { status: 404 });
   if (attachment) {
     const member = await withTenantDb(organization.id, (db) =>
       db.channelMember.findUnique({
