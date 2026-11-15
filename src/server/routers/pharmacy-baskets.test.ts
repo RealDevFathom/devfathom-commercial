@@ -102,17 +102,20 @@ function setup(role = 'ADMIN') {
       ]),
     },
     medicine: {
-      findMany: vi.fn(async (args: { select: { productName?: boolean } }) =>
-        args.select.productName
-          ? [
-              product('soap'),
-              product('cream'),
-              product('rx', { rx: true }),
-              product('restricted', { restricted: true }),
-              product('controlled', { controlled: true }),
-              product('otc', { otc: true, productFamily: 'PHARMACEUTICAL' }),
-            ]
-          : [{ id: 'cream' }, { id: 'soap' }]
+      findMany: vi.fn(
+        async (args: { select: { productName?: boolean; productFamily?: boolean } }) =>
+          args.select.productName
+            ? [
+                product('soap'),
+                product('cream'),
+                product('rx', { rx: true }),
+                product('restricted', { restricted: true }),
+                product('controlled', { controlled: true }),
+                product('otc', { otc: true, productFamily: 'PHARMACEUTICAL' }),
+              ]
+            : args.select.productFamily
+              ? [product('cream'), product('soap')]
+              : [{ id: 'cream' }, { id: 'soap' }]
       ),
     },
     restaurantStaffProfile: { findMany: vi.fn(async () => [{ id: 'staff-owner' }]) },

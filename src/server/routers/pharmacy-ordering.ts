@@ -18,6 +18,7 @@ import {
   recordDeliveryCommand,
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
+import { MAX_DELIVERY_DISTANCE_METERS } from '@/lib/pharmacy/delivery-radius-profitability';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import {
   actorMayRefund,
@@ -222,6 +223,12 @@ export const pharmacyOrderingRouter = router({
           orderId: z.string().min(1),
           action: z.enum(['accept', 'pack', 'ready', 'dispatch', 'cancel', 'expire']),
           runnerUserId: z.string().min(1).optional(),
+          deliveryDistanceMeters: z
+            .number()
+            .int()
+            .min(0)
+            .max(MAX_DELIVERY_DISTANCE_METERS)
+            .optional(),
         })
         .strict()
     )
