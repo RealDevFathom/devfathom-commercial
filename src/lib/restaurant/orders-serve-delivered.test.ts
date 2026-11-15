@@ -21,10 +21,12 @@ function txFor(status: string, items: Array<{ id: string; status: string }>) {
   return { tx: tx as never, updateMany };
 }
 
+const actor = { staffProfileId: 's', deviceId: 'd' };
+
 describe('serveDeliveredOrderItems', () => {
   beforeEach(() => appendOrderEvent.mockReset());
 
-  it('serves live items the kitchen never marked prepared', async () => {
+  it('serves received items the kitchen never marked prepared (normal case)', async () => {
     const { tx, updateMany } = txFor('SENT', [
       { id: 'a', status: 'QUEUED' },
       { id: 'b', status: 'FIRING' },
@@ -32,10 +34,7 @@ describe('serveDeliveredOrderItems', () => {
       { id: 'd', status: 'SERVED' },
       { id: 'e', status: 'VOIDED' },
     ]);
-    const served = await serveDeliveredOrderItems(tx, 'order-1', {
-      staffProfileId: 's',
-      deviceId: 'd',
-    });
+    const served = await serveDeliveredOrderItems(tx, 'order-1', actor);
     expect(served).toEqual(['a', 'b', 'c']);
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'SERVED' } })
@@ -48,11 +47,25 @@ describe('serveDeliveredOrderItems', () => {
     });
   });
 
+  it.each([
+    ['an unsent item', 'HELD'],
+    ['an item added after dispatch (unsent)', 'HELD'],
+    ['a remake-requested item', 'REMAKE_REQUESTED'],
+  ])('refuses the hand-off while %s remains and serves nothing', async (_label, status) => {
+    const { tx, updateMany } = txFor('SENT', [
+      { id: 'a', status: 'PREPARED' },
+      { id: 'b', status },
+    ]);
+    await expect(serveDeliveredOrderItems(tx, 'order-1', actor)).rejects.toMatchObject({
+      reason: 'ITEM_STATE',
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(appendOrderEvent).not.toHaveBeenCalled();
+  });
+
   it('leaves a terminal order untouched', async () => {
-    const { tx, updateMany } = txFor('CLOSED', [{ id: 'a', status: 'QUEUED' }]);
-    expect(
-      await serveDeliveredOrderItems(tx, 'order-1', { staffProfileId: null, deviceId: null })
-    ).toEqual([]);
+    const { tx, updateMany } = txFor('CLOSED', [{ id: 'a', status: 'HELD' }]);
+    expect(await serveDeliveredOrderItems(tx, 'order-1', actor)).toEqual([]);
     expect(updateMany).not.toHaveBeenCalled();
   });
 });
