@@ -350,7 +350,8 @@ export const pharmacyOrderingRouter = router({
         .object({
           branchId,
           requestId: z.string().trim().min(1).max(128),
-          businessDate: z.date(),
+          // Optional: the server books on today; any other client date is refused.
+          businessDate: z.date().optional(),
         })
         .strict()
     )

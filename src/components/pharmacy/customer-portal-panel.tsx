@@ -26,20 +26,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   INVALID_STATE: 'This request was already decided. Refresh the queue.',
   REQUEST_NOT_FOUND: 'This request was already decided. Refresh the queue.',
   DAY_CLOSED: 'Open the business day before recording a payment.',
+  BUSINESS_DATE_NOT_CURRENT: 'Payments use today’s business date only. Refresh and try again.',
 };
 
 function money(minor: number, currency: string) {
   return new Intl.NumberFormat('en-PK', { style: 'currency', currency }).format(minor / 100);
-}
-
-function todayInKarachi() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Karachi',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
-  return new Date(`${parts}T00:00:00.000Z`);
 }
 
 /**
@@ -87,11 +78,8 @@ export function CustomerPortalPanel() {
     setNotice(null);
     try {
       if (action === 'CONFIRM') {
-        const slip = await confirm.mutateAsync({
-          branchId,
-          requestId: request.id,
-          businessDate: todayInKarachi(),
-        });
+        // The server books the payment on today's business date.
+        const slip = await confirm.mutateAsync({ branchId, requestId: request.id });
         setNotice({ tone: 'success', message: `Payment recorded · ${slip.receiptReference}` });
       } else {
         await decide.mutateAsync({ branchId, requestId: request.id, decision: action });

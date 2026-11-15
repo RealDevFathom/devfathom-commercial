@@ -297,6 +297,7 @@ describe('DEV-15 staff decisions', () => {
           }),
           updateMany,
         },
+        organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
       }),
     };
   }
@@ -325,10 +326,38 @@ describe('DEV-15 staff decisions', () => {
     ).rejects.toMatchObject({ reason: 'KIND_NOT_ALLOWED' });
   });
 
-  it('posts a confirmed Raast payment through the counter repayment path', async () => {
+  // 2026-11-15 00:30 in Karachi is still 2026-11-14 in UTC.
+  const NOW = new Date('2026-11-14T19:30:00.000Z');
+  const TODAY = new Date('2026-11-15T00:00:00.000Z');
+
+  it.each([
+    ['a past day', new Date('2026-11-13T00:00:00.000Z')],
+    ['a future day', new Date('2026-11-17T00:00:00.000Z')],
+    ['the UTC day, already yesterday in Karachi', new Date('2026-11-14T00:00:00.000Z')],
+  ])('refuses to post a payment on %s the client sent', async (_, businessDate) => {
+    vi.mocked(recordKhataRepayment).mockClear();
     const { db, updateMany } = staffDb('KHATA_PAYMENT');
-    const businessDate = new Date('2026-11-15T00:00:00Z');
-    await confirmPortalKhataPayment(db, scope, { requestId: 'r-1', businessDate });
+    await expect(
+      confirmPortalKhataPayment(db, scope, { requestId: 'r-1', businessDate }, NOW)
+    ).rejects.toMatchObject({ reason: 'BUSINESS_DATE_NOT_CURRENT' });
+    expect(recordKhataRepayment).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('books on today in the workspace zone when the client sends no date', async () => {
+    vi.mocked(recordKhataRepayment).mockClear();
+    const { db } = staffDb('KHATA_PAYMENT');
+    await confirmPortalKhataPayment(db, scope, { requestId: 'r-1' }, NOW);
+    expect(vi.mocked(recordKhataRepayment).mock.calls[0][2]).toMatchObject({
+      businessDate: TODAY,
+    });
+  });
+
+  it('posts a confirmed Raast payment through the counter repayment path', async () => {
+    vi.mocked(recordKhataRepayment).mockClear();
+    const { db, updateMany } = staffDb('KHATA_PAYMENT');
+    const businessDate = TODAY;
+    await confirmPortalKhataPayment(db, scope, { requestId: 'r-1', businessDate }, NOW);
     expect(recordKhataRepayment).toHaveBeenCalledWith(db, scope, {
       familyAccountId: 'fa-1',
       amountMinor: 50_000,

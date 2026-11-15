@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceToday } from '@/lib/timezone';
 
 import { readCustomerSnapshot } from './customer-loyalty';
 import { readKhataBalance } from './family-khata';
@@ -52,6 +53,7 @@ export class PharmacyPortalError extends Error {
       | 'REQUEST_NOT_FOUND'
       | 'INVALID_STATE'
       | 'KIND_NOT_ALLOWED'
+      | 'BUSINESS_DATE_NOT_CURRENT'
   ) {
     super(reason);
     this.name = 'PharmacyPortalError';
@@ -579,9 +581,20 @@ export async function decidePortalRequest(
 export async function confirmPortalKhataPayment(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { requestId: string; businessDate: Date }
+  input: { requestId: string; businessDate?: Date },
+  now: Date = new Date()
 ) {
   const request = await pendingRequest(db, scope, input.requestId);
+  // Money confirmed now books on today in the workspace zone (the DEV-630 rule),
+  // never on a past or future day the client chose.
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const today = workspaceToday(organization?.timezone, now);
+  if (input.businessDate && input.businessDate.toISOString().slice(0, 10) !== today)
+    throw new PharmacyPortalError('BUSINESS_DATE_NOT_CURRENT');
+  const businessDate = new Date(`${today}T00:00:00.000Z`);
   if (
     request.kind !== 'KHATA_PAYMENT' ||
     !request.familyAccountId ||
@@ -594,7 +607,7 @@ export async function confirmPortalKhataPayment(
     amountMinor: request.amountMinor,
     tender: 'RAAST',
     payerReference: request.payerReference,
-    businessDate: input.businessDate,
+    businessDate,
     idempotencyKey: `portal-request:${request.id}`,
   });
   await closeRequest(db, scope, request.id, {
