@@ -535,11 +535,20 @@ export type CounterCartLine = {
   }>;
 };
 
+/** #722: one recorded payment row of a (possibly split) bill. */
+export type CounterCartTender = {
+  tenderId: string;
+  type: string;
+  amountMinor: number;
+};
+
 export type CounterCart = {
   saleId: string;
   status: string;
   receiptNumber: number | null;
   lines: CounterCartLine[];
+  /** Recorded payments in the order taken; optional for older cached responses. */
+  tenders?: CounterCartTender[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number; tenderedMinor: number };
 };
 
@@ -547,7 +556,7 @@ async function saleInScope(db: ScopedDb, scope: CounterScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
-      tenders: true,
+      tenders: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       lines: {
         orderBy: { createdAt: 'asc' },
         include: {
@@ -650,6 +659,12 @@ export async function readCounterCart(
     status: sale.status,
     receiptNumber: sale.receiptNumber,
     lines,
+    // Allowlisted: actor, device and provider references stay server-side.
+    tenders: sale.tenders.map((tender) => ({
+      tenderId: tender.id,
+      type: tender.type,
+      amountMinor: tender.amountMinor,
+    })),
     totals: {
       grossMinor,
       discountMinor,
