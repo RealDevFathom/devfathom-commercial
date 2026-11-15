@@ -259,6 +259,14 @@ describe('DEV-764 loyalty owner console', () => {
     ).not.toBeChecked();
   });
 
+  it('warns that the point value revalues points already held, and sets the manager ceiling', async () => {
+    await show();
+    expect(
+      screen.getByText(/Changing it changes the value of every point customers already hold/)
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Largest manager adjustment (points)')).toHaveValue('500');
+  });
+
   it('makes the first setup obvious and starts from the PKR 1 default', async () => {
     await show();
     expect(screen.getByText(/First setup: choose how points are earned/)).toBeInTheDocument();

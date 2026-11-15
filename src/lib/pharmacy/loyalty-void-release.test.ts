@@ -63,6 +63,8 @@ function ledger(
               .reduce((sum, row) => sum + Number(row.points), 0) || null,
         },
       })),
+      // The ledger replay for restored points; these fixtures have no expiring lots.
+      findMany: vi.fn(async () => []),
       create: vi.fn(async ({ data }: { data: Row }) => {
         const row = { id: `entry-${created.length}`, ...data };
         created.push(row);
@@ -234,5 +236,73 @@ describe('DEV-764 releasing a redemption when its sale is voided', () => {
       'BILL_HAS_PAYMENTS'
     );
     expect(created).toEqual([]);
+  });
+});
+
+describe('DEV-764 a void release keeps the redeemed points expiry', () => {
+  it('expires at once released points whose lot expired before the void', async () => {
+    const { db, created } = ledger([loyaltyTender(2_000)]);
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000);
+    const history = [
+      // 20 points earned 60 days ago, expiring 30 days ago; all 20 redeemed on the open bill.
+      {
+        id: 'earn-a',
+        kind: 'EARN',
+        points: 20,
+        saleId: 'sale-old',
+        tenderId: null,
+        programVersionId: 'program-1',
+        reversesEntryId: null,
+        expiresAt: at(30),
+        occurredAt: at(60),
+      },
+      {
+        id: 'redeem-a',
+        kind: 'REDEEM',
+        points: -20,
+        saleId: 'sale-a',
+        tenderId: 'tender-a',
+        programVersionId: null,
+        reversesEntryId: null,
+        expiresAt: null,
+        occurredAt: at(40),
+      },
+      // The sweep closed the spent lot with nothing left in it.
+      {
+        id: 'expiry-a',
+        kind: 'EXPIRY',
+        points: 0,
+        saleId: null,
+        tenderId: null,
+        programVersionId: 'program-1',
+        reversesEntryId: 'earn-a',
+        expiresAt: null,
+        occurredAt: at(30),
+      },
+    ];
+    db.pharmacyLoyaltyPointsEntry.findMany.mockImplementation(async () => [
+      ...history,
+      ...created.map((row) => ({
+        expiresAt: null,
+        programVersionId: null,
+        reversesEntryId: null,
+        saleId: null,
+        tenderId: null,
+        occurredAt: at(0.001),
+        ...row,
+      })),
+    ]);
+
+    await releaseVoidedSaleRedemptions(db as never, scope, 'sale-a');
+
+    expect(created).toEqual([
+      expect.objectContaining({ kind: 'REDEMPTION_RELEASE', points: 20 }),
+      expect.objectContaining({
+        kind: 'EXPIRY',
+        points: -20,
+        reversesEntryId: 'entry-0',
+        idempotencyKey: 'loyalty:expiry:entry-0',
+      }),
+    ]);
   });
 });

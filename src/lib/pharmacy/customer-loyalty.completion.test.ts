@@ -91,6 +91,8 @@ function fixture() {
     pharmacyLoyaltyPointsEntry: {
       findUnique: vi.fn().mockResolvedValue(null),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 10 } }),
+      // DEV-764: no lot past expiry, so the whole balance can be spent.
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
     },
   };
@@ -182,5 +184,34 @@ describe('DEV-764 redemption at the owner-set point value', () => {
     expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ kind: 'REDEEM', points: -2, requestedPoints: 2 }),
     });
+  });
+});
+
+describe('DEV-764 points past expiry cannot be redeemed before the sweep', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('refuses to spend points of a lot already past its expiry date', async () => {
+    const { db } = fixture();
+    // 10 points in the balance, all from one lot that expired yesterday and is not yet swept.
+    db.pharmacyLoyaltyPointsEntry.count.mockResolvedValue(1);
+    Object.assign(db.pharmacyLoyaltyPointsEntry, {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'earn-a',
+          kind: 'EARN',
+          points: 10,
+          saleId: 'sale-old',
+          tenderId: null,
+          programVersionId: 'program-1',
+          reversesEntryId: null,
+          expiresAt: new Date(Date.now() - 86_400_000),
+          occurredAt: new Date(Date.now() - 40 * 86_400_000),
+        },
+      ]),
+    });
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow(
+      'INSUFFICIENT_POINTS'
+    );
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 });

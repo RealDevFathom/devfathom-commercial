@@ -63,6 +63,13 @@ export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: s
   });
 }
 
+/**
+ * DEV-764: the largest manual adjustment a manager may make before the owner sets one (the
+ * column default); the owner can change it in the program settings.
+ */
+export const DEFAULT_MANAGER_ADJUST_LIMIT_POINTS = 500;
+export const LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS = 1_000_000;
+
 /** DEV-764: the most days an owner may let a point last (ten years). */
 export const LOYALTY_MAX_EXPIRY_DAYS = 3650;
 
@@ -70,11 +77,17 @@ export const LOYALTY_MAX_EXPIRY_DAYS = 3650;
 export type LoyaltyProgramSettings = LoyaltyEarnRule & {
   expiryDays?: number | null;
   khataEarns?: boolean;
+  managerAdjustLimitPoints?: number;
 };
 type PriorVersion = Awaited<ReturnType<typeof currentLoyaltyProgram>>;
 
 export function assertLoyaltyProgramSettings(settings: LoyaltyProgramSettings) {
-  const { expiryDays } = settings;
+  const { expiryDays, managerAdjustLimitPoints: limit } = settings;
+  if (
+    limit !== undefined &&
+    (!Number.isSafeInteger(limit) || limit < 0 || limit > LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS)
+  )
+    throw new RangeError('INVALID_ADJUST_LIMIT');
   assertLoyaltyEarnRule(settings);
   if (
     expiryDays !== undefined &&
@@ -114,6 +127,7 @@ export async function publishLoyaltyProgramVersion(
       redemptionValueMinor: rule.redemptionValueMinor,
       expiryDays: rule.expiryDays,
       khataEarns: rule.khataEarns,
+      managerAdjustLimitPoints: rule.managerAdjustLimitPoints,
       actorId: scope.actorId,
     },
   });

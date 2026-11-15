@@ -11,6 +11,7 @@ export type ProgramDefaults = {
   pointValue: string;
   expiryDays: number | null;
   khataEarns: boolean;
+  managerAdjustLimitPoints: number;
 };
 
 const initial: EarnRateFormState = { status: 'idle', message: '' };
@@ -18,7 +19,7 @@ const fieldClass = 'grid w-full gap-2 text-sm sm:w-48';
 
 export function EarnRateForm({
   presets,
-  defaults = { pointValue: '1', expiryDays: null, khataEarns: true },
+  defaults = { pointValue: '1', expiryDays: null, khataEarns: true, managerAdjustLimitPoints: 500 },
 }: {
   presets: readonly EarnRateChoice[];
   defaults?: ProgramDefaults;
@@ -121,7 +122,9 @@ export function EarnRateForm({
           </label>
         </div>
         <p id="point-value-help" className="text-sm text-text-muted">
-          What one point takes off a bill at the counter.
+          What one point takes off a bill at the counter. Changing it changes the value of every
+          point customers already hold, not only points earned from now on: raising it raises your
+          liability for all unredeemed points.
         </p>
         <p id="expiry-help" className="text-sm text-text-muted">
           Leave blank and points never expire. Points expire by the date each was earned.
@@ -135,6 +138,22 @@ export function EarnRateForm({
           />
           Khata purchases earn points once the customer pays them off
         </label>
+        <label className={fieldClass}>
+          Largest manager adjustment (points)
+          <Input
+            name="managerAdjustLimitPoints"
+            inputMode="numeric"
+            required
+            defaultValue={defaults.managerAdjustLimitPoints}
+            aria-describedby="adjust-limit-help"
+            aria-invalid={invalid || undefined}
+            className="min-h-11"
+          />
+        </label>
+        <p id="adjust-limit-help" className="text-sm text-text-muted">
+          A manager can add or remove up to this many points in one adjustment. Larger adjustments
+          need the owner. Every adjustment is audited.
+        </p>
       </fieldset>
       <Button type="submit" className="min-h-11" disabled={pending}>
         {pending ? 'Saving…' : 'Save earning rate'}

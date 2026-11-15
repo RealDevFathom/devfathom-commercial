@@ -17,7 +17,10 @@ import {
   LOYALTY_POINT_VALUE_MINOR,
 } from '@/lib/commerce/loyalty-arithmetic';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
+import {
+  DEFAULT_MANAGER_ADJUST_LIMIT_POINTS,
+  LOYALTY_EARN_PRESETS,
+} from '@/lib/pharmacy/loyalty-program';
 
 export const metadata = { title: 'Loyalty points · Pharmacy' };
 const linkClass =
@@ -195,6 +198,8 @@ export default async function LoyaltyPage({
             pointValue: rupeesInput(pointValueOf(current)),
             expiryDays: current?.expiryDays ?? null,
             khataEarns: current?.khataEarns ?? true,
+            managerAdjustLimitPoints:
+              current?.managerAdjustLimitPoints ?? DEFAULT_MANAGER_ADJUST_LIMIT_POINTS,
           }}
         />
         {earnRate.versions.length > 1 && (

@@ -24,6 +24,12 @@ export async function saveEarnRate(
     const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
     const option = field(form, 'option') ?? '';
     const expiryDays = field(form, 'expiryDays');
+    const managerLimit = field(form, 'managerAdjustLimitPoints');
+    if (managerLimit !== undefined && whole(managerLimit) === undefined)
+      return {
+        status: 'error',
+        message: 'Enter the largest manager adjustment as a whole number of points.',
+      };
     if (expiryDays !== undefined && whole(expiryDays) === undefined)
       return {
         status: 'error',
@@ -35,6 +41,7 @@ export async function saveEarnRate(
       pointValue: field(form, 'pointValue'),
       expiryDays: expiryDays === undefined ? null : whole(expiryDays),
       khataEarns: form.get('khataEarns') === 'on',
+      ...(managerLimit !== undefined ? { managerAdjustLimitPoints: whole(managerLimit) } : {}),
       ...(option === 'custom-percent' ? { percent: field(form, 'percent') } : {}),
       ...(option === 'custom-step'
         ? {

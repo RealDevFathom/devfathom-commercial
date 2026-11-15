@@ -14,8 +14,11 @@ import {
   PharmacyLoyaltyError,
 } from '@/lib/pharmacy/customer-loyalty';
 import {
+  currentLoyaltyProgram,
+  DEFAULT_MANAGER_ADJUST_LIMIT_POINTS,
   LOYALTY_EARN_PRESETS,
   LOYALTY_MAX_EXPIRY_DAYS,
+  LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS,
   listLoyaltyProgramVersions,
   percentRule,
   publishLoyaltyProgramVersion,
@@ -121,6 +124,13 @@ export const earnRateInput = z
     expiryDays: z.number().int().min(1).max(LOYALTY_MAX_EXPIRY_DAYS).nullable().optional(),
     // DEV-764: whether khata purchases earn once the customer pays them off.
     khataEarns: z.boolean().optional(),
+    // DEV-764: the largest manual adjustment a manager may make; larger ones need the owner.
+    managerAdjustLimitPoints: z
+      .number()
+      .int()
+      .min(0)
+      .max(LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS)
+      .optional(),
   })
   .strict();
 
@@ -172,6 +182,7 @@ export function programSettingsFor(
     redemptionValueMinor?: number;
     expiryDays?: number | null;
     khataEarns?: boolean;
+    managerAdjustLimitPoints?: number;
   } | null
 ): LoyaltyProgramSettings {
   const pointValueMinor =
@@ -193,6 +204,7 @@ export function programSettingsFor(
         : undefined,
     expiryDays: input.expiryDays !== undefined ? input.expiryDays : prior?.expiryDays,
     khataEarns: input.khataEarns ?? prior?.khataEarns,
+    managerAdjustLimitPoints: input.managerAdjustLimitPoints ?? prior?.managerAdjustLimitPoints,
   };
 }
 
@@ -204,6 +216,7 @@ const programSnapshot = (version: {
   redemptionValueMinor?: number;
   expiryDays?: number | null;
   khataEarns?: boolean;
+  managerAdjustLimitPoints?: number;
 }) => ({
   version: version.version,
   earnMode: version.earnMode,
@@ -212,6 +225,7 @@ const programSnapshot = (version: {
   redemptionValueMinor: version.redemptionValueMinor,
   expiryDays: version.expiryDays,
   khataEarns: version.khataEarns,
+  managerAdjustLimitPoints: version.managerAdjustLimitPoints,
 });
 
 // Server-page caller: no central router mutation. Explicit CRM check also applies
@@ -264,6 +278,14 @@ export const pharmacyLoyaltyRouter = router({
   // DEV-764: owner or manager correction of a customer's points, with a written reason.
   adjustPoints: protectedProcedure.input(adjustPointsInput).mutation(async ({ ctx, input }) => {
     const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+    // DEV-764: a manager may adjust up to the owner's ceiling; anything larger needs the owner.
+    const program = await currentLoyaltyProgram(ctx.db, scope.organizationId);
+    const managerLimit = program?.managerAdjustLimitPoints ?? DEFAULT_MANAGER_ADJUST_LIMIT_POINTS;
+    if (authority === 'MANAGER' && Math.abs(input.points) > managerLimit)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: `Adjustments above ${managerLimit.toLocaleString('en-PK')} points need the owner.`,
+      });
     let result: Awaited<ReturnType<typeof adjustLoyaltyPoints>>;
     try {
       result = await ctx.db.$transaction((tx) =>
@@ -305,6 +327,7 @@ export const pharmacyLoyaltyRouter = router({
         points: input.points,
         reason: result.entry.reason,
         authority,
+        managerLimit,
         replayed: result.replayed,
       },
     });

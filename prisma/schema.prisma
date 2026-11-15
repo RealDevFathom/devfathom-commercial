@@ -1454,21 +1454,23 @@ model PharmacyKhataLimitDecision {
 /// DEV-764: each version also carries the redemption value, the expiry period and whether
 /// khata purchases earn once paid off.
 model PharmacyLoyaltyProgramVersion {
-  id                   String                  @id @default(cuid())
-  organizationId       String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  version              Int
-  earnMode             PharmacyLoyaltyEarnMode
-  earnPoints           Int
-  perSpendMinor        Int
+  id                       String                  @id @default(cuid())
+  organizationId           String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  version                  Int
+  earnMode                 PharmacyLoyaltyEarnMode
+  earnPoints               Int
+  perSpendMinor            Int
   /// Money one point redeems for. Versions from before DEV-764 redeem at 100 (PKR 1).
-  redemptionValueMinor Int                     @default(100)
+  redemptionValueMinor     Int                     @default(100)
   /// Days an earned point lasts; null means points never expire.
-  expiryDays           Int?
+  expiryDays               Int?
   /// Owner switch: whether khata purchases earn points when the customer pays them off.
-  khataEarns           Boolean                 @default(true)
-  effectiveFrom        DateTime                @default(now())
-  actorId              String
-  createdAt            DateTime                @default(now())
+  khataEarns               Boolean                 @default(true)
+  /// Largest manual points adjustment a manager may make; larger ones need the owner.
+  managerAdjustLimitPoints Int                     @default(500)
+  effectiveFrom            DateTime                @default(now())
+  actorId                  String
+  createdAt                DateTime                @default(now())
 
   entries PharmacyLoyaltyPointsEntry[]
 

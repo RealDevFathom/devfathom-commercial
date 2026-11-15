@@ -26,6 +26,8 @@ function fixture(balance: number | null = 30) {
             ) ?? null
         ),
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: balance } }),
+        // No lot past expiry: every point in the balance can be spent.
+        count: vi.fn().mockResolvedValue(0),
         create: vi.fn(async ({ data }) => {
           const row = { id: `adjust-${created.length}`, ...data };
           created.push(row);
@@ -235,5 +237,46 @@ describe('DEV-764 liability and redemption history', () => {
         },
       })
     );
+  });
+});
+
+describe('DEV-764 a removal cannot take points already past expiry', () => {
+  it('counts only points that can still be spent', async () => {
+    const { db, created } = fixture(30);
+    // 20 of the 30 points sit in a lot already past expiry, not yet swept.
+    db.pharmacyLoyaltyPointsEntry.count.mockResolvedValue(1);
+    Object.assign(db.pharmacyLoyaltyPointsEntry, {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'earn-old',
+          kind: 'EARN',
+          points: 20,
+          saleId: 'sale-old',
+          tenderId: null,
+          programVersionId: 'program-1',
+          reversesEntryId: null,
+          expiresAt: new Date(Date.now() - 86_400_000),
+          occurredAt: new Date(Date.now() - 40 * 86_400_000),
+        },
+        {
+          id: 'earn-new',
+          kind: 'EARN',
+          points: 10,
+          saleId: 'sale-new',
+          tenderId: null,
+          programVersionId: 'program-1',
+          reversesEntryId: null,
+          expiresAt: null,
+          occurredAt: new Date(Date.now() - 86_400_000),
+        },
+      ]),
+    });
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, { ...adjustment, points: -11 })
+    ).rejects.toThrow('ADJUSTMENT_EXCEEDS_BALANCE');
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, { ...adjustment, points: -10 })
+    ).resolves.toMatchObject({ balanceAfter: 20 });
+    expect(created).toHaveLength(1);
   });
 });

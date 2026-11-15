@@ -4,6 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockCustomerConsent } from './consent-writer';
 import { postLoyaltyReleaseEntry } from './finance-postings';
+import { expireStrandedRestoration } from './loyalty-expiry';
 import type { LedgerScope } from './stock-ledger';
 
 /**
@@ -65,8 +66,8 @@ export async function releaseVoidedSaleRedemptions(
         _sum: { points: true },
       });
       const points = -redemption.points - (restored._sum.points ?? 0);
-      if (points > 0)
-        await db.pharmacyLoyaltyPointsEntry.create({
+      if (points > 0) {
+        const entry = await db.pharmacyLoyaltyPointsEntry.create({
           data: {
             organizationId: scope.organizationId,
             branchId: scope.branchId,
@@ -79,6 +80,19 @@ export async function releaseVoidedSaleRedemptions(
             idempotencyKey: key,
           },
         });
+        // The points go back into the lots they were redeemed from, with those lots' expiry
+        // dates; any that land in a lot already expired are expired again at once.
+        await expireStrandedRestoration(
+          db,
+          {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            customerId: redemption.customerId,
+          },
+          entry,
+          new Date()
+        );
+      }
       released.push({
         tenderId: tender.id,
         points: Math.max(0, points),

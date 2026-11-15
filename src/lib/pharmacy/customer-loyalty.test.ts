@@ -205,6 +205,8 @@ describe('CRM-L01 pharmacy loyalty', () => {
         findUnique: vi.fn().mockImplementation(async () => created),
         findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: 5 } }),
+        // DEV-764: the ledger replay for restored points; no lot has expired.
+        findMany: vi.fn().mockResolvedValue([]),
         create,
       },
       pharmacyRefund: {
@@ -331,6 +333,7 @@ describe('DEV-764 expiry dates and value-true refund restoration', () => {
         // 20 points redeemed at PKR 2.50 each for PKR 50.
         findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 5_000 } }),
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: null } }),
+        findMany: vi.fn().mockResolvedValue([]),
         create,
       },
       pharmacyRefund: {

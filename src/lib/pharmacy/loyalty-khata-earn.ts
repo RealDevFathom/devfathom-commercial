@@ -136,14 +136,19 @@ export function khataEarnRetained(
   let retainedPoints = 0;
   let retainedMinor = 0;
   let earnedPoints = 0;
+  // DEV-764: points each collection keeps, in input order, so a caller can tell which lots
+  // the refund actually reverses.
+  const retainedByEarn: number[] = [];
   for (const earn of earns) {
     const kept = Math.min(Math.max(capMinor - earn.earnStartMinor, 0), earn.netPaidMinor);
-    earnedPoints += earn.points;
-    retainedMinor += kept;
-    retainedPoints += Math.min(
+    const keptPoints = Math.min(
       earn.points,
       earnedPointsForTranche(earn.earnStartMinor, kept, earn.rule)
     );
+    earnedPoints += earn.points;
+    retainedMinor += kept;
+    retainedPoints += keptPoints;
+    retainedByEarn.push(keptPoints);
   }
-  return { earnedPoints, retainedPoints, retainedMinor };
+  return { earnedPoints, retainedPoints, retainedMinor, retainedByEarn };
 }

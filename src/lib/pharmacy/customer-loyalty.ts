@@ -19,6 +19,7 @@ import {
 } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { expireStrandedRestoration, pointsPastExpiry } from './loyalty-expiry';
 import { currentLoyaltyProgram, hasLoyaltyEarningConsent } from './loyalty-program';
 import type { LedgerScope } from './stock-ledger';
 
@@ -241,13 +242,19 @@ export async function redeemSalePoints(
   );
   const outstandingMinor =
     totalMinor - sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
-  // DEV-764: points redeem at the owner's current redemption value (PKR 1 before one is set).
+  // DEV-764: points redeem at the owner's current redemption value (PKR 1 before one is set),
+  // and points already past their expiry date cannot be spent even before the sweep runs.
   const program = await currentLoyaltyProgram(db, scope.organizationId);
+  const pastExpiry = await pointsPastExpiry(
+    db,
+    { organizationId: scope.organizationId, branchId: scope.branchId, customerId: sale.customerId },
+    new Date()
+  );
   let redemption: { points: number; amountMinor: number };
   try {
     redemption = redemptionFor({
       requestedPoints: input.points,
-      availablePoints: balance._sum.points ?? 0,
+      availablePoints: Math.max(0, (balance._sum.points ?? 0) - pastExpiry),
       outstandingMinor,
       pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
     });
@@ -361,6 +368,17 @@ export async function restoreRefundedLoyaltyPoints(
       idempotencyKey: key,
     },
   });
+  // DEV-764: points restored into a lot that has since expired are expired again at once.
+  await expireStrandedRestoration(
+    db,
+    {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: input.customerId,
+    },
+    entry,
+    new Date()
+  );
   return { ...entry, replayed: false };
 }
 
@@ -648,8 +666,16 @@ export async function adjustLoyaltyPoints(
     _sum: { points: true },
   });
   const balanceBefore = balance._sum.points ?? 0;
-  if (balanceBefore + input.points < 0)
-    throw new PharmacyLoyaltyError('ADJUSTMENT_EXCEEDS_BALANCE');
+  // A removal may take only points that can still be spent: not those already past expiry.
+  if (input.points < 0) {
+    const pastExpiry = await pointsPastExpiry(
+      db,
+      { organizationId: scope.organizationId, branchId: scope.branchId, customerId: customer.id },
+      new Date()
+    );
+    if (balanceBefore - pastExpiry + input.points < 0)
+      throw new PharmacyLoyaltyError('ADJUSTMENT_EXCEEDS_BALANCE');
+  }
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
       organizationId: scope.organizationId,

@@ -79,7 +79,7 @@ export function AdjustPointsForm({
         className={`text-sm ${invalid ? 'text-destructive' : 'text-text-muted'}`}
       >
         {state.message ||
-          'Owners and managers only. Each adjustment is kept in the ledger and the audit log with your name and reason; a removal cannot take the balance below zero.'}
+          'Owners, and managers up to the limit the owner sets. Each adjustment is kept in the ledger and the audit log with your name and reason; a removal cannot take more than the points that can still be spent.'}
       </p>
     </form>
   );

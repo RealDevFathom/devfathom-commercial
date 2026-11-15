@@ -54,6 +54,8 @@ describe('pharmacy loyalty console migration (DEV-764)', () => {
     expect(code).toContain('"redemptionValueMinor" INTEGER NOT NULL DEFAULT 100');
     expect(code).toMatch(/"expiryDays" INTEGER,/);
     expect(code).toContain('"khataEarns" BOOLEAN NOT NULL DEFAULT true');
+    expect(code).toContain('"managerAdjustLimitPoints" INTEGER NOT NULL DEFAULT 500');
+    expect(code).toContain('"managerAdjustLimitPoints" BETWEEN 0 AND 1000000');
   });
 
   it("caps a rate at paying back what was spent, at the version's own redemption value", () => {

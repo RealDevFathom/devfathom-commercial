@@ -10,17 +10,25 @@ import type { LedgerScope } from './stock-ledger';
 
 /**
  * DEV-764: points of an earned lot that already expired are gone from the balance. A refund
- * reverses the earn, but never takes those points a second time.
+ * reverses the earn, but never takes those points a second time. Only the part of a lot the
+ * refund reverses counts: expiry on a lot (or part of a lot) the refund leaves in place does
+ * not reduce what is taken back.
  */
 const EXPIRED_FROM_LOT = {
   closedBy: { where: { kind: 'EXPIRY' as const }, select: { points: true } },
 };
-function expiredFromLots(lots: ReadonlyArray<{ closedBy?: ReadonlyArray<{ points: number }> }>) {
-  return lots.reduce(
-    (sum, lot) =>
-      sum + (lot.closedBy ?? []).reduce((total, row) => total + Math.max(0, -row.points), 0),
-    0
-  );
+function expiredFrom(lot: { closedBy?: ReadonlyArray<{ points: number }> }) {
+  return (lot.closedBy ?? []).reduce((total, row) => total + Math.max(0, -row.points), 0);
+}
+/** Points to take back from lots, each reversing `reversed[i]` of its points. */
+function reversalAfterExpiry(
+  lots: ReadonlyArray<{ closedBy?: ReadonlyArray<{ points: number }> }>,
+  reversed: readonly number[]
+) {
+  return lots.reduce((sum, lot, index) => {
+    const take = Math.max(0, reversed[index] ?? 0);
+    return sum + take - Math.min(take, expiredFrom(lot));
+  }, 0);
 }
 
 /** Internal refund transaction only. No provider calls or stock-return accrual. */
@@ -112,7 +120,7 @@ export async function reverseRefundedEarnedPoints(
     }),
   ]);
   const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
-  const target = Math.max(0, earn.points - pointsFor(netPaidMinor) - expiredFromLots([earn]));
+  const target = reversalAfterExpiry([earn], [earn.points - pointsFor(netPaidMinor)]);
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -179,7 +187,10 @@ async function reverseKhataEarnedPoints(
     })),
     capMinor
   );
-  const target = Math.max(0, totals.earnedPoints - totals.retainedPoints - expiredFromLots(earns));
+  const target = reversalAfterExpiry(
+    earns,
+    earns.map((earn, index) => earn.points - (totals.retainedByEarn[index] ?? 0))
+  );
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({

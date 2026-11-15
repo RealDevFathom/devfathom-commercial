@@ -261,3 +261,77 @@ describe('DEV-764 manual adjustment authority', () => {
     );
   });
 });
+
+describe('DEV-764 manager adjustment ceiling', () => {
+  const input = {
+    branchId: 'branch-a',
+    customerId: 'customer-a',
+    points: 600,
+    reason: 'Points missed on several receipts',
+    idempotencyKey: 'adjust-key-2',
+  };
+  beforeEach(() => {
+    mocks.adjust.mockResolvedValue({
+      entry: { id: 'entry-b', points: 600, reason: input.reason },
+      balanceBefore: 0,
+      balanceAfter: 600,
+      replayed: false,
+    });
+    mocks.managerGate.mockResolvedValue({
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      actorId: 'user-a',
+    });
+  });
+
+  it('refuses a manager above the default ceiling of 500 points, before any write', async () => {
+    await expect(caller('MEMBER').adjustPoints(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Adjustments above 500 points need the owner.',
+    });
+    await expect(caller('MEMBER').adjustPoints({ ...input, points: -501 })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.adjust).not.toHaveBeenCalled();
+  });
+
+  it('lets a manager adjust up to the ceiling the owner set', async () => {
+    mocks.findFirst.mockResolvedValue({ ...prior, managerAdjustLimitPoints: 1_000 });
+    await expect(caller('MEMBER').adjustPoints(input)).resolves.toMatchObject({ points: 600 });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({ authority: 'MANAGER', managerLimit: 1_000 }),
+      })
+    );
+    mocks.findFirst.mockResolvedValue({ ...prior, managerAdjustLimitPoints: 0 });
+    await expect(
+      caller('MEMBER').adjustPoints({ ...input, points: 1, idempotencyKey: 'adjust-key-3' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('lets the owner adjust above the ceiling, and audits it', async () => {
+    await expect(caller('ADMIN').adjustPoints(input)).resolves.toMatchObject({ points: 600 });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({ authority: 'OWNER', managerLimit: 500 }),
+      })
+    );
+  });
+
+  it('saves the ceiling as part of the dated program version and carries it forward', async () => {
+    await caller().setEarnRate({ option: 'percent-1', managerAdjustLimitPoints: 2_000 });
+    expect(mocks.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ managerAdjustLimitPoints: 2_000 }),
+    });
+    mocks.findFirst.mockResolvedValue({ ...prior, managerAdjustLimitPoints: 2_000 });
+    await caller().setEarnRate({ option: 'percent-2' });
+    expect(mocks.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ managerAdjustLimitPoints: 2_000 }),
+    });
+    await expect(
+      caller().setEarnRate({ option: 'percent-1', managerAdjustLimitPoints: 1_000_001 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});

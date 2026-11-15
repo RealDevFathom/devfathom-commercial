@@ -6,8 +6,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn(), withTenantD
 import { lockCustomerConsent } from './consent-writer';
 import {
   expireCustomerLoyaltyPoints,
+  expireStrandedRestoration,
   LOYALTY_EXPIRY_ACTOR,
   planPharmacyLotExpiries,
+  pointsPastExpiry,
+  strandedRestoredPoints,
   type PharmacyPointsEntryForExpiry,
 } from './loyalty-expiry';
 
@@ -182,5 +185,112 @@ describe('DEV-764 pharmacy points expiry ledger entries', () => {
         customerId: 'customer-a',
       }),
     ]);
+  });
+});
+
+describe('DEV-764 points that come back keep their expiry', () => {
+  it('returns released points to the lot they were redeemed from, with its expiry date', () => {
+    const entries = [
+      entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+      entry('redeem', 'REDEEM', -60, 10, { saleId: 'sale-v', tenderId: 'points-v' }),
+      entry('release', 'REDEMPTION_RELEASE', 60, 20, { saleId: 'sale-v', tenderId: 'points-v' }),
+    ];
+    // Without the return, the 60 released points would never expire and only 40 would.
+    expect(planPharmacyLotExpiries(entries, day(40))).toEqual([
+      { lotId: 'earn-a', programVersionId: 'program-1', points: 100 },
+    ]);
+    expect(strandedRestoredPoints(entries, 'release', day(40))).toBe(0);
+  });
+
+  it('does the same for points restored by a refund of the points tender', () => {
+    const entries = [
+      entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+      entry('redeem', 'REDEEM', -60, 10, { saleId: 'sale-r', tenderId: 'points-r' }),
+      entry('restore', 'REFUND', 25, 20, { saleId: 'sale-r', tenderId: 'points-r' }),
+    ];
+    expect(planPharmacyLotExpiries(entries, day(40))).toEqual([
+      { lotId: 'earn-a', programVersionId: 'program-1', points: 65 },
+    ]);
+  });
+
+  it('marks points returned into a lot that already expired as stranded, to expire at once', () => {
+    const entries = [
+      entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+      entry('redeem', 'REDEEM', -60, 10, { saleId: 'sale-v', tenderId: 'points-v' }),
+      entry('expiry-a', 'EXPIRY', -40, 31, { reversesEntryId: 'earn-a' }),
+      entry('release', 'REDEMPTION_RELEASE', 60, 35, { saleId: 'sale-v', tenderId: 'points-v' }),
+    ];
+    expect(strandedRestoredPoints(entries, 'release', day(36))).toBe(60);
+    expect(planPharmacyLotExpiries(entries, day(36))).toEqual([]);
+    const settled = [
+      ...entries,
+      entry('expiry-r', 'EXPIRY', -60, 35, { reversesEntryId: 'release' }),
+    ];
+    expect(strandedRestoredPoints(settled, 'release', day(36))).toBe(0);
+  });
+
+  it('writes one immediate EXPIRY entry for stranded points, linked to the restoring entry', async () => {
+    const create = vi.fn(async ({ data }) => data);
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        findMany: vi.fn(async () => [
+          entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+          entry('redeem', 'REDEEM', -60, 10, { saleId: 'sale-v', tenderId: 'points-v' }),
+          entry('expiry-a', 'EXPIRY', -40, 31, { reversesEntryId: 'earn-a' }),
+          entry('release', 'REDEMPTION_RELEASE', 60, 35, {
+            saleId: 'sale-v',
+            tenderId: 'points-v',
+          }),
+        ]),
+        create,
+      },
+    };
+    const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    await expireStrandedRestoration(db as never, scope, { id: 'release' }, day(36));
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'EXPIRY',
+        points: -60,
+        reversesEntryId: 'release',
+        idempotencyKey: 'loyalty:expiry:release',
+        customerId: 'customer-a',
+        branchId: 'branch-a',
+      }),
+    });
+  });
+});
+
+describe('DEV-764 points past expiry cannot be spent before the sweep runs', () => {
+  const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+
+  it('counts what is left of due, unswept lots', async () => {
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        count: vi.fn(async () => 1),
+        findMany: vi.fn(async () => [
+          entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+          entry('earn-b', 'EARN', 50, 2, { saleId: 'sale-b', expiresAt: day(90) }),
+          entry('redeem', 'REDEEM', -30, 3, { saleId: 'sale-r', tenderId: 'points-r' }),
+        ]),
+      },
+    };
+    await expect(pointsPastExpiry(db as never, scope, day(40))).resolves.toBe(70);
+    expect(db.pharmacyLoyaltyPointsEntry.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        kind: { in: ['EARN', 'KHATA_EARN'] },
+        expiresAt: { lte: day(40) },
+        closedBy: { none: { kind: 'EXPIRY' } },
+      },
+    });
+  });
+
+  it('does not read the ledger when no lot is past expiry', async () => {
+    const findMany = vi.fn();
+    const db = { pharmacyLoyaltyPointsEntry: { count: vi.fn(async () => 0), findMany } };
+    await expect(pointsPastExpiry(db as never, scope, day(40))).resolves.toBe(0);
+    expect(findMany).not.toHaveBeenCalled();
   });
 });

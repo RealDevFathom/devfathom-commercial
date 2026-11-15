@@ -16,7 +16,9 @@ ALTER TYPE "PharmacyLoyaltyEntryKind" ADD VALUE IF NOT EXISTS 'REDEMPTION_RELEAS
 ALTER TABLE "pharmacy_loyalty_program_versions"
   ADD COLUMN IF NOT EXISTS "redemptionValueMinor" INTEGER NOT NULL DEFAULT 100,
   ADD COLUMN IF NOT EXISTS "expiryDays" INTEGER,
-  ADD COLUMN IF NOT EXISTS "khataEarns" BOOLEAN NOT NULL DEFAULT true;
+  ADD COLUMN IF NOT EXISTS "khataEarns" BOOLEAN NOT NULL DEFAULT true,
+  -- The largest manual adjustment a manager may make; anything larger needs the owner.
+  ADD COLUMN IF NOT EXISTS "managerAdjustLimitPoints" INTEGER NOT NULL DEFAULT 500;
 
 -- A rule may never pay back more than the money spent, at the version's own redemption value.
 -- Existing rows all have redemptionValueMinor = 100, so they satisfy the new check exactly as
@@ -27,6 +29,7 @@ ALTER TABLE "pharmacy_loyalty_program_versions"
     "version" > 0 AND "earnPoints" > 0 AND "perSpendMinor" > 0 AND
     "redemptionValueMinor" BETWEEN 1 AND 100000 AND
     ("expiryDays" IS NULL OR "expiryDays" BETWEEN 1 AND 3650) AND
+    "managerAdjustLimitPoints" BETWEEN 0 AND 1000000 AND
     "earnPoints"::bigint * "redemptionValueMinor"::bigint <= "perSpendMinor"::bigint
   );
 
@@ -48,9 +51,10 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- One expiry per earned lot; also how the expiry job finds lots it has not closed yet. Only an
--- EXPIRY entry may name a lot (sign check below), so the predicate needs no enum comparison:
--- an index predicate must be immutable, and an enum-to-text cast is not.
+-- One expiry per earned lot (or per restoring entry whose points came back into a lot already
+-- expired); also how the expiry job finds lots it has not closed yet. Only an EXPIRY entry may
+-- set reversesEntryId (sign check below), so the predicate needs no enum comparison: an index
+-- predicate must be immutable, and an enum-to-text cast is not.
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expiry_lot_key"
   ON "pharmacy_loyalty_points_entries" ("organizationId", "reversesEntryId")
   WHERE "reversesEntryId" IS NOT NULL;
@@ -60,8 +64,9 @@ CREATE INDEX IF NOT EXISTS "pharmacy_loyalty_points_entries_expires_idx"
 
 -- Every earlier shape is kept, now also requiring its sale. New shapes:
 --  ADJUSTMENT: an owner or manager correction, signed, never zero, with a written reason.
---  EXPIRY: closes one earned lot (reversesEntryId, which no other kind may set); takes its
---  remaining points, possibly none.
+--  EXPIRY: closes one earned lot, taking its remaining points (possibly none), or expires
+--  points a refund or void returned into a lot already expired (reversesEntryId names that
+--  entry). No other kind may set reversesEntryId.
 --  REDEMPTION_RELEASE: returns the points of a redemption tender on a voided sale.
 ALTER TABLE "pharmacy_loyalty_points_entries"
   DROP CONSTRAINT IF EXISTS pharmacy_loyalty_points_entries_sign_check,
