@@ -27,6 +27,11 @@ import {
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  readKhataReminderSettings,
+  saveKhataReminderSettings,
+} from '@/lib/pharmacy/khata-reminder-branch-settings';
+import { khataReminderSettingsSchema } from '@/lib/pharmacy/khata-reminder-settings';
+import {
   executeSandboxPayment,
   sandboxPaymentInput,
   PharmacyPaymentSandboxError,
@@ -859,6 +864,31 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
+  // DEV-76: the owner sets each branch's khata reminder cadence and balance floor.
+  khataReminderSettings: adminProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) =>
+      readKhataReminderSettings(ctx.db, await branchScopeOrForbidden(ctx, input.branchId))
+    ),
+  saveKhataReminderSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: khataReminderSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, khataReminderSettings: input.settings },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -2603,7 +2633,9 @@ export const pharmacySalesRouter = router({
   /** Allocate a browser/OS receipt copy. A separate call records dialog handoff. */
   counterReceiptBrowserPrint: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2649,7 +2681,9 @@ export const pharmacySalesRouter = router({
   /** Failed browser preflight is durable evidence, without claiming a copy. */
   counterReceiptBrowserPrintFailed: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2822,7 +2856,10 @@ export const pharmacySalesRouter = router({
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       if (!COUNTER_KEYMAP_PRESETS[input.preset].confirmed && ctx.session.user.role !== 'ADMIN') {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'This preset is not available to staff.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'This preset is not available to staff.',
+        });
       }
       try {
         const resolved = resolveCounterKeymap({

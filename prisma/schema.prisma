@@ -199,6 +199,11 @@ model PharmacyBranch {
   receiptLayoutRevision  Int                  @default(0)
   manualPaymentSettings  Json?
   manualPaymentRevision  Int                  @default(0)
+  /// DEV-76 owner-configured khata collection reminder schedule.
+  khataReminderEnabled         Boolean @default(true)
+  khataReminderCadenceDays     Int     @default(7)
+  khataReminderMinBalanceMinor Int     @default(10000)
+  khataReminderRevision        Int     @default(0)
   id                     String               @id @default(cuid())
   organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String

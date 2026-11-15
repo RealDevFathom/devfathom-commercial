@@ -63,6 +63,26 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
     OUTSIDE,
   ],
   [
+    'khataReminderSettings',
+    (c) => {
+      db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+      return c.khataReminderSettings({ branchId: BRANCH });
+    },
+    OUTSIDE,
+  ],
+  [
+    'saveKhataReminderSettings',
+    (c) => {
+      db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+      return c.saveKhataReminderSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: { enabled: true, cadenceDays: 7, minBalanceMinor: 10_000 },
+      });
+    },
+    OUTSIDE,
+  ],
+  [
     'drawerStatus',
     (c) => c.drawerStatus({ branchId: BRANCH, deviceId: 'counter-device' }),
     NOT_IN_WORKSPACE,
@@ -206,14 +226,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-
 describe('pharmacy drawer, close and cash procedures: the branch in the input', () => {
   it('refuses non-admin changes to reference-skip policy before accessing the branch', async () => {
     // A real member row, so the refusal is the ADMIN policy, not a missing user.
     db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
-    await expect(caller('EMPLOYEE').saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {
-      RAAST: { destination: 'Till', allowReferenceSkip: true },
-    } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('EMPLOYEE').saveManualPaymentSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: {
+          RAAST: { destination: 'Till', allowReferenceSkip: true },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses non-admin changes to the khata reminder schedule before accessing the branch', async () => {
+    db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
+    await expect(
+      caller('EMPLOYEE').saveKhataReminderSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: { enabled: true, cadenceDays: 1, minBalanceMinor: 100 },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
   it.each(procedures)(

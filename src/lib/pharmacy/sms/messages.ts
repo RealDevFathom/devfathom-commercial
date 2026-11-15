@@ -9,7 +9,14 @@ export type SmsLanguage = 'en' | 'ur';
 export type UtilitySmsContent =
   | { kind: 'REFILL_REMINDER'; dueDate: string }
   | { kind: 'ORDER_READY'; reference: string; branch: string }
-  | { kind: 'KHATA_REMINDER'; balance: string };
+  | {
+      kind: 'KHATA_REMINDER';
+      balance: string;
+      /** DEV-76: the oldest overdue charge's local due date. */
+      dueDate?: string | null;
+      /** DEV-76: the branch's Raast / wallet destination, e.g. "Raast PK36…". */
+      payTo?: string | null;
+    };
 
 const STOP_LINE: Record<SmsLanguage, string> = {
   en: 'Reply STOP to opt out.',
@@ -55,10 +62,14 @@ export function utilitySmsBody(content: UtilitySmsContent, language: SmsLanguage
     }
     case 'KHATA_REMINDER': {
       const balance = clean(content.balance, 20);
+      const dueDate = content.dueDate ? clean(content.dueDate, 20) : '';
+      const payTo = content.payTo ? clean(content.payTo, 80) : '';
       text =
         language === 'ur'
-          ? `آپ کے فارمیسی کھاتے میں ${balance} واجب الادا ہیں۔ براہ کرم سہولت سے ادائیگی کریں۔`
-          : `Your pharmacy account has an outstanding balance of ${balance}. Please settle it at your convenience.`;
+          ? `آپ کے فارمیسی کھاتے میں ${balance} واجب الادا ہیں${dueDate ? ` (${dueDate} سے)` : ''}۔ براہ کرم سہولت سے ادائیگی کریں۔` +
+            (payTo ? ` ادائیگی: ${payTo}` : '')
+          : `Your pharmacy account has an outstanding balance of ${balance}${dueDate ? `, due ${dueDate}` : ''}. Please settle it at your convenience.` +
+            (payTo ? ` Pay via ${payTo}.` : '');
       break;
     }
   }
