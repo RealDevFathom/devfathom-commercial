@@ -422,6 +422,37 @@ describe('DEV-713 manual card tender', () => {
   });
 });
 
+describe('DEV-713 wallet is its own tender, separate from card', () => {
+  it('shows enabled wallets in their own Wallet group, apart from Card', () => {
+    setup({
+      manualSettings: {
+        JAZZCASH: { destination: '', allowReferenceSkip: false },
+        RAAST: { destination: '', allowReferenceSkip: false },
+      },
+    });
+    const wallet = screen.getByRole('group', { name: 'Wallet' });
+    expect(
+      within(wallet)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['JazzCash', 'Raast']);
+    expect(within(wallet).queryByRole('button', { name: 'Card' })).not.toBeInTheDocument();
+    chooseTender('CARD');
+    expect(
+      screen.getByText(/Take JazzCash, Easypaisa or Raast under Wallet, not Card/)
+    ).toBeVisible();
+    expect(screen.queryByText(/wallet tap/)).not.toBeInTheDocument();
+    chooseTender('JAZZCASH');
+    expect(screen.queryByLabelText('Approval code')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Transaction ID (last 4–6 digits)')).toBeVisible();
+  });
+
+  it('shows no Wallet group when the branch has enabled no wallet', () => {
+    setup({ manualSettings: {} });
+    expect(screen.queryByRole('group', { name: 'Wallet' })).not.toBeInTheDocument();
+  });
+});
+
 describe('DEV-713 wallets enabled without merchant details', () => {
   it('takes an enabled wallet with no IBAN, till number or QR on file', async () => {
     const { props } = setup({

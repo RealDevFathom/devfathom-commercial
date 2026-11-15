@@ -112,6 +112,19 @@ describe('DEV-713 manual card and wallet confirmation', () => {
     await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({ reason: 'UNCERTIFIED_PROVIDER' });
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
   });
+  it('never records a wallet payment through Card: wallet capture on a card tender is refused', async () => {
+    const input = { ...cardBase, providerRef: '001234', approvalCode: 'A1B2', payerName: 'Ayesha' };
+    const { db, scoped } = fixture(input);
+    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    // The same payment taken as a wallet is recorded as that wallet tender, with its provider type.
+    const wallet = { ...base, type: 'JAZZCASH' as const, providerRef: '001234' };
+    const walletFixture = fixture(wallet);
+    await expect(applyPharmacyTender(walletFixture.scoped, scope, wallet)).resolves.toMatchObject({ settled: true });
+    expect(walletFixture.db.pharmacyTender.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      type: 'JAZZCASH', provider: 'MANUAL_MERCHANT', providerRef: '001234', approvalCode: undefined,
+    }) });
+  });
   it('refuses an approval code on any other tender', async () => {
     const input = { ...cardBase, type: 'BANK_TRANSFER' as const, approvalCode: 'A1B2' };
     const { scoped } = fixture(input);

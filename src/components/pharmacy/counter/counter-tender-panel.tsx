@@ -213,6 +213,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           Boolean(manualSettings?.[entry.value]))
     );
     const cashDrawerClosed = drawerOpen === false;
+    // DEV-713 (15 Nov decision): Wallet is its own tender, never taken as Card.
+    // Each enabled wallet records its provider and transaction reference.
+    const walletOptions = offered.filter((entry) => entry.offer === 'configured');
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
     const manualCard = type === 'CARD';
@@ -372,6 +375,40 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       }
     }
 
+    const renderTenderButton = (entry: (typeof TENDER_TYPES)[number]) => {
+      const active = entry.value === type;
+      const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
+      return (
+        <div key={entry.value} className="min-w-0 space-y-1">
+          <Button
+            type="button"
+            size="touch"
+            variant={active ? 'secondary' : 'outline'}
+            className="w-full rounded-sm"
+            aria-pressed={active}
+            aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
+            disabled={!editable}
+            onClick={() => {
+              if (active) return;
+              setType(entry.value);
+              setProviderRef('');
+              setPayerName('');
+              setReferenceSkipped(false);
+              setApprovalCode('');
+            }}
+          >
+            {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
+            {entry.label}
+          </Button>
+          {drawerNote ? (
+            <p id="tender-cash-drawer" className="text-xs text-destructive">
+              {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
+            </p>
+          ) : null}
+        </div>
+      );
+    };
+
     return (
       <div ref={ref} tabIndex={-1} className="min-w-0 space-y-5 focus-visible:outline-none">
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
@@ -461,39 +498,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             aria-labelledby="tender-type-label"
             className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3"
           >
-            {offered.map((entry) => {
-              const active = entry.value === type;
-              const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
-              return (
-                <div key={entry.value} className="min-w-0 space-y-1">
-                  <Button
-                    type="button"
-                    size="touch"
-                    variant={active ? 'secondary' : 'outline'}
-                    className="w-full rounded-sm"
-                    aria-pressed={active}
-                    aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
-                    disabled={!editable}
-                    onClick={() => {
-                      if (active) return;
-                      setType(entry.value);
-                      setProviderRef('');
-                      setPayerName('');
-                      setReferenceSkipped(false);
-                      setApprovalCode('');
-                    }}
-                  >
-                    {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
-                    {entry.label}
-                  </Button>
-                  {drawerNote ? (
-                    <p id="tender-cash-drawer" className="text-xs text-destructive">
-                      {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
-                    </p>
-                  ) : null}
+            {offered.filter((entry) => entry.offer !== 'configured').map(renderTenderButton)}
+            {walletOptions.length ? (
+              <div
+                role="group"
+                aria-labelledby="tender-wallet-label"
+                className="col-span-full space-y-1.5 border-t border-border-subtle pt-2"
+              >
+                <p id="tender-wallet-label" className="text-xs font-medium text-text-muted">
+                  Wallet
+                </p>
+                <div className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3">
+                  {walletOptions.map(renderTenderButton)}
                 </div>
-              );
-            })}
+              </div>
+            ) : null}
           </div>
           {manualSettingsError && !manual ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -550,8 +569,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         {manualCard ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             <p className="text-sm text-text-muted">
-              Take the card or wallet tap on the shop’s terminal first. Enter the details from the
-              approved slip; you are recorded as the person who confirmed this payment.
+              Take the card on the shop’s terminal first. Enter the details from the approved slip;
+              you are recorded as the person who confirmed this payment. Take JazzCash, Easypaisa or
+              Raast under Wallet, not Card.
             </p>
             <Label htmlFor="manual-card-reference">Card last 4 digits or terminal reference</Label>
             <Input
