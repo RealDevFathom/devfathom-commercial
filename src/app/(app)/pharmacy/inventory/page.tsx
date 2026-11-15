@@ -169,6 +169,7 @@ export default async function PharmacyInventoryPage({
   // #979: `createLocation` is an inventory-control write; a counter-only role
   // is not offered a form the server would refuse.
   const canControlInventory = await inventoryControlAllowed(ctx);
+  const viewerId = ctx.session.user.id;
   // DEV-594: offer the expiry advisor where the owner reviews expiring stock.
   const advice = await readPharmacyAdviceAccess(ctx);
   const branches = await ctx.db.pharmacyBranch.findMany({
@@ -928,8 +929,7 @@ export default async function PharmacyInventoryPage({
                         />
                       </label>
                     ) : null}
-                    {count.status === 'AWAITING_COAUTH' &&
-                    count.createdById === ctx.session.user.id ? (
+                    {count.status === 'AWAITING_COAUTH' && count.createdById === viewerId ? (
                       <label className="text-sm">
                         Your PIN, if you work alone
                         <Input
