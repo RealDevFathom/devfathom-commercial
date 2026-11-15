@@ -9,6 +9,9 @@ const url = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 const suffix = randomUUID().replaceAll('-', '');
 const org = `dev505_${suffix}`;
 const other = `${org}_other`;
+// organization_roles is unique on (organizationId, key): the tenant-authored
+// lookalike needs its own organization beside the denied system Manager.
+const customOrg = `${org}_custom`;
 const restaurant = `${org}_restaurant`;
 const id = (key: string) => `${org}_${key}`;
 const INVENTORY = 'pharmacy:inventory';
@@ -40,6 +43,7 @@ const migration = migrationSql.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, ''
     for (const [organizationId, vertical] of [
       [org, 'PHARMACY'],
       [other, 'PHARMACY'],
+      [customOrg, 'PHARMACY'],
       [restaurant, 'RESTAURANT'],
     ] as const) {
       await client.query(
@@ -50,7 +54,7 @@ const migration = migrationSql.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, ''
     for (const [key, roleKey, isSystem, roleOrg] of [
       ['manager', 'manager', true, org],
       ['denied', 'manager', true, other],
-      ['custom', 'manager', false, other],
+      ['custom', 'manager', false, customOrg],
       ['restaurant', 'manager', true, restaurant],
       ['cashier', 'cashier', true, org],
     ] as const) {
@@ -92,8 +96,8 @@ const migration = migrationSql.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, ''
   it('is idempotent', async () => {
     const read = () =>
       client.query(
-        `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-        [org, other, restaurant]
+        `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+        [org, other, customOrg, restaurant]
       );
     const before = await read();
     await client.query(migration);
