@@ -1023,9 +1023,16 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.select();
   }, []);
 
+  // DEV-725: a ready bill on a device with no OPEN drawer is not offered for
+  // payment; recovery of an earlier attempt (any other bill state) stays open.
+  const payBlockedByDrawer = drawerRequired && billState === 'ready';
   const openPayment = useCallback(() => {
+    if (payBlockedByDrawer) {
+      setNotice({ tone: 'warning', message: messageFrom(new Error('DRAWER_NOT_OPEN')) });
+      return;
+    }
     setPaymentOpen(true);
-  }, []);
+  }, [payBlockedByDrawer]);
 
   const startNextBill = useCallback(() => {
     if (busy || attemptRef.current) return;
@@ -2701,7 +2708,7 @@ function ScopedPharmacyCounterConsole({
             ) : (
               <Button
                 className="h-14 w-full justify-between"
-                disabled={billState !== 'ready' || blocked || busy}
+                disabled={billState !== 'ready' || blocked || busy || drawerRequired}
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -2714,7 +2721,9 @@ function ScopedPharmacyCounterConsole({
             <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
               {blocked
                 ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
-                : unknownTender
+                : payBlockedByDrawer
+                  ? 'Open the cash drawer above before taking payment.'
+                  : unknownTender
                   ? 'Payment locked until its outcome is checked. Review payment status before taking more money.'
                   : storageError
                     ? 'Browser recovery is unavailable. Review payment status before continuing.'
@@ -2785,7 +2794,7 @@ function ScopedPharmacyCounterConsole({
         </Button>
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
-          disabled={billState !== 'ready' || blocked || busy}
+          disabled={billState !== 'ready' || blocked || busy || drawerRequired}
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>

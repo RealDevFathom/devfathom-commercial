@@ -1848,6 +1848,21 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
+  it('does not offer payment on an open bill while the drawer is closed (DEV-725)', () => {
+    closeDrawer();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    for (const pay of screen.getAllByRole('button', { name: /^Pay/ })) expect(pay).toBeDisabled();
+    expect(screen.getByText('Open the cash drawer above before taking payment.')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(screen.queryByRole('dialog', { name: /Payment/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Open the cash drawer for this counter before starting a bill or taking a payment.'
+      )
+    ).toBeInTheDocument();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('explains blocked site storage instead of waiting on a drawer it cannot read (DEV-725)', () => {
     const blocked = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError');

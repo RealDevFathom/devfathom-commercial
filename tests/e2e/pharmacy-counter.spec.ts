@@ -100,6 +100,8 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
  * raw `DRAWER_NOT_OPEN` symbol must never reach the counter.
  */
 async function openDrawer(page: Page) {
+  // DEV-725: opening the drawer is the shift's first step and records the counted cash.
+  await page.getByLabel('Opening cash', { exact: true }).fill('0');
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
@@ -888,18 +890,15 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
+  await page.getByLabel('Opening cash', { exact: true }).fill('0');
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('alert').filter({ hasText: /This business day is closed/ })
   ).toBeVisible();
-  await search(page, otc.brandName);
-  await stageFirstResult(page, otc.name);
-  await page.keyboard.press('F4');
-  await setQuantity(page, 1);
-  await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
-  await expect(page.getByText(/This business day is closed/).first()).toBeVisible();
+  // DEV-725: with the day closed no drawer opens, so no bill can be started that
+  // payment would then refuse: the opening step stays and scan/search is not offered.
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
 });
 
 test('this spec drives the counter without a pointer', async () => {
