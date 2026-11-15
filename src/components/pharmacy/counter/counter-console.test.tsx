@@ -2803,6 +2803,22 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
+  it.each([0, 10])('explains missing sale units using the selected row stock (%s)', (onHandUnits) => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [], onHandUnits }))
+    );
+    if (onHandUnits === 0) {
+      expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
+      expect(screen.queryByText(/pack hierarchy does not match/)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/pack hierarchy does not match/)).toHaveAttribute('role', 'status');
+      expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it('clears the canonical-unit demand draft and captures only the replacement quantity', async () => {
     mocks.mutations.captureDemand!.mockResolvedValue({});
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
