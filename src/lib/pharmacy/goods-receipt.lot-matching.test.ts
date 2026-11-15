@@ -100,6 +100,7 @@ function receiptLine(lot: LotInput) {
     discountBps: 0,
     taxBps: 0,
     taxCreditable: false,
+    allocatedOrderChargeMinor: 0,
     gs1Warnings: [] as string[],
   };
 }

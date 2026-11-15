@@ -205,9 +205,9 @@ export async function lockReceivablePurchaseOrder(
  * The share is cumulative from the paid units already posted against the line
  * and advances lot by lot, so a split or over-delivered line never capitalises
  * its charge more than once. Drafting prices a receipt through here as a
- * preview; posting prices it again under the order's row lock, so receipts
- * drafted side by side, or a draft that never posts, cannot double-count or
- * strand a charge.
+ * preview and keeps the share on the line; posting settles the share again
+ * under the order's row lock, so receipts drafted side by side, or a draft
+ * that never posts, cannot double-count or strand a charge.
  */
 export async function orderReceiptCostTerms(
   db: ScopedDb,
@@ -438,18 +438,32 @@ export async function postGoodsReceipt(
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
 
   for (const line of receipt.lines) {
-    const unitCostMinor = orderCostTerms
-      ? receiptLineUnitCostMinor({
+    // The draft's stamped cost already holds the order-line rebate and its
+    // order-charge share as they stood at drafting, plus anything else the
+    // receipt itself charged. Only the order-charge share can have moved since,
+    // so the cost is adjusted by that difference and everything else in it is
+    // kept exactly as stamped.
+    let unitCostMinor = line.unitCostMinor;
+    const orderTerms = orderCostTerms?.termsFor(
+      line.purchaseOrderLineId,
+      line.receivedCanonicalUnits
+    );
+    if (orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor) {
+      const costed = (allocatedChargeMinor: number) =>
+        receiptLineUnitCostMinor({
           receivedPacks: line.receivedPacks,
           bonusPacks: line.bonusPacks,
           canonicalUnitsPerPack: line.canonicalUnitsPerPack,
           invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
           discountBps: line.discountBps,
+          rebateBps: orderTerms.rebateBps,
           taxBps: line.taxBps,
           taxCreditable: line.taxCreditable,
-          ...orderCostTerms.termsFor(line.purchaseOrderLineId, line.receivedCanonicalUnits),
-        })
-      : line.unitCostMinor;
+          allocatedChargeMinor,
+        });
+      unitCostMinor +=
+        costed(orderTerms.allocatedChargeMinor) - costed(line.allocatedOrderChargeMinor);
+    }
     const batch = await resolveManufacturingBatch(db, scope, {
       medicineId: line.medicineId,
       batchNumber: line.batchNumber,
@@ -491,7 +505,9 @@ export async function postGoodsReceipt(
       where: { id: line.id },
       data: {
         inventoryLotId: posted.lot.id,
-        ...(unitCostMinor !== line.unitCostMinor ? { unitCostMinor } : {}),
+        ...(orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor
+          ? { unitCostMinor, allocatedOrderChargeMinor: orderTerms.allocatedChargeMinor }
+          : {}),
         ...(near && !line.gs1Warnings.includes(near.code)
           ? { gs1Warnings: [...line.gs1Warnings, near.code] }
           : {}),

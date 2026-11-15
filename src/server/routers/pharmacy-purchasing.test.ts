@@ -1397,7 +1397,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // Order line A nets 100_000 − 5% rebate = 95_000; B nets 95_000, so the
     // 4_200 of freight and charges splits 2_100 / 2_100. Line A lands at
     // 97_100 over 120 units — not the 833 that the invoice price alone gives.
-    expect(line).toMatchObject({ acceptedCanonicalUnits: 120, unitCostMinor: 809 });
+    expect(line).toMatchObject({
+      acceptedCanonicalUnits: 120,
+      unitCostMinor: 809,
+      allocatedOrderChargeMinor: 2_100,
+    });
     expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { lineNumber: 'asc' } })
     );

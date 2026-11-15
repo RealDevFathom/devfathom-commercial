@@ -110,6 +110,7 @@ function receiptDb(line: {
             discountBps: 0,
             taxBps: 0,
             taxCreditable: false,
+            allocatedOrderChargeMinor: 0,
             purchaseOrderLineId: null,
             quarantineLocationId: line.rejected > 0 ? 'quar' : null,
             rejectionReason: line.rejected > 0 ? 'Expired' : null,

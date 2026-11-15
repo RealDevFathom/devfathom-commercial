@@ -1670,6 +1670,7 @@ const purchasingRouter = router({
                 taxCreditable: line.taxCreditable,
                 allocatedChargeMinor: orderCostTerms.allocatedChargeMinor,
               }),
+              allocatedOrderChargeMinor: orderCostTerms.allocatedChargeMinor,
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
               gtin: identity.gtin,

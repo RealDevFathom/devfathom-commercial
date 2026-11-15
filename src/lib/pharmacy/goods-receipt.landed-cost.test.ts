@@ -1,8 +1,9 @@
 /**
- * PUR-03 at posting: a draft's stamped unit cost is a preview. Posting prices
- * every lot again under the order's row lock from the receipts that have
- * actually posted, so drafts made side by side cannot both capitalise an order
- * line's freight, and a draft that never posts cannot strand it.
+ * PUR-03 at posting: a draft's order-charge share is a preview. Posting settles
+ * it again under the order's row lock from the receipts that have actually
+ * posted, and moves the stamped unit cost by the difference only, so drafts made
+ * side by side cannot both capitalise an order line's freight, a draft that
+ * never posts cannot strand it, and nothing else inside the stamped cost moves.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,13 @@ vi.mock('./stock-ledger', async () => {
   const actual = await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger');
   return { ...actual, receiveLot };
 });
+
+// FIN-01 journals the posted receipt; the journal itself is covered elsewhere.
+const finance = vi.hoisted(() => ({ postGoodsReceiptEntry: vi.fn() }));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  ...finance,
+}));
 
 import { postGoodsReceipt } from './goods-receipt';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -42,6 +50,8 @@ function receiptDb(input: {
   earlier?: Array<{ status: 'DRAFT' | 'POSTED'; receivedCanonicalUnits: number }>;
   /** The cost the draft was stamped with when it was created. */
   stampedUnitCostMinor: number;
+  /** The order-charge share the draft was stamped with. */
+  stampedOrderChargeMinor: number;
 }) {
   const earlier = input.earlier ?? [];
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -130,6 +140,7 @@ function receiptDb(input: {
             taxBps: 0,
             taxCreditable: false,
             unitCostMinor: input.stampedUnitCostMinor,
+            allocatedOrderChargeMinor: input.stampedOrderChargeMinor,
             stockLocationId: 'loc',
             quarantineLocationId: null,
             gs1Warnings: [] as string[],
@@ -156,6 +167,7 @@ function receiptDb(input: {
 }
 
 beforeEach(() => {
+  finance.postGoodsReceiptEntry.mockReset().mockResolvedValue({ id: 'entry' });
   receiveLot.mockReset().mockResolvedValue({
     lot: { id: 'lot' },
     movement: { id: 'move' },
@@ -167,14 +179,19 @@ const postedCost = () => (receiveLot.mock.calls[0]![2] as { unitCostMinor: numbe
 
 describe('postGoodsReceipt landed cost (PUR-03)', () => {
   it('posts the order rebate and the whole freight share for the first full delivery', async () => {
-    const { db, lineUpdate } = receiptDb({ freightMinor: 1_000, stampedUnitCostMinor: 1_000 });
+    // Drafted while another receipt held the share; that one never posted.
+    const { db, lineUpdate } = receiptDb({
+      freightMinor: 1_000,
+      stampedUnitCostMinor: 90,
+      stampedOrderChargeMinor: 0,
+    });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     // 10_000 − 10% rebate = 9_000, plus all 1_000 of freight, over 100 units.
     expect(postedCost()).toBe(100);
     expect(lineUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'line' },
-        data: expect.objectContaining({ unitCostMinor: 100 }),
+        data: expect.objectContaining({ unitCostMinor: 100, allocatedOrderChargeMinor: 1_000 }),
       })
     );
   });
@@ -185,6 +202,7 @@ describe('postGoodsReceipt landed cost (PUR-03)', () => {
       freightMinor: 1_000,
       earlier: [{ status: 'POSTED', receivedCanonicalUnits: 100 }],
       stampedUnitCostMinor: 100,
+      stampedOrderChargeMinor: 1_000,
     });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     // The freight is in stock once already: this lot carries only 9_000 / 100.
@@ -205,15 +223,34 @@ describe('postGoodsReceipt landed cost (PUR-03)', () => {
       freightMinor: 1_000,
       earlier: [{ status: 'DRAFT', receivedCanonicalUnits: 100 }],
       stampedUnitCostMinor: 90,
+      stampedOrderChargeMinor: 0,
     });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     expect(postedCost()).toBe(100);
   });
 
   it('keeps the stamped cost, and writes nothing, when posting agrees with the draft', async () => {
-    const { db, lineUpdate } = receiptDb({ freightMinor: 1_000, stampedUnitCostMinor: 100 });
+    const { db, lineUpdate } = receiptDb({
+      freightMinor: 1_000,
+      stampedUnitCostMinor: 100,
+      stampedOrderChargeMinor: 1_000,
+    });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     expect(postedCost()).toBe(100);
     expect(lineUpdate.mock.calls[0]![0].data).not.toHaveProperty('unitCostMinor');
+  });
+
+  it('keeps any other charge already inside the stamped cost when the order share moves', async () => {
+    // Stamped with the full order share plus 1_000 the receipt itself charged
+    // (10 per unit); another receipt has since posted the order share.
+    const { db } = receiptDb({
+      freightMinor: 1_000,
+      earlier: [{ status: 'POSTED', receivedCanonicalUnits: 100 }],
+      stampedUnitCostMinor: 110,
+      stampedOrderChargeMinor: 1_000,
+    });
+    await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+    // Only the order share leaves: 110 − (100 − 90) = 100.
+    expect(postedCost()).toBe(100);
   });
 });
