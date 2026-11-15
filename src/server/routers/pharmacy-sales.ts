@@ -574,7 +574,7 @@ function fail(error: unknown): never {
       code:
         error.reason === 'NOT_FOUND'
           ? 'NOT_FOUND'
-          : error.reason === 'CROSS_BRANCH_REFERENCE'
+          : error.reason === 'CROSS_BRANCH_REFERENCE' || error.reason === 'NOT_BILL_OWNER'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
@@ -2207,11 +2207,19 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
+            const db = txDb(tx);
+            const scope = await requireCounterReceiptAccess(ctx, input.branchId);
             return await changeSaleStatus(
-              txDb(tx),
-              await requireCounterReceiptAccess(ctx, input.branchId),
+              db,
+              scope,
               input.saleId,
               input.action,
+              {
+                kind: 'COUNTER',
+                // DEV-821: only the bill's cashier or a manager/owner may void it.
+                actorIsManager:
+                  input.action === 'void' && (await actorMayRefund(db, ctx.session!.user)),
+              },
               input.reason,
               input.controlledWitness
             );

@@ -25,6 +25,8 @@ vi.mock('./finance-postings', async () => ({
 }));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+// DEV-821: these void suites run as a manager; bill ownership has its own cases below.
+const manager = { kind: 'COUNTER', actorIsManager: true } as const;
 
 describe('POS sale voiding', () => {
   it('restores exact allocated canonical units once with append-only reversals', async () => {
@@ -96,7 +98,7 @@ describe('POS sale voiding', () => {
       pharmacyTender: { findMany: async () => [] },
     };
 
-    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', manager, 'Customer cancelled');
 
     expect(allocationQuery).toMatchObject({
       where: {
@@ -125,7 +127,7 @@ describe('POS sale voiding', () => {
       12
     );
 
-    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
       'INVALID_STATE'
     );
     expect(reversals).toHaveLength(2);
@@ -187,7 +189,7 @@ describe('POS sale voiding', () => {
       },
     };
 
-    await changeSaleStatus(db as never, scope, 'sale-held', 'void', 'Lost to a reload');
+    await changeSaleStatus(db as never, scope, 'sale-held', 'void', manager, 'Lost to a reload');
 
     expect(status).toBe('VOID');
     // The claim is conditional on the status read, so a concurrent resume loses.
@@ -229,7 +231,7 @@ describe('POS sale voiding', () => {
         pharmacySaleEvent: { create: events },
       };
 
-      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
         'BILL_HAS_PAYMENTS'
       );
       expect(tenderQueries).toEqual([
@@ -246,6 +248,80 @@ describe('POS sale voiding', () => {
     }
   );
 
+  // DEV-821: a void releases the bill's stock, so another counter user cannot do it.
+  it.each(['OPEN', 'HELD'])(
+    "refuses a cashier voiding another cashier's %s bill before claiming it",
+    async (current) => {
+      const updateMany = vi.fn();
+      const stockWrites = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({
+            id: 'sale-a',
+            status: current,
+            createdByUserId: 'user-b',
+            lines: [],
+          }),
+          updateMany,
+        },
+        pharmacyStockMovement: { create: stockWrites },
+      };
+      await expect(
+        changeSaleStatus(db as never, scope, 'sale-a', 'void', {
+          kind: 'COUNTER',
+          actorIsManager: false,
+        })
+      ).rejects.toThrow('NOT_BILL_OWNER');
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(stockWrites).not.toHaveBeenCalled();
+    }
+  );
+
+  it('fails closed when a caller supplies no void authority', async () => {
+    const updateMany = vi.fn();
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({
+          id: 'sale-a',
+          status: 'HELD',
+          createdByUserId: 'user-a',
+          lines: [],
+        }),
+        updateMany,
+      },
+    };
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'void', undefined as never)
+    ).rejects.toThrow('NOT_BILL_OWNER');
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the cashier who opened it', 'user-a', false],
+    ['a manager or owner', 'user-b', true],
+  ])('lets %s void a held bill', async (_who, createdByUserId, actorIsManager) => {
+    let status = 'HELD';
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status, createdByUserId, lines: [] }),
+        updateMany: async ({ data }: { data: { status: string } }) => {
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacyTender: { findMany: async () => [] },
+      pharmacySaleLineAllocation: { findMany: async () => [] },
+      pharmacyStockMovement: { findMany: async () => [] },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: { create: async ({ data }: { data: unknown }) => data },
+    };
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', {
+      kind: 'COUNTER',
+      actorIsManager,
+    });
+    expect(status).toBe('VOID');
+  });
+
   it.each(['QUOTATION', 'COMPLETED', 'VOID'])(
     'still refuses to void a %s sale',
     async (current) => {
@@ -256,7 +332,7 @@ describe('POS sale voiding', () => {
           updateMany,
         },
       };
-      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
         'INVALID_STATE'
       );
       expect(updateMany).not.toHaveBeenCalled();
