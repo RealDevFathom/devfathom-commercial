@@ -38,6 +38,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { managerBranchIds } from '../pharmacy-manager-branches';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyAccessRouter } from './pharmacy-access';
+import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 import { canClosePharmacyDay, pharmacySalesRouter } from './pharmacy-sales';
 
@@ -45,6 +46,7 @@ const app = router({
   pharmacySales: pharmacySalesRouter,
   pharmacyReports: pharmacyReportsRouter,
   pharmacyAccess: pharmacyAccessRouter,
+  pharmacyInventory: pharmacyInventoryRouter,
 });
 
 const ASSIGNED = 'branch-assigned';
@@ -120,7 +122,12 @@ function fixture({
     db,
     entitlements: {
       organizationId: ORG,
-      enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-reports'],
+      enabledModules: [
+        'pharmacy-core',
+        'pharmacy-counter',
+        'pharmacy-reports',
+        'pharmacy-inventory',
+      ],
       modules: [],
     },
     session: {
@@ -285,6 +292,64 @@ describe('DEV-505 Manager template: purchasing and inventory', () => {
       expect(await decide(action)).toBe(true);
     for (const action of ['pharmacy:close', 'reports:operational', 'reports:financial'] as const)
       expect(await decide(action)).toBe(false);
+  });
+});
+
+describe('DEV-505 Manager template: inventory mutations', () => {
+  const OUTSIDE_SCOPE = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
+  const mutations = [
+    [
+      'approveCount',
+      (caller: ReturnType<typeof fixture>['caller'], branchId: string) =>
+        caller.pharmacyInventory.approveCount({
+          branchId,
+          countId: 'count_1',
+          idempotencyKeyPrefix: 'count-1',
+        }),
+    ],
+    [
+      'breakPack',
+      (caller: ReturnType<typeof fixture>['caller'], branchId: string) =>
+        caller.pharmacyInventory.breakPack({
+          branchId,
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'location_1',
+          requiredLooseUnits: 1,
+          idempotencyKey: 'break-1',
+        }),
+    ],
+    [
+      'quarantineExpiring',
+      (caller: ReturnType<typeof fixture>['caller'], branchId: string) =>
+        caller.pharmacyInventory.quarantineExpiring({
+          branchId,
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'location_1',
+          units: 1,
+          reason: 'Expires this week',
+          requestKey: 'quarantine-1',
+        }),
+    ],
+    [
+      'refreshStockSignals',
+      (caller: ReturnType<typeof fixture>['caller'], branchId: string) =>
+        caller.pharmacyInventory.refreshStockSignals({ branchId }),
+    ],
+  ] as const;
+
+  it.each(mutations)('refuses %s on a branch the Manager is not assigned to', async (_, run) => {
+    const { caller } = fixture();
+    await expect(run(caller, OTHER)).rejects.toMatchObject(OUTSIDE_SCOPE);
+  });
+
+  it.each(mutations)('admits %s past the branch rule on the assigned branch', async (_, run) => {
+    const { caller } = fixture();
+    // The mocked ledger may refuse later; the branch rule must not.
+    const outcome = await run(caller, ASSIGNED).then(
+      () => null,
+      (error: { message?: string }) => error
+    );
+    expect(outcome?.message).not.toBe(OUTSIDE_SCOPE.message);
   });
 });
 

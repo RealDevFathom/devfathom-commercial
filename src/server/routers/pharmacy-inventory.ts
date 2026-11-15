@@ -326,8 +326,12 @@ async function recordAdminBranchException(
  * stock-removing mutations (createLocation, receiveLot, createCount, writeOff),
  * the branch stock reads, allocateForSale and every transfer step.
  *
- * The other branch-scoped mutations still use the tenant-only scopeFor; that
- * remaining gap is tracked on DEV-660 rather than widened here.
+ * DEV-505: it also guards every other branch-scoped `pharmacy:inventory`
+ * procedure (counts, pack breaks, quarantine release, temperature logs, stock
+ * signals, safety stock, supplier claims and the expiry markdown, return and
+ * quarantine drafts), so a Manager holding `pharmacy:inventory` is refused every
+ * branch they are not assigned to. Only the `pharmacy:safety` procedures
+ * (quarantinePart, acknowledgeRecall) keep the tenant-only scopeFor.
  */
 async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
@@ -896,7 +900,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       try {
         return await ingestTemperatureReadings(
           ctx.db,
@@ -920,7 +924,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       try {
         return await ingestTemperatureReadings(
           ctx.db,
@@ -952,7 +956,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       const location = await ctx.db.pharmacyStockLocation.findFirst({
         where: {
           id: input.stockLocationId,
@@ -1184,7 +1188,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await breakPack(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await breakPack(ctx.db, await admittedScopeFor(ctx, input.branchId), {
           inventoryLotId: input.inventoryLotId,
           stockLocationId: input.stockLocationId,
           requiredLooseUnits: input.requiredLooseUnits,
@@ -1277,7 +1281,7 @@ export const pharmacyInventoryRouter = router({
         return await ctx.db.$transaction(async (tx) =>
           approveCount(
             txDb(tx),
-            await scopeFor(ctx, input.branchId),
+            await admittedScopeFor(ctx, input.branchId),
             input.countId,
             input.idempotencyKeyPrefix
           )
@@ -1360,7 +1364,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          releaseQuarantinedPart(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          releaseQuarantinedPart(txDb(tx), await admittedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1528,7 +1532,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        const scope = await admittedScopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
           reserveSupplierClaim(txDb(tx), scope, input)
         );
@@ -1570,7 +1574,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId, saleable: true } }))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Medicine is outside this workspace.' });
       }
@@ -1604,7 +1608,7 @@ export const pharmacyInventoryRouter = router({
   refreshStockSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           refreshStockSignals(txDb(tx), scope, new Date())
@@ -1617,14 +1621,14 @@ export const pharmacyInventoryRouter = router({
   markStaleSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) =>
-      markStaleSignals(ctx.db, await scopeFor(ctx, input.branchId), new Date())
+      markStaleSignals(ctx.db, await admittedScopeFor(ctx, input.branchId), new Date())
     ),
 
   acknowledgeSignal: inventoryControl
     .input(z.object({ branchId, signalId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await acknowledgeSignal(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await acknowledgeSignal(ctx.db, await admittedScopeFor(ctx, input.branchId), {
           signalId: input.signalId,
           at: new Date(),
         });
@@ -1647,7 +1651,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await snoozeSignal(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await snoozeSignal(ctx.db, await admittedScopeFor(ctx, input.branchId), {
           signalId: input.signalId,
           until: input.until,
           reason: input.reason,
@@ -1670,7 +1674,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await dismissSignal(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await dismissSignal(ctx.db, await admittedScopeFor(ctx, input.branchId), {
           signalId: input.signalId,
           reason: input.reason,
           at: new Date(),
@@ -1749,7 +1753,7 @@ export const pharmacyInventoryRouter = router({
       ])
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) => createDraftAction(txDb(tx), scope, input));
       } catch (error) {
@@ -2031,7 +2035,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       const at = new Date();
       try {
         return await ctx.db.$transaction(async (transaction) => {
@@ -2173,7 +2177,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       const at = new Date();
       try {
         return await ctx.db.$transaction(async (transaction) => {
@@ -2430,7 +2434,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       const at = new Date();
       const idempotencyKeyPrefix = `expiry-quarantine:${input.requestKey}`;
       try {

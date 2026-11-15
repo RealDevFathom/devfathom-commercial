@@ -1311,6 +1311,186 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         reason: 'Near-expiry return claim',
       }),
   },
+  // DEV-505 — every other branch-scoped `pharmacy:inventory` procedure, so a
+  // Manager granted inventory is refused every branch they are not assigned to.
+  {
+    name: 'recordTemperature',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().recordTemperature({
+        branchId: 'branch_a',
+        stockLocationId: 'location_1',
+        temperatureC: 5,
+        recordedAt: new Date('2026-10-22T08:00:00.000Z'),
+      }),
+  },
+  {
+    name: 'importTemperatureCsv',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().importTemperatureCsv({
+        branchId: 'branch_a',
+        stockLocationId: 'location_1',
+        csv: 'recordedAt,temperatureC\n2026-10-22T08:00:00.000Z,5\n',
+      }),
+  },
+  {
+    name: 'configureTemperatureMonitoring',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().configureTemperatureMonitoring({
+        branchId: 'branch_a',
+        stockLocationId: 'location_1',
+        expectedTemperatureReadingIntervalMinutes: 30,
+        temperatureExcursionDurationMinutes: 60,
+      }),
+  },
+  {
+    name: 'breakPack',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().breakPack({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        requiredLooseUnits: 1,
+        idempotencyKey: 'break-1',
+      }),
+  },
+  {
+    name: 'approveCount',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().approveCount({
+        branchId: 'branch_a',
+        countId: 'count_1',
+        idempotencyKeyPrefix: 'count-1',
+      }),
+  },
+  {
+    name: 'releaseQuarantinedPart',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().releaseQuarantinedPart({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: 'release-1',
+      }),
+  },
+  {
+    name: 'reserveSupplierClaim',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().reserveSupplierClaim({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        reservedUnits: 1,
+        returnBy: new Date('2026-12-01T00:00:00.000Z'),
+      }),
+  },
+  {
+    name: 'approveSafetyStock',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().approveSafetyStock({
+        branchId: 'branch_a',
+        medicineId: 'medicine_1',
+        safetyStockUnits: 10,
+        coverageDays: 30,
+      }),
+  },
+  {
+    name: 'refreshStockSignals',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().refreshStockSignals({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'markStaleSignals',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().markStaleSignals({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'acknowledgeSignal',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().acknowledgeSignal({ branchId: 'branch_a', signalId: 'signal_1' }),
+  },
+  {
+    name: 'snoozeSignal',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().snoozeSignal({
+        branchId: 'branch_a',
+        signalId: 'signal_1',
+        until: new Date('2026-12-01T00:00:00.000Z'),
+        reason: 'Supplier delivery booked',
+      }),
+  },
+  {
+    name: 'dismissSignal',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().dismissSignal({
+        branchId: 'branch_a',
+        signalId: 'signal_1',
+        reason: 'Discontinued line',
+      }),
+  },
+  {
+    name: 'createDraftAction',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().createDraftAction({
+        kind: 'DRAFT_REQUISITION',
+        branchId: 'branch_a',
+        signalId: 'signal_1',
+        reference: 'REQ-1',
+        medicineId: 'medicine_1',
+        packLevelId: 'pack_1',
+        canonicalUnitsPerPack: 10,
+        quantityPacks: 1,
+      }),
+  },
+  {
+    name: 'draftExpiryMarkdown',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().draftExpiryMarkdown({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        markdownPercent: 20,
+        reason: 'Near expiry',
+      }),
+  },
+  {
+    name: 'draftExpiryReturn',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().draftExpiryReturn({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        supplierId: 'supplier_1',
+        units: 1,
+        reason: 'Near-expiry return',
+      }),
+  },
+  {
+    name: 'quarantineExpiring',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().quarantineExpiring({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Expires this week',
+        requestKey: 'quarantine-1',
+      }),
+  },
 ];
 
 /** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
@@ -1787,31 +1967,12 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
 
 /**
  * DEV-660 residual: branch-scoped procedures still on the tenant-only branch
- * check. Each is a known gap tracked on DEV-660; moving one to admittedScopeFor
- * moves it from here into ASSIGNMENT_GATED. A new procedure that takes a
- * branchId must be placed in one of the two lists, so none skips the decision.
+ * check. DEV-505 moved every `pharmacy:inventory` procedure into
+ * ASSIGNMENT_GATED; only the `pharmacy:safety` ones remain here. A new procedure
+ * that takes a branchId must be placed in one of the two lists, so none skips
+ * the decision.
  */
-const TENANT_ONLY_BRANCH_PROCEDURES = [
-  'recordTemperature',
-  'importTemperatureCsv',
-  'configureTemperatureMonitoring',
-  'breakPack',
-  'approveCount',
-  'quarantinePart',
-  'releaseQuarantinedPart',
-  'acknowledgeRecall',
-  'reserveSupplierClaim',
-  'approveSafetyStock',
-  'refreshStockSignals',
-  'markStaleSignals',
-  'acknowledgeSignal',
-  'snoozeSignal',
-  'dismissSignal',
-  'createDraftAction',
-  'draftExpiryMarkdown',
-  'draftExpiryReturn',
-  'quarantineExpiring',
-];
+const TENANT_ONLY_BRANCH_PROCEDURES = ['quarantinePart', 'acknowledgeRecall'];
 
 function takesBranchId(schema: unknown): boolean {
   const zod = schema as {
@@ -1840,7 +2001,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(19);
+    expect(ASSIGNMENT_GATED).toHaveLength(36);
   });
 });
 
