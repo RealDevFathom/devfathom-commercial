@@ -59,6 +59,7 @@ import {
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
+import { useBrowserOnline } from './use-browser-online';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -101,6 +102,8 @@ import {
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
+  counterUnitNoun,
+  plural,
   looseSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
@@ -114,6 +117,7 @@ import {
 import {
   assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
+  counterFormatFromLayout,
   printCounterBrowserReceipt,
   reserveCounterBrowserPrint,
   type CounterBrowserPrintReservation,
@@ -292,6 +296,17 @@ function tenderRejected(error: unknown): boolean {
   );
 }
 
+/** DEV-575: typed search fires this long after the last keystroke. */
+export const COUNTER_SEARCH_DEBOUNCE_MS = 150;
+
+/**
+ * A barcode (six or more digits) or a GS1 payload: input a scanner sends as one
+ * burst ending in Enter. It is resolved on Enter, never searched per keystroke.
+ */
+export function looksLikeScannedCode(text: string): boolean {
+  return /^\d{6,}$/.test(text) || text.startsWith(']d2') || text.startsWith('(01)');
+}
+
 const UNKNOWN_TENDER_MESSAGE =
   'Payment outcome is unknown. The original attempt is saved in this browser. Check payment outcome before taking more money. Refreshing the bill will not retry the payment.';
 
@@ -315,6 +330,57 @@ function counterSelectionPreview(
   } catch {
     return null;
   }
+}
+
+const LINK_CLASS =
+  'font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
+
+/**
+ * DEV-724: why a staged medicine offers no sale unit, in shop words. "No stock
+ * here" and "the pack setup needs fixing" are different jobs for the operator,
+ * so they are never reported with the same message.
+ */
+export function CounterUnsellableMessage({ row }: { row: CounterSearchRow }) {
+  if (row.onHandUnits === 0) {
+    // Blocked balances are excluded from on-hand units, so zero sellable stock
+    // is not the same as no stock: say which it is.
+    if (row.blocked.length > 0) {
+      return (
+        <>
+          None of the stock here can be sold right now (
+          {row.blocked.map((reason) => reason.toLowerCase().replace(/_/g, ' ')).join(', ')}).
+          Receive fresh stock or record it as a shortage.
+        </>
+      );
+    }
+    return <>Out of stock at this branch. Receive stock or record it as a shortage.</>;
+  }
+  const name = counterMedicineDisplayName(row);
+  const fix = (
+    <>
+      {' '}
+      Open{' '}
+      <Link href="/pharmacy/medicines" className={LINK_CLASS}>
+        Medicines › {name} › Packs for receiving
+      </Link>{' '}
+      to fix it.
+    </>
+  );
+  if (row.packMismatch) {
+    return (
+      <>
+        This batch was received as {row.packMismatch.received} but the medicine is set up as{' '}
+        {row.packMismatch.setup ?? 'a different pack'}, so it cannot be priced.
+        {fix}
+      </>
+    );
+  }
+  return (
+    <>
+      This medicine&apos;s pack setup does not match the batch on hand, so it cannot be priced.
+      {fix}
+    </>
+  );
 }
 
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
@@ -356,6 +422,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       evidenceAuthorized={user.role === 'ADMIN'}
       keymapPreviewAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -395,6 +462,7 @@ function ScopedPharmacyCounterConsole({
   evidenceAuthorized = false,
   keymapPreviewAuthorized = false,
   safetyLicensed,
+  dispensingLicensed = false,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
@@ -403,6 +471,8 @@ function ScopedPharmacyCounterConsole({
   keymapPreviewAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
+  /** Pharmacy Dispensing owns the substitution workspace the Rx hand-off links to. */
+  dispensingLicensed?: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -425,12 +495,29 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
+  // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
+  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
+    enabled: Boolean(accountId),
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+    staleTime: 30_000,
+  });
+  const canOpenSubstitution =
+    dispensingLicensed &&
+    railAccess.data?.userId === accountId &&
+    (railAccess.data?.capabilities ?? []).some(
+      (capability) => capability === 'pharmacy:dispense' || capability === 'pharmacy:safety'
+    );
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
-  const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
+  // DEV-742: a cashier's paper choice overrides the branch's saved paper for this session only.
+  const [receiptFormatChoice, setReceiptFormatChoice] = useState<{
+    branchId: string;
+    format: CounterReceiptFormat;
+  } | null>(null);
   const [receiptReprint, setReceiptReprint] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
@@ -447,7 +534,6 @@ function ScopedPharmacyCounterConsole({
     receipt: CounterReceipt;
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
-  const paymentAttempt = useRef<{ saleId: string; id: string } | null>(null);
   // The patient on the bill when it was first seen paid or voided, and the
   // authorization fields the operator has edited since then (DEV-712).
   const closedBillPatient = useRef<{
@@ -458,6 +544,7 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const online = useBrowserOnline();
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -501,6 +588,18 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+  const savedReceiptFormat = trpc.pharmacySales.counterReceiptFormat.useQuery(
+    { branchId },
+    { enabled: branchAuthorized, staleTime: 60_000, retry: false }
+  );
+  const receiptFormat =
+    receiptFormatChoice?.branchId === branchId
+      ? receiptFormatChoice.format
+      : counterFormatFromLayout(savedReceiptFormat.data?.layout);
+  const setReceiptFormat = useCallback(
+    (format: CounterReceiptFormat) => setReceiptFormatChoice({ branchId, format }),
+    [branchId]
+  );
 
   useEffect(
     () => () => {
@@ -598,7 +697,9 @@ function ScopedPharmacyCounterConsole({
   });
 
   const trimmedQuery = query.trim();
-  const scannerQuery = trimmedQuery.startsWith(']d2') || trimmedQuery.startsWith('(01)');
+  // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
+  // being typed never fires a search per digit; Enter submits it.
+  const scannerQuery = looksLikeScannedCode(trimmedQuery);
   const searchCurrent =
     branchAuthorized &&
     trimmedQuery.length >= 2 &&
@@ -609,13 +710,18 @@ function ScopedPharmacyCounterConsole({
     if (!branchAuthorized || trimmedQuery.length < 2 || scannerQuery || searchCurrent) return;
     const timer = window.setTimeout(() => {
       setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
-    }, 300);
+    }, COUNTER_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [branchAuthorized, branchId, scannerQuery, searchCurrent, trimmedQuery]);
 
   const searchQuery = trpc.pharmacySales.counterSearch.useQuery(
     { branchId, query: submittedQuery },
-    { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
+    {
+      enabled: searchCurrent && submittedQuery.length >= 2,
+      staleTime: 10_000,
+      // A superseded search is cancelled rather than left to finish on the server.
+      trpc: { abortOnUnmount: true },
+    }
   );
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
@@ -693,6 +799,9 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  // DEV-641: only a request React Query is holding for the connection is queued.
+  // A dispatched payment or its post-acceptance bill read is not waiting to send.
+  const paymentQueued = pending === 'tender' && tender.isPaused;
   const allocateBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrint.useMutation({
     retry: false,
   });
@@ -862,6 +971,7 @@ function ScopedPharmacyCounterConsole({
       closedBillPatient.current = { saleId, patientId, editedAuth: new Set() };
   }, [currentBillClosed, patientId, saleId]);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
+  const paidMinor = currentBill ? cart.totals.tenderedMinor : 0;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
   const billState: CounterTenderBillState =
@@ -1213,13 +1323,16 @@ function ScopedPharmacyCounterConsole({
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or record the shortage.`,
         });
         return;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
       if (overrideLotId && !batchOverride?.reason.trim()) {
-        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        setNotice({
+          tone: 'warning',
+          message: 'Enter a reason before selling a batch other than the earliest-expiry one.',
+        });
         return;
       }
       setPending('addToCart');
@@ -1489,6 +1602,10 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  const loadKhataApprovers = useCallback(
+    () => utils.client.pharmacySales.khataOverLimitApprovers.query({ branchId }),
+    [branchId, utils]
+  );
   // A signup started on one bill must not link its customer to another branch or bill.
   const counterScopeRef = useRef('');
   useEffect(() => {
@@ -1593,6 +1710,8 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        overrideReason?: string;
+        overLimitApproval?: { staffProfileId: string; pin: string };
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
@@ -1627,13 +1746,6 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
           throw new Error(TENDER_STORAGE_MESSAGE);
         }
-        // DEV-712: a payment carries its own attempt ID, so a second payment of the
-        // same type and amount on one bill is recorded rather than replayed as the
-        // first. The ID survives a refused (rolled-back) try and is retired once a
-        // payment is accepted; recovery re-sends the saved attempt, key included.
-        if (paymentAttempt.current?.saleId !== saleId)
-          paymentAttempt.current = { saleId, id: browserUuid() };
-        const paymentAttemptId = paymentAttempt.current.id;
         const payload: TenderAttempt['input'] = {
           branchId,
           saleId,
@@ -1644,12 +1756,22 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
+          // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
+          // different paid balances; a double tap at the same balance still replays.
           idempotencyKey:
             input.familyAccountId || input.payerName !== undefined || input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
-              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}:${paymentAttemptId}`,
+              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
+                  paidMinor > 0 ? `:after:${paidMinor}` : ''
+                }`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            ? {
+                familyAccountId: input.familyAccountId,
+                ownerOverride: input.ownerOverride,
+                ...(input.overrideReason !== undefined
+                  ? { overrideReason: input.overrideReason }
+                  : {}),
+              }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
@@ -1673,7 +1795,13 @@ function ScopedPharmacyCounterConsole({
         };
         receiptIntent.current = intent;
         dispatched = true;
-        const result = await tender.mutateAsync(payload);
+        // DEV-290: the approver's PIN goes with this one request only; it is never persisted
+        // with the recovery attempt, so a recovery check never carries or replays it.
+        const result = await tender.mutateAsync(
+          input.overLimitApproval
+            ? { ...payload, overLimitApproval: input.overLimitApproval }
+            : payload
+        );
         outcome = tenderAcknowledgement(result)
           ? { status: 'accepted', message: 'Payment recorded.' }
           : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
@@ -1703,10 +1831,6 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
         }
       }
-      // Only a refused (rolled-back) try may reuse its ID. Once a write may have
-      // landed, the saved attempt keeps its key for recovery and the next
-      // payment — even after "Check payment outcome" confirms this one — is new.
-      if (outcome.status !== 'rejected') paymentAttempt.current = null;
       // An acknowledged write stays accepted even if the follow-up read fails.
       // Unknown writes are never replayed or inferred from aggregate balances.
       if (outcome.status === 'accepted') await refreshTenderBill('accepted');
@@ -1720,6 +1844,7 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       discardReceiptIntent,
+      paidMinor,
       recoveryScope,
       refreshTenderBill,
       saleId,
@@ -1880,7 +2005,7 @@ function ScopedPharmacyCounterConsole({
       });
       setNotice({
         tone: 'success',
-        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
+        message: `Recorded a shortage of ${capturedUnits} ${plural(counterUnitNoun(activeRow?.dosageForm), capturedUnits)} for ${requested}.`,
       });
       focusSearch();
     } catch (error) {
@@ -2474,6 +2599,35 @@ function ScopedPharmacyCounterConsole({
           </Button>
         </div>
       </header>
+      {online ? null : (
+        <div
+          role="status"
+          aria-live="polite"
+          data-counter-offline=""
+          className="mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+        >
+          <StatusPill status="offline" tone="warning" label="Offline" />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="font-medium text-text-strong">
+              {paymentQueued
+                ? 'Offline — the payment will be sent when the connection returns.'
+                : pending === 'tender'
+                  ? 'Offline — this payment is waiting for the server to confirm it.'
+                  : 'Offline — this counter cannot reach the server.'}
+            </p>
+            <p className="text-text-body">
+              {paymentQueued
+                ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
+                : pending === 'tender'
+                  ? 'Keep this bill open and do not take the money again until the connection returns.'
+                  : 'Search, bill changes and payments wait until the connection returns.'}
+            </p>
+          </div>
+          {paymentQueued ? (
+            <StatusPill status="queued" tone="warning" label="1 payment waiting" />
+          ) : null}
+        </div>
+      )}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
           <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
@@ -2578,11 +2732,7 @@ function ScopedPharmacyCounterConsole({
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
-                          const barcode =
-                            /^\d{6,}$/.test(trimmed) ||
-                            trimmed.startsWith(']d2') ||
-                            trimmed.startsWith('(01)');
-                          if (barcode) {
+                          if (looksLikeScannedCode(trimmed)) {
                             void addBarcode(trimmed);
                             return;
                           }
@@ -2677,10 +2827,13 @@ function ScopedPharmacyCounterConsole({
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantityText}
                       chordFor={chordFor}
+                      emptyMessage={<CounterUnsellableMessage row={activeRow} />}
                     />
                     {activeRow.saleUnits.length === 0 ? (
                       <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                        <Label htmlFor="counter-demand-units">
+                          Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
+                        </Label>
                         <Input
                           id="counter-demand-units"
                           type="number"
@@ -2702,8 +2855,8 @@ function ScopedPharmacyCounterConsole({
                         onClick={() => void captureShortfall()}
                       >
                         {pending === 'captureDemand'
-                          ? 'Capturing…'
-                          : `Capture shortfall: ${shortfallUnits} canonical units`}
+                          ? 'Recording…'
+                          : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
                       </Button>
                     ) : null}
                   </div>
@@ -2724,8 +2877,10 @@ function ScopedPharmacyCounterConsole({
                     {lotOverride?.inventoryLotId
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
                       : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
-                        : 'No sellable FEFO batch is available.'}
+                        ? `Earliest-expiry batch ${activeRow.batchNumber} is used; more batches are added if needed.`
+                        : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
+                          ? 'No batch of this medicine is in stock here.'
+                          : 'No batch can be sold here right now.'}
                   </span>
                   <CounterLotOverride
                     value={lotOverride}
@@ -2775,6 +2930,7 @@ function ScopedPharmacyCounterConsole({
                       : 'ready'
                 }
                 prescriptionOnly={activeRow?.restriction.rx ?? false}
+                canOpenSubstitution={canOpenSubstitution}
                 error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
                 disabled={busy}
                 onChoose={(proposal) => {
@@ -3017,13 +3173,16 @@ function ScopedPharmacyCounterConsole({
           onReloadManualSettings={() => void manualSettings.refetch()}
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
+          loadKhataApprovers={loadKhataApprovers}
           printKhataStatement={printKhataStatement}
           signUpKhata={signUpKhata}
           khataSignupPatient={khataSignupPatient}
           balanceMinor={balanceMinor}
+          tenders={currentBill ? cart.tenders : undefined}
           state={billState}
           blocked={blocked}
           pending={pending === 'tender'}
+          queued={paymentQueued}
           disabled={busy || !saleId}
           initialDraft={
             restoredAttempt

@@ -62,6 +62,7 @@ import {
   maySuggestExpiryMarkdown,
   supplierReturnDates,
 } from '@/lib/pharmacy/expiry-growth';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -87,6 +88,13 @@ import {
   loadTemperatureZoneStatuses,
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
+import {
+  enrollColdChainSensor,
+  listColdChainSensors,
+  PharmacyColdChainSensorError,
+  revokeColdChainSensor,
+  rotateColdChainSensorSecret,
+} from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
@@ -149,6 +157,17 @@ function domainError(error: unknown): never {
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyColdChainSensorError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DUPLICATE_DEVICE_IDENTIFIER' || error.reason === 'REVOKED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -394,6 +413,19 @@ export type ExpiryMarkdownDraft = {
   expiresAt: string;
 };
 
+/** A mark-down draft as any response carries it: never with the landed unit cost. */
+export type PublicExpiryMarkdownDraft = Omit<ExpiryMarkdownDraft, 'unitCostMinor'>;
+
+/**
+ * DEV-627: the stored draft keeps `unitCostMinor` as evidence, but it is a
+ * purchase-cost fact, so it is dropped before a draft leaves the server.
+ */
+export function publicMarkdownDraft(draft: ExpiryMarkdownDraft): PublicExpiryMarkdownDraft {
+  const copy: Partial<ExpiryMarkdownDraft> = { ...draft };
+  delete copy.unitCostMinor;
+  return copy as PublicExpiryMarkdownDraft;
+}
+
 export function parseMarkdownDraft(detail: string | null): ExpiryMarkdownDraft | null {
   if (!detail?.startsWith(MARKDOWN_DRAFT_PREFIX)) return null;
   try {
@@ -498,6 +530,10 @@ async function availableAt(
   });
   return balance?.onHandUnits ?? 0;
 }
+
+/** Supplier names match the way the expiry board groups them: trimmed, case-insensitive. */
+const sameSupplierName = (left: string, right: string) =>
+  left.trim().toLowerCase() === right.trim().toLowerCase();
 
 const expiryPosition = {
   branchId,
@@ -923,6 +959,60 @@ export const pharmacyInventoryRouter = router({
           input.stockLocationId,
           new CsvTemperatureReadingSource(input.csv)
         );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * DEV-82 — live cold-chain sensors. Like the storage zones and readings they
+   * feed, they belong to whoever runs the stock (`pharmacy:inventory`) AND is
+   * admitted to the branch, not just to a branch of the tenant. A push secret
+   * is returned once and only its hash is stored; every call is audited.
+   */
+  coldChainSensors: inventoryControl
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      listColdChainSensors(ctx.db, await admittedScopeFor(ctx, input.branchId))
+    ),
+
+  enrollColdChainSensor: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1).max(128),
+          name: z.string().trim().min(1).max(120),
+          deviceIdentifier: z.string().trim().min(1).max(120),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await enrollColdChainSensor(ctx.db, scope, input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  rotateColdChainSensorSecret: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await rotateColdChainSensorSecret(ctx.db, scope, input.sensorId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  revokeColdChainSensor: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await revokeColdChainSensor(ctx.db, scope, input.sensorId, new Date());
       } catch (error) {
         domainError(error);
       }
@@ -1790,6 +1880,13 @@ export const pharmacyInventoryRouter = router({
    * Every saleable lot position expiring inside the window — and every one that
    * has already expired but is still AVAILABLE on a shelf, which is the stock
    * most in need of an action — with the drafts already raised against it.
+   *
+   * DEV-627: landed unit cost never leaves the server (not on a row, not inside a
+   * mark-down draft), and the PKR value at risk
+   * derived from it is released only to a caller holding `reports:financial`
+   * (owner or finance). Everyone else still gets the operational board — units,
+   * expiry, MRP, drafts — with `costVisible: false`, a null value at risk and no
+   * PKR risk buckets.
    */
   expiryBoardLots: auditedProtectedProcedure
     .input(
@@ -1805,6 +1902,12 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
       await assertBranch(ctx.db, scope);
+      const costVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+      );
       const at = new Date();
       const { withinDays } = input;
       // Always read through 90 days so the headline recovery ledger can show
@@ -1928,14 +2031,14 @@ export const pharmacyInventoryRouter = router({
           returnByLot.set(line.inventoryLotId, line.purchaseReturn);
       const markdownByPosition = new Map<
         string,
-        ExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
+        PublicExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
       >();
       for (const event of markdownEvents) {
         const draft = parseMarkdownDraft(event.detail);
         const key = draft ? `${draft.inventoryLotId}:${draft.stockLocationId}` : null;
         if (draft && key && !markdownByPosition.has(key))
           markdownByPosition.set(key, {
-            ...draft,
+            ...publicMarkdownDraft(draft),
             eventId: event.id,
             reason: event.reason,
             recordedAt: event.createdAt,
@@ -1987,9 +2090,8 @@ export const pharmacyInventoryRouter = router({
             reservedUnits: reservedByLot.get(row.inventoryLotId) ?? 0,
             quarantinedUnits: heldByLot.get(row.inventoryLotId) ?? 0,
             unitsPerPack: lot.unitsPerPack,
-            unitCostMinor: lot.unitCostMinor,
             printedMrpMinor: lot.printedMrpMinor,
-            valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
+            valueAtRiskMinor: (row.onHandUnits * lot.unitCostMinor) as number | null,
             supplierName: lot.supplierName,
             suggestedSupplierId,
             markdownEligible,
@@ -2004,10 +2106,21 @@ export const pharmacyInventoryRouter = router({
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
-            right.valueAtRiskMinor - left.valueAtRiskMinor ||
+            // Without cost access the order must not hint at relative cost either.
+            (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
+      if (!costVisible) {
+        return {
+          generatedAt: at,
+          withinDays,
+          costVisible,
+          riskBuckets: [] as typeof riskBuckets,
+          rows: rows.map((row) => ({ ...row, valueAtRiskMinor: null })),
+          suppliers,
+        };
+      }
+      return { generatedAt: at, withinDays, costVisible, riskBuckets, rows, suppliers };
     }),
 
   /**
@@ -2131,7 +2244,12 @@ export const pharmacyInventoryRouter = router({
             latest.draft.markdownPercent === input.markdownPercent &&
             latest.draft.proposedPackPriceMinor === proposedPackPriceMinor
           ) {
-            return { created: false, signalId: signal.id, eventId: latest.id, draft: latest.draft };
+            return {
+              created: false,
+              signalId: signal.id,
+              eventId: latest.id,
+              draft: publicMarkdownDraft(latest.draft),
+            };
           }
           const event = await tx.pharmacyStockSignalEvent.create({
             data: {
@@ -2145,7 +2263,12 @@ export const pharmacyInventoryRouter = router({
             },
             select: { id: true },
           });
-          return { created: true, signalId: signal.id, eventId: event.id, draft };
+          return {
+            created: true,
+            signalId: signal.id,
+            eventId: event.id,
+            draft: publicMarkdownDraft(draft),
+          };
         });
       } catch (error) {
         expiryError(error);
@@ -2237,6 +2360,170 @@ export const pharmacyInventoryRouter = router({
               reference: created.reference,
               status: created.status,
             },
+          };
+        });
+      } catch (error) {
+        expiryError(error);
+      }
+    }),
+
+  /**
+   * DEV-728: one EXPIRY_CLAIM DRAFT to a distributor covering every listed
+   * near-expiry position it can still take. Each position is checked exactly as
+   * `draftExpiryReturn` checks one: branch-locked lot, inside the action horizon,
+   * no open return already on the lot, and only units not reserved for a claim.
+   * Every lot must also have come from that distributor, or the claim is refused.
+   * Expired lots are skipped too: a line's return window ends at the lot's expiry,
+   * and submitting refuses the whole return if any line's window has closed.
+   * Positions that fail those checks are skipped, never forced onto the claim.
+   * Like any draft it reserves nothing until it is submitted in Purchasing.
+   */
+  draftExpiryReturnClaim: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          supplierId: z.string().min(1).max(128),
+          positions: z
+            .array(
+              z
+                .object({
+                  inventoryLotId: z.string().min(1).max(128),
+                  stockLocationId: z.string().min(1).max(128),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(EXPIRY_CLAIM_MAX_POSITIONS)
+            .refine(
+              (positions) =>
+                new Set(positions.map((p) => `${p.inventoryLotId}:${p.stockLocationId}`)).size ===
+                positions.length,
+              'Each stock position may appear once.'
+            ),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      const at = new Date();
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          const supplier = await tx.pharmacySupplier.findFirst({
+            where: { id: input.supplierId, organizationId: scope.organizationId, active: true },
+            select: { id: true, name: true },
+          });
+          if (!supplier) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Supplier is outside this workspace.',
+            });
+          }
+          // Lock in a stable order so two claims over overlapping lots cannot deadlock.
+          const positions = [...input.positions].sort(
+            (left, right) =>
+              left.inventoryLotId.localeCompare(right.inventoryLotId) ||
+              left.stockLocationId.localeCompare(right.stockLocationId)
+          );
+          const lines: Array<Parameters<typeof createPurchaseReturn>[2]['lines'][number]> = [];
+          const alreadyOpen: Array<{ id: string; reference: string; status: string }> = [];
+          let windowClosed = 0;
+          for (const position of positions) {
+            const lot = await lockExpiringLot(tx, scope, position.inventoryLotId);
+            assertOnBoard(lot.batch.expiresAt, at);
+            // The lot must have come from this distributor, matched the way the
+            // board groups it: the supplier on its posted goods receipt while that
+            // supplier is active, otherwise the supplier name recorded on the lot.
+            const receipt = await tx.pharmacyGoodsReceiptLine.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: position.inventoryLotId,
+                goodsReceipt: { status: 'POSTED' },
+              },
+              select: {
+                goodsReceipt: {
+                  select: { supplierId: true, supplier: { select: { active: true } } },
+                },
+              },
+            });
+            const fromSupplier = receipt?.goodsReceipt.supplier.active
+              ? receipt.goodsReceipt.supplierId === supplier.id
+              : sameSupplierName(lot.supplierName, supplier.name);
+            if (!fromSupplier) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'A lot on this claim did not come from that supplier.',
+              });
+            }
+            if (lot.batch.expiresAt.getTime() <= at.getTime()) {
+              windowClosed += 1;
+              continue;
+            }
+            const open = await tx.pharmacyPurchaseReturnLine.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: position.inventoryLotId,
+                purchaseReturn: { status: { in: ['DRAFT', 'SUBMITTED'] } },
+              },
+              orderBy: { createdAt: 'desc' },
+              select: { purchaseReturn: { select: { id: true, reference: true, status: true } } },
+            });
+            if (open) {
+              alreadyOpen.push(open.purchaseReturn);
+              continue;
+            }
+            const [onHandUnits, reserved] = await Promise.all([
+              availableAt(tx, scope, position.inventoryLotId, position.stockLocationId),
+              tx.pharmacySupplierClaim.aggregate({
+                where: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  inventoryLotId: position.inventoryLotId,
+                  status: 'RESERVED',
+                },
+                _sum: { reservedUnits: true },
+              }),
+            ]);
+            const units = Math.min(onHandUnits, onHandUnits - (reserved._sum.reservedUnits ?? 0));
+            if (units <= 0) continue;
+            lines.push({
+              inventoryLotId: position.inventoryLotId,
+              stockLocationId: position.stockLocationId,
+              quantityUnits: units,
+              reason: input.reason,
+              returnWindowEndsAt: lot.batch.expiresAt,
+              expectedCreditMinor: units * lot.unitCostMinor,
+            });
+          }
+          if (lines.length === 0) {
+            if (alreadyOpen[0]) {
+              return { created: false, purchaseReturn: alreadyOpen[0], lineCount: 0, skipped: 0 };
+            }
+            if (windowClosed > 0) throw new PharmacySupplierReturnError('RETURN_WINDOW_CLOSED');
+            throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+          }
+          const stamp = at.toISOString().slice(0, 10).replaceAll('-', '');
+          const created = await createPurchaseReturn(tx, scope, {
+            supplierId: supplier.id,
+            kind: 'EXPIRY_CLAIM',
+            reference: `EXPC-${stamp}-${at.getTime().toString(36).toUpperCase()}`,
+            note: `Expiry claim to ${supplier.name}, drafted from the near-expiry board. A draft reserves nothing; submit it to hold the stock for the supplier.`,
+            lines,
+          });
+          return {
+            created: true,
+            purchaseReturn: {
+              id: created.id,
+              reference: created.reference,
+              status: created.status,
+            },
+            lineCount: lines.length,
+            skipped: positions.length - lines.length,
           };
         });
       } catch (error) {

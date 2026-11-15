@@ -53,6 +53,7 @@ const SAFETY_LEASE = {
   recallVersion: 0,
   licenceVersion: 1,
   ruleVersion: 1,
+  recalledBatchIds: [],
 };
 
 const CATALOG_KINDS: PharmacyOfflineSnapshotKind[] = [
@@ -410,6 +411,42 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       safetyLeaseStatus: 'ACTIVE',
       appliedRecallVersion: 1,
     });
+  });
+
+  it('#519: blocks a lot the signed lease marks recalled, with no bulletin applied', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const renewedAt = '2026-09-02T11:00:00.000Z';
+    await install(
+      counter,
+      'RULES',
+      { kind: 'RULES', recalled: true },
+      {
+        version: 2,
+        issuedAt: renewedAt,
+        safetyLease: { ...SAFETY_LEASE, issuedAt: renewedAt, recalledBatchIds: ['lot_1'] },
+      }
+    );
+
+    expect(counter.safetyLeaseState().recalledBatchIds).toEqual(['lot_1']);
+    expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)).toMatchObject({
+      type: 'RENEWED',
+      recalledBatchIds: ['lot_1'],
+    });
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+  });
+
+  it('#519: refuses a snapshot whose safety lease carries no recall set', async () => {
+    const counter = runtime(createMemoryDriver());
+    await counter.hydrate();
+    const leaseWithoutRecalls: Partial<typeof SAFETY_LEASE> = { ...SAFETY_LEASE };
+    delete leaseWithoutRecalls.recalledBatchIds;
+    const result = await install(counter, 'RULES', { kind: 'RULES' }, {
+      safetyLease: leaseWithoutRecalls as typeof SAFETY_LEASE,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'MALFORMED' });
   });
 
   it('fails medicine closed after expiry while an allowed non-medicine OTC row continues', async () => {

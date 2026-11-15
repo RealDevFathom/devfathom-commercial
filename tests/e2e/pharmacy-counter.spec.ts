@@ -202,7 +202,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText(`Batch ${otc.batchNumber}`);
   await expect(allocation).toContainText('Exp 2028-06-30');
   await expect(allocation).toContainText('20 units');
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
 
   // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
@@ -487,7 +487,7 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
   await expect(allocation).toContainText(`Batch ${batchNumber}`);
   await expect(allocation).not.toContainText(`Batch ${syrup.batchNumber}`);
   await expect(allocation).toContainText(`${syrup.unitsPerPack} units`);
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
   await expect(allocation).toContainText(/Near expiry · 4[4-6] d/);
 
@@ -626,15 +626,18 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         }
       }
     }
-    const override = page.getByLabel('Owner: authorize limit increase');
+    const override = page.getByLabel('Owner or manager: authorize limit increase');
     await override.focus();
     await override.press('Space');
     await page
       .getByLabel('Family Khata account')
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
+    // The signed-in admin approves as themselves with a fresh password re-entry.
+    await page.getByLabel('I am the only owner or manager: re-enter my password').check();
+    await page.getByLabel('Reason for exceeding the limit').fill('Regular family, paying Friday');
     await page
-      .getByLabel('Owner password (current account)')
+      .getByLabel('Your password (current account)')
       .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
     await expect(page.getByText('Settled', { exact: true })).toBeVisible();

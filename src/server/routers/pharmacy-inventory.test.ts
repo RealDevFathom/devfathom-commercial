@@ -49,7 +49,9 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postInterbranchTransferLossEntry: mocks.postInterbranchTransferLossEntry,
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 
 import { admittedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -79,6 +81,11 @@ function makeDb() {
     packLevel: model(),
     camera: model(),
     pharmacyStockLocation: model(),
+    pharmacyColdChainSensor: Object.assign(model(), {
+      findMany: vi.fn().mockResolvedValue([]),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'sensor_existing' }),
+    }),
     pharmacyTemperatureLog: Object.assign(model(), {
       createMany: vi.fn().mockResolvedValue({ count: 1 }),
     }),
@@ -126,7 +133,7 @@ function makeDb() {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []),
   });
 }
 
@@ -285,6 +292,285 @@ describe('transfer short-close accounting (DEV-131)', () => {
   });
 });
 
+describe('DEV-728 distributor expiry claim draft', () => {
+  const soon = () => new Date(Date.now() + 20 * 86_400_000);
+  function lotRow(id: string, unitCostMinor = 1_000) {
+    return {
+      id,
+      unitCostMinor,
+      supplierName: 'Distributor',
+      batch: { batchNumber: `B-${id}`, expiresAt: soon(), state: 'ACTIVE', medicine: {} },
+    };
+  }
+  function prepare({
+    open = new Set<string>(),
+    reserved = {} as Record<string, number>,
+    receivedFrom = { supplierId: 'supplier_1', supplier: { active: true } } as {
+      supplierId: string;
+      supplier: { active: boolean };
+    } | null,
+  }: {
+    open?: Set<string>;
+    reserved?: Record<string, number>;
+    receivedFrom?: { supplierId: string; supplier: { active: boolean } } | null;
+  } = {}) {
+    grant([allow('pharmacy:inventory')]);
+    const receiptLine = {
+      findFirst: vi.fn().mockResolvedValue(receivedFrom ? { goodsReceipt: receivedFrom } : null),
+    };
+    Object.assign(db, { pharmacyGoodsReceiptLine: receiptLine });
+    db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_1', name: 'Distributor' });
+    db.pharmacyInventoryLot.findFirst.mockImplementation(
+      async ({ where }: { where: { id: string } }) =>
+        lotRow(where.id, where.id === 'lot_2' ? 2_000 : 1_000)
+    );
+    db.pharmacyStockLocation.findFirst.mockResolvedValue({ id: 'location_1' });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 10 });
+    db.pharmacyPurchaseReturnLine.findFirst.mockImplementation(
+      async ({ where }: { where: { inventoryLotId: string } }) =>
+        open.has(where.inventoryLotId)
+          ? { purchaseReturn: { id: 'ret_old', reference: 'EXP-OLD', status: 'DRAFT' } }
+          : null
+    );
+    const aggregate = vi.fn(async ({ where }: { where: { inventoryLotId: string } }) => ({
+      _sum: { reservedUnits: reserved[where.inventoryLotId] ?? null },
+    }));
+    const createMany = vi.fn().mockResolvedValue({ count: 0 });
+    const findFirstOrThrow = vi.fn().mockResolvedValue({
+      id: 'ret_new',
+      reference: 'EXPC-NEW',
+      status: 'DRAFT',
+    });
+    Object.assign(db.pharmacySupplierClaim, { aggregate });
+    Object.assign(db.pharmacyPurchaseReturnLine, { createMany });
+    Object.assign(db.pharmacyPurchaseReturn, { findFirstOrThrow });
+    return { createMany };
+  }
+  const claim = (positions: string[]) =>
+    caller().draftExpiryReturnClaim({
+      branchId: 'branch_a',
+      supplierId: 'supplier_1',
+      positions: positions.map((inventoryLotId) => ({
+        inventoryLotId,
+        stockLocationId: 'location_1',
+      })),
+      reason: 'Near-expiry return claim',
+    });
+
+  it('drafts one EXPIRY_CLAIM for the distributor with every claimable lot as a line', async () => {
+    const { createMany } = prepare({ reserved: { lot_2: 4 } });
+
+    const result = await claim(['lot_2', 'lot_1']);
+
+    expect(result).toEqual({
+      created: true,
+      purchaseReturn: { id: 'ret_new', reference: 'EXPC-NEW', status: 'DRAFT' },
+      lineCount: 2,
+      skipped: 0,
+    });
+    expect(db.pharmacyPurchaseReturn.create).toHaveBeenCalledOnce();
+    expect(db.pharmacyPurchaseReturn.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        supplierId: 'supplier_1',
+        kind: 'EXPIRY_CLAIM',
+        createdByUserId: 'user_a',
+      }),
+    });
+    // Only unreserved units are claimed, and the credit is priced at the lot cost.
+    expect(createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          lineNumber: 1,
+          inventoryLotId: 'lot_1',
+          quantityUnits: 10,
+          expectedCreditMinor: 10_000,
+        }),
+        expect.objectContaining({
+          lineNumber: 2,
+          inventoryLotId: 'lot_2',
+          quantityUnits: 6,
+          expectedCreditMinor: 12_000,
+        }),
+      ],
+    });
+    // Every lot is locked before it is read.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips lots already on an open return or fully reserved', async () => {
+    const { createMany } = prepare({ open: new Set(['lot_1']), reserved: { lot_3: 10 } });
+
+    const result = await claim(['lot_1', 'lot_2', 'lot_3']);
+
+    expect(result).toMatchObject({ created: true, lineCount: 1, skipped: 2 });
+    expect(createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ inventoryLotId: 'lot_2', quantityUnits: 10 })],
+    });
+  });
+
+  it('replays the existing return instead of drafting a duplicate claim', async () => {
+    prepare({ open: new Set(['lot_1']) });
+
+    await expect(claim(['lot_1'])).resolves.toEqual({
+      created: false,
+      purchaseReturn: { id: 'ret_old', reference: 'EXP-OLD', status: 'DRAFT' },
+      lineCount: 0,
+      skipped: 0,
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses when no unit is left to claim', async () => {
+    prepare({ reserved: { lot_1: 10 } });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({ message: 'INSUFFICIENT_STOCK' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a supplier outside the workspace before touching any lot', async () => {
+    prepare();
+    db.pharmacySupplier.findFirst.mockResolvedValue(null);
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Supplier is outside this workspace.',
+    });
+    expect(db.pharmacySupplier.findFirst).toHaveBeenCalledWith({
+      where: { id: 'supplier_1', organizationId: 'org_a', active: true },
+      select: { id: true, name: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('leaves expired lots off the claim, since their return window has closed', async () => {
+    const { createMany } = prepare();
+    const lots = db.pharmacyInventoryLot.findFirst.getMockImplementation()!;
+    db.pharmacyInventoryLot.findFirst.mockImplementation(
+      async (args: { where: { id: string } }) => {
+        const lot = await lots(args);
+        return args.where.id === 'lot_1'
+          ? { ...lot, batch: { ...lot.batch, expiresAt: new Date(Date.now() - 86_400_000) } }
+          : lot;
+      }
+    );
+
+    await expect(claim(['lot_1', 'lot_2'])).resolves.toMatchObject({
+      created: true,
+      lineCount: 1,
+      skipped: 1,
+    });
+    expect(createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ inventoryLotId: 'lot_2' })],
+    });
+  });
+
+  it('refuses a claim whose every lot has expired', async () => {
+    prepare();
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      batch: {
+        batchNumber: 'B',
+        expiresAt: new Date(Date.now() - 86_400_000),
+        state: 'ACTIVE',
+        medicine: {},
+      },
+    });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'RETURN_WINDOW_CLOSED',
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses more positions than one claim may carry', async () => {
+    prepare();
+    await expect(
+      claim(Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 1 }, (_, i) => `lot_${i}`))
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('checks each lot against the supplier on its posted goods receipt', async () => {
+    prepare();
+
+    await expect(claim(['lot_1'])).resolves.toMatchObject({ created: true });
+    expect(
+      (db as unknown as { pharmacyGoodsReceiptLine: { findFirst: ReturnType<typeof vi.fn> } })
+        .pharmacyGoodsReceiptLine.findFirst
+    ).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        goodsReceipt: { status: 'POSTED' },
+      },
+      select: {
+        goodsReceipt: { select: { supplierId: true, supplier: { select: { active: true } } } },
+      },
+    });
+  });
+
+  it('refuses a lot received from a different supplier', async () => {
+    prepare({ receivedFrom: { supplierId: 'supplier_2', supplier: { active: true } } });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A lot on this claim did not come from that supplier.',
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the supplier name on the lot without an active receipt supplier', async () => {
+    prepare({ receivedFrom: null });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      supplierName: '  distributor ',
+    });
+    await expect(claim(['lot_1'])).resolves.toMatchObject({ created: true });
+
+    db = makeDb();
+    prepare({ receivedFrom: { supplierId: 'supplier_2', supplier: { active: false } } });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      supplierName: 'Another distributor',
+    });
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A lot on this claim did not come from that supplier.',
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a lot beyond the action horizon', async () => {
+    prepare();
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      batch: {
+        batchNumber: 'B',
+        expiresAt: new Date(Date.now() + 400 * 86_400_000),
+        state: 'ACTIVE',
+        medicine: {},
+      },
+    });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses duplicated positions and a caller without the inventory capability', async () => {
+    prepare();
+    await expect(claim(['lot_1', 'lot_1'])).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    grant([]);
+    await expect(claim(['lot_1'])).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('PH-A5 expiry recovery integration', () => {
   function position(id: string, expiresAt: Date, unitCostMinor = 2_500) {
     return {
@@ -317,7 +603,7 @@ describe('PH-A5 expiry recovery integration', () => {
   }
 
   it('uses the active branch relationship and returns risk/calendar facts', async () => {
-    grant([allow('pharmacy:inventory')]);
+    grant([allow('pharmacy:inventory'), allow('reports:financial')]);
     const expiresAt = new Date(Date.now() + 45 * 86_400_000);
     db.pharmacyStockBalance.findMany.mockResolvedValueOnce([position('lot_1', expiresAt)]);
     db.pharmacySupplier.findMany.mockResolvedValue([
@@ -357,6 +643,7 @@ describe('PH-A5 expiry recovery integration', () => {
   it.each([30, 60, 90, 180] as const)(
     'keeps cumulative risk independent of the %s-day list filter and excludes expired stock',
     async (withinDays) => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
       const now = Date.now();
       const day = 86_400_000;
       const positions = [
@@ -403,6 +690,158 @@ describe('PH-A5 expiry recovery integration', () => {
       );
     }
   );
+
+  describe('DEV-627: purchase cost on the expiry board', () => {
+    /** A stored mark-down draft carries the lot's unit cost as evidence. */
+    const storedDraft = (inventoryLotId: string, unitCostMinor: number) => ({
+      inventoryLotId,
+      stockLocationId: 'location_1',
+      batchNumber: 'B-1',
+      markdownPercent: 20,
+      printedMrpMinor: 5_000,
+      proposedPackPriceMinor: 4_000,
+      unitsPerPack: 10,
+      unitCostMinor,
+      onHandUnits: 10,
+      expiresAt: new Date(Date.now() + 20 * 86_400_000).toISOString(),
+    });
+
+    function seedBoard() {
+      const now = Date.now();
+      db.pharmacyStockBalance.findMany.mockResolvedValueOnce([
+        position('lot_cheap', new Date(now + 20 * 86_400_000), 1_000),
+        position('lot_dear', new Date(now + 20 * 86_400_000), 9_000),
+      ]);
+      db.pharmacyStockSignalEvent.findMany.mockResolvedValueOnce([
+        {
+          id: 'event_dear',
+          reason: 'Near expiry',
+          detail: `DRAFT mark-down ${JSON.stringify(storedDraft('lot_dear', 9_000))}`,
+          createdAt: new Date(now - 86_400_000),
+        },
+      ]);
+    }
+
+    it('withholds unit cost, value at risk and PKR buckets from a cashier without reports:financial', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows).toHaveLength(2);
+      for (const row of board.rows) {
+        expect(row).not.toHaveProperty('unitCostMinor');
+        expect(row.valueAtRiskMinor).toBeNull();
+        expect(row).toMatchObject({ onHandUnits: 10, printedMrpMinor: 5_000 });
+      }
+      // The order must not rank positions by their hidden cost either.
+      expect(board.rows.map((row) => row.inventoryLotId)).toEqual(['lot_cheap', 'lot_dear']);
+      // The seeded mark-down draft still reaches the board, without its stored unit cost.
+      const drafted = board.rows.find((row) => row.inventoryLotId === 'lot_dear');
+      expect(drafted?.markdown).toMatchObject({
+        eventId: 'event_dear',
+        markdownPercent: 20,
+        printedMrpMinor: 5_000,
+        proposedPackPriceMinor: 4_000,
+      });
+      expect(drafted?.markdown).not.toHaveProperty('unitCostMinor');
+      expect(JSON.stringify(board)).not.toMatch(/unitCost|9000|90000/);
+    });
+
+    it('withholds cost from a tenant ADMIN whose role explicitly denies reports:financial', async () => {
+      grant([allow('pharmacy:inventory'), deny('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(false);
+      expect(board.riskBuckets).toEqual([]);
+      expect(board.rows.every((row) => row.valueAtRiskMinor === null)).toBe(true);
+    });
+
+    it('releases value at risk, but never the unit cost, to a reports:financial holder', async () => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')]);
+      seedBoard();
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 30 });
+
+      expect(board.costVisible).toBe(true);
+      expect(board.riskBuckets[0]).toEqual({ days: 30, valueAtRiskMinor: 100_000 });
+      expect(board.rows.map((row) => [row.inventoryLotId, row.valueAtRiskMinor])).toEqual([
+        ['lot_dear', 90_000],
+        ['lot_cheap', 10_000],
+      ]);
+      for (const row of board.rows) expect(row).not.toHaveProperty('unitCostMinor');
+      expect(board.rows[0]?.markdown).toMatchObject({ eventId: 'event_dear' });
+      expect(board.rows[0]?.markdown).not.toHaveProperty('unitCostMinor');
+    });
+
+    function seedMarkdownLot() {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+        printedMrpMinor: 5_000,
+        unitsPerPack: 10,
+        unitCostMinor: 9_000,
+        batch: {
+          batchNumber: 'B-1',
+          expiresAt: new Date(Date.now() + 20 * 86_400_000),
+          state: 'ACTIVE',
+          medicineId: 'medicine_1',
+          medicine: {
+            rx: false,
+            otc: true,
+            restricted: false,
+            controlled: false,
+            productFamily: 'PHARMACEUTICAL',
+          },
+        },
+      });
+      db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 10 });
+      db.pharmacyStockSignal.findFirst.mockResolvedValue({ id: 'signal_1' });
+    }
+    const markdownInput = {
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_dear',
+      stockLocationId: 'location_1',
+      markdownPercent: 20,
+      reason: 'Near expiry',
+    };
+
+    it('records the unit cost as evidence but returns a new mark-down draft without it', async () => {
+      seedMarkdownLot();
+
+      const result = await caller().draftExpiryMarkdown(markdownInput);
+
+      expect(result.created).toBe(true);
+      expect(result.draft).toMatchObject({ markdownPercent: 20, proposedPackPriceMinor: 4_000 });
+      expect(result.draft).not.toHaveProperty('unitCostMinor');
+      expect(JSON.stringify(result)).not.toMatch(/unitCost|9000/);
+      const stored = db.pharmacyStockSignalEvent.create.mock.calls[0]![0] as {
+        data: { detail: string };
+      };
+      expect(stored.data.detail).toContain('"unitCostMinor":9000');
+    });
+
+    it('returns a replayed mark-down draft without its stored unit cost', async () => {
+      seedMarkdownLot();
+      db.pharmacyStockSignalEvent.findMany.mockResolvedValueOnce([
+        {
+          id: 'event_dear',
+          detail: `DRAFT mark-down ${JSON.stringify(storedDraft('lot_dear', 9_000))}`,
+        },
+      ]);
+
+      const result = await caller().draftExpiryMarkdown(markdownInput);
+
+      expect(result).toMatchObject({ created: false, eventId: 'event_dear' });
+      expect(result.draft).not.toHaveProperty('unitCostMinor');
+      expect(db.pharmacyStockSignalEvent.create).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([
     ['Rx', { rx: true, restricted: false, controlled: false }],
@@ -1020,6 +1459,44 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         idempotencyKeyPrefix: 'receive-1',
       }),
   },
+  {
+    name: 'coldChainSensors',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().coldChainSensors({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'enrollColdChainSensor',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().enrollColdChainSensor({
+        branchId: 'branch_a',
+        stockLocationId: 'fridge_1',
+        name: 'Vaccine fridge probe',
+        deviceIdentifier: 'SN-001',
+      }),
+  },
+  {
+    name: 'rotateColdChainSensorSecret',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' }),
+  },
+  {
+    name: 'revokeColdChainSensor',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_1' }),
+  },
+  {
+    name: 'draftExpiryReturnClaim',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().draftExpiryReturnClaim({
+        branchId: 'branch_a',
+        supplierId: 'supplier_1',
+        positions: [{ inventoryLotId: 'lot_1', stockLocationId: 'location_1' }],
+        reason: 'Near-expiry return claim',
+      }),
+  },
 ];
 
 /** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
@@ -1549,7 +2026,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(18);
+    expect(ASSIGNMENT_GATED).toHaveLength(23);
   });
 });
 
@@ -2038,5 +2515,205 @@ describe('PR J (#979) — the transfer board needs pharmacy:inventory', () => {
     db.pharmacyInterbranchTransfer.findMany.mockResolvedValue([]);
     Object.assign(db.user, { findMany: vi.fn().mockResolvedValue([]) });
     await expect(caller().transferBoard({ branchId: 'branch_a' })).resolves.toEqual([]);
+  });
+});
+
+describe('DEV-82 — live cold-chain sensor management', () => {
+  const COLD_ZONE = {
+    id: 'fridge_1',
+    coldChain: true,
+    minimumTemperatureC: 2,
+    maximumTemperatureC: 8,
+  };
+  const ENROLL = {
+    branchId: 'branch_a',
+    stockLocationId: 'fridge_1',
+    name: 'Vaccine fridge probe',
+    deviceIdentifier: 'SN-001',
+  };
+
+  it('maps every sensor procedure to the pharmacy-inventory entitlement', () => {
+    for (const procedure of [
+      'coldChainSensors',
+      'enrollColdChainSensor',
+      'rotateColdChainSensorSecret',
+      'revokeColdChainSensor',
+    ]) {
+      expect(moduleForProcedure(`pharmacyInventory.${procedure}`)).toBe('pharmacy-inventory');
+    }
+  });
+
+  it('refuses credential issuance without pharmacy:inventory', async () => {
+    grant([allow('pharmacy:counter')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    await expect(
+      caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+
+  it('issues the secret once and stores only its hash, scoped to the session', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    const result = await caller().enrollColdChainSensor(ENROLL);
+    expect(result?.secret).toMatch(/^pcs_[A-Za-z0-9_-]{43}$/);
+    const [{ data }] = db.pharmacyColdChainSensor.create.mock.calls[0] as unknown as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).toMatchObject({
+      organizationId: 'org_a',
+      branchId: 'branch_a',
+      stockLocationId: 'fridge_1',
+      deviceIdentifier: 'SN-001',
+      enrolledByActorId: 'user_a',
+    });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(data)).not.toContain(result!.secret);
+    expect(db.pharmacyStockLocation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
+      })
+    );
+  });
+
+  it('refuses to bind a sensor to a zone that is not a validated cold-chain zone', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(LOCATION_ROW);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'LOCATION_NOT_COLD_CHAIN',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zone from another branch or tenant', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(null);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a serial already enrolled in the organization', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({ id: 'sensor_existing' });
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('re-enrolls a revoked serial on its own row with a fresh secret', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({
+      id: 'sensor_existing',
+      status: 'REVOKED',
+    });
+    const result = await caller().enrollColdChainSensor(ENROLL);
+    expect(result?.secret).toMatch(/^pcs_[A-Za-z0-9_-]{43}$/);
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+    const [{ where, data }] = db.pharmacyColdChainSensor.updateMany.mock.calls[0] as unknown as [
+      { where: Record<string, unknown>; data: Record<string, unknown> },
+    ];
+    expect(where).toEqual({ organizationId: 'org_a', id: 'sensor_existing', status: 'REVOKED' });
+    expect(data).toMatchObject({
+      branchId: 'branch_a',
+      stockLocationId: 'fridge_1',
+      status: 'ACTIVE',
+      revokedAt: null,
+      enrolledByActorId: 'user_a',
+    });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('reports a lost re-enrollment race as CONFLICT', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({
+      id: 'sensor_existing',
+      status: 'REVOKED',
+    });
+    db.pharmacyColdChainSensor.updateMany.mockResolvedValue({ count: 0 });
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'DUPLICATE_DEVICE_IDENTIFIER',
+    });
+  });
+
+  it('reports a concurrent enrollment of the same serial as CONFLICT, not a 500', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['organizationId', 'deviceIdentifier'] },
+      })
+    );
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'DUPLICATE_DEVICE_IDENTIFIER',
+    });
+  });
+
+  it('re-attributes a sensor to the rotating admin', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.$queryRaw.mockResolvedValue([{ id: 'sensor_1', status: 'ACTIVE', revokedAt: null }]);
+    await caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' });
+    const [{ data }] = db.pharmacyColdChainSensor.update.mock.calls[0] as unknown as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).toMatchObject({ enrolledByActorId: 'user_a' });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('gates listing and revocation behind pharmacy:inventory', async () => {
+    grant([allow('pharmacy:counter')]);
+    await expect(caller().coldChainSensors({ branchId: 'branch_a' })).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    await expect(
+      caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_1' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyColdChainSensor.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+
+  it('lists sensors for the session branch without ever selecting the secret hash', async () => {
+    grant([allow('pharmacy:inventory')]);
+    await caller().coldChainSensors({ branchId: 'branch_a' });
+    const [query] = db.pharmacyColdChainSensor.findMany.mock.calls[0] as unknown as [
+      { where: object; select: Record<string, boolean> },
+    ];
+    expect(query.where).toEqual({ organizationId: 'org_a', branchId: 'branch_a' });
+    expect(query.select).not.toHaveProperty('secretHash');
+  });
+
+  it('revokes with a server timestamp inside the session branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.$queryRaw.mockResolvedValue([{ id: 'sensor_1', status: 'ACTIVE', revokedAt: null }]);
+    await caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_1' });
+    expect(db.pharmacyColdChainSensor.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId_id: { organizationId: 'org_a', id: 'sensor_1' } },
+        data: { status: 'REVOKED', revokedAt: expect.any(Date) },
+      })
+    );
+  });
+
+  it('reports an unknown sensor as NOT_FOUND on revoke', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.$queryRaw.mockResolvedValue([]);
+    await expect(
+      caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_other' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
   });
 });

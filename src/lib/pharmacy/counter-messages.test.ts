@@ -70,6 +70,7 @@ describe('counterErrorMessage', () => {
    */
   it('has a sentence for every reason PharmacySettlementError can raise', () => {
     const settlementReasons = [
+      'BUSINESS_DATE_NOT_CURRENT',
       'SALE_NOT_OPEN',
       'INVALID_AMOUNT',
       'OVER_TENDER',

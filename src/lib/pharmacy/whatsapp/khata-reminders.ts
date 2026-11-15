@@ -8,6 +8,20 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
+import {
+  emptySmsFallbackCounts,
+  sendUtilitySmsFallback,
+  tallySms,
+  type SmsFallbackCounts,
+} from '../sms/fallback';
+import { smsFallbackReason } from '../sms/messages';
+import {
+  createSmsProvider,
+  readSmsConfig,
+  smsEnabledFor,
+  type SmsConfig,
+  type SmsProvider,
+} from '../sms/provider';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -80,10 +94,13 @@ export type KhataReminderRunResult = {
   skippedConfiguration: number;
   notDue: number;
   configurationErrors: string[];
+  /** DEV-87 SMS fallback outcomes (no WhatsApp consent or permanent failure). */
+  sms: SmsFallbackCounts;
 };
 
 type KhataRecipientResult =
   | { kind: 'configuration'; configurationError: string }
+  | { kind: 'sms'; customerId: string }
   | {
       kind: 'recipient';
       customerId: string;
@@ -136,12 +153,22 @@ export async function processDueWhatsAppKhataReminders(
     minBalanceMinor?: number;
     config?: WhatsAppConfig;
     provider?: WhatsAppProvider;
+    smsConfig?: SmsConfig;
+    smsProvider?: SmsProvider;
+    /**
+     * DEV-730 owner "Send reminder": restrict the run to one family account. The same
+     * overdue, consent, quiet-hour, once-per-week and SMS-fallback gates apply as the
+     * scheduled job.
+     */
+    account?: { organizationId: string; branchId: string; familyAccountId: string };
   } = {}
 ): Promise<KhataReminderRunResult> {
   const now = options.now ?? new Date();
   const config = options.config ?? readWhatsAppConfig();
   const provider = options.provider ?? createWhatsAppProvider(config);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
+  const smsConfig = options.smsConfig ?? readSmsConfig();
+  const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
   const result: KhataReminderRunResult = {
     configured: false,
     scanned: 0,
@@ -154,14 +181,29 @@ export async function processDueWhatsAppKhataReminders(
     skippedConfiguration: 0,
     notDue: 0,
     configurationErrors: baseConfigurationErrors(config),
+    sms: emptySmsFallbackCounts(),
   };
   result.configured = result.configurationErrors.length === 0;
-  const organizationId = config.organizationId;
-  if (!result.configured || !organizationId || !config.phoneNumberId) return result;
+  // `configured` reports the WhatsApp channel. A bound SMS sender still runs
+  // the job for customers it can reach, without WhatsApp credentials.
+  const whatsappReady = result.configured && Boolean(config.organizationId && config.phoneNumberId);
+  const smsReady = smsConfig.provider !== 'disabled' && Boolean(smsConfig.organizationId);
+  const organizationId = whatsappReady
+    ? config.organizationId
+    : smsReady
+      ? smsConfig.organizationId
+      : null;
+  if (!organizationId) return result;
+  // An owner's single-account send never scans another workspace's accounts.
+  if (options.account && options.account.organizationId !== organizationId) {
+    result.configured = false;
+    result.configurationErrors.push('ORGANIZATION_NOT_CONFIGURED');
+    return result;
+  }
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
-    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
+    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor, options.account)
   );
 
   for (const account of accounts) {
@@ -184,7 +226,8 @@ export async function processDueWhatsAppKhataReminders(
     const recipient = await withTenantDb<KhataRecipientResult | null>(
       account.organizationId,
       async (db) => {
-        if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
+        const whatsappBound = whatsappReady && config.organizationId === account.organizationId;
+        if (!whatsappBound && !smsEnabledFor(smsConfig, account.organizationId)) return null;
         const organization = await db.organization.findUnique({
           where: { id: account.organizationId },
           select: { vertical: true, status: true, timezone: true },
@@ -241,13 +284,14 @@ export async function processDueWhatsAppKhataReminders(
         });
         const to = normalizeWhatsAppNumber(customer.patient.phone);
         if (
+          !whatsappBound ||
           !to ||
           !canMessageCustomer(customer) ||
           !consent?.granted ||
           consent.revokedAt ||
           consent.recordedAt > now
         )
-          return null;
+          return { kind: 'sms', customerId: customer.id };
         const language = customer.preferredLanguage;
         if (language !== 'en' && language !== 'ur')
           return { kind: 'configuration', configurationError: 'KHATA_LANGUAGE_UNSUPPORTED' };
@@ -297,6 +341,27 @@ export async function processDueWhatsAppKhataReminders(
       result.skippedNoConsent += 1;
       continue;
     }
+    const smsFallback = (customerId: string) =>
+      sendUtilitySmsFallback(
+        {
+          organizationId: account.organizationId,
+          branchId: account.branchId,
+          customerId,
+          dedupeKey: plan.dedupeKey,
+          content: { kind: 'KHATA_REMINDER', balance: formatMinor(balanceMinor) },
+          dueDate: plan.dueDate,
+        },
+        smsConfig,
+        smsProvider,
+        now
+      );
+    if (recipient.kind === 'sms') {
+      // No WhatsApp consent: SMS only with the customer's own SMS reminder consent.
+      const sms = await smsFallback(recipient.customerId);
+      if (sms) tallySms(result.sms, sms);
+      else result.skippedNoConsent += 1;
+      continue;
+    }
     if (recipient.kind === 'configuration') {
       result.skippedConfiguration += 1;
       if (!result.configurationErrors.includes(recipient.configurationError))
@@ -335,6 +400,10 @@ export async function processDueWhatsAppKhataReminders(
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
     else result.duplicate += 1;
+    if (smsFallbackReason({ whatsappEligible: true, whatsappOutcome: outcome })) {
+      const sms = await smsFallback(recipient.customerId);
+      if (sms) tallySms(result.sms, sms);
+    }
   }
   return result;
 }
@@ -363,9 +432,13 @@ export async function readDueKhataAccounts(
   organizationId: string,
   now: Date,
   limit: number,
-  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR
+  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR,
+  only?: { branchId: string; familyAccountId: string }
 ): Promise<DueAccount[]> {
   const floor = Math.max(1, Number.isSafeInteger(minBalanceMinor) ? minBalanceMinor : 1);
+  const accountFilter = only
+    ? Prisma.sql`AND acct."branchId" = ${only.branchId} AND acct."id" = ${only.familyAccountId}`
+    : Prisma.empty;
   return db.$queryRaw<DueAccount[]>(Prisma.sql`
     WITH payments AS (
       SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
@@ -392,6 +465,7 @@ export async function readDueKhataAccounts(
      AND payments."familyAccountId" = ev."familyAccountId"
      AND payments."settlesChargeId" = ev."id"
     WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
+      ${accountFilter}
     GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName", acct."payerCustomerId"
     HAVING SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END) >= ${floor}

@@ -314,3 +314,89 @@ describe('pharmacyPackLabel.read', () => {
     expect(mocks.branch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('pharmacyPackLabel.read printed price (DEV-770)', () => {
+  const packPrice = vi.fn();
+  function pricedContext(organizationId = 'org-a') {
+    const ctx = context('user-a', organizationId) as unknown as { db: Record<string, unknown> };
+    ctx.db.pharmacyPackPrice = { findFirst: packPrice };
+    return ctx as unknown as TRPCContext;
+  }
+  const priced = (value: string | null, confidence = 0.9) =>
+    readable({ price: { value, confidence } });
+
+  beforeEach(() => {
+    packPrice.mockReset();
+  });
+
+  it('suggests batch, expiry and MRP from a clear label that matches the current price', async () => {
+    mocks.extract.mockResolvedValue(priced('MRP Rs. 450.00'));
+    packPrice.mockResolvedValueOnce({ mrpMinor: 45_000 });
+    const proposal = await caller(pricedContext()).read(input());
+    expect(proposal).toMatchObject({
+      status: 'PROPOSED',
+      requiresReceiverConfirmation: true,
+      batch: { value: 'SYN-B2741' },
+      expiry: { kind: 'read', candidate: { date: '2028-06-30' } },
+      price: { kind: 'read', amountMinor: 45_000, confidence: 0.9 },
+      currentMrpMinor: 45_000,
+      warnings: [],
+    });
+  });
+
+  it('reads the current price from the pack record of the session tenant, branch first', async () => {
+    mocks.extract.mockResolvedValue(priced('MRP Rs. 495.00'));
+    packPrice.mockResolvedValueOnce(null).mockResolvedValueOnce({ mrpMinor: 45_000 });
+    const proposal = await caller(pricedContext('org-b')).read(input());
+    expect(packPrice).toHaveBeenCalledTimes(2);
+    expect(packPrice.mock.calls[0]![0]).toMatchObject({
+      where: { organizationId: 'org-b', packLevelId: 'pack-a', branchId: 'branch-a' },
+    });
+    expect(packPrice.mock.calls[1]![0]).toMatchObject({
+      where: { organizationId: 'org-b', packLevelId: 'pack-a', branchId: null },
+    });
+    // Both prices go back so the receiver chooses; neither is applied here.
+    expect(proposal.price).toMatchObject({ kind: 'read', amountMinor: 49_500 });
+    expect(proposal.currentMrpMinor).toBe(45_000);
+    expect(proposal.warnings.map((w) => w.code)).toEqual(['PRICE_DIFFERS_FROM_CURRENT']);
+  });
+
+  it('leaves an unreadable price empty, says so, and does not look up a price', async () => {
+    mocks.extract.mockResolvedValue(priced(null, 0.99));
+    const proposal = await caller(pricedContext()).read(input());
+    expect(proposal.price).toEqual({ kind: 'unreadable', printed: null, confidence: 0 });
+    expect(proposal.currentMrpMinor).toBeNull();
+    expect(proposal.warnings.map((w) => w.code)).toEqual(['PRICE_UNREADABLE']);
+    expect(packPrice).not.toHaveBeenCalled();
+  });
+
+  it('rejects two prices on one label without choosing one', async () => {
+    mocks.extract.mockResolvedValue(priced('MRP Rs 450 | MRP Rs 495', 0.97));
+    const proposal = await caller(pricedContext()).read(input());
+    expect(proposal.price).toEqual({
+      kind: 'ambiguous',
+      printed: 'MRP Rs 450 | MRP Rs 495',
+      confidence: 0,
+    });
+    expect(proposal.warnings.map((w) => w.code)).toEqual(['PRICE_AMBIGUOUS']);
+    expect(packPrice).not.toHaveBeenCalled();
+  });
+
+  it('audits the suggested and current price, and writes nothing', async () => {
+    mocks.extract.mockResolvedValue(priced('MRP Rs. 495.00'));
+    packPrice.mockResolvedValueOnce({ mrpMinor: 45_000 });
+    const ctx = pricedContext();
+    await caller(ctx).read(input());
+    const row = mocks.audit.mock.calls[0]![0] as {
+      ctx: { audit: { detail: { metadata?: Record<string, unknown> } } };
+    };
+    expect(row.ctx.audit.detail.metadata).toMatchObject({
+      priceKind: 'read',
+      suggestedMrpMinor: 49_500,
+      currentMrpMinor: 45_000,
+    });
+    expect(
+      Object.values((ctx as unknown as { db: Record<string, object> }).db).flatMap(Object.keys)
+    ).toEqual(['findFirst', 'findFirst', 'findFirst']);
+  });
+});

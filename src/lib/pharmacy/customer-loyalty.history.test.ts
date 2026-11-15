@@ -20,6 +20,17 @@ function fixture() {
     },
   };
 }
+// Directory reads also total branch balances; history tests keep the narrower ledger mock.
+function directoryFixture() {
+  const db = fixture();
+  return {
+    ...db,
+    pharmacyLoyaltyPointsEntry: {
+      ...db.pharmacyLoyaltyPointsEntry,
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
+  };
+}
 
 describe('ordinary loyalty history reads', () => {
   it('scopes every ledger query and bounds page two without paging the balance', async () => {
@@ -141,7 +152,7 @@ describe('ordinary loyalty history reads', () => {
     });
   });
   it('caps directory results and selects only retail identity fields', async () => {
-    const db = fixture();
+    const db = directoryFixture();
     db.pharmacyCustomer.findMany.mockResolvedValue(
       Array.from({ length: 51 }, (_, i) => ({ id: String(i) }))
     );
@@ -152,12 +163,81 @@ describe('ordinary loyalty history reads', () => {
       where: {
         organizationId: 'org-a',
         active: true,
-        displayName: { contains: 'Ali', mode: 'insensitive' },
+        AND: [
+          {
+            OR: [
+              { displayName: { contains: 'Ali', mode: 'insensitive' } },
+              { patient: { displayName: { contains: 'Ali', mode: 'insensitive' } } },
+              { id: 'Ali' },
+            ],
+          },
+        ],
       },
       select: { id: true, displayName: true, phoneLast4: true },
       orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
       take: 51,
     });
+  });
+  it('lists every active customer with branch balances when no search is entered', async () => {
+    const db = directoryFixture();
+    db.pharmacyCustomer.findMany.mockResolvedValue([
+      { id: 'customer-a', displayName: 'Ahmed Raza', phoneLast4: '4567' },
+      { id: 'customer-b', displayName: 'Sana Khan', phoneLast4: null },
+    ]);
+    db.pharmacyLoyaltyPointsEntry.groupBy.mockResolvedValue([
+      { customerId: 'customer-a', _sum: { points: 120 } },
+    ]);
+    const result = await listLoyaltyCustomers(db as never, scope, '');
+    expect(db.pharmacyCustomer.findMany.mock.calls[0]?.[0].where).toEqual({
+      organizationId: 'org-a',
+      active: true,
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.groupBy).toHaveBeenCalledWith({
+      by: ['customerId'],
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        customerId: { in: ['customer-a', 'customer-b'] },
+      },
+      _sum: { points: true },
+    });
+    expect(result.customers).toEqual([
+      { id: 'customer-a', displayName: 'Ahmed Raza', phoneLast4: '4567', pointsBalance: 120 },
+      { id: 'customer-b', displayName: 'Sana Khan', phoneLast4: null, pointsBalance: 0 },
+    ]);
+  });
+  it('finds a customer by patient name when the loyalty name snapshot differs', async () => {
+    const db = directoryFixture();
+    await listLoyaltyCustomers(db as never, scope, 'ahmed  raza');
+    const where = db.pharmacyCustomer.findMany.mock.calls[0]?.[0].where;
+    expect(where.AND).toHaveLength(2);
+    expect(where.AND[0].OR).toContainEqual({
+      patient: { displayName: { contains: 'ahmed', mode: 'insensitive' } },
+    });
+    expect(where.AND[1].OR).toContainEqual({
+      displayName: { contains: 'raza', mode: 'insensitive' },
+    });
+  });
+  it('finds a customer by phone number and by loyalty number', async () => {
+    const db = directoryFixture();
+    await listLoyaltyCustomers(db as never, scope, '0300-1234567');
+    let [term] = db.pharmacyCustomer.findMany.mock.calls[0]?.[0].where.AND;
+    expect(term.OR).toContainEqual({ patient: { phone: { contains: '3001234567' } } });
+    await listLoyaltyCustomers(db as never, scope, '4567');
+    [term] = db.pharmacyCustomer.findMany.mock.calls[1]?.[0].where.AND;
+    expect(term.OR).toContainEqual({ phoneLast4: '4567' });
+    await listLoyaltyCustomers(db as never, scope, 'cmh0loyalty01');
+    [term] = db.pharmacyCustomer.findMany.mock.calls[2]?.[0].where.AND;
+    expect(term.OR).toContainEqual({ id: 'cmh0loyalty01' });
+    expect(term.OR).not.toContainEqual(expect.objectContaining({ phoneLast4: expect.anything() }));
+  });
+  it('skips the balance read when nothing matches', async () => {
+    const db = directoryFixture();
+    expect(await listLoyaltyCustomers(db as never, scope, 'Nobody')).toEqual({
+      customers: [],
+      hasMore: false,
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.groupBy).not.toHaveBeenCalled();
   });
   it('rejects oversized search before database reads', async () => {
     const db = fixture();
