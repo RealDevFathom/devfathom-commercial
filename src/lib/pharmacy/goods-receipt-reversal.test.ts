@@ -8,6 +8,15 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
+const finance = vi.hoisted(() => ({
+  postGoodsReceiptEntry: vi.fn(),
+  reversePostingForSource: vi.fn(),
+}));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  ...finance,
+}));
+
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
   isLockedOut: () => false,
@@ -147,6 +156,28 @@ describe('controlled goods receipt reversal authorization', () => {
         });
     }
   );
+
+  it('reverses the receipt journal entry with the stock (DEV-131)', async () => {
+    finance.reversePostingForSource.mockReset().mockResolvedValue({ id: 'reversal-entry' });
+    const { db, run } = fixture();
+    await run();
+    expect(finance.reversePostingForSource).toHaveBeenCalledWith(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: 'receipt',
+      reason: input.reason,
+      at: input.at,
+    });
+  });
+
+  it('reverses a receipt that never journalled anything', async () => {
+    const { PharmacyFinanceError } =
+      await vi.importActual<typeof import('./finance-postings')>('./finance-postings');
+    finance.reversePostingForSource
+      .mockReset()
+      .mockRejectedValue(new PharmacyFinanceError('NOT_FOUND'));
+    const { run } = fixture();
+    await expect(run()).resolves.toMatchObject({ reversalMovementIds: ['reversal'] });
+  });
 
   it('keeps ordinary receipt reversal available without a witness', async () => {
     const { db, run } = fixture();

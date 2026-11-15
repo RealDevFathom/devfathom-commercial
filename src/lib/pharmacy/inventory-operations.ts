@@ -2,6 +2,11 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import {
+  postCountAdjustmentEntry,
+  postInterbranchTransferEntry,
+  postInterbranchTransferReceiptEntry,
+} from './finance-postings';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
@@ -312,10 +317,20 @@ export async function approveCount(
       },
     });
   }
-  return db.pharmacyInventoryCount.update({
+  const approved = await db.pharmacyInventoryCount.update({
     where: { id: count.id },
     data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt: new Date() },
   });
+  // FIN-01: each approved variance is journalled in the transaction that moved
+  // the stock, so GL inventory and the stock ledger change together.
+  for (const line of count.lines) {
+    if (!line.varianceUnits) continue;
+    await postCountAdjustmentEntry(db, scope, {
+      countLineId: line.id,
+      at: approved.approvedAt ?? new Date(),
+    });
+  }
+  return approved;
 }
 
 export async function writeOff(
@@ -645,10 +660,19 @@ export async function dispatchTransfer(
       },
     });
   }
-  return db.pharmacyInterbranchTransfer.update({
+  const dispatched = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
     data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt: new Date() },
   });
+  // FIN-01: the value leaving the source branch is moved into transit in the
+  // same transaction as the units.
+  for (const line of transfer.lines) {
+    await postInterbranchTransferEntry(db, scope, {
+      transferLineId: line.id,
+      at: dispatched.dispatchedAt ?? new Date(),
+    });
+  }
+  return dispatched;
 }
 
 export async function receiveTransferLine(
@@ -710,7 +734,7 @@ export async function receiveTransferLine(
       receivedAt: new Date(),
     },
   });
-  await db.pharmacyStockMovement.create({
+  const received = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -724,6 +748,12 @@ export async function receiveTransferLine(
       actorId: scope.actorId,
       idempotencyKey: `${input.idempotencyKeyPrefix}:received`,
     },
+  });
+  // FIN-01: what arrived leaves transit and joins the destination's inventory.
+  await postInterbranchTransferReceiptEntry(db, scope, {
+    transferLineId: line.id,
+    stockMovementId: received.id,
+    at: received.occurredAt,
   });
   await db.pharmacyInterbranchTransferLine.update({
     where: { id: line.id },

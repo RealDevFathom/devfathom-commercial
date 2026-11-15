@@ -42,7 +42,10 @@ import {
   setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
-import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
+import {
+  postInterbranchTransferLossEntry,
+  postWriteOffEntry,
+} from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -754,6 +757,13 @@ async function receiveTransferWithVariance(
         idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
       },
     });
+    // FIN-01: the missing units' value leaves transit as a loss in the same
+    // transaction, or a short-closed transfer keeps a phantom transit asset.
+    await postInterbranchTransferLossEntry(db, scope, {
+      transferLineId: step.line.id,
+      stockMovementId: movement.id,
+      at: movement.occurredAt,
+    });
     const custody = await db.pharmacyCustodyRecord.create({
       data: {
         organizationId: scope.organizationId,
@@ -957,10 +967,15 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           medicineId: z.string().min(1),
-          batchNumber: z.string().trim().min(1).max(120).regex(
-            /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/u,
-            'Batch number cannot contain control characters.'
-          ),
+          batchNumber: z
+            .string()
+            .trim()
+            .min(1)
+            .max(120)
+            .regex(
+              /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/u,
+              'Batch number cannot contain control characters.'
+            ),
           printedExpiry: z.date(),
           expiryPrecision,
         })
