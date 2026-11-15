@@ -106,6 +106,12 @@ import {
   submitPurchaseReturn,
 } from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
+import {
+  planReorderDrafts,
+  readReorderFacts,
+  REORDER_DEFAULT_COVER_DAYS,
+  REORDER_DEFAULT_WINDOW_DAYS,
+} from '@/lib/pharmacy/reorder-drafts';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { denyByDefaultProcedure, router } from '../trpc';
@@ -2466,6 +2472,34 @@ const purchasingRouter = router({
     .query(async ({ ctx, input: { branchId: branch, ...bounds } }) =>
       listSupplierCredits(ctx.db, await supplierFollowUpScope(ctx, branch), bounds)
     ),
+
+  /**
+   * DEV-678 — velocity-based reorder, one draft per distributor. Read only: SQL
+   * reads the branch's sales, available stock and open orders, and the planner
+   * turns them into suggested packs. A person confirms a draft through
+   * `createPurchaseOrder`; nothing is written or sent here.
+   */
+  reorderDrafts: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z
+        .object({
+          branchId,
+          windowDays: z.number().int().min(1).max(90).default(REORDER_DEFAULT_WINDOW_DAYS),
+          coverDays: z.number().int().min(0).max(90).default(REORDER_DEFAULT_COVER_DAYS),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      const policy = { windowDays: input.windowDays, coverDays: input.coverDays };
+      const facts = await readReorderFacts(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        policy
+      );
+      return { branchId: scope.branchId, ...planReorderDrafts(facts, policy) };
+    }),
 
   /** INV-10 — exact PUR-07 demand. Branch grants see only their own rows. */
   centralDemand: purchasing
