@@ -86,26 +86,35 @@ export function workspaceZoneLabel(timeZone: string | null | undefined): string 
 }
 
 /**
- * The first instant of `date` (`YYYY-MM-DD`) on the clock of a valid IANA
- * `zone`: usually local midnight, or the end of a daylight-saving gap that
- * swallows midnight. Every zone's offset lies within ±15 hours, so the local
- * date is still the day before at `date` 00:00 UTC − 15 h and has reached
- * `date` by 00:00 UTC + 15 h; a binary search between them finds the boundary
- * to the millisecond, whatever transitions fall nearby.
+ * The first instant of the calendar date `day` (given as that date's UTC-midnight
+ * milliseconds) on the clock of a valid IANA `zone`: usually local midnight, or
+ * the end of a daylight-saving gap that swallows midnight. Every zone's offset
+ * lies within ±15 hours, so the local date is still the day before at `day`
+ * − 15 h and has reached it by `day` + 15 h; a binary search between them finds
+ * the boundary to the millisecond, whatever transitions fall nearby.
  */
-function workspaceDayStart(date: string, zone: string): Date {
-  const localDate = new Intl.DateTimeFormat('en-CA', {
+function workspaceDayStart(day: number, zone: string): Date {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: zone,
     year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    month: 'numeric',
+    day: 'numeric',
   });
-  const naive = new Date(`${date}T00:00:00.000Z`).getTime();
-  let before = naive - 15 * 3_600_000;
-  let reached = naive + 15 * 3_600_000;
+  // The local calendar date of an instant, as the UTC-midnight milliseconds of that date:
+  // numbers compare correctly for every year, where `YYYY-MM-DD` strings stop at 9999.
+  const localDay = (instant: number) => {
+    const field = Object.fromEntries(
+      parts.formatToParts(new Date(instant)).map((part) => [part.type, Number(part.value)])
+    );
+    const date = new Date(0);
+    date.setUTCFullYear(field.year!, field.month! - 1, field.day!);
+    return date.getTime();
+  };
+  let before = day - 15 * 3_600_000;
+  let reached = day + 15 * 3_600_000;
   while (reached - before > 1) {
     const middle = before + Math.floor((reached - before) / 2);
-    if (localDate.format(new Date(middle)) < date) before = middle;
+    if (localDay(middle) < day) before = middle;
     else reached = middle;
   }
   return new Date(reached);
@@ -122,10 +131,8 @@ export function workspaceDateRange(
   timeZone: string | null | undefined
 ): { from: Date; to: Date } {
   const zone = workspaceTimezone(timeZone);
-  const dayAfter = new Date(`${to}T00:00:00.000Z`);
-  dayAfter.setUTCDate(dayAfter.getUTCDate() + 1);
   return {
-    from: workspaceDayStart(from, zone),
-    to: workspaceDayStart(dayAfter.toISOString().slice(0, 10), zone),
+    from: workspaceDayStart(Date.parse(`${from}T00:00:00.000Z`), zone),
+    to: workspaceDayStart(Date.parse(`${to}T00:00:00.000Z`) + 86_400_000, zone),
   };
 }

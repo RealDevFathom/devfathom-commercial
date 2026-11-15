@@ -77,6 +77,14 @@ describe('workspace time zones', () => {
       from: new Date('2026-04-04T11:00:00.000Z'),
       to: new Date('2026-04-05T12:00:00.000Z'),
     });
+    // The last date a report accepts: its exclusive end is in year 10000.
+    expect(workspaceDateRange('9999-12-31', '9999-12-31', null)).toEqual({
+      from: new Date('9999-12-31T00:00:00.000Z'),
+      to: new Date('+010000-01-01T00:00:00.000Z'),
+    });
+    expect(workspaceDateRange('9999-12-31', '9999-12-31', 'Asia/Karachi').to).toEqual(
+      new Date('9999-12-31T19:00:00.000Z')
+    );
     // Santiago skips 00:00–00:59 on 6 Sep 2026: the day starts at 01:00 (-03).
     expect(workspaceDateRange('2026-09-06', '2026-09-06', 'America/Santiago').from).toEqual(
       new Date('2026-09-06T04:00:00.000Z')
