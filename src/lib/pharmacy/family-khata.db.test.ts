@@ -207,7 +207,7 @@ suite('family Khata restricted PostgreSQL', () => {
       khata.authorizeKhataCharge(
         db,
         a,
-        { ...a, amountMinor: 200, ownerOverride: true },
+        { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Paying on Friday' },
         { authorized: true, passwordAuthenticatedAt: Date.now() }
       )
     );
@@ -217,7 +217,10 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      reasons: expect.objectContaining({
+        ownerAuthorizedByUserId: 'owner',
+        overrideReason: 'Paying on Friday',
+      }),
     });
     await expect(
       inScope(a, (db) =>
@@ -435,6 +438,14 @@ suite('khata reminder PostgreSQL balance and idempotency', () => {
     expect(await due()).toEqual([]);
     await schedule({ khataReminderMinBalanceMinor: 20_000, khataReminderEnabled: false });
     expect(await due()).toEqual([]);
+    // An owner's one-account send (DEV-730) is not held back by the schedule switch.
+    const owner = await withPlatformDb((db) =>
+      readDueKhataAccounts(db, orgC, now, 1, undefined, {
+        branchId: scope.branchId,
+        familyAccountId: scope.familyAccountId,
+      })
+    );
+    expect(owner.map((row) => row.familyAccountId)).toEqual([scope.familyAccountId]);
     await schedule({ khataReminderEnabled: true });
     expect(await due()).toEqual([scope.familyAccountId]);
     await expect(schedule({ khataReminderCadenceDays: 0 })).rejects.toThrow();

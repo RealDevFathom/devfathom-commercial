@@ -159,6 +159,7 @@ describe('pharmacy navigation', () => {
         '/pharmacy/medicines',
         '/pharmacy/regulatory',
         '/pharmacy/settings/branches',
+        '/pharmacy/settings/printers',
         '/pharmacy/finance',
       ]) {
         expect(visible).not.toContain(adminRoute);
@@ -273,6 +274,13 @@ describe('pharmacy navigation', () => {
 
     it.each(capabilityGated)('keeps %s from an administrator the engine refuses', (route) => {
       expect(hrefs('ADMIN')).not.toContain(route);
+    });
+
+    it('shows Substitution to a Pharmacy Safety holder without dispensing (DEV-35)', () => {
+      const visible = hrefs('EMPLOYEE', ['pharmacy:safety']);
+      expect(visible).toContain('/pharmacy/substitution');
+      expect(visible).not.toContain('/pharmacy/pharmacist-queue');
+      expect(hrefs('EMPLOYEE', ['reports:operational'])).not.toContain('/pharmacy/substitution');
     });
 
     it('keeps the administrator-only day close for administrators', () => {

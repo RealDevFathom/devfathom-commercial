@@ -2,20 +2,20 @@ import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import { config } from 'dotenv';
+import { loadLocalEnv, requireDatabaseUrl } from './load-env.js';
 
-config({ path: '.env' });
-config({ path: '.env.local', override: true });
+loadLocalEnv();
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
-import { upsertPlatformAdmin } from './platform-admin.js';
+import { provisionPlatformAdmin } from './platform-admin.js';
+import { describeSeedFailure, isUniqueConstraintViolation } from './seed-failure.js';
 import { upsertStagingAdmin } from './staging-admin.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
 const pool = new pg.Pool({
-  connectionString: process.env.MIGRATION_DATABASE_URL?.trim() || process.env.DATABASE_URL,
+  connectionString: requireDatabaseUrl(['MIGRATION_DATABASE_URL', 'DATABASE_URL']),
 });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
@@ -1505,6 +1505,12 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
 }
 
 async function main() {
+  // DEV-347: the platform operator commits in its own transaction BEFORE the
+  // tenant demo data, so a demo-data failure can no longer roll it back. It
+  // runs on every seed (fresh or "already present") so a rotated
+  // PLATFORM_ADMIN_PASSWORD lands on every deployment.
+  await provisionPlatformAdmin(prisma);
+
   await prisma.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(
@@ -1634,11 +1640,6 @@ async function main() {
         },
       });
 
-      // Runs ahead of seedTenantData because that function returns early once
-      // seed data is present, refreshing the eight @company.com tenant users and
-      // nothing else. A rotated PLATFORM_ADMIN_PASSWORD has to land on every
-      // deployment, not only the one that creates the administrator.
-      await upsertPlatformAdmin(tx);
       // The staging workspace administrator (ADMIN_EMAIL / ADMIN_PASSWORD) is
       // not one of the demo @company.com users. Create it on every deploy,
       // including the early return inside seedTenantData.
@@ -1969,7 +1970,10 @@ function getTasksForProject(projectName: string) {
 
 main()
   .catch((e) => {
-    console.error('❌ Seeding failed:', e);
+    // A unique-constraint failure gets an actionable message instead of a raw
+    // Prisma stack trace; anything else keeps its stack for diagnosis.
+    console.error(describeSeedFailure(e));
+    if (!isUniqueConstraintViolation(e)) console.error(e);
     process.exit(1);
   })
   .finally(async () => {

@@ -8,11 +8,7 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
-import {
-  isKhataReminderQuietHour,
-  KHATA_REMINDER_DEFAULTS,
-  khataReminderPayTo,
-} from '../khata-reminder-settings';
+import { KHATA_REMINDER_DEFAULTS, khataReminderPayTo } from '../khata-reminder-settings';
 import { manualPaymentSettingsSchema } from '../manual-payments';
 import {
   emptySmsFallbackCounts,
@@ -29,6 +25,7 @@ import {
   type SmsProvider,
 } from '../sms/provider';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import { isUtilityReminderQuietHour, reminderLocalHour } from './reminder-quiet-hours';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
   createWhatsAppProvider,
@@ -211,6 +208,12 @@ export async function processDueWhatsAppKhataReminders(
     provider?: WhatsAppProvider;
     smsConfig?: SmsConfig;
     smsProvider?: SmsProvider;
+    /**
+     * DEV-730 owner "Send reminder": restrict the run to one family account. The same
+     * overdue, consent, quiet-hour, once-per-week and SMS-fallback gates apply as the
+     * scheduled job.
+     */
+    account?: { organizationId: string; branchId: string; familyAccountId: string };
   } = {}
 ): Promise<KhataReminderRunResult> {
   const now = options.now ?? new Date();
@@ -243,10 +246,16 @@ export async function processDueWhatsAppKhataReminders(
       ? smsConfig.organizationId
       : null;
   if (!organizationId) return result;
+  // An owner's single-account send never scans another workspace's accounts.
+  if (options.account && options.account.organizationId !== organizationId) {
+    result.configured = false;
+    result.configurationErrors.push('ORGANIZATION_NOT_CONFIGURED');
+    return result;
+  }
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
-    readDueKhataAccounts(db, organizationId, now, limit, options.minBalanceMinor)
+    readDueKhataAccounts(db, organizationId, now, limit, options.minBalanceMinor, options.account)
   );
 
   for (const account of accounts) {
@@ -285,7 +294,7 @@ export async function processDueWhatsAppKhataReminders(
           organization.vertical !== 'PHARMACY' ||
           !isTenantLifecycleAccessible(organization.status) ||
           !branch ||
-          branch.khataReminderEnabled === false
+          (branch.khataReminderEnabled === false && !options.account)
         )
           return null;
         if (
@@ -297,14 +306,7 @@ export async function processDueWhatsAppKhataReminders(
           return null;
         // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
         const timeZone = workspaceTimezone(organization.timezone);
-        const hour = Number(
-          new Intl.DateTimeFormat('en-GB', {
-            timeZone,
-            hour: '2-digit',
-            hourCycle: 'h23',
-          }).format(now)
-        );
-        if (isKhataReminderQuietHour(hour)) return null;
+        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone))) return null;
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -500,7 +502,8 @@ export async function readDueKhataAccounts(
   organizationId: string,
   now: Date,
   limit: number,
-  minBalanceMinor?: number
+  minBalanceMinor?: number,
+  only?: { branchId: string; familyAccountId: string }
 ): Promise<DueAccount[]> {
   const override =
     minBalanceMinor === undefined
@@ -510,6 +513,12 @@ export async function readDueKhataAccounts(
     override === null
       ? Prisma.sql`GREATEST(1, br."khataReminderMinBalanceMinor")`
       : Prisma.sql`${override}`;
+  const accountFilter = only
+    ? Prisma.sql`AND acct."branchId" = ${only.branchId} AND acct."id" = ${only.familyAccountId}`
+    : Prisma.empty;
+  // The owner's on/off switch governs the scheduled job; an owner's explicit
+  // one-account send (DEV-730) still goes out through every other gate.
+  const scheduleSwitch = only ? Prisma.empty : Prisma.sql`AND br."khataReminderEnabled" = true`;
   return db.$queryRaw<DueAccount[]>(Prisma.sql`
     WITH payments AS (
       SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
@@ -531,7 +540,7 @@ export async function readDueKhataAccounts(
     FROM "pharmacy_family_accounts" acct
     JOIN "pharmacy_branches" br
       ON br."organizationId" = acct."organizationId" AND br."id" = acct."branchId"
-     AND br."active" = true AND br."khataReminderEnabled" = true
+     AND br."active" = true ${scheduleSwitch}
     JOIN "pharmacy_khata_events" ev
       ON ev."organizationId" = acct."organizationId"
      AND ev."branchId" = acct."branchId" AND ev."familyAccountId" = acct."id"
@@ -541,6 +550,7 @@ export async function readDueKhataAccounts(
      AND payments."familyAccountId" = ev."familyAccountId"
      AND payments."settlesChargeId" = ev."id"
     WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
+      ${accountFilter}
       AND NOT EXISTS (
         SELECT 1 FROM "pharmacy_message_logs" ml
         WHERE ml."organizationId" = acct."organizationId"

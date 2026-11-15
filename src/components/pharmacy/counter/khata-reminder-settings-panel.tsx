@@ -50,7 +50,8 @@ export function KhataReminderSettingsPanel({ branchId }: { branchId: string }) {
       <p className="mb-4 text-sm text-text-muted">
         Overdue khata payers who agreed to reminders get a WhatsApp or SMS note with the amount, the
         due date and this branch&apos;s Raast or wallet details. No reminder is sent between 10pm
-        and 9am, and a STOP reply ends them. Payments are still recorded at the counter.
+        and 9am, and a STOP reply ends them. Payments are still recorded at the counter. Switching
+        scheduled reminders off does not stop an owner sending one account a reminder by hand.
       </p>
       {query.isLoading ? <p role="status">Loading reminder schedule…</p> : null}
       {query.isError ? (
@@ -72,7 +73,7 @@ export function KhataReminderSettingsPanel({ branchId }: { branchId: string }) {
             checked={values?.enabled ?? false}
             onChange={(event) => change({ enabled: event.target.checked })}
           />{' '}
-          Send khata reminders from this branch
+          Send scheduled khata reminders from this branch
         </Label>
         <div className="space-y-2">
           <Label htmlFor={`khata-reminder-cadence-${branchId}`}>Days between reminders</Label>

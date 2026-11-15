@@ -1,19 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isKhataReminderQuietHour,
   KHATA_REMINDER_DEFAULTS,
   khataReminderPayTo,
   khataReminderSettingsSchema,
 } from './khata-reminder-settings';
 
 describe('DEV-76 khata reminder settings', () => {
-  it('treats 22:00 to 08:59 local as quiet hours', () => {
-    for (const hour of [22, 23, 0, 3, 8]) expect(isKhataReminderQuietHour(hour)).toBe(true);
-    for (const hour of [9, 12, 21]) expect(isKhataReminderQuietHour(hour)).toBe(false);
-    expect(isKhataReminderQuietHour(Number.NaN)).toBe(true);
-  });
-
   it('accepts the defaults and bounds the owner schedule', () => {
     expect(khataReminderSettingsSchema.parse(KHATA_REMINDER_DEFAULTS)).toEqual(
       KHATA_REMINDER_DEFAULTS

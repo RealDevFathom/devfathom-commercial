@@ -82,6 +82,7 @@ import {
   formatKhataDueDate,
   planKhataReminder,
   processDueWhatsAppKhataReminders,
+  readDueKhataAccounts,
   sanitizeReminderDisplayName,
 } from './khata-reminders';
 
@@ -651,5 +652,106 @@ describe('planKhataReminder cadence', () => {
       '10 Oct 2026'
     );
     expect(formatKhataDueDate(new Date('2026-10-09T20:00:00Z'), 'UTC')).toBe('9 Oct 2026');
+  });
+});
+
+describe('DEV-730 owner reminder for one account', () => {
+  it('refuses another organization without scanning, claiming or sending', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: { organizationId: 'org_b', branchId: 'branch-1', familyAccountId: 'family-1' },
+    });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0, prepared: 0 });
+    expect(result.configurationErrors).toContain('ORGANIZATION_NOT_CONFIGURED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('applies the same consent-gated, once-a-week send to the selected account', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const only = { organizationId: 'org_a', branchId: 'branch-1', familyAccountId: 'family-1' };
+
+    const first = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: only,
+    });
+    const again = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: only,
+    });
+
+    expect(first).toMatchObject({ scanned: 1, prepared: 1 });
+    expect(again).toMatchObject({ scanned: 1, duplicate: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('narrows the due-account scan to the branch and account', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1, 10_000, {
+      branchId: 'branch-1',
+      familyAccountId: 'family-1',
+    });
+    const query = queryRaw.mock.calls[0]![0] as { sql: string; values: unknown[] };
+    expect(query.sql).toContain('acct."branchId" = ?');
+    expect(query.sql).toContain('acct."id" = ?');
+    expect(query.values).toEqual(expect.arrayContaining(['branch-1', 'family-1']));
+
+    queryRaw.mockClear();
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
+    expect((queryRaw.mock.calls[0]![0] as { sql: string }).sql).not.toContain('acct."id" = ?');
+  });
+});
+
+describe('DEV-76 schedule switch and the DEV-730 owner send', () => {
+  it('still lets an owner send one account a reminder when scheduled reminders are off', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.branch = { id: 'branch-1', khataReminderEnabled: false };
+    const provider = new MockWhatsAppProvider(config);
+
+    const scheduled = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(scheduled).toMatchObject({ prepared: 0 });
+    const owner = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: { organizationId: 'org_a', branchId: 'branch-1', familyAccountId: 'family-1' },
+    });
+
+    expect(owner).toMatchObject({ scanned: 1, prepared: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('drops only the on/off switch from a one-account scan; cadence still applies', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
+    expect((queryRaw.mock.calls[0]![0] as { sql: string }).sql).toContain(
+      'br."khataReminderEnabled" = true'
+    );
+    queryRaw.mockClear();
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1, undefined, {
+      branchId: 'branch-1',
+      familyAccountId: 'family-1',
+    });
+    const sql = (queryRaw.mock.calls[0]![0] as { sql: string }).sql;
+    expect(sql).not.toContain('br."khataReminderEnabled" = true');
+    expect(sql).toContain('make_interval(days => br."khataReminderCadenceDays")');
+    expect(sql).toContain('GREATEST(1, br."khataReminderMinBalanceMinor")');
   });
 });

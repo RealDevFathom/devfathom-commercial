@@ -16,20 +16,6 @@ export const KHATA_REMINDER_DEFAULTS = {
 export const KHATA_REMINDER_CADENCE_RANGE = { min: 1, max: 30 } as const;
 export const KHATA_REMINDER_MIN_BALANCE_RANGE = { min: 100, max: 100_000_000 } as const;
 
-/**
- * Quiet hours are policy, not an owner setting: no reminder leaves between
- * 22:00 and 09:00 in the workspace's local time (PKT for Pakistan tenants).
- */
-export const KHATA_REMINDER_QUIET_HOURS = { startHour: 22, endHour: 9 } as const;
-
-export function isKhataReminderQuietHour(localHour: number): boolean {
-  return (
-    !Number.isInteger(localHour) ||
-    localHour >= KHATA_REMINDER_QUIET_HOURS.startHour ||
-    localHour < KHATA_REMINDER_QUIET_HOURS.endHour
-  );
-}
-
 export const khataReminderSettingsSchema = z
   .object({
     enabled: z.boolean(),

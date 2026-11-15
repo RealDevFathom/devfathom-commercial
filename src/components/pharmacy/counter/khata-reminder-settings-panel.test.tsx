@@ -60,7 +60,7 @@ describe('DEV-76 khata reminder schedule form', () => {
 
   it('lets the owner switch reminders off', async () => {
     render(<KhataReminderSettingsPanel branchId="branch" />);
-    fireEvent.click(screen.getByLabelText('Send khata reminders from this branch'));
+    fireEvent.click(screen.getByLabelText('Send scheduled khata reminders from this branch'));
     fireEvent.click(screen.getByRole('button', { name: 'Save reminder schedule' }));
     await waitFor(() =>
       expect(mocks.save).toHaveBeenCalledWith({
