@@ -3112,7 +3112,7 @@ function ScopedPharmacyCounterConsole({
                 aria-label="Next line"
                 className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
               >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto]">
+                <div className="grid items-center gap-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_auto]">
                   <div className="min-w-0">
                     <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
                       Next line
@@ -3140,7 +3140,7 @@ function ScopedPharmacyCounterConsole({
                         .join(' · ')}
                     </p>
                   </div>
-                  <div className="counter-next-controls space-y-3">
+                  <div className="counter-next-controls min-w-0 space-y-3">
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
