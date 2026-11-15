@@ -17,6 +17,7 @@ import {
 } from '@/lib/finance/currency';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { paymentLedgerDeleteError, paymentLedgerUpdateError } from '@/lib/finance/payment-ledger';
 import {
   isPersistableMoney,
   MAX_MONEY,
@@ -234,6 +235,14 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const existing = await ctx.db.transaction.findUnique({
+        where: { id },
+        select: { paymentId: true, type: true, amount: true, date: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Transaction not found' });
+      // DEV-166: a payment-posted INCOME row only changes through its payment.
+      const lockedError = paymentLedgerUpdateError(existing, data);
+      if (lockedError) throw new TRPCError({ code: 'BAD_REQUEST', message: lockedError });
       const orgId = workspaceId(ctx);
       await assertInOrganization(ctx.db.client, orgId, [data.clientId]);
       await assertInOrganization(ctx.db.project, orgId, [data.projectId]);
@@ -243,6 +252,13 @@ export const financeRouter = router({
   deleteTransaction: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.transaction.findUnique({
+        where: { id: input.id },
+        select: { paymentId: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Transaction not found' });
+      const lockedError = paymentLedgerDeleteError(existing);
+      if (lockedError) throw new TRPCError({ code: 'BAD_REQUEST', message: lockedError });
       return ctx.db.transaction.delete({ where: { id: input.id } });
     }),
 
