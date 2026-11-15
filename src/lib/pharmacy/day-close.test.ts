@@ -207,3 +207,24 @@ describe('day close boundaries', () => {
     );
   });
 });
+
+describe('day close open bills (DEV-623)', () => {
+  it('counts every unpaid OPEN and HELD bill in the branch, whatever its date', async () => {
+    const { db, scoped } = fixture();
+    db.pharmacySale.findMany.mockImplementation(async (args: { where: { status: unknown } }) =>
+      args.where.status === 'COMPLETED'
+        ? [{ id: 'sale', lines: [{ quantity: 1, unitPriceMinor: 2500, discountMinor: 0 }] }]
+        : [{ status: 'OPEN' }, { status: 'OPEN' }, { status: 'HELD' }]
+    );
+
+    const preview = await readPharmacyClose(scoped, scope, date);
+
+    expect(preview.openBills).toEqual({ open: 2, held: 1 });
+    expect(db.pharmacySale.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org', branchId: 'branch', status: { in: ['OPEN', 'HELD'] } },
+      select: { status: true },
+    });
+    // Unpaid bills are reported, never counted as sales.
+    expect(preview.totals).toMatchObject({ grossSalesMinor: 2500 });
+  });
+});

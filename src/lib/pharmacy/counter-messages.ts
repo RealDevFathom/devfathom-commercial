@@ -52,6 +52,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // itself, so the sentence never sends the operator to refresh.
   INVALID_STATE:
     'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
+  // DEV-623: money taken on a bill comes back through a refund, never a void.
+  BILL_HAS_PAYMENTS:
+    'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
