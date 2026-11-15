@@ -51,6 +51,7 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
+import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
@@ -702,6 +703,28 @@ function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<L
   );
 }
 
+/**
+ * #728 / DEV-695: owner-only financial close reads. `adminProcedure` only checks the
+ * grantable `admin:access` capability, so a delegated EMPLOYEE is refused here before
+ * any read. Refund/void analytics and staff findings are financial reporting: an
+ * owner explicitly denied `reports:financial` is refused before any evidence read,
+ * as the anomaly report and the Ask Fathom tool already do.
+ */
+async function requireOwnerFinancialReports(ctx: TRPCContext) {
+  if (ctx.session?.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Financial reports permission required.',
+    });
+}
+
 async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   const user = ctx.session?.user;
   if (!user)
@@ -1006,27 +1029,28 @@ export const pharmacySalesRouter = router({
   closeAnomalyCheck: adminProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      // `adminProcedure` only checks the grantable `admin:access` capability; this
-      // check is owner-only, so a delegated EMPLOYEE is refused before any read.
-      if (ctx.session?.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
-      // Refund/void analytics and staff findings are financial reporting: an owner
-      // explicitly denied `reports:financial` is refused before any evidence read,
-      // as the anomaly report and the Ask Fathom tool already do.
-      if (
-        !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }))
-      )
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Financial reports permission required.',
-        });
+      await requireOwnerFinancialReports(ctx);
       try {
         const scope = await scopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyCashCloseCheck(txDb(tx), scope, input.businessDate)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // DEV-695: the shift handover note drawn up at drawer close — pending Rx, items
+  // promised to customers, cash variance, and the #728 check's flags (not a new
+  // detector). Read-only and returned as a draft the owner edits and hands over;
+  // it carries the same refund/void/staff findings, so it has the same guard.
+  shiftHandoverNote: adminProcedure
+    .input(z.object({ branchId, businessDate: closeDate }).strict())
+    .query(async ({ ctx, input }) => {
+      await requireOwnerFinancialReports(ctx);
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          readPharmacyShiftHandover(txDb(tx), scope, input.businessDate)
         );
       } catch (error) {
         fail(error);

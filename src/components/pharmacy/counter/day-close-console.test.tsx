@@ -100,6 +100,22 @@ vi.mock('@/lib/trpc', () => ({
               },
         }),
       },
+      shiftHandoverNote: {
+        useQuery: () => ({
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+          data: {
+            currency: 'USD',
+            note: 'Shift handover — 2026-09-29 (day closed)',
+            policyVersion: 'CC01-2026-11-01',
+            pendingRx: { count: 0 },
+            promised: { openOrders: 0, overdueOrders: 0, restockPromises: 0 },
+            cash: { varianceMinor: 0 },
+            flags: [],
+          },
+        }),
+      },
     },
   },
 }));
@@ -490,6 +506,24 @@ describe('day-close console', () => {
     expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
     // Read-only: the panel offers no action beyond the existing close controls.
     expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+  });
+  it('drafts the shift handover note once the drawers are closed with the day', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByText('Shift handover note')).not.toBeInTheDocument();
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+    };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Shift handover note')).toBeInTheDocument();
+    expect(screen.getByLabelText('Handover note for the next shift')).toHaveValue(
+      'Shift handover — 2026-09-29 (day closed)'
+    );
   });
   it('says a refused cash-close check is not permitted instead of offering a retry', () => {
     mocks.close = {
