@@ -31,7 +31,7 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { cutPharmacyDailyClose } from '@/lib/pharmacy/settlement';
 import { router, type TRPCContext } from '../trpc';
-import { pharmacySalesRouter } from './pharmacy-sales';
+import { pharmacySalesRouter, pharmacyCloseBranchIds } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
@@ -58,8 +58,8 @@ function fixture(
     ),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {
-      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
-        where.id.in.map((id) => ({ id }))
+      findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        (where.id?.in ?? [BRANCH]).map((id) => ({ id }))
       ),
     },
     pharmacyBranchAssignment: {
@@ -79,7 +79,7 @@ function fixture(
       })),
     },
   };
-  const caller = app.createCaller({
+  const ctx = {
     db,
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
     session: {
@@ -90,8 +90,9 @@ function fixture(
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext).pharmacySales;
-  return { db, caller };
+  } as unknown as TRPCContext;
+  const caller = app.createCaller(ctx).pharmacySales;
+  return { db, caller, ctx };
 }
 
 type Caller = ReturnType<typeof fixture>['caller'];
@@ -199,4 +200,22 @@ describe('day close is manager or owner only (DEV-31)', () => {
       expect(cutPharmacyDailyClose).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('DEV-240 close navigation mirrors the close guard', () => {
+  it.each(admitted)('offers the admitted branch to $name', async (who) => {
+    const f = fixture(who.role, who.overrides, who.session);
+    await expect(pharmacyCloseBranchIds(f.ctx)).resolves.toEqual([BRANCH]);
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+  it.each(refused)('offers no branch to $name', async (who) => {
+    const f = fixture(who.role, who.overrides, 'EMPLOYEE', who.assigned, who.member);
+    await expect(pharmacyCloseBranchIds(f.ctx)).resolves.toEqual([]);
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+  it('propagates a failed branch lookup instead of presenting it as a denial', async () => {
+    const f = fixture([]);
+    f.db.pharmacyBranch.findMany.mockRejectedValue(new Error('lookup unavailable'));
+    await expect(pharmacyCloseBranchIds(f.ctx)).rejects.toThrow('lookup unavailable');
+  });
 });

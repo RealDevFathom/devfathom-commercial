@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,15 +55,17 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   const entitlements = useEntitlements();
   const user = session?.user;
   const sessionVerdict = evaluateSessionUser(user);
+  const access = usePharmacyNavigationAccess();
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
-    user?.role !== 'ADMIN' ||
-    user.organizationId !== entitlements.organizationId ||
+    !user ||
+    !access.data?.capabilities.includes('pharmacy:close') ||
+    user?.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     let detail =
-      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.';
+      'Day-close permission is required. Ask your workspace administrator to review your day-close permission.';
     if (status === 'loading') {
       detail = 'Checking day-close access…';
     } else if (status !== 'authenticated') {
@@ -74,6 +77,10 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
     } else if (!isModuleGranted('pharmacy-counter', entitlements.enabledModules)) {
       detail =
         'The Pharmacy Counter module is not enabled for this workspace. Ask your workspace administrator to enable it for day close.';
+    } else if (access.isLoading || access.isFetching) {
+      detail = 'Checking day-close access…';
+    } else if (access.isError) {
+      detail = 'Could not check day-close access. Please try again.';
     }
     return (
       <SectionCard title="Day close unavailable">
@@ -81,11 +88,26 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} initial={initial} />;
+  return (
+    <DayCloseBranches
+      key={`${user.organizationId}:${user.id}`}
+      initial={initial}
+      closeBranchIds={access.data.closeBranchIds}
+    />
+  );
 }
 
-function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
+function DayCloseBranches({
+  initial,
+  closeBranchIds,
+}: {
+  initial?: DayCloseInitial;
+  closeBranchIds: string[];
+}) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
+  const allowedBranches = branches.data?.branches.filter((branch) =>
+    closeBranchIds.includes(branch.id)
+  );
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(
     initial?.date && DAY.test(initial.date) ? initial.date : null
@@ -95,8 +117,12 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
-  const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
-  const branchId = selected || linked || branches.data?.branches[0]?.id || '';
+  const linked = allowedBranches?.find((b) => b.id === initial?.branch)?.id;
+  const branchId =
+    allowedBranches?.find((branch) => branch.id === selected)?.id ||
+    linked ||
+    allowedBranches?.[0]?.id ||
+    '';
   const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
@@ -113,9 +139,9 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
               className="min-h-11 rounded-sm border border-border-default bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
               value={branchId}
               onChange={(e) => setSelected(e.target.value)}
-              disabled={branches.isLoading || !branches.data?.branches.length}
+              disabled={branches.isLoading || !allowedBranches?.length}
             >
-              {branches.data?.branches.map((b) => (
+              {allowedBranches?.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
@@ -141,7 +167,7 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
             </Button>
           </p>
         )}
-        {branches.isSuccess && !branches.data.branches.length && (
+        {branches.isSuccess && !allowedBranches?.length && (
           <p>No active pharmacy branches are available.</p>
         )}
       </SectionCard>
@@ -166,6 +192,7 @@ function DayCloseForm({
   date: string;
   currency: string;
 }) {
+  const { data: session } = useSession();
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
@@ -191,7 +218,9 @@ function DayCloseForm({
     );
   const data = preview.data;
   const report = close.data ?? data.close;
-  const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
+  const tenderTotals = tenderTotalsSchema.parse(
+    (report ? report.tenderTotals : data.tenderTotals) ?? []
+  );
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
   const valid = open.every((d) => cashMinor(counts[d.id] ?? '') !== null);
@@ -272,8 +301,9 @@ function DayCloseForm({
         <div className="mt-4 space-y-2" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <p key={row.type} className="text-sm text-text-body">
-              <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
+              <span className="font-medium">{row.type}</span> · Received{' '}
+              {formatMinor(row.amountMinor)} · Refunds {formatMinor(row.refundMinor)} · Net{' '}
+              {formatMinor(row.netMinor)} {currency}
             </p>
           ))}
         </div>
@@ -459,7 +489,9 @@ function DayCloseForm({
         )}
       </SectionCard>
       {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
-      {report && <CashCloseCheckPanel branchId={branchId} date={date} />}
+      {report && session?.user.role === 'ADMIN' && (
+        <CashCloseCheckPanel branchId={branchId} date={date} />
+      )}
     </div>
   );
 }

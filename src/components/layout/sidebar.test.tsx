@@ -11,6 +11,10 @@ const useSessionMock = vi.hoisted(() =>
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
 const pharmacyRailQuery = vi.hoisted(() => ({
+  isError: false,
+  isFetching: false,
+  options: vi.fn(),
+  input: vi.fn(),
   data: undefined as
     undefined | { userId: string; organizationId: string | null; capabilities: string[] },
 }));
@@ -73,7 +77,13 @@ vi.mock('@/lib/trpc', () => ({
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
     pharmacyAccess: {
-      navigation: { useQuery: () => ({ data: pharmacyRailQuery.data }) },
+      navigation: {
+        useQuery: (input: unknown, options: unknown) => {
+          pharmacyRailQuery.input(input);
+          pharmacyRailQuery.options(options);
+          return pharmacyRailQuery;
+        },
+      },
     },
     pharmacySop: {
       access: {
@@ -233,8 +243,12 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     vertical = 'PHARMACY',
     granted = pharmacyModules,
     pathname = '/dashboard',
-    capabilities = ['pharmacy:procurement', 'reports:operational'],
+    capabilities = ['pharmacy:inventory', 'pharmacy:procurement', 'reports:operational'],
     railUserId = 'pharmacy-user-1',
+    railOrganizationId = 'pharmacy-1',
+    sessionOrganizationId = 'pharmacy-1',
+    isError = false,
+    isFetching = false,
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
@@ -242,11 +256,29 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     pathname?: string;
     capabilities?: string[];
     railUserId?: string;
+    railOrganizationId?: string;
+    sessionOrganizationId?: string;
+    isError?: boolean;
+    isFetching?: boolean;
   } = {}) {
     useSessionMock.mockReturnValue({
-      data: { user: { id: 'pharmacy-user-1', role, name: 'Test operator' } },
+      data: {
+        user: {
+          id: 'pharmacy-user-1',
+          role,
+          name: 'Test operator',
+          organizationId: sessionOrganizationId,
+          status: 'ACTIVE',
+        },
+      },
     } as unknown as ReturnType<typeof useSessionMock>);
-    pharmacyRailQuery.data = { userId: railUserId, organizationId: 'pharmacy-1', capabilities };
+    pharmacyRailQuery.data = {
+      userId: railUserId,
+      organizationId: railOrganizationId,
+      capabilities,
+    };
+    pharmacyRailQuery.isError = isError;
+    pharmacyRailQuery.isFetching = isFetching;
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
     render(
@@ -321,8 +353,8 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   });
 
-  it('offers a cashier without procurement or reports neither destination (#979)', () => {
-    renderNavigation({ role: 'MEMBER', capabilities: [] });
+  it('offers an inventory member without procurement or reports neither destination (#979)', () => {
+    renderNavigation({ role: 'MEMBER', capabilities: ['pharmacy:inventory'] });
     expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
     for (const label of ['Purchasing', 'Reports & Insights', 'Day close', 'Team']) {
       expect(
@@ -350,6 +382,54 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('ignores a cached capability answer for another signed-in identity (#979)', () => {
     renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
     for (const label of ['Purchasing', 'Reports & Insights']) {
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([
+    { railOrganizationId: 'previous-org' },
+    { sessionOrganizationId: 'other-org' },
+    { isError: true },
+    { isFetching: true },
+  ])('hides cached operational links until current access is confirmed: %j', (state) => {
+    renderNavigation({
+      role: 'MEMBER',
+      capabilities: [
+        'pharmacy:counter',
+        'pharmacy:inventory',
+        'pharmacy:close',
+        'pharmacy:procurement',
+        'reports:operational',
+      ],
+      ...state,
+    });
+    for (const label of ['Counter', 'Inventory', 'Day close', 'Purchasing', 'Reports & Insights']) {
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it('keys capability requests by both identity and tenant and refreshes on mount', () => {
+    renderNavigation();
+    expect(pharmacyRailQuery.input).toHaveBeenLastCalledWith({
+      userId: 'pharmacy-user-1',
+      organizationId: 'pharmacy-1',
+    });
+    expect(pharmacyRailQuery.options).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: true, staleTime: 0, refetchOnMount: 'always' })
+    );
+  });
+
+  it('offers an authorized non-admin Day close and hides unrelated operations', () => {
+    renderNavigation({ role: 'EMPLOYEE', capabilities: ['pharmacy:close'] });
+    expect(screen.getByRole('link', { name: /Day close$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/counter/close'
+    );
+    for (const label of ['Counter', 'Inventory', 'Purchasing', 'Reports & Insights']) {
       expect(
         screen.queryByRole('link', { name: (name) => name.endsWith(label) })
       ).not.toBeInTheDocument();

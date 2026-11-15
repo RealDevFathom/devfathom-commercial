@@ -684,6 +684,35 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   });
 }
 
+/** Navigation and the close picker use the same branch-specific guard as closePreview. */
+export async function pharmacyCloseBranchIds(ctx: TRPCContext): Promise<string[]> {
+  const user = ctx.session?.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !user ||
+    !organizationId ||
+    user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    return [];
+  const branches = await ctx.db.pharmacyBranch.findMany({
+    where: { organizationId, active: true },
+    select: { id: true },
+  });
+  const admitted = await Promise.all(
+    branches.map(async (branch) => {
+      try {
+        await requireCloseAccess(ctx, branch.id);
+        return branch.id;
+      } catch (error) {
+        if (error instanceof TRPCError && error.code === 'FORBIDDEN') return null;
+        throw error;
+      }
+    })
+  );
+  return admitted.filter((id): id is string => id !== null);
+}
+
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))

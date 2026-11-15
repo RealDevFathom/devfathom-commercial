@@ -58,6 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
@@ -317,13 +318,12 @@ export const navigation: NavItem[] = [
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
-  // #979: the day-close console only opens for a pharmacy administrator, so a
-  // cashier is not offered an entry that ends in "Day close unavailable".
+  // The server resolves day-close grants, including assigned managers.
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',
     icon: Monitor,
-    adminOnly: true,
+    pharmacyCapabilities: ['pharmacy:close'],
     group: 'Pharmacy',
     module: 'pharmacy-counter',
   },
@@ -338,6 +338,7 @@ export const navigation: NavItem[] = [
   {
     label: 'Inventory',
     href: '/pharmacy/inventory',
+    pharmacyCapabilities: ['pharmacy:inventory'],
     icon: PackageSearch,
     group: 'Pharmacy',
   },
@@ -643,24 +644,8 @@ export function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  // #979: the rest of the pharmacy rail, resolved by the same ABAC engine the
-  // pages use. Pharmacy Core is mandatory, so every pharmacy workspace asks.
-  const pharmacyRail =
-    entitlements.vertical === 'PHARMACY' &&
-    Boolean(session?.user.id) &&
-    isModuleGranted('pharmacy-core', entitlements.enabledModules);
-  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: pharmacyRail,
-    // A transient failure must not leave the rail without entries the member
-    // holds; only an authorization refusal is final.
-    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
-    staleTime: 30_000,
-  });
-  // A cached answer for another signed-in identity cannot expose an entry.
-  const railCapabilities =
-    pharmacyRail && railAccess.data && railAccess.data.userId === session?.user.id
-      ? railAccess.data.capabilities
-      : [];
+  const railAccess = usePharmacyNavigationAccess();
+  const railCapabilities = railAccess.data?.capabilities ?? [];
   const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
     enabled: safetyModule,
     retry: false,

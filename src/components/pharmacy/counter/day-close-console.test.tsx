@@ -2,7 +2,13 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
-  enabledModules: ['pharmacy-counter'],
+  closeAllowed: true,
+  accessFetching: false,
+  accessError: false,
+  accessUserId: 'owner',
+  accessOrganizationId: 'org',
+  closeBranchIds: ['b'],
+  enabledModules: ['pharmacy-core', 'pharmacy-counter'],
   sessionStatus: 'authenticated',
   sessionRevoked: false,
   organizationId: 'org',
@@ -43,10 +49,28 @@ vi.mock('next-auth/react', () => ({
   }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ organizationId: 'org', enabledModules: mocks.enabledModules }),
+  useEntitlements: () => ({
+    organizationId: 'org',
+    vertical: 'PHARMACY',
+    enabledModules: mocks.enabledModules,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    pharmacyAccess: {
+      navigation: {
+        useQuery: () => ({
+          data: {
+            userId: mocks.accessUserId,
+            organizationId: mocks.accessOrganizationId,
+            capabilities: mocks.closeAllowed ? ['pharmacy:close'] : [],
+            closeBranchIds: mocks.closeBranchIds,
+          },
+          isFetching: mocks.accessFetching,
+          isError: mocks.accessError,
+        }),
+      },
+    },
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
@@ -115,7 +139,13 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
-  mocks.enabledModules = ['pharmacy-counter'];
+  mocks.closeAllowed = true;
+  mocks.accessFetching = false;
+  mocks.accessError = false;
+  mocks.accessUserId = 'owner';
+  mocks.accessOrganizationId = 'org';
+  mocks.closeBranchIds = ['b'];
+  mocks.enabledModules = ['pharmacy-core', 'pharmacy-counter'];
   mocks.sessionStatus = 'authenticated';
   mocks.sessionRevoked = false;
   mocks.organizationId = 'org';
@@ -236,11 +266,12 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
+  it('shows permission denial for a member without day-close access', () => {
     mocks.role = 'MEMBER';
+    mocks.closeAllowed = false;
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.'
+      'Day-close permission is required. Ask your workspace administrator to review your day-close permission.'
     );
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
@@ -367,7 +398,9 @@ describe('day-close console', () => {
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
       screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
-    ).toHaveTextContent(/re-record this close report with a reason, but that never reopens the day/);
+    ).toHaveTextContent(
+      /re-record this close report with a reason, but that never reopens the day/
+    );
   });
   it('totals counted cash live from the drawers entered so far', () => {
     mocks.extraDrawers = [
@@ -472,6 +505,7 @@ describe('day-close console', () => {
       { id: 'b', name: 'Main' },
       { id: 'b2', name: 'Second' },
     ];
+    mocks.closeBranchIds = ['b', 'b2'];
     render(<PharmacyDayCloseConsole initial={{ branch: 'b2', date: '2026-09-20' }} />);
     expect(screen.getByLabelText('Branch')).toHaveValue('b2');
     expect(screen.getByLabelText('Business date')).toHaveValue('2026-09-20');
@@ -485,4 +519,28 @@ describe('day-close console', () => {
     expect(screen.getByLabelText('Branch')).toHaveValue('b');
     expect(screen.getByLabelText('Business date')).toHaveValue(workspaceToday(WORKSPACE_ZONE));
   });
+});
+
+describe('DEV-240 capability-based day close', () => {
+  it('admits a non-admin with close access and selects only an admitted branch', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.branches = [
+      { id: 'forbidden', name: 'Other' },
+      { id: 'b', name: 'Main' },
+    ];
+    render(<PharmacyDayCloseConsole initial={{ branch: 'forbidden' }} />);
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Other' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: 'b' }));
+  });
+  it.each(['accessFetching', 'accessError', 'accessUserId', 'accessOrganizationId'] as const)(
+    'does not read a close with unconfirmed access: %s',
+    (field) => {
+      if (field === 'accessFetching' || field === 'accessError') mocks[field] = true;
+      else mocks[field] = 'previous-identity';
+      render(<PharmacyDayCloseConsole />);
+      expect(mocks.previewInput).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    }
+  );
 });

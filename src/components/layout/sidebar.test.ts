@@ -104,7 +104,11 @@ describe('pharmacy navigation', () => {
     ['/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
   /** What a manager holding procurement and operational reports is granted (#979). */
-  const operatingCapabilities = ['pharmacy:procurement', 'reports:operational'];
+  const operatingCapabilities = [
+    'pharmacy:inventory',
+    'pharmacy:procurement',
+    'reports:operational',
+  ];
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',
@@ -243,6 +247,8 @@ describe('pharmacy navigation', () => {
       visibleNavigation(entitlements, role, [], held).map((item) => item.href);
     const capabilityGated = [
       ['/pharmacy/counter', 'pharmacy:counter'],
+      ['/pharmacy/counter/close', 'pharmacy:close'],
+      ['/pharmacy/inventory', 'pharmacy:inventory'],
       ['/pharmacy/purchasing', 'pharmacy:procurement'],
       ['/pharmacy/reports', 'reports:operational'],
       ['/pharmacy/prescriptions', 'pharmacy:prescriptions'],
@@ -255,6 +261,7 @@ describe('pharmacy navigation', () => {
       expect(visible).toContain('/pharmacy/counter');
       for (const hidden of [
         '/pharmacy/counter/close',
+        '/pharmacy/inventory',
         '/pharmacy/reports',
         '/pharmacy/prescriptions',
         '/pharmacy/pharmacist-queue',
@@ -275,8 +282,8 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
-    it('keeps the administrator-only day close for administrators', () => {
-      expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    it('keeps day close for authorized administrators', () => {
+      expect(hrefs('ADMIN', ['pharmacy:close'])).toContain('/pharmacy/counter/close');
     });
 
     it('shows Team to administrators, and to members only with the HR directory', () => {
