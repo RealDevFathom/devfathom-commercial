@@ -891,7 +891,12 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
   // DEV-96: pharmacy records past their rule-set retention window, bounded per run.
-  await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), { timeout: 120_000 });
+  // Isolated so a purge timeout or connection failure cannot block recovery or job claims.
+  try {
+    await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), { timeout: 120_000 });
+  } catch (error) {
+    console.error('[platform-jobs] pharmacy retention purge failed; continuing with job processing', error);
+  }
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,
