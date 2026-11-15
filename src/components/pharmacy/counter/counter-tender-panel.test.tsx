@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -20,6 +20,32 @@ function setup(overrides: Partial<CounterTenderPanelProps> = {}) {
   return { ...view, props };
 }
 
+const TENDER_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  CARD: 'Card',
+  BANK_TRANSFER: 'Bank transfer',
+  KHATA: 'Khata',
+  JAZZCASH: 'JazzCash',
+  EASYPAISA: 'Easypaisa',
+  RAAST: 'Raast',
+  WALLET: 'Wallet',
+  CREDIT: 'Credit (legacy)',
+};
+
+function tenderButtons() {
+  return within(screen.getByRole('group', { name: 'Tender' })).getAllByRole('button');
+}
+
+function tenderButton(type: string) {
+  return within(screen.getByRole('group', { name: 'Tender' })).getByRole('button', {
+    name: TENDER_LABELS[type],
+  });
+}
+
+function chooseTender(type: string) {
+  fireEvent.click(tenderButton(type));
+}
+
 function enterCash() {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
@@ -33,17 +59,15 @@ describe('DEV-618 payment panel', () => {
     expect(screen.getByLabelText('Amount')).toHaveAccessibleDescription(
       /Leave blank to pay the balance due. Enter a smaller amount to split payment across tenders./
     );
-    expect(screen.getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
-      'CASH',
-      'CARD',
-      'BANK_TRANSFER',
-      'WALLET',
-      'KHATA',
-      'CREDIT',
-      'RAAST',
-      'JAZZCASH',
-      'EASYPAISA',
+    expect(tenderButtons().map((button) => button.textContent)).toEqual([
+      'Cash',
+      'Card',
+      'Bank transfer',
+      'Khata',
     ]);
+    expect(tenderButton('CASH')).toHaveAttribute('aria-pressed', 'true');
+    expect(tenderButton('CARD')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('combobox', { name: 'Tender' })).not.toBeInTheDocument();
   });
 
   it('keeps split payments available after the parent supplies the remaining balance', async () => {
@@ -54,7 +78,7 @@ describe('DEV-618 payment panel', () => {
     await screen.findByText('Payment recorded.');
     rerender(<CounterTenderPanel {...props} balanceMinor={12450} />);
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('124.50');
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
+    chooseTender('BANK_TRANSFER');
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenNthCalledWith(
@@ -67,13 +91,116 @@ describe('DEV-618 payment panel', () => {
 
   it('retains parent permission and busy-state locks', () => {
     const { props } = setup({ disabled: true });
-    expect(screen.getByLabelText('Tender')).toBeDisabled();
+    for (const button of tenderButtons()) expect(button).toBeDisabled();
     expect(screen.getByLabelText('Amount')).toBeDisabled();
     expect(screen.getByLabelText('Cash received')).toBeDisabled();
     const button = screen.getByRole('button', { name: 'Take payment' });
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(props.onTender).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-714 tender buttons', () => {
+  it('offers a wallet button only when the branch has its merchant details', () => {
+    setup({
+      manualSettings: {
+        JAZZCASH: { destination: 'Till 1', allowReferenceSkip: false },
+        RAAST: { destination: 'PK00MERCHANT', allowReferenceSkip: false },
+      },
+    });
+    expect(tenderButtons().map((button) => button.textContent)).toEqual([
+      'Cash',
+      'Card',
+      'Bank transfer',
+      'Khata',
+      'JazzCash',
+      'Raast',
+    ]);
+    expect(screen.queryByRole('button', { name: 'Wallet' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Easypaisa' })).not.toBeInTheDocument();
+  });
+
+  it('switches tender on click and clears the previous wallet capture', () => {
+    setup({
+      manualSettings: {
+        JAZZCASH: { destination: 'Till 1', allowReferenceSkip: false },
+        RAAST: { destination: 'PK00MERCHANT', allowReferenceSkip: false },
+      },
+    });
+    chooseTender('JAZZCASH');
+    expect(tenderButton('JAZZCASH')).toHaveAttribute('aria-pressed', 'true');
+    expect(tenderButton('CASH')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByLabelText('Cash received')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    chooseTender('RAAST');
+    expect(screen.getByLabelText('Payer’s name')).toHaveValue('');
+    chooseTender('CASH');
+    expect(screen.getByLabelText('Cash received')).toBeVisible();
+  });
+
+  it('says why wallets are hidden when merchant details fail to load', () => {
+    const onReloadManualSettings = vi.fn();
+    setup({ manualSettingsError: true, onReloadManualSettings });
+    expect(tenderButtons()).toHaveLength(4);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Wallet merchant details could not be loaded'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reload merchant details' }));
+    expect(onReloadManualSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides cached wallet buttons once a merchant-details reload fails', () => {
+    const manualSettings = {
+      JAZZCASH: { destination: 'Till 1', allowReferenceSkip: false },
+    };
+    const { props, rerender } = setup({ manualSettings });
+    expect(tenderButton('JAZZCASH')).toBeVisible();
+    rerender(<CounterTenderPanel {...props} manualSettingsError />);
+    expect(screen.queryByRole('button', { name: 'JazzCash' })).not.toBeInTheDocument();
+    expect(tenderButtons()).toHaveLength(4);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Wallet merchant details could not be loaded'
+    );
+  });
+
+  it('still renders a restored Wallet attempt so it can be resolved', () => {
+    setup({ initialDraft: { type: 'WALLET', amount: '', cashReceived: '' } });
+    expect(tenderButton('WALLET')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Requires a certified payment provider/)).toBeVisible();
+  });
+
+  it('flags only the Cash button when the drawer is closed and keeps other tenders usable', async () => {
+    const { props } = setup({ drawerOpen: false });
+    const message = 'Open the cash drawer to take cash. Other tenders do not need the drawer.';
+    expect(tenderButton('CASH')).toHaveAccessibleDescription(message);
+    for (const type of ['CARD', 'BANK_TRANSFER', 'KHATA'])
+      expect(tenderButton(type)).not.toHaveAccessibleDescription();
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    enterCash();
+    const take = screen.getByRole('button', { name: 'Take payment' });
+    expect(take).toBeDisabled();
+    expect(take).toHaveAccessibleDescription(new RegExp(message));
+    fireEvent.click(take);
+    expect(props.onTender).not.toHaveBeenCalled();
+
+    chooseTender('BANK_TRANSFER');
+    expect(take).toBeEnabled();
+    expect(take).not.toHaveAccessibleDescription(new RegExp(message));
+    fireEvent.click(take);
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'BANK_TRANSFER', amountMinor: 12550 },
+        { amount: '125.50', cashReceived: '' }
+      )
+    );
+  });
+
+  it.each([true, undefined])('shows no drawer message when the drawer is %s', (drawerOpen) => {
+    setup({ drawerOpen });
+    expect(tenderButton('CASH')).not.toHaveAccessibleDescription();
+    enterCash();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
   });
 });
 
@@ -94,7 +221,7 @@ describe('#710 Raast / wallet counter controls', () => {
           },
         },
       });
-      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+      chooseTender(type);
       expect(screen.getByAltText(`${type} merchant QR`)).toBeVisible();
       expect(screen.getByText('PKR 250.00')).toBeVisible();
       expect(screen.getByText('PK00MERCHANT')).toBeVisible();
@@ -120,7 +247,7 @@ describe('#710 Raast / wallet counter controls', () => {
     const { props } = setup({
       manualSettings: { RAAST: { destination: 'Till 123', allowReferenceSkip: true } },
     });
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    chooseTender('RAAST');
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
     fireEvent.click(screen.getByLabelText('Skip reference under branch policy'));
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
@@ -134,8 +261,8 @@ describe('#710 Raast / wallet counter controls', () => {
   it.each([{ manualSettingsLoading: true }, { manualSettingsError: true }, {}])(
     'fails closed for unavailable merchant settings (%j)',
     (state) => {
-      setup(state);
-      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+      setup({ ...state, initialDraft: { type: 'RAAST', amount: '', cashReceived: '' } });
+      expect(tenderButton('RAAST')).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     }
   );
@@ -150,7 +277,7 @@ describe('CounterTenderPanel acknowledgement', () => {
     await screen.findByText(`Payment ${status}.`);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
     expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
-    expect(screen.getByLabelText('Tender')).toHaveValue('CASH');
+    expect(tenderButton('CASH')).toHaveAttribute('aria-pressed', 'true');
     expect(onTender).toHaveBeenCalledExactlyOnceWith(
       {
         type: 'CASH',
@@ -161,7 +288,7 @@ describe('CounterTenderPanel acknowledgement', () => {
     );
     if (status === 'unknown') {
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-      expect(screen.getByLabelText('Tender')).toBeDisabled();
+      for (const button of tenderButtons()) expect(button).toBeDisabled();
     }
   });
 
@@ -217,25 +344,20 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['CARD', 'WALLET', 'BANK_TRANSFER'])(
-    'keeps rejected %s selection and amount',
-    async (type) => {
-      const onTender = vi
-        .fn()
-        .mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
-      setup({ onTender });
-      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
-      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-      await screen.findByText('Payment refused.');
-      expect(screen.getByLabelText('Tender')).toHaveValue(type);
-      expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-      expect(onTender).toHaveBeenCalledExactlyOnceWith(
-        { type, amountMinor: 12550 },
-        { amount: '125.50', cashReceived: '' }
-      );
-    }
-  );
+  it.each(['CARD', 'BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    chooseTender(type);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(tenderButton(type)).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      { type, amountMinor: 12550 },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {
@@ -337,7 +459,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
   it('keeps the safety block across tender types', () => {
     const { props } = setup({ blocked: true });
     enterCash();
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'CREDIT' } });
+    chooseTender('KHATA');
     expect(screen.getByText('Payment locked')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent('unresolved safety block');
     const button = screen.getByRole('button', { name: 'Take payment' });
@@ -374,7 +496,7 @@ describe('family Khata tender', () => {
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
       reauthenticateOwner,
     });
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
@@ -394,7 +516,7 @@ describe('family Khata tender', () => {
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
       reauthenticateOwner: vi.fn().mockRejectedValue(new Error('denied')),
     });
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
@@ -412,7 +534,7 @@ describe('family Khata tender', () => {
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
       printKhataStatement,
     });
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
     await waitFor(() => expect(printKhataStatement).toHaveBeenCalledWith('family-a'));
@@ -497,3 +619,110 @@ it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('DEV-716 inline Khata signup', () => {
+  it('signs up a new customer with name, phone and consent, then reloads accounts', async () => {
+    const account = {
+      id: 'family-new',
+      displayName: 'Ayesha',
+      creditLimitMinor: 0,
+      balanceMinor: 0,
+    };
+    const loadKhataAccounts = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([account]);
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({ loadKhataAccounts, signUpKhata });
+    chooseTender('KHATA');
+    const open = await screen.findByRole('button', { name: 'Open Khata account' });
+    expect(screen.getByText(/The credit limit starts at/)).toHaveTextContent('0.00');
+
+    fireEvent.change(screen.getByLabelText('Customer name'), { target: { value: ' Ayesha ' } });
+    fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '0300 1234567' } });
+    expect(open).toBeDisabled();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        displayName: 'Ayesha',
+        phone: '0300 1234567',
+        consentGranted: true,
+      })
+    );
+    await waitFor(() => expect(loadKhataAccounts).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('option', { name: 'Ayesha' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Khata account' })).not.toBeInTheDocument();
+  });
+
+  it('offers the selected counter patient as payer without re-asking name and phone', async () => {
+    const signUpKhata = vi.fn().mockResolvedValue(undefined);
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    expect(screen.queryByLabelText('Phone')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    await waitFor(() =>
+      expect(signUpKhata).toHaveBeenCalledExactlyOnceWith({
+        patientId: 'patient-a',
+        displayName: 'Bilal',
+        consentGranted: true,
+      })
+    );
+  });
+
+  it('shows a failure and keeps the form when signup is refused', async () => {
+    const signUpKhata = vi
+      .fn()
+      .mockRejectedValue(new Error('This bill is no longer open for payment.'));
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    fireEvent.click(
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This bill is no longer open for payment.'
+    );
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeInTheDocument();
+  });
+
+  it('clears the consent tick when the payer changes', async () => {
+    const props = {
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender, props: all } = setup({
+      ...props,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    chooseTender('KHATA');
+    await screen.findByText('Payer: Bilal');
+    const consent = () =>
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record');
+    fireEvent.click(consent());
+    expect(consent()).toBeChecked();
+    rerender(
+      <CounterTenderPanel
+        {...all}
+        khataSignupPatient={{ patientId: 'patient-b', displayName: 'Sana' }}
+      />
+    );
+    await screen.findByText('Payer: Sana');
+    expect(consent()).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeDisabled();
+  });
+});

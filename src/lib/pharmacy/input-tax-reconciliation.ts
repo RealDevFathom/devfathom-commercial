@@ -3,13 +3,14 @@
  *
  * This is a reporting control, not a posting gate. A bill remains a faithful
  * record even when its distributor tax identity is incomplete; the report
- * flags it and keeps its claimed input tax visible for reconciliation.
+ * flags positive input-tax claims and keeps claimed tax visible for reconciliation.
  */
 
 export type InputTaxBill = {
   id: string;
   reference: string;
   supplierInvoiceRef: string;
+  supplier: { name: string };
   distributorNtn: string | null;
   distributorStrn: string | null;
   status: 'DRAFT' | 'POSTED' | 'REVERSED' | 'CANCELLED';
@@ -26,6 +27,7 @@ export type InputTaxBillReconciliation = {
   id: string;
   reference: string;
   supplierInvoiceRef: string;
+  supplierName: string;
   missing: ('NTN' | 'STRN')[];
   flagged: boolean;
   claimMinor: number;
@@ -51,13 +53,15 @@ export function reconcileInputTaxBills(bills: readonly InputTaxBill[]) {
       const missing: ('NTN' | 'STRN')[] = [];
       if (!bill.distributorNtn?.trim()) missing.push('NTN');
       if (!bill.distributorStrn?.trim()) missing.push('STRN');
+      const claimMinor = claimedInputTaxMinor(bill);
       return {
         id: bill.id,
         reference: bill.reference,
         supplierInvoiceRef: bill.supplierInvoiceRef,
+        supplierName: bill.supplier.name,
         missing,
-        flagged: missing.length > 0,
-        claimMinor: claimedInputTaxMinor(bill),
+        flagged: claimMinor > 0 && missing.length > 0,
+        claimMinor,
       };
     });
 

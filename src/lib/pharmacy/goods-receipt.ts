@@ -42,6 +42,7 @@ import { PharmacyInventoryError } from './inventory';
 import {
   authorizeControlledRestoration,
   ControlledRestorationDenied,
+  SOLO_PHARMACIST_WITNESS_POLICY,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import {
@@ -67,6 +68,11 @@ import {
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 import { acceptedKey, goodsReceiptMovementKeys, quarantineKey } from './goods-receipt-keys';
+import {
+  PharmacyFinanceError,
+  postGoodsReceiptEntry,
+  reversePostingForSource,
+} from './finance-postings';
 
 export type ReceivingScope = LedgerScope;
 
@@ -450,6 +456,16 @@ export async function postGoodsReceipt(
     data: { status: 'POSTED', postedAt: input.at },
   });
 
+  // FIN-01: the inventory the receipt just shelved and what is now owed for it
+  // are journalled in this same transaction, so GL inventory never trails the
+  // stock ledger. A receipt whose every unit was rejected without quarantine
+  // shelved nothing of value and has nothing to journal.
+  try {
+    await postGoodsReceiptEntry(db, scope, { goodsReceiptId: receipt.id, at: input.at });
+  } catch (error) {
+    if (!(error instanceof PharmacyFinanceError && error.reason === 'NOTHING_TO_POST')) throw error;
+  }
+
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
@@ -638,8 +654,32 @@ export async function reverseGoodsReceipt(
       db,
       scope,
       input.controlledWitness,
-      'pharmacy:safety'
+      'pharmacy:safety',
+      { allowSoloSelfWitness: true }
     );
+    if (witness.soloSelfWitness) {
+      // Solo-pharmacy rule: the self-witness is lawful only with this record,
+      // written in the same transaction as the reversal it authorizes.
+      await db.auditLog.create({
+        data: {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          actorType: 'USER',
+          source: 'TRPC',
+          category: 'PHARMACY_PURCHASING',
+          operation: 'OTHER',
+          action: 'pharmacy.controlledReceiptReversalSelfWitness',
+          targetType: 'PharmacyGoodsReceipt',
+          targetId: receipt.id,
+          metadata: {
+            policy: SOLO_PHARMACIST_WITNESS_POLICY,
+            pinVerified: true,
+            branchId: scope.branchId,
+            signatureRef: witness.signatureRef,
+          },
+        },
+      });
+    }
     // Dispensing takes the branch register lock before any stock balance lock.
     // Use the same order even when a receipt has multiple movements to reverse.
     await lockRegister(db, scope.organizationId, scope.branchId);
@@ -687,6 +727,20 @@ export async function reverseGoodsReceipt(
       reversalReason: input.reason,
     },
   });
+
+  // FIN-01 / §8A invariant 15: the receipt's journal entry is negated by a new
+  // linked entry, never edited. A receipt that journalled nothing (zero value,
+  // or posted before receipts were journalled) has nothing to negate.
+  try {
+    await reversePostingForSource(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reason: input.reason,
+      at: input.at,
+    });
+  } catch (error) {
+    if (!(error instanceof PharmacyFinanceError && error.reason === 'NOT_FOUND')) throw error;
+  }
 
   return {
     goodsReceiptId: receipt.id,
