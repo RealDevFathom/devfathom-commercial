@@ -102,6 +102,7 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterSaleErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import {
   counterSetupAdvice,
@@ -1682,7 +1683,7 @@ function ScopedPharmacyCounterConsole({
         setQuery('');
         focusSearch();
       } catch (error) {
-        const message = messageFrom(error);
+        const message = counterSaleErrorMessage(error);
         setNotice({
           tone: counterErrorTone(error),
           message,

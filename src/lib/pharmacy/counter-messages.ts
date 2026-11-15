@@ -265,6 +265,14 @@ export function counterErrorMessage(error: unknown): string {
   return error.message;
 }
 
+/** Sale admission displays only known copy; unexpected server prose can contain private data. */
+export function counterSaleErrorMessage(error: unknown): string {
+  const reason = counterReason(error);
+  return Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)
+    ? COUNTER_ERROR_MESSAGES[reason]!
+    : COUNTER_UNKNOWN_ERROR_MESSAGE;
+}
+
 function isForbidden(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('data' in error)) return false;
   const data = (error as { data?: unknown }).data;

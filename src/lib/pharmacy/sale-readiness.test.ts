@@ -16,6 +16,7 @@ const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-1
 
 function pharmacistCredential(overrides: Record<string, unknown> = {}) {
   return {
+    id: 'pin-1',
     failedAttempts: 0,
     lockedUntil: null,
     staffProfile: {
@@ -162,6 +163,37 @@ describe('hasIndependentPharmacistPin (DEV-860)', () => {
       undefined,
       expect.objectContaining({ now: at })
     );
+  });
+
+  it('finds an eligible pharmacist after a full page of ineligible PINs', async () => {
+    const db = fixture();
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      pharmacistCredential({ id: `pin-${index}`, lockedUntil: new Date('2026-11-15T10:00:00Z') })
+    );
+    db.restaurantOperatorCredential.findMany
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([pharmacistCredential({ id: 'pin-50' })]);
+    await expect(ask(db)).resolves.toBe(true);
+    expect(db.restaurantOperatorCredential.findMany).toHaveBeenCalledTimes(2);
+    expect(db.restaurantOperatorCredential.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: { id: 'pin-49' }, skip: 1, orderBy: { id: 'asc' } })
+    );
+  });
+
+  it('exhausts every full page before reporting that no pharmacist is eligible', async () => {
+    const db = fixture();
+    vi.mocked(can).mockResolvedValue(false);
+    db.restaurantOperatorCredential.findMany
+      .mockResolvedValueOnce(
+        Array.from({ length: 50 }, (_, index) => pharmacistCredential({ id: `pin-${index}` }))
+      )
+      .mockResolvedValueOnce(
+        Array.from({ length: 50 }, (_, index) => pharmacistCredential({ id: `pin-${index + 50}` }))
+      )
+      .mockResolvedValueOnce([]);
+    await expect(ask(db)).resolves.toBe(false);
+    expect(db.restaurantOperatorCredential.findMany).toHaveBeenCalledTimes(3);
+    expect(can).toHaveBeenCalledTimes(100);
   });
 
   it('does not count a holder without the dispensing grant', async () => {

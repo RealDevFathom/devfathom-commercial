@@ -6,6 +6,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
 } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
+import { COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
@@ -2291,6 +2292,49 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       expect(notice).toHaveTextContent('Ask your owner or manager to set this up.');
       expect(within(notice).queryByRole('link')).not.toBeInTheDocument();
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it.each(['create', 'addLine'] as const)(
+      'hides unknown %s errors, including internal ids and stack traces',
+      async (operation) => {
+        openTheDrawer();
+        mocks.queries.saleReadiness = readiness(false);
+        mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+        mocks.mutations.create!.mockResolvedValue({ id: 'sale-a' });
+        mocks.mutations[operation]!.mockRejectedValue(
+          new Error('Tenant org-secret failed at /server/private.ts:42: internal-id-123')
+        );
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        const search = screen.getByLabelText('Scan or search');
+        fireEvent.change(search, { target: { value: '123456' } });
+        fireEvent.keyDown(search, { key: 'Enter' });
+        expect(await screen.findByText(COUNTER_UNKNOWN_ERROR_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(/org-secret|private.ts|internal-id-123/)).not.toBeInTheDocument();
+      }
+    );
+
+    it.each([
+      'ORGANIZATION_NOT_ACTIVE',
+      'PROFILE_MISSING',
+      'BRANCH_INACTIVE',
+      'PROFILE_PREMISES_MISMATCH',
+      'RULE_SET_UNCONFIRMED',
+      'LICENCE_INVALID',
+      'QUALIFIED_PERSON_COVERAGE_MISSING',
+      'SCHEDULE_NOT_PERMITTED',
+      'PHARMACIST_NOT_PRESENT',
+    ] as const)('explains an add-line refusal for %s', async (reason) => {
+      openTheDrawer();
+      mocks.queries.saleReadiness = readiness(false);
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockResolvedValue({ id: 'sale-a' });
+      mocks.mutations.addLine!.mockRejectedValue(refused('FORBIDDEN', reason));
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const message = await screen.findByText(COUNTER_SETUP_GUIDANCE[reason].message);
+      expect(message.closest('[role="alert"]')).toHaveTextContent('Ask your owner or manager');
     });
 
     it('links an owner or administrator to the setup step', async () => {

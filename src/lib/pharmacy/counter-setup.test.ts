@@ -4,6 +4,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
   counterErrorTone,
+  counterSaleErrorMessage,
 } from './counter-messages';
 import {
   ASK_OWNER_OR_MANAGER,
@@ -57,6 +58,19 @@ describe('counter setup reasons (DEV-860)', () => {
       'You are not assigned to this branch, so you cannot sell here.'
     );
     expect(counterErrorTone(error)).toBe('warning');
+  });
+
+  it.each([
+    'INTERNAL_FAILURE',
+    'toString',
+    '__proto__',
+    'Tenant org-private at /server/internal.ts:42',
+  ])('uses generic sale admission copy for an unknown error: %s', (message) => {
+    expect(counterSaleErrorMessage(new Error(message))).toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
+  });
+
+  it.each(REGULATORY_REASONS)('keeps the safe sale admission message for %s', (reason) => {
+    expect(counterSaleErrorMessage(new Error(reason))).toBe(COUNTER_SETUP_GUIDANCE[reason].message);
   });
 
   it('keeps the scope sentence when the refusal declares no reason', () => {

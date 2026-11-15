@@ -37,8 +37,8 @@ type ReadinessInput = {
   at?: Date;
 };
 
-/** Credentials read when looking for a countersigning pharmacist; a branch has few. */
-const PHARMACIST_PIN_SCAN_LIMIT = 50;
+/** Bound each read, but exhaust all organization-wide credentials before reporting absence. */
+const PHARMACIST_PIN_PAGE_SIZE = 50;
 
 /**
  * True when someone other than the operator could countersign a controlled line: an
@@ -50,47 +50,60 @@ export async function hasIndependentPharmacistPin(
   db: ScopedDb,
   input: Pick<ReadinessInput, 'organizationId' | 'actorId'> & { at: Date }
 ): Promise<boolean> {
-  const credentials = await db.restaurantOperatorCredential.findMany({
-    where: {
-      organizationId: input.organizationId,
-      type: 'PIN',
-      revokedAt: null,
-      deviceId: null,
-      staffProfile: {
-        status: 'ACTIVE',
-        user: {
-          organizationId: input.organizationId,
+  let cursor: string | undefined;
+  while (true) {
+    const credentials = await db.restaurantOperatorCredential.findMany({
+      where: {
+        organizationId: input.organizationId,
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: {
           status: 'ACTIVE',
-          id: { not: input.actorId },
-        },
-      },
-    },
-    select: {
-      failedAttempts: true,
-      lockedUntil: true,
-      staffProfile: {
-        select: {
           user: {
-            select: { id: true, role: true, department: true, status: true, organizationId: true },
+            organizationId: input.organizationId,
+            status: 'ACTIVE',
+            id: { not: input.actorId },
           },
         },
       },
-    },
-    take: PHARMACIST_PIN_SCAN_LIMIT,
-  });
-  for (const credential of credentials) {
-    const user = credential.staffProfile.user;
-    if (
-      !user ||
-      user.organizationId !== input.organizationId ||
-      user.status !== 'ACTIVE' ||
-      user.id === input.actorId ||
-      isLockedOut(credential, input.at)
-    )
-      continue;
-    if (await can(user, 'pharmacy:dispense', undefined, { db, now: input.at })) return true;
+      select: {
+        id: true,
+        failedAttempts: true,
+        lockedUntil: true,
+        staffProfile: {
+          select: {
+            user: {
+              select: {
+                id: true,
+                role: true,
+                department: true,
+                status: true,
+                organizationId: true,
+              },
+            },
+          },
+        },
+      },
+      take: PHARMACIST_PIN_PAGE_SIZE,
+      orderBy: { id: 'asc' },
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    for (const credential of credentials) {
+      const user = credential.staffProfile.user;
+      if (
+        !user ||
+        user.organizationId !== input.organizationId ||
+        user.status !== 'ACTIVE' ||
+        user.id === input.actorId ||
+        isLockedOut(credential, input.at)
+      )
+        continue;
+      if (await can(user, 'pharmacy:dispense', undefined, { db, now: input.at })) return true;
+    }
+    if (credentials.length < PHARMACIST_PIN_PAGE_SIZE) return false;
+    cursor = credentials[credentials.length - 1]!.id;
   }
-  return false;
 }
 
 export async function evaluateCounterSaleReadiness(
