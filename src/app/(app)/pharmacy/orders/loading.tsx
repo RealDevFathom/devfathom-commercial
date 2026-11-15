@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function PharmacyOrdersLoading() {
   return (
-    <main className="min-w-0 space-y-6" aria-busy="true">
+    <div className="min-w-0 space-y-6" aria-busy="true">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Customer orders"
@@ -21,6 +21,6 @@ export default function PharmacyOrdersLoading() {
           className="min-h-64 animate-pulse"
         />
       </div>
-    </main>
+    </div>
   );
 }

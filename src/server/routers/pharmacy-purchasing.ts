@@ -21,6 +21,8 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { actorIsPharmacyOwner, procurementBranchIds } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
+  decideReceiptDebitNote,
+  listReceiptDebitNotes,
   listReceivingExceptions,
   lockReceivablePurchaseOrder,
   orderReceiptCostTerms,
@@ -78,6 +80,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import { isEffective, packConversions } from '@/lib/pharmacy/pack-conversion';
 import {
   isNonDrugRetail,
   resolveReceiptBatchIdentity,
@@ -113,6 +116,7 @@ import {
   readReorderFacts,
   REORDER_DEFAULT_COVER_DAYS,
   REORDER_DEFAULT_WINDOW_DAYS,
+  REORDER_MAX_DRAFT_LINES,
 } from '@/lib/pharmacy/reorder-drafts';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -139,6 +143,19 @@ import {
 
 const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
+// DEV-145: hard ceilings checked before any DB work, each sized so the server's own
+// drafting and receiving flows can never exceed it.
+// A requisition, quote (lines of one requisition) or return is a hand-entered document.
+const MAX_DOCUMENT_LINES = 100;
+// An order may be confirmed straight from a reorder draft, which holds up to one line
+// per planned medicine.
+const MAX_PURCHASE_ORDER_LINES = REORDER_MAX_DRAFT_LINES;
+// A receipt is filed once per supplier invoice, and a serialized pack is always a line
+// of its own, so one invoice may carry a line per pack. An over-delivery still drafts and
+// is raised as an OVERAGE exception at posting; this is only the hard ceiling against abuse.
+const MAX_RECEIPT_LINES = 20_000;
+// A central receipt is allocated in one call, each line split across destination branches.
+const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
 function domainError(error: unknown): never {
   if (error instanceof ControlledRestorationDenied) {
@@ -624,7 +641,7 @@ const purchasingRouter = router({
     .input(
       z
         .object({
-          supplierId: z.string().min(1),
+          supplierId: z.string().min(1).max(200),
           licenceType: z.string().trim().min(1).max(100),
           licenceNumber: z.string().trim().min(1).max(100),
           issuingAuthority: z.string().trim().min(1).max(200),
@@ -632,7 +649,7 @@ const purchasingRouter = router({
           expiresAt: z.date(),
           evidenceUri: z.string().trim().max(1000).optional(),
           verified: z.boolean().default(false),
-          supersedesId: z.string().min(1).optional(),
+          supersedesId: z.string().min(1).max(200).optional(),
         })
         .strict()
         .refine((value) => value.expiresAt > value.issuedAt, {
@@ -667,7 +684,7 @@ const purchasingRouter = router({
    */
   verifySupplierLicence: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ licenceId: z.string().min(1) }).strict())
+    .input(z.object({ licenceId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       const { organizationId, actorId } = procurementActor(ctx);
       // One transaction holding the filing's row lock: two colleagues verifying
@@ -717,7 +734,7 @@ const purchasingRouter = router({
    */
   setSupplierAuthorization: purchasing
     .meta(PROCUREMENT_AND_APPROVAL)
-    .input(z.object({ supplierId: z.string().min(1), authorized: z.boolean() }).strict())
+    .input(z.object({ supplierId: z.string().min(1).max(200), authorized: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Supplier is outside this workspace.' });
@@ -751,7 +768,7 @@ const purchasingRouter = router({
                 .strict()
             )
             .min(1)
-            .max(100),
+            .max(MAX_DOCUMENT_LINES),
         })
         .strict()
     )
@@ -788,7 +805,7 @@ const purchasingRouter = router({
 
   submitRequisition: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ requisitionId: z.string().min(1) }).strict())
+    .input(z.object({ requisitionId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
         const requisition = await ctx.db.pharmacyRequisition.findFirst({
@@ -813,8 +830,8 @@ const purchasingRouter = router({
     .input(
       z
         .object({
-          requisitionId: z.string().min(1),
-          supplierId: z.string().min(1),
+          requisitionId: z.string().min(1).max(200),
+          supplierId: z.string().min(1).max(200),
           reference: z.string().trim().max(100).optional(),
           quotedAt: z.date(),
           validUntil: z.date(),
@@ -823,7 +840,7 @@ const purchasingRouter = router({
             .array(
               z
                 .object({
-                  requisitionLineId: z.string().min(1),
+                  requisitionLineId: z.string().min(1).max(200),
                   pricePerPackMinor: z.number().int().nonnegative(),
                   schemeBuyPacks: z.number().int().nonnegative().default(0),
                   schemeFreePacks: z.number().int().nonnegative().default(0),
@@ -840,7 +857,8 @@ const purchasingRouter = router({
                   path: ['schemeFreePacks'],
                 })
             )
-            .min(1),
+            .min(1)
+            .max(MAX_DOCUMENT_LINES),
         })
         .strict()
         .refine((value) => value.validUntil >= value.quotedAt, {
@@ -879,7 +897,9 @@ const purchasingRouter = router({
    */
   compareQuotes: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ requisitionLineId: z.string().min(1), at: z.date().optional() }).strict())
+    .input(
+      z.object({ requisitionLineId: z.string().min(1).max(200), at: z.date().optional() }).strict()
+    )
     .query(async ({ ctx, input }) => {
       try {
         const at = input.at ?? new Date();
@@ -945,10 +965,10 @@ const purchasingRouter = router({
       z
         .object({
           reference: z.string().trim().min(1).max(100),
-          supplierId: z.string().min(1),
-          branchId: z.string().min(1).optional(),
-          requisitionId: z.string().min(1).optional(),
-          quoteId: z.string().min(1).optional(),
+          supplierId: z.string().min(1).max(200),
+          branchId: z.string().min(1).max(200).optional(),
+          requisitionId: z.string().min(1).max(200).optional(),
+          quoteId: z.string().min(1).max(200).optional(),
           expectedDeliveryAt: z.date().optional(),
           freightMinor: z.number().int().nonnegative().default(0),
           otherChargesMinor: z.number().int().nonnegative().default(0),
@@ -957,8 +977,8 @@ const purchasingRouter = router({
             .array(
               z
                 .object({
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   orderedPacks: z.number().int().positive(),
                   bonusPacks: z.number().int().nonnegative().default(0),
                   canonicalUnitsPerPack: z.number().int().positive(),
@@ -973,7 +993,8 @@ const purchasingRouter = router({
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(MAX_PURCHASE_ORDER_LINES),
         })
         .strict()
     )
@@ -1019,14 +1040,22 @@ const purchasingRouter = router({
         await assertOrderBranches(ctx, {
           requisitionBranchId: quote?.requisition?.branchId ?? null,
         });
-        for (const line of input.lines) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-        }
+        // DEV-145: one lookup per table, not two per line, so a full reorder draft
+        // costs the same two queries as a one-line order.
+        const medicineIds = [...new Set(input.lines.map((line) => line.medicineId))];
+        const packLevelIds = [...new Set(input.lines.map((line) => line.packLevelId))];
+        const [medicines, packLevels] = await Promise.all([
+          ctx.db.medicine.findMany({
+            where: { id: { in: medicineIds }, saleable: true },
+            select: { id: true },
+          }),
+          ctx.db.packLevel.findMany({
+            where: { id: { in: packLevelIds } },
+            select: { id: true },
+          }),
+        ]);
+        if (medicines.length !== medicineIds.length || packLevels.length !== packLevelIds.length)
+          throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         // Reject impossible money or quantity terms before they reach the table.
         landedCost({
           lines: input.lines,
@@ -1122,7 +1151,7 @@ const purchasingRouter = router({
 
   submitPurchaseOrder: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
+    .input(z.object({ purchaseOrderId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
         const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
@@ -1155,7 +1184,7 @@ const purchasingRouter = router({
     .input(
       z
         .object({
-          purchaseOrderId: z.string().min(1),
+          purchaseOrderId: z.string().min(1).max(200),
           decision: z.enum(['APPROVED', 'REJECTED']),
           pin: z
             .string()
@@ -1302,7 +1331,7 @@ const purchasingRouter = router({
 
   sendPurchaseOrder: purchasing
     .meta(APPROVAL)
-    .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
+    .input(z.object({ purchaseOrderId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
         const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
@@ -1344,7 +1373,7 @@ const purchasingRouter = router({
   /** PUR-03: the stored order, costed. Bonus packs only ever divide the money over more units. */
   landedCost: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
+    .input(z.object({ purchaseOrderId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       try {
         const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
@@ -1415,8 +1444,8 @@ const purchasingRouter = router({
         .object({
           reference: z.string().trim().min(1).max(100),
           branchId,
-          supplierId: z.string().min(1),
-          purchaseOrderId: z.string().min(1).optional(),
+          supplierId: z.string().min(1).max(200),
+          purchaseOrderId: z.string().min(1).max(200).optional(),
           supplierInvoiceRef: z.string().trim().min(1).max(200),
           supplierInvoiceDate: z.date(),
           distributorNtn: z.string().trim().min(1).max(60).optional(),
@@ -1432,16 +1461,16 @@ const purchasingRouter = router({
             .strict()
             .optional(),
           note: z.string().trim().max(2000).optional(),
-          qualifiedPersonUserId: z.string().trim().min(1).optional(),
+          qualifiedPersonUserId: z.string().trim().min(1).max(200).optional(),
           /** DEV-77: freight the supplier billed on this invoice, spread into lot landed cost. */
           freightMinor: z.number().int().nonnegative().max(999_999_999).default(0),
           lines: z
             .array(
               z
                 .object({
-                  purchaseOrderLineId: z.string().min(1).optional(),
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  purchaseOrderLineId: z.string().min(1).max(200).optional(),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   // #718: optional only for NON_DRUG_RETAIL (FRONT_SHOP) items; the server
                   // still refuses a medicine line without its printed batch, expiry and MRP.
                   batchNumber: z.string().trim().min(1).max(120).optional(),
@@ -1457,8 +1486,8 @@ const purchasingRouter = router({
                   discountBps: bps.default(0),
                   taxBps: bps.default(0),
                   taxCreditable: z.boolean().default(false),
-                  stockLocationId: z.string().min(1),
-                  quarantineLocationId: z.string().min(1).optional(),
+                  stockLocationId: z.string().min(1).max(200),
+                  quarantineLocationId: z.string().min(1).max(200).optional(),
                   gtin: z
                     .string()
                     .regex(/^\d{14}$/)
@@ -1467,6 +1496,10 @@ const purchasingRouter = router({
                   gs1Payload: z.string().trim().min(1).max(400).optional(),
                   invoiceCorrection: z.boolean().optional(),
                   gs1Warnings: z.array(z.enum(GS1_WARNING_CODES)).max(6).optional(),
+                  /** DEV-691: the distributor bill's own line, for the three-way match. */
+                  billedPacks: z.number().int().nonnegative().max(1_000_000).optional(),
+                  billedBatchNumber: z.string().trim().min(1).max(120).optional(),
+                  billedPrintedExpiry: z.date().optional(),
                 })
                 .strict()
                 // PUR-04: rejected goods need somewhere that is not the shelf,
@@ -1490,7 +1523,8 @@ const purchasingRouter = router({
                   }
                 )
             )
-            .min(1),
+            .min(1)
+            .max(MAX_RECEIPT_LINES),
         })
         .strict()
         .refine((value) => Boolean(value.directPurchase) !== Boolean(value.purchaseOrderId), {
@@ -1519,6 +1553,23 @@ const purchasingRouter = router({
           let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
             null;
           if (input.purchaseOrderId) {
+            // An organization-wide order raised from a branch requisition is
+            // still that branch's demand: receiving against it needs reach
+            // there too, as every other order-scoped procedure does (#979).
+            // Checked before the row lock (#991), so a buyer cannot lock
+            // another branch's order or learn its status from the refusal.
+            // An order's branch and requisition never change after creation.
+            const target = await db.pharmacyPurchaseOrder.findFirst({
+              where: { id: input.purchaseOrderId, organizationId: scope.organizationId },
+              select: { branchId: true, requisitionId: true },
+            });
+            if (target) {
+              await assertOrderBranches(
+                ctx,
+                { branchId: target.branchId, requisitionId: target.requisitionId },
+                db
+              );
+            }
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
             const order = await lockReceivablePurchaseOrder(db, scope, {
@@ -1530,14 +1581,6 @@ const purchasingRouter = router({
               freightMinor: order.freightMinor,
               otherChargesMinor: order.otherChargesMinor,
             };
-            // An organization-wide order raised from a branch requisition is
-            // still that branch's demand: receiving against it needs reach
-            // there too, as every other order-scoped procedure does (#979).
-            await assertOrderBranches(
-              ctx,
-              { branchId: order.branchId, requisitionId: order.requisitionId },
-              db
-            );
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
           // received from, checked here and again when the receipt posts. With
@@ -1628,8 +1671,17 @@ const purchasingRouter = router({
               retailPriceMinor: item.retailPriceMinor,
             });
             if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
-            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // DEV-201: the pack must be one of this medicine's own pack levels, so a
+            // line cannot pair medicine A with medicine B's pack.
+            const pack = await db.packLevel.findFirst({
+              where: {
+                id: line.packLevelId,
+                organizationId: scope.organizationId,
+                presentation: { organizationId: scope.organizationId, medicineId: line.medicineId },
+              },
+              select: { id: true, presentationId: true },
+            });
+            if (!pack) throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
@@ -1647,6 +1699,33 @@ const purchasingRouter = router({
               ) {
                 throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
               }
+            }
+            // DEV-201: units per pack come from the configured pack hierarchy, never
+            // from the client. A typed multiplier would let one received pack post
+            // any number of units into the lot and the stock ledger.
+            // A version superseded since the order was raised keeps the conversion it
+            // carried while it was in force.
+            const levels = await db.packLevel.findMany({
+              where: { organizationId: scope.organizationId, presentationId: pack.presentationId },
+              select: {
+                id: true,
+                level: true,
+                unitsPerParent: true,
+                parentPackLevelId: true,
+                effectiveFrom: true,
+                effectiveTo: true,
+              },
+            });
+            const selected = levels.find((level) => level.id === pack.id);
+            const now = new Date();
+            const conversion = selected
+              ? packConversions(
+                  levels,
+                  isEffective(selected, now) ? now : selected.effectiveFrom
+                ).find((row) => row.packLevelId === pack.id)
+              : undefined;
+            if (conversion?.canonicalUnitsPerPack !== line.canonicalUnitsPerPack) {
+              throw new PharmacyReceivingError('PACK_CONVERSION_MISMATCH');
             }
 
             const quantities = receiptLineQuantities({
@@ -1751,6 +1830,9 @@ const purchasingRouter = router({
               serialNumber: identity.serialNumber,
               serialKey: identity.serialKey,
               gs1Warnings: identity.gs1Warnings,
+              billedPacks: line.billedPacks ?? null,
+              billedBatchNumber: line.billedBatchNumber ?? null,
+              billedPrintedExpiry: line.billedPrintedExpiry ?? null,
             });
           }
 
@@ -1844,8 +1926,8 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          goodsReceiptId: z.string().min(1),
-          staffProfileId: z.string().trim().min(1).optional(),
+          goodsReceiptId: z.string().min(1).max(200),
+          staffProfileId: z.string().trim().min(1).max(200).optional(),
           approvalPin: z
             .string()
             .regex(/^\d{4,8}$/)
@@ -1963,7 +2045,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          goodsReceiptId: z.string().min(1),
+          goodsReceiptId: z.string().min(1).max(200),
         })
         .strict()
     )
@@ -2015,7 +2097,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          goodsReceiptId: z.string().min(1),
+          goodsReceiptId: z.string().min(1).max(200),
         })
         .strict()
     )
@@ -2063,11 +2145,11 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          goodsReceiptId: z.string().min(1),
+          goodsReceiptId: z.string().min(1).max(200),
           reason: z.string().trim().min(1).max(1000),
           controlledWitness: z
             .object({
-              staffProfileId: z.string().min(1),
+              staffProfileId: z.string().min(1).max(200),
               pin: z.string().regex(/^\d{4,8}$/),
             })
             .strict()
@@ -2100,7 +2182,7 @@ const purchasingRouter = router({
         .object({
           branchId,
           status: z.enum(['OPEN', 'RESOLVED']).default('OPEN'),
-          goodsReceiptId: z.string().min(1).optional(),
+          goodsReceiptId: z.string().min(1).max(200).optional(),
         })
         .strict()
     )
@@ -2120,7 +2202,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          receivingExceptionId: z.string().min(1),
+          receivingExceptionId: z.string().min(1).max(200),
           resolutionNote: z.string().trim().min(1).max(1000),
         })
         .strict()
@@ -2132,6 +2214,59 @@ const purchasingRouter = router({
           resolutionNote: input.resolutionNote,
           at: new Date(),
         });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** DEV-691: draft debit notes the three-way match proposed, for a person to decide. */
+  receiptDebitNotes: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z
+        .object({
+          branchId,
+          status: z.enum(['DRAFT', 'CONFIRMED', 'DISCARDED']).default('DRAFT'),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return listReceiptDebitNotes(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        { status: input.status }
+      );
+    }),
+
+  /**
+   * DEV-691: confirm or discard a draft receipt debit note. A claim on a
+   * supplier's account is a financial act, so it needs procurement and finance,
+   * as issuing a return debit note does. The actor comes from the session.
+   */
+  decideReceiptDebitNote: purchasing
+    .meta(PROCUREMENT_AND_FINANCE)
+    .input(
+      z
+        .object({
+          branchId,
+          debitNoteId: z.string().min(1).max(200),
+          decision: z.enum(['CONFIRMED', 'DISCARDED']),
+          note: z.string().trim().max(1000).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          decideReceiptDebitNote(txDb(tx), scope, {
+            debitNoteId: input.debitNoteId,
+            decision: input.decision,
+            note: input.note,
+            at: new Date(),
+          })
+        );
       } catch (error) {
         domainError(error);
       }
@@ -2149,7 +2284,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          supplierId: z.string().min(1),
+          supplierId: z.string().min(1).max(200),
           kind: z.enum(['PURCHASE_RETURN', 'EXPIRY_CLAIM']),
           reference: z.string().trim().min(1).max(120),
           note: z.string().trim().max(1000).optional(),
@@ -2157,8 +2292,8 @@ const purchasingRouter = router({
             .array(
               z
                 .object({
-                  inventoryLotId: z.string().min(1),
-                  stockLocationId: z.string().min(1),
+                  inventoryLotId: z.string().min(1).max(200),
+                  stockLocationId: z.string().min(1).max(200),
                   quantityUnits: z.number().int().positive(),
                   reason: z.string().trim().min(1).max(500),
                   returnWindowEndsAt: z.date(),
@@ -2166,7 +2301,8 @@ const purchasingRouter = router({
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(MAX_DOCUMENT_LINES),
         })
         .strict()
     )
@@ -2190,7 +2326,7 @@ const purchasingRouter = router({
   /** Take the INV-09 reservation. From here the quantity cannot be sold. */
   submitPurchaseReturn: purchasing
     .meta(PROCUREMENT_AND_FINANCE)
-    .input(z.object({ branchId, purchaseReturnId: z.string().min(1) }).strict())
+    .input(z.object({ branchId, purchaseReturnId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await receivingScope(ctx, input.branchId);
       try {
@@ -2212,7 +2348,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          purchaseReturnId: z.string().min(1),
+          purchaseReturnId: z.string().min(1).max(200),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
@@ -2238,7 +2374,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          purchaseReturnId: z.string().min(1),
+          purchaseReturnId: z.string().min(1).max(200),
           reference: z.string().trim().min(1).max(120),
         })
         .strict()
@@ -2262,7 +2398,7 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          supplierId: z.string().min(1),
+          supplierId: z.string().min(1).max(200),
           reference: z.string().trim().min(1).max(120),
           amountMinor: z.number().int().positive(),
           receivedAt: z.date(),
@@ -2289,8 +2425,8 @@ const purchasingRouter = router({
       z
         .object({
           branchId,
-          supplierCreditId: z.string().min(1),
-          debitNoteId: z.string().min(1),
+          supplierCreditId: z.string().min(1).max(200),
+          debitNoteId: z.string().min(1).max(200),
           amountMinor: z.number().int().positive(),
         })
         .strict()
@@ -2314,7 +2450,7 @@ const purchasingRouter = router({
   /** PUR-06 acceptance: expected and received credit, side by side. */
   debitNotePositions: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ branchId, supplierId: z.string().min(1).optional() }).strict())
+    .input(z.object({ branchId, supplierId: z.string().min(1).max(200).optional() }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await receivingScope(ctx, input.branchId);
       return debitNotePositions(
@@ -2392,7 +2528,7 @@ const purchasingRouter = router({
    */
   officialPriceAlerts: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ medicineIds: z.array(z.string().min(1)).min(1).max(500) }).strict())
+    .input(z.object({ medicineIds: z.array(z.string().min(1).max(200)).min(1).max(500) }).strict())
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements?.organizationId;
       if (!organizationId || !ctx.session || !hasModule(ctx.entitlements, 'pharmacy-procurement'))
@@ -2411,7 +2547,7 @@ const purchasingRouter = router({
 
   receivedAgainstOrder: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
+    .input(z.object({ purchaseOrderId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
         where: { id: input.purchaseOrderId },
@@ -2457,7 +2593,7 @@ const purchasingRouter = router({
    */
   lotsFromReceipt: purchasing
     .meta(PROCUREMENT)
-    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .input(z.object({ branchId, goodsReceiptId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) =>
       lotsFromReceipt(ctx.db, await receivingScope(ctx, input.branchId), input.goodsReceiptId)
     ),
@@ -2564,21 +2700,22 @@ const purchasingRouter = router({
       z
         .object({
           reference: z.string().trim().min(1).max(100),
-          supplierId: z.string().min(1),
+          supplierId: z.string().min(1).max(200),
           receivingBranchId: branchId,
           lines: z
             .array(
               z
                 .object({
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   orderedPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   listPricePerPackMinor: z.number().int().nonnegative(),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(MAX_PURCHASE_ORDER_LINES),
         })
         .strict()
     )
@@ -2603,19 +2740,20 @@ const purchasingRouter = router({
     .input(
       z
         .object({
-          goodsReceiptId: z.string().min(1),
+          goodsReceiptId: z.string().min(1).max(200),
           allocations: z
             .array(
               z
                 .object({
-                  goodsReceiptLineId: z.string().min(1),
+                  goodsReceiptLineId: z.string().min(1).max(200),
                   destinationBranchId: branchId,
-                  destinationStockLocationId: z.string().min(1),
+                  destinationStockLocationId: z.string().min(1).max(200),
                   quantityUnits: z.number().int().positive(),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(MAX_RECEIPT_ALLOCATIONS),
         })
         .strict()
     )

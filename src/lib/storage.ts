@@ -4,8 +4,9 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream, realpathSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 
 // Resolve existing ancestors too: a not-yet-created directory can have a
@@ -103,6 +104,10 @@ type ObjectStore = {
   put(key: string, data: Buffer, contentType: string): Promise<void>;
   /** A missing object rejects with an error whose `statusCode` is 404, as readers expect. */
   get(key: string): Promise<Buffer>;
+  /** Upload a file from disk as a stream, so it is never read into memory whole. */
+  putFile(key: string, path: string, contentType: string): Promise<void>;
+  /** A streamed read; a missing object rejects like `get`. */
+  stream(key: string): Promise<StoredObjectStream>;
   /** Idempotent: removing an object that is already gone succeeds. */
   remove(key: string): Promise<void>;
 };
@@ -139,6 +144,9 @@ function isMissingS3Object(error: unknown): boolean {
 
 let s3Region: string | undefined;
 
+/** A stored object read as a stream, with its size when the store reports one. */
+export type StoredObjectStream = { body: ReadableStream<Uint8Array>; size: number | null };
+
 function s3Store(bucket: string, region: string): ObjectStore {
   if (!s3Client || s3Region !== region) {
     s3Client = new S3Client({ region });
@@ -161,6 +169,32 @@ function s3Store(bucket: string, region: string): ObjectStore {
       }
       if (!response.Body) throw new Error('Stored object has no body.');
       return Buffer.from(await response.Body.transformToByteArray());
+    },
+    async putFile(key, path, contentType) {
+      const { size } = await stat(path);
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: createReadStream(path),
+          ContentLength: size,
+          ContentType: contentType,
+        })
+      );
+    },
+    async stream(key) {
+      let response;
+      try {
+        response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      } catch (error) {
+        if (isMissingS3Object(error)) throw new StoredObjectMissingError({ cause: error });
+        throw error;
+      }
+      if (!response.Body) throw new Error('Stored object has no body.');
+      return {
+        body: response.Body.transformToWebStream() as ReadableStream<Uint8Array>,
+        size: typeof response.ContentLength === 'number' ? response.ContentLength : null,
+      };
     },
     async remove(key) {
       // S3 answers a delete of a missing key with success.
@@ -196,6 +230,39 @@ export async function getUpload(organizationId: string, filename: string): Promi
   const store = objectStore();
   if (typeof store !== 'string') return store.get(`${organizationId}/${filename}`);
   return readFile(join(store, organizationId, filename));
+}
+
+/** `putUpload` for a file already on disk: streamed, never buffered whole. */
+export async function putUploadFile(
+  organizationId: string,
+  filename: string,
+  path: string,
+  contentType: string
+): Promise<void> {
+  const store = objectStore();
+  if (typeof store !== 'string') {
+    await store.putFile(`${organizationId}/${filename}`, path, contentType);
+    return;
+  }
+  const directory = join(store, organizationId);
+  await mkdir(directory, { recursive: true });
+  await copyFile(path, join(directory, filename));
+}
+
+/** `getUpload` as a stream, so a large object is never held in memory whole. */
+export async function getUploadStream(
+  organizationId: string,
+  filename: string
+): Promise<StoredObjectStream> {
+  const store = objectStore();
+  if (typeof store !== 'string') return store.stream(`${organizationId}/${filename}`);
+  const path = join(store, organizationId, filename);
+  // stat first: a missing file rejects with ENOENT before any stream is opened.
+  const { size } = await stat(path);
+  return {
+    body: Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>,
+    size,
+  };
 }
 
 /**

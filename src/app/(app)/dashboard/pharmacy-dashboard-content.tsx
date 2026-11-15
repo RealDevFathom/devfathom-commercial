@@ -51,6 +51,21 @@ const formatMetric = (key: string, value: number | null) =>
       ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
       : value.toLocaleString();
 
+/**
+ * DEV-729: stock signals and recommended orders come back null until the evaluator has
+ * run for every branch in scope. Say that plainly instead of a dash or a zero, which an
+ * owner reads as "nothing to reorder".
+ */
+const UNCALCULATED_METRICS = new Set(['openStockSignals', 'recommendedOrders']);
+const metricValue = (key: string, value: number | null) =>
+  value == null && UNCALCULATED_METRICS.has(key) ? 'Not calculated yet' : formatMetric(key, value);
+const metricSub = (key: string, value: number | null, source: string | null | undefined) =>
+  value != null
+    ? sourceLine(source)
+    : UNCALCULATED_METRICS.has(key)
+      ? 'Stock signals have not been worked out for this scope. Refresh them in Inventory.'
+      : 'No data recorded yet';
+
 // Only reached when the metric catalog has not delivered a label for a key.
 // Reads the camelCase metric key as words rather than the raw, unspaced key the
 // `.eyebrow` style would otherwise shout back (e.g. OPENSTOCKSIGNALS).
@@ -135,8 +150,8 @@ function WidgetState({
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
-          value={formatMetric(item.metrics[index]!, value)}
-          sub={value == null ? 'No data recorded yet' : sourceLine(contract?.source)}
+          value={metricValue(item.metrics[index]!, value)}
+          sub={metricSub(item.metrics[index]!, value, contract?.source)}
         />
       ))}
     </div>
@@ -213,14 +228,54 @@ function AiAdviceCard({
   );
 }
 
-export function PharmacyDashboardContent({ role }: { role: string | null | undefined }) {
+export function PharmacyDashboardContent({
+  role,
+  reportAccess,
+}: {
+  role: string | null | undefined;
+  /**
+   * Whether the member holds `reports:operational`, read server-side by the page. `false` (a
+   * cashier) renders a pharmacy home with no owner title, no layout editor and no report reads;
+   * `undefined` (access unknown) keeps the command centre, whose reads stay server-gated.
+   */
+  reportAccess?: boolean;
+}) {
   // Every command-centre read is a Pharmacy Reports procedure, and each one refuses a workspace
   // without that module (FORBIDDEN). Ask them nothing there, as the counter does for its module.
   const { enabledModules } = useEntitlements();
+  if (reportAccess === false) return <PharmacyMemberHome />;
   return isModuleGranted('pharmacy-reports', enabledModules) ? (
     <OwnerCommandCentre role={role} />
   ) : (
     <ReportsNotInPackage role={role} />
+  );
+}
+
+/**
+ * DEV-602: the pharmacy home for a member without report access (the cashier template). It names
+ * no owner surface, offers no layout editor and asks Pharmacy Reports nothing, so no read is
+ * refused with a 403 and no save can fail silently.
+ */
+function PharmacyMemberHome() {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Pharmacy workspace"
+        heading="Pharmacy home"
+        description="Your pharmacy tools are in the menu. Owner reports stay with members who hold report access."
+      />
+      <SectionCard
+        eyebrow="Pharmacy Reports"
+        title="Owner reports are outside your access"
+        titleLevel={2}
+        actions={<StatusPill status="Restricted" tone="neutral" />}
+      >
+        <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
+          Operational reports access is required for the command centre. No report figures are
+          requested or shown, and every pharmacy tool in your menu works as usual.
+        </p>
+      </SectionCard>
+    </div>
   );
 }
 
@@ -281,6 +336,13 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   // DEV-95: a refused branch read is an access boundary, not an outage. Say so
   // plainly and offer no Retry that can only be refused again.
   const branchesDenied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(branches.error?.data?.code ?? '');
+  // DEV-602: a member whose report reads are refused cannot save a layout either, so offer no
+  // editor that can only end in a refused save.
+  const preferencesDenied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(
+    preferences.error?.data?.code ?? ''
+  );
+  const canEdit = !branchesDenied && !preferencesDenied;
+  const procurement = isModuleGranted('pharmacy-procurement', enabledModules);
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -306,7 +368,9 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     setDraft(next);
   };
   const save = async () => {
-    const saved = await update.mutateAsync(draftRef.current);
+    // A refused or failed save stays in edit mode; `update.error` renders the alert below.
+    const saved = await update.mutateAsync(draftRef.current).catch(() => null);
+    if (!saved) return;
     utils.pharmacyReports.getPreferences.setData(undefined, saved);
     setEditing(false);
   };
@@ -318,10 +382,12 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         heading="Owner command centre"
         description="Live operational signals with visible source, freshness and permission boundaries."
         actions={
-          <Button variant="outline" onClick={begin}>
-            <Pencil aria-hidden />
-            Edit dashboard
-          </Button>
+          canEdit ? (
+            <Button variant="outline" onClick={begin}>
+              <Pencil aria-hidden />
+              Edit dashboard
+            </Button>
+          ) : null
         }
       />
       <SectionCard
@@ -366,7 +432,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           growth={role === 'ADMIN' && isModuleGranted('pharmacy-crm', enabledModules)}
         />
       ) : null}
-      {editing ? (
+      {editing && canEdit ? (
         <SectionCard
           eyebrow="Edit mode"
           title="Widget layout"
@@ -499,6 +565,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       catalog.data?.metrics.find((metric) => metric.key === item.metrics[0])
                         ?.drillThrough ? (
                         <Link
+                          aria-label={`Open report: ${item.label}`}
                           className="text-sm font-medium text-text-strong underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           href={
                             catalog.data.metrics.find((metric) => metric.key === item.metrics[0])!
@@ -518,6 +585,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       branchCount={branches.data?.branches.length ?? 0}
                       metricsReady={Boolean(catalog.data) || Boolean(catalog.error)}
                     />
+                    {item.key === 'stock' && procurement ? (
+                      // DEV-729: one entry to the per-distributor reorder board (DEV-678),
+                      // which still checks procurement access on the server.
+                      <Link
+                        href={`/pharmacy/purchasing/reorder${branchId ? `?${new URLSearchParams({ branch: branchId })}` : ''}`}
+                        className={buttonVariants({ variant: 'outline', className: 'mt-5' })}
+                      >
+                        <ShoppingCart aria-hidden />
+                        Draft POs per distributor
+                      </Link>
+                    ) : null}
                   </SectionCard>
                 </section>
               );

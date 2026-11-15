@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -212,7 +212,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [approvalCode, setApprovalCode] = useState(initialDraft?.approvalCode ?? '');
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
-    const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
+    // DEV-499: null means the cashier has not typed Cash received, so it follows
+    // the amount being tendered (exact cash). Typing or a quick-cash button sets it.
+    const [cashReceived, setCashReceived] = useState<string | null>(
+      initialDraft?.cashReceived ? initialDraft.cashReceived : null
+    );
     const [submitting, setSubmitting] = useState(false);
     const [outcome, setOutcome] = useState<CounterTenderResult | null>(null);
     // An accepted callback may acknowledge a replay. Never sum acknowledgements;
@@ -221,6 +225,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const submissionRef = useRef(false);
     const checkRef = useRef(false);
     const statusRef = useRef<HTMLParagraphElement>(null);
+    const payerNameRef = useRef<HTMLInputElement>(null);
+    const providerRefInput = useRef<HTMLInputElement>(null);
+    // Set when a wallet button is pressed, so its first empty field takes focus.
+    const focusCaptureRef = useRef<'payer' | 'reference' | null>(null);
     const takingPayment = pending || submitting;
     const displayedOutcome = recoveryOutcome ?? outcome;
     const unknown = displayedOutcome?.status === 'unknown';
@@ -229,10 +237,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
 
     const amountMinor = amount.trim() === '' ? balanceMinor : parseAmountMinor(amount);
-    const cashReceivedMinor = cashReceived.trim() === '' ? null : parseAmountMinor(cashReceived);
     const amountValid =
       balanceKnown && amountMinor !== null && amountMinor > 0 && amountMinor <= balanceMinor;
-    const cashInvalid = type === 'CASH' && cashReceived.trim() !== '' && cashReceivedMinor === null;
+    // Prefilled only while the bill can take payment, so a settled or locked
+    // panel never shows a cash figure the cashier did not enter.
+    const cashText =
+      cashReceived ?? (type === 'CASH' && editable && amountValid ? formatMinor(amountMinor!) : '');
+    const cashReceivedMinor = cashText.trim() === '' ? null : parseAmountMinor(cashText);
+    const cashInvalid = type === 'CASH' && cashText.trim() !== '' && cashReceivedMinor === null;
     const cashShort =
       type === 'CASH' &&
       cashReceivedMinor !== null &&
@@ -266,6 +278,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
     }, [editable, merchant]);
+    useEffect(() => {
+      const target = focusCaptureRef.current;
+      if (!target) return;
+      focusCaptureRef.current = null;
+      (target === 'reference' ? providerRefInput : payerNameRef).current?.focus();
+    }, [type]);
     const capture = manual
       ? manualTenderCaptureSchema.safeParse({
           type,
@@ -387,6 +405,51 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 ? Boolean(approverId) && APPROVER_PIN.test(approverPin)
                 : Boolean(password) && Boolean(reauthenticateOwner))))));
 
+    // DEV-41: a disabled Take payment button always says why, in cashier words.
+    const disabledReason = submittable
+      ? null
+      : takingPayment
+        ? null // The button and the payment status already say a payment is being taken.
+        : unknown
+          ? 'Check the payment outcome before taking more money.'
+          : state === 'idle'
+            ? 'Open a bill before taking payment.'
+            : state === 'loading'
+              ? 'Checking the bill balance…'
+              : state === 'settled'
+                ? 'This bill is already paid.'
+                : state === 'stale' || state === 'error' || !balanceKnown
+                  ? 'Refresh the bill to check the balance before taking payment.'
+                  : state === 'unavailable'
+                    ? 'This bill is not available for payment. Add items or resume the bill.'
+                    : disabled
+                      ? 'Wait for the current counter action to finish before taking payment.'
+                      : blocked
+                        ? 'Resolve the safety block in the prescription panel before taking payment.'
+                        : type === 'CASH' && cashDrawerClosed
+                          ? null // The Cash button already shows and describes the drawer reason.
+                          : !amountValid
+                            ? 'Enter an amount between 0.01 and the balance due.'
+                            : cashInvalid
+                              ? 'Enter a valid cash amount with at most two decimal places.'
+                              : cashShort
+                                ? 'Cash received is less than the amount tendered.'
+                                : manual && manualSettingsLoading
+                                  ? 'Loading merchant details…'
+                                  : manual && (manualSettingsError || !merchant)
+                                    ? 'Reload merchant details before taking payment.'
+                                    : manual &&
+                                        (!capture?.success ||
+                                          (referenceSkipped && !merchant?.allowReferenceSkip))
+                                      ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
+                                      : manualCard && !cardCapture?.success
+                                        ? 'Enter the card reference and approval code from the terminal slip.'
+                                        : khataLoading
+                                          ? 'Loading Khata accounts…'
+                                          : isKhata && !account
+                                            ? 'Choose a family Khata account before taking payment.'
+                                            : 'A manager or owner must approve the credit limit increase first.';
+
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
       submissionRef.current = true;
@@ -426,7 +489,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   ...(pinApproval ? { overLimitApproval: pinApproval } : {}),
                 }
               : {}),
-            ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
+            // An untouched prefill is exact cash, which the server already assumes
+            // when Cash received is absent; only a figure the cashier set is sent.
+            ...(type === 'CASH' && cashReceived !== null && cashReceivedMinor !== null
+              ? { cashReceivedMinor }
+              : {}),
             ...(manual && capture?.success
               ? {
                   payerName: capture.data.payerName,
@@ -437,13 +504,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               : {}),
             ...(manualCard && cardCapture?.success ? cardCapture.data : {}),
           },
-          { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
+          { amount, cashReceived: type === 'CASH' ? (cashReceived ?? '') : '' }
         );
         setOutcome(result);
         if (result.status === 'accepted') {
           if (changeMinor !== null && changeMinor > 0) setRecordedChangeMinor(changeMinor);
           setAmount('');
-          setCashReceived('');
+          setCashReceived(null);
           setProviderRef('');
           setPayerName('');
           setReferenceSkipped(false);
@@ -480,7 +547,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           if (result.changeMinor !== undefined && result.changeMinor > 0)
             setRecordedChangeMinor(result.changeMinor);
           setAmount('');
-          setCashReceived('');
+          setCashReceived(null);
           statusRef.current?.focus();
         }
       } catch {
@@ -509,9 +576,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             disabled={!editable}
             onClick={() => {
               if (active) return;
+              // DEV-499: a wallet payer is usually the bill's patient. Offer that
+              // name and send focus to the first empty field, so a wallet payment
+              // is the provider button, then the transaction ID and Enter.
+              const payer = isManualTender(entry.value)
+                ? (khataSignupPatient?.displayName.trim() ?? '')
+                : '';
+              focusCaptureRef.current = isManualTender(entry.value)
+                ? payer
+                  ? 'reference'
+                  : 'payer'
+                : null;
               setType(entry.value);
               setProviderRef('');
-              setPayerName('');
+              setPayerName(payer);
               setReferenceSkipped(false);
               setApprovalCode('');
             }}
@@ -528,8 +606,41 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       );
     };
 
+    // DEV-499: Enter takes payment from the panel itself (focused by F9) or from
+    // a text field. Buttons, checkboxes, selects and text areas keep their own Enter.
+    function takePaymentOnEnter(event: KeyboardEvent<HTMLDivElement>) {
+      if (
+        event.key !== 'Enter' ||
+        event.nativeEvent.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
+      const target = event.target;
+      const textField =
+        target instanceof HTMLInputElement &&
+        !['checkbox', 'radio', 'button', 'submit', 'reset', 'file'].includes(target.type);
+      if (target !== event.currentTarget && !textField) return;
+      event.preventDefault();
+      if (submittable) void submitTender();
+    }
+
+    const quickCash = [
+      { label: 'Exact', minor: amountValid ? amountMinor! : null },
+      { label: '500', minor: 50000 },
+      { label: '1000', minor: 100000 },
+      { label: '5000', minor: 500000 },
+    ];
+
     return (
-      <div ref={ref} tabIndex={-1} className="min-w-0 space-y-5 focus-visible:outline-none">
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className="min-w-0 space-y-5 focus-visible:outline-none"
+        onKeyDown={takePaymentOnEnter}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
           <p className="space-y-2">
             <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
@@ -635,7 +746,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         <div className="space-y-1.5">
           <p id="tender-type-label" className="text-sm leading-none font-medium select-none">
-            Tender
+            Payment method
           </p>
           <div
             role="group"
@@ -679,8 +790,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
           {selected.requiresAdapter ? (
             <p className="text-sm text-text-muted">
-              Requires a certified payment provider. Without one configured, the server refuses this
-              tender rather than simulating an approval.
+              A payment provider must be connected before you can use this method. Ask your manager
+              if it is unavailable.
             </p>
           ) : null}
         </div>
@@ -701,7 +812,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           />
           <p id="tender-amount-help" className="text-sm text-text-muted">
             Leave blank to pay the balance due. Enter a smaller amount to split payment across
-            tenders.
+            payment methods.
           </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
@@ -806,6 +917,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 </p>
                 <Label htmlFor="manual-payer-name">Payer’s name</Label>
                 <Input
+                  ref={payerNameRef}
                   id="manual-payer-name"
                   className="min-h-11"
                   value={payerName}
@@ -815,6 +927,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 />
                 <Label htmlFor="manual-provider-reference">Transaction ID (last 4–6 digits)</Label>
                 <Input
+                  ref={providerRefInput}
                   id="manual-provider-reference"
                   className="min-h-11"
                   inputMode="numeric"
@@ -1115,13 +1228,32 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               id="tender-cash-received"
               inputMode="decimal"
               autoComplete="off"
-              value={cashReceived}
+              value={cashText}
               disabled={!editable}
               aria-invalid={cashShort || cashInvalid || undefined}
               aria-describedby="tender-status tender-error tender-cash-error"
               onChange={(event) => setCashReceived(event.target.value)}
               className="h-11 rounded-sm font-mono tabular-nums"
             />
+            <div role="group" aria-label="Quick cash" className="grid grid-cols-4 gap-2">
+              {quickCash.map((option) => (
+                <Button
+                  key={option.label}
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 rounded-sm font-mono tabular-nums"
+                  disabled={
+                    !editable ||
+                    !amountValid ||
+                    option.minor === null ||
+                    option.minor < amountMinor!
+                  }
+                  onClick={() => setCashReceived(formatMinor(option.minor!))}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
                 Enter a valid cash amount with at most two decimal places.
@@ -1136,7 +1268,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 aria-live="polite"
               >
                 <span>Change</span>
-                <span className="font-mono text-lg tabular-nums text-text-strong">
+                <span className="font-mono text-2xl font-semibold tabular-nums text-text-strong">
                   {formatMinor(changeMinor)}
                 </span>
               </p>
@@ -1152,6 +1284,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {error}
         </p>
 
+        {disabledReason ? (
+          <p id="tender-disabled-reason" className="text-sm text-text-muted">
+            {disabledReason}
+          </p>
+        ) : null}
         <Button
           type="button"
           className="min-h-12 w-full rounded-sm"
@@ -1160,6 +1297,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             'tender-status tender-error',
             blocked ? 'tender-blocked' : '',
             type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
+            disabledReason ? 'tender-disabled-reason' : '',
           ]
             .filter(Boolean)
             .join(' ')}

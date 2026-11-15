@@ -11,11 +11,12 @@ import { workspaceToday } from '@/lib/timezone';
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
 import { returnedLineValue } from './sales';
-import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
+import { postDailyCloseEntry, postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertRxLinesPrescribed } from './rx-prescription-reference';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
@@ -367,12 +368,25 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // DEV-86: a regulated line added inside pharmacist-presence hours cannot be paid for,
+  // and the sale completed, after those hours close.
+  if (
+    sale.lines.some(({ medicine }) => medicine?.rx || medicine?.restricted || medicine?.controlled)
+  )
+    await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+      name: 'pharmacy.sale.tender_regulated',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: true,
+    });
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
   await assertRxSaleAllowed(
     db,
     scope,
     sale.lines.map((line) => line.medicine)
   );
+  // DEV-629: an Rx/restricted line is never paid for without a pharmacist-attached prescription
+  // and a pharmacist's signed review of that line.
+  await assertRxLinesPrescribed(db, sale.lines);
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
@@ -1057,6 +1071,8 @@ export async function cutPharmacyDailyClose(
       actorId: scope.actorId,
     },
   });
+  // The counted cash variance reaches the journal in the close's own transaction (CASH / CASH_OVER_SHORT).
+  await postDailyCloseEntry(db, scope, { closeId: close.id, at: close.createdAt });
   await requestCounterEvidence(db, scope, { kind: 'DAILY_CLOSE', subjectId: close.id });
   return close;
 }

@@ -18,3 +18,5 @@ HMAC-SHA256(RESTAURANT_TERMINAL_WEBHOOK_SECRET, "<unix-seconds>.<source>.<raw bo
 The compare checks that the decoded digest is the same length as the expected digest, then uses `crypto.timingSafeEqual`. A missing secret, a missing or non-canonical timestamp, or a bad signature returns 401 and writes nothing.
 
 A new `externalEventId` is stored under the unique `(organization, source, externalEventId)` inbox constraint and returns 202. A repeat of that event id returns 200 and does not enqueue another job.
+
+An unsigned or non-terminal envelope never holds an event id against a signed terminal event. If a signed terminal event arrives for an id that only an unauthenticated envelope has used, the server replaces that row and queues the signed event. An unauthenticated envelope that reuses a signed event's id returns 200 and changes nothing.

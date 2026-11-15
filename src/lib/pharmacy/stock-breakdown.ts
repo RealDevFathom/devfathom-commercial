@@ -122,6 +122,11 @@ export function soldUnitNoun(saleUnit: string, levelLabel?: string | null): stri
   return soldUnitNouns(saleUnit, levelLabel)[0];
 }
 
+/** DEV-501: the plural noun for the pack level a line was sold in, for quantity labels. */
+export function soldUnitPluralNoun(saleUnit: string, levelLabel?: string | null): string {
+  return soldUnitNouns(saleUnit, levelLabel)[1];
+}
+
 /** DEV-638: a sold line as it was sold, for example "1 strip of 10" or "3 units". */
 export function formatSoldQuantity(input: {
   quantity: number;

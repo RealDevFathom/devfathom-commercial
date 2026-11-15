@@ -116,7 +116,7 @@ export default async function JournalEntryLookupPage({
     TRUNCATED: 'This branch slice exceeds 200 lines. No partial details or totals are shown.',
   };
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Journal entry lookup"
@@ -179,7 +179,7 @@ export default async function JournalEntryLookupPage({
           to={displayValues.to!}
         />
       )}
-    </main>
+    </div>
   );
 }
 

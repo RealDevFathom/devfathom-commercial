@@ -19,7 +19,9 @@ import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
+import { adminPasswordResetData } from '@/lib/auth/admin-password-reset';
 import { createMemberInvitation } from '@/lib/member-invitation';
+import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
@@ -43,6 +45,22 @@ const notificationPrefsSchema = z
   .strict();
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
+// DEV-828 F01: the only User fields a profile save hands back to the caller.
+const PROFILE_RESPONSE_SELECT = {
+  id: true,
+  name: true,
+  phone: true,
+  bio: true,
+  skills: true,
+} as const satisfies Prisma.UserSelect;
+const profileResponseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  phone: z.string().nullable(),
+  bio: z.string().nullable(),
+  skills: z.array(z.string()),
+});
+
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
 
 // #435: admin:access lets a member into the admin procedures, but granting or
@@ -229,12 +247,19 @@ export const teamRouter = router({
       const organizationRole = input.organizationRoleId
         ? await ctx.db.organizationRole.findFirst({
             where: { id: input.organizationRoleId, organizationId: workspaceId(ctx) },
-            select: { id: true, name: true },
+            select: { id: true, name: true, key: true },
           })
         : null;
       if (input.organizationRoleId && !organizationRole) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
       }
+      // SEC-I (DEV-827): the invite grants exactly what the chosen role's label says.
+      const roleRefusal = inviteRoleRefusal(
+        ctx.entitlements.vertical,
+        input.role,
+        organizationRole?.key ?? null
+      );
+      if (roleRefusal) throw new TRPCError({ code: 'BAD_REQUEST', message: roleRefusal });
       const profile = {
         name: input.name,
         role: input.role,
@@ -762,10 +787,15 @@ export const teamRouter = router({
         skills: z.array(z.string()).optional(),
       })
     )
+    // DEV-828 F01: never return the whole User row — it carries the password
+    // verifier and the TOTP seed. Select only what the profile editor shows, and
+    // parse the result through an explicit schema so a new column cannot leak.
+    .output(profileResponseSchema)
     .mutation(async ({ ctx, input }) => {
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: input,
+        select: PROFILE_RESPONSE_SELECT,
       });
     }),
 
@@ -993,12 +1023,7 @@ export const teamRouter = router({
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({
         where: { id: input.id },
-        data: {
-          password: hashed,
-          passwordChangedAt: null,
-          mustChangePassword: true,
-          tokenVersion: { increment: 1 },
-        },
+        data: adminPasswordResetData(hashed),
         select: { name: true },
       });
       // The new password is redacted by the audit layer; record only that a
@@ -1066,9 +1091,12 @@ export const teamRouter = router({
               });
             }
           }
+          // DEV-828 F02: select only the notice/audit fields; the full row
+          // carries the member's password verifier and TOTP seed.
           const updated = await tx.user.update({
             where: { id: input.id },
             data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+            select: { id: true, name: true, status: true },
           });
           return { before, updated };
         }
@@ -1099,7 +1127,7 @@ export const teamRouter = router({
         console.error('[layOffMember] notice email failed for', before.email, err);
       }
 
-      return updated;
+      return { success: true as const, id: updated.id, status: updated.status };
     }),
 
   // Performance notes — admin-authored feedback on a team member.

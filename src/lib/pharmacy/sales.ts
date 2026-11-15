@@ -32,6 +32,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
+import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -163,12 +164,14 @@ export class PharmacySaleError extends Error {
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'VOUCHER_CATEGORY_REFUSED'
       | 'VOUCHER_INVALID'
+      | 'VOUCHER_PIN_REQUIRED'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'NOT_BILL_OWNER'
   ) {
     super(reason);
   }
@@ -280,6 +283,11 @@ type AddSaleLineInput = {
   discountMinor?: number;
   /** DEV-27: a stored voucher to redeem; it sets the discount and its approval. */
   voucherId?: string;
+  /**
+   * DEV-819: set only by the counter after the redeeming cashier re-entered their own PIN.
+   * A voucher line without it is refused.
+   */
+  voucherCashierPinVerified?: true;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -315,6 +323,11 @@ export async function addReservedSaleLine(
 /**
  * DEV-27: loads the stored voucher for a line and enforces its allowlist. The
  * caller cannot set the amount, kind or approver of a voucher discount.
+ *
+ * DEV-819: the cashier must have re-entered their PIN; the voucher must be live (not
+ * revoked, not expired, uses left); the issuer must still hold owner rights and the recorded
+ * approval must still stand. One use is taken here, inside the sale transaction, with a
+ * compare-and-set on the use count so concurrent redemptions cannot exceed the limit.
  */
 async function voucherForRedemption(
   db: ScopedDb,
@@ -335,22 +348,37 @@ async function voucherForRedemption(
     input.approvalPolicy !== undefined
   )
     throw new PharmacySaleError('VOUCHER_INVALID');
+  if (input.voucherCashierPinVerified !== true) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+  const now = new Date();
   const voucher = await db.pharmacyVoucher.findFirst({
     where: {
       id: input.voucherId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       active: true,
+      revokedAt: null,
+      validUntil: { gt: now },
     },
     select: {
       id: true,
       discountMinor: true,
       eligibleCategories: true,
       issuedByUserId: true,
+      approvedByUserId: true,
+      approvalPolicy: true,
       validUntil: true,
+      maxUses: true,
+      usedCount: true,
+      revokedAt: true,
     },
   });
-  if (!voucher || (voucher.validUntil && voucher.validUntil.getTime() <= Date.now()))
+  if (
+    !voucher ||
+    voucher.revokedAt !== null ||
+    !voucher.validUntil ||
+    voucher.validUntil.getTime() <= now.getTime() ||
+    voucher.usedCount >= voucher.maxUses
+  )
     throw new PharmacySaleError('VOUCHER_INVALID');
   try {
     assertVoucherEligibleLine(medicine, voucher.eligibleCategories);
@@ -358,7 +386,26 @@ async function voucherForRedemption(
     if (error instanceof VoucherScopeError) throw new PharmacySaleError('VOUCHER_CATEGORY_REFUSED');
     throw error;
   }
-  return voucher;
+  let approverUserId: string;
+  try {
+    approverUserId = await assertVoucherIssuerRights(db, scope.organizationId, voucher);
+  } catch (error) {
+    if (error instanceof VoucherIssuerRevoked) throw new PharmacySaleError('VOUCHER_INVALID');
+    throw error;
+  }
+  const taken = await db.pharmacyVoucher.updateMany({
+    where: {
+      id: voucher.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      revokedAt: null,
+      usedCount: voucher.usedCount,
+    },
+    data: { usedCount: { increment: 1 } },
+  });
+  if (taken.count !== 1) throw new PharmacySaleError('VOUCHER_INVALID');
+  return { ...voucher, approverUserId };
 }
 
 async function addSaleLineWithAllocation(
@@ -404,6 +451,14 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-86: an Rx, restricted or controlled line is dispensed only inside the rule set's
+  // pharmacist-presence hours, on every line path, before any stock is allocated.
+  if (medicine.rx || medicine.restricted || medicine.controlled)
+    await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+      name: 'pharmacy.sale.dispense_regulated',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: true,
+    });
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.
@@ -488,7 +543,7 @@ async function addSaleLineWithAllocation(
       ? ('PROMOTION' as const)
       : input.discountKind;
   const approvedByUserId = voucher
-    ? voucher.issuedByUserId
+    ? voucher.approverUserId
     : (promotion?.promotion.createdByUserId ?? input.approvedByUserId);
   const approvalPolicy = voucher
     ? `voucher:${voucher.id}`
@@ -566,17 +621,42 @@ async function addSaleLineWithAllocation(
   return { line, allocation };
 }
 
+/**
+ * DEV-821: who is changing a bill's status, decided by the caller. Required on every
+ * call, so no caller can void without stating it. A counter user may void only a
+ * bill they created unless they are a manager or owner. A failed delivery that the
+ * delivery path has already authorized voids its own order sale.
+ */
+export type SaleTransitionAuthority =
+  | { kind: 'COUNTER'; actorIsManager: boolean }
+  | { kind: 'FAILED_DELIVERY_RETURN' };
+
+function mayVoidSale(
+  authority: SaleTransitionAuthority | undefined,
+  sale: { createdByUserId: string },
+  scope: LedgerScope
+) {
+  if (authority?.kind === 'FAILED_DELIVERY_RETURN') return true;
+  if (authority?.kind !== 'COUNTER') return false;
+  return authority.actorIsManager || sale.createdByUserId === scope.actorId;
+}
+
 export async function changeSaleStatus(
   db: ScopedDb,
   scope: LedgerScope,
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
+  authority: SaleTransitionAuthority,
   reason?: string,
   controlledWitness?: ControlledRestorationPin,
   /** DEV-508: structured detail kept on the status event, e.g. a void's reason code. */
   eventPayload?: Prisma.InputJsonValue
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-821: fails closed. A void releases the bill's stock, so a missing or
+  // insufficient authority is refused before the bill is claimed.
+  if (action === 'void' && !mayVoidSale(authority, sale, scope))
+    throw new PharmacySaleError('NOT_BILL_OWNER');
   // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
   // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
@@ -627,6 +707,22 @@ export async function changeSaleStatus(
       0
     );
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
+    // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
+    // claimed above, so this runs once per void.
+    const voucherUses = new Map<string, number>();
+    for (const line of sale.lines)
+      if (line.voucherId)
+        voucherUses.set(line.voucherId, (voucherUses.get(line.voucherId) ?? 0) + 1);
+    for (const [voucherId, uses] of voucherUses)
+      await db.pharmacyVoucher.updateMany({
+        where: {
+          id: voucherId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          usedCount: { gte: uses },
+        },
+        data: { usedCount: { decrement: uses } },
+      });
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -822,6 +918,116 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   };
 }
 
+type PlannedAllocation = {
+  id: string;
+  inventoryLotId: string;
+  canonicalUnits: number;
+  grossMinor?: number | null;
+  discountMinor?: number | null;
+};
+type PlannedReturnRow = {
+  inventoryLotId: string;
+  canonicalUnits: number;
+  grossMinor?: number | null;
+  discountMinor?: number | null;
+};
+
+/**
+ * How a verified-lot return splits across the sold line's allocations of that lot, and what
+ * each slice is worth from its allocation's snapshotted price. Pure: returnSaleLine records
+ * exactly this plan, and DEV-501's counter quotes the refund from it.
+ */
+export function planLotReturn<A extends PlannedAllocation>(
+  line: Omit<Parameters<typeof priceReturn>[0], 'returnLines'> & {
+    allocations: readonly A[];
+    returnLines: readonly PlannedReturnRow[];
+  },
+  lotId: string,
+  canonicalUnits: number
+) {
+  // Earlier slices of this return count as already returned when pricing later ones.
+  const returnLines: PlannedReturnRow[] = [...line.returnLines];
+  const priced = { ...line, returnLines };
+  const consumed = new Map<string, number>();
+  for (const row of returnLines)
+    consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
+  const moneyByAllocation = new Map(saleAllocationMoney(line).map((row) => [row.id, row]));
+  const slices: Array<{
+    allocation: A;
+    units: number;
+    money: { grossMinor: number; discountMinor: number };
+  }> = [];
+  let remaining = canonicalUnits;
+  for (const allocation of line.allocations) {
+    if (allocation.inventoryLotId !== lotId) continue;
+    const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
+    consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
+    const units = Math.min(remaining, allocation.canonicalUnits - used);
+    if (!units) continue;
+    const charged = moneyByAllocation.get(allocation.id)!;
+    const delta = (amount: number) =>
+      Math.floor((amount * (used + units)) / allocation.canonicalUnits) -
+      Math.floor((amount * used) / allocation.canonicalUnits);
+    const discount = delta(charged.discountMinor);
+    const money = priceReturn(priced, units, {
+      grossMinor: delta(charged.grossMinor - charged.discountMinor) + discount,
+      discountMinor: discount,
+    });
+    returnLines.push({
+      inventoryLotId: allocation.inventoryLotId,
+      canonicalUnits: units,
+      ...money,
+    });
+    slices.push({ allocation, units, money });
+    remaining -= units;
+    if (!remaining) break;
+  }
+  return { slices, remaining };
+}
+
+/**
+ * DEV-501: the refund a proposed return is worth, priced exactly as returnSaleLine would
+ * snapshot it now. Read-only; the recorded return remains the source of truth.
+ */
+export async function quoteSaleLineReturn(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { saleLineId: string; lotId?: string; canonicalUnits: number }
+) {
+  const line = await db.pharmacySaleLine.findFirst({
+    where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: {
+      sale: { select: { status: true } },
+      allocations: { orderBy: { id: 'asc' } },
+      returnLines: true,
+      unidentifiedReturnHolds: true,
+    },
+  });
+  if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  const returned =
+    line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0) +
+    line.unidentifiedReturnHolds.reduce((sum, item) => sum + item.canonicalUnits, 0);
+  if (
+    !Number.isSafeInteger(input.canonicalUnits) ||
+    input.canonicalUnits <= 0 ||
+    returned + input.canonicalUnits > line.canonicalUnits
+  )
+    throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
+  if (!input.lotId) {
+    const money = priceReturn(line, input.canonicalUnits);
+    return { valueMinor: money.grossMinor - money.discountMinor };
+  }
+  const plan = planLotReturn(line, input.lotId, input.canonicalUnits);
+  if (!plan.slices.length) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  if (plan.remaining) throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
+  return {
+    valueMinor: plan.slices.reduce(
+      (sum, slice) => sum + slice.money.grossMinor - slice.money.discountMinor,
+      0
+    ),
+  };
+}
+
 export async function returnSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1006,7 +1212,6 @@ export async function returnSaleLine(
       replayed: false,
     };
   }
-  let remaining = input.canonicalUnits;
   let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
   let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
   const restorations: Array<{
@@ -1015,15 +1220,9 @@ export async function returnSaleLine(
     quantityCanonicalUnits: number;
     restoreSellable: boolean;
   }> = [];
-  const consumed = new Map<string, number>();
-  for (const row of line.returnLines)
-    consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
-  const moneyByAllocation = new Map(saleAllocationMoney(line).map((row) => [row.id, row]));
-  for (const allocation of allocations) {
-    const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
-    consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
-    const units = Math.min(remaining, allocation.canonicalUnits - used);
-    if (!units) continue;
+  // DEV-501: the same pure plan prices the counter's refund quote.
+  const plan = planLotReturn(line, input.lotId, input.canonicalUnits);
+  for (const { allocation, units, money } of plan.slices) {
     if (disposition === 'RESTOCK') {
       // Batch lock shares the recall boundary; never restore unsafe stock as available.
       await db.$queryRaw(Prisma.sql`SELECT b.id FROM pharmacy_manufacturing_batches b
@@ -1066,15 +1265,6 @@ export async function returnSaleLine(
         idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
       },
     });
-    const charged = moneyByAllocation.get(allocation.id)!;
-    const delta = (amount: number) =>
-      Math.floor((amount * (used + units)) / allocation.canonicalUnits) -
-      Math.floor((amount * used) / allocation.canonicalUnits);
-    const discount = delta(charged.discountMinor);
-    const money = priceReturn(line, units, {
-      grossMinor: delta(charged.grossMinor - charged.discountMinor) + discount,
-      discountMinor: discount,
-    });
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {
         organizationId: scope.organizationId,
@@ -1104,8 +1294,6 @@ export async function returnSaleLine(
         restoreSellable: disposition === 'RESTOCK',
       });
     }
-    remaining -= units;
-    if (!remaining) break;
   }
   await appendControlledRestorations(db, {
     organizationId: scope.organizationId,
@@ -1115,7 +1303,7 @@ export async function returnSaleLine(
     reason: disposition === 'RESTOCK' ? 'Returned to stock' : 'Returned to quarantine',
     lines: restorations,
   });
-  if (remaining || !firstReturnLine || !firstMovement)
+  if (plan.remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {
     returnId: saleReturn.id,
@@ -1132,6 +1320,25 @@ export async function returnSaleLine(
     returnId: saleReturn.id,
     replayed: false,
   };
+}
+
+/**
+ * DEV-501: the money value snapshotted for one recorded sale return, so the counter can
+ * refund exactly what that return is worth in the same transaction. A replayed return
+ * reads the same snapshot, so its refund amount (and refund idempotency hash) is stable.
+ */
+export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, returnId: string) {
+  const where = { organizationId: scope.organizationId, branchId: scope.branchId, returnId };
+  const select = { grossMinor: true, discountMinor: true } as const;
+  const [lines, holds] = await Promise.all([
+    db.pharmacySaleReturnLine.findMany({ where, select }),
+    db.pharmacyUnidentifiedReturnHold.findMany({ where, select }),
+  ]);
+  const rows = [...lines, ...holds];
+  // A return always has rows; an unpriced (legacy) row cannot be valued for a refund.
+  if (!rows.length || rows.some((row) => row.grossMinor == null || row.discountMinor == null))
+    throw new PharmacySaleError('INVALID_STATE');
+  return rows.reduce((sum, row) => sum + row.grossMinor! - row.discountMinor!, 0);
 }
 
 export async function captureDemand(

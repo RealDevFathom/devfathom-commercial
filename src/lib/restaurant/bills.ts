@@ -1743,7 +1743,7 @@ export async function finalizeBillSettlement(
           ("id", "organizationId", "snapshotId", "ruleVersionId", "paymentCategory",
            "priceMode", "rate", "taxableAmount", "taxAmount", "grossAmount",
            "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount",
-           "evidenceVersion", "allocationKind", "billLineId", "unitOrdinal")
+           "evidenceVersion", "allocationKind", "billLineId", "sourceOrderItemId", "unitOrdinal")
         VALUES
           (${frozenBucket.id}, ${input.organizationId}, ${snapshotId},
            ${bucket.ruleVersionId}, ${bucket.paymentCategory},
@@ -1751,7 +1751,7 @@ export async function finalizeBillSettlement(
            ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
            ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
            ${bucket.afterTaxDiscountAmount}, 1, ${line.billLineId ? 'MERCHANDISE' : 'FRACTIONAL_MERCHANDISE'}, ${line.billLineId},
-           ${bucket.unitOrdinal})
+           ${line.billLineId ? null : (line.sourceOrderItemId ?? null)}, ${bucket.unitOrdinal})
       `;
     }
   }

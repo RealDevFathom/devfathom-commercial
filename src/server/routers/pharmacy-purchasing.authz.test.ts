@@ -236,7 +236,27 @@ beforeEach(() => {
   });
   m('pharmacySupplier').findFirst.mockResolvedValue(SUPPLIER);
   m('medicine').findFirst.mockResolvedValue({ id: 'medicine_a' });
-  m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a' });
+  m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+  // pack_a is a box of 10, matching RECEIPT_LINE.canonicalUnitsPerPack.
+  const packALevels = [
+    {
+      id: 'pack_a',
+      level: 'BOX',
+      unitsPerParent: 10,
+      parentPackLevelId: null,
+      effectiveFrom: PAST,
+      effectiveTo: null,
+    },
+  ];
+  // createPurchaseOrder resolves its lines' medicines and pack levels by ID in one query each.
+  type IdQuery = { where?: { id?: { in?: string[] } } };
+  const ids = (args?: IdQuery) => args?.where?.id?.in;
+  m('medicine').findMany.mockImplementation(async (args?: IdQuery) =>
+    (ids(args) ?? []).map((id) => ({ id }))
+  );
+  m('packLevel').findMany.mockImplementation(async (args?: IdQuery) =>
+    ids(args) ? ids(args)!.map((id) => ({ id })) : packALevels
+  );
   m('restaurantOperatorCredential').findFirst.mockResolvedValue({
     id: 'credential_a',
     credentialHash: APPROVER_HASH,
@@ -351,6 +371,13 @@ const CALLS = {
       branchId: 'branch_a',
       receivingExceptionId: 'exc_a',
       resolutionNote: 'Checked',
+    }),
+  receiptDebitNotes: (c: Caller) => c.receiptDebitNotes({ branchId: 'branch_a' }),
+  decideReceiptDebitNote: (c: Caller) =>
+    c.decideReceiptDebitNote({
+      branchId: 'branch_a',
+      debitNoteId: 'rdn_a',
+      decision: 'CONFIRMED',
     }),
   createPurchaseReturn: (c: Caller) =>
     c.createPurchaseReturn({
@@ -472,6 +499,8 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   reverseGoodsReceipt: PROCUREMENT,
   receivingExceptions: PROCUREMENT,
   resolveReceivingException: PROCUREMENT,
+  receiptDebitNotes: PROCUREMENT,
+  decideReceiptDebitNote: PROCUREMENT_AND_FINANCE,
   createPurchaseReturn: PROCUREMENT_AND_FINANCE,
   submitPurchaseReturn: PROCUREMENT_AND_FINANCE,
   dispatchPurchaseReturn: PROCUREMENT_AND_FINANCE,
@@ -510,6 +539,8 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'reverseGoodsReceipt',
   'receivingExceptions',
   'resolveReceivingException',
+  'receiptDebitNotes',
+  'decideReceiptDebitNote',
   'createPurchaseReturn',
   'submitPurchaseReturn',
   'dispatchPurchaseReturn',

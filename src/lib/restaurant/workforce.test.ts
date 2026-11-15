@@ -7,6 +7,8 @@ import {
   appendTimeAdjustment,
   exportWorkforceAttendanceCsv,
   presentWorkforceShift,
+  requestShiftSwap,
+  reviewShiftSwap,
 } from './workforce';
 
 const baseShift = {
@@ -205,5 +207,133 @@ describe('restaurant workforce corrections on cancelled shifts', () => {
       })
     ).resolves.toMatchObject({ kind: 'CLOCK_IN' });
     expect(create).toHaveBeenCalledOnce();
+  });
+});
+
+const unclockedShift = { ...baseShift, clockedInAt: null };
+const clockInRepair = {
+  id: 'adj_1',
+  breakId: null,
+  kind: 'CLOCK_IN' as const,
+  correctedAt: new Date('2026-08-20T09:02:00Z'),
+  createdAt: new Date('2026-08-20T18:00:00Z'),
+};
+
+function swapRequestDb(shift: object) {
+  const tx = {
+    $queryRaw: vi.fn(async () => [{ id: 'shift_1' }]),
+    restaurantStaffProfile: {
+      findFirst: vi.fn(async (args: { where: { id?: string } }) => ({
+        id: args.where.id ?? 'staff_1',
+        displayName: 'Employee',
+        primaryBranchId: 'branch_1',
+      })),
+    },
+    restaurantWorkforceCommand: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async () => ({})),
+    },
+    restaurantShift: { findUnique: vi.fn(async () => shift) },
+    restaurantShiftSwapRequest: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async () => ({ id: 'swap_1', note: null })),
+    },
+    restaurantShiftEvent: { create: vi.fn(async () => ({})) },
+  };
+  const db = { $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)) };
+  return { db: db as unknown as ScopedDb, tx };
+}
+
+function swapReviewDb(shift: object) {
+  const tx = {
+    $queryRaw: vi.fn(async () => [{ shiftId: 'shift_1' }]),
+    restaurantWorkforceCommand: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async () => ({})),
+    },
+    restaurantShiftSwapRequest: {
+      findUnique: vi.fn(async () => ({
+        id: 'swap_1',
+        shiftId: 'shift_1',
+        requestedByStaffProfileId: 'staff_1',
+        replacementStaffProfileId: 'staff_2',
+        decision: null,
+        shift,
+        replacement: { id: 'staff_2', status: 'ACTIVE', primaryBranchId: 'branch_1' },
+      })),
+    },
+    restaurantShift: {
+      findFirst: vi.fn(async () => null),
+      update: vi.fn(async () => ({})),
+    },
+    restaurantShiftSwapDecision: {
+      create: vi.fn(async () => ({ id: 'decision_1', reason: null })),
+    },
+    restaurantShiftEvent: { create: vi.fn(async () => ({})) },
+  };
+  const db = { $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)) };
+  return { db: db as unknown as ScopedDb, tx };
+}
+
+const approve = {
+  requestId: 'swap_1',
+  branchId: 'branch_1',
+  decision: 'APPROVED' as const,
+  actorUserId: 'manager_1',
+  actorStaffProfileId: null,
+  idempotencyKey: 'approve-1',
+};
+
+describe('restaurant shift swaps keep recorded attendance with its employee', () => {
+  it.each([
+    ['a raw clock-in', baseShift],
+    ['only a manager clock-in repair', { ...unclockedShift, adjustments: [clockInRepair] }],
+  ])('refuses to request a swap for a shift with %s', async (_label, shift) => {
+    const { db, tx } = swapRequestDb(shift);
+    await expect(
+      requestShiftSwap(db, {
+        shiftId: 'shift_1',
+        userId: 'user_1',
+        replacementStaffProfileId: 'staff_2',
+        idempotencyKey: 'swap-1',
+      })
+    ).rejects.toMatchObject({ reason: 'CONFLICT' });
+    expect(tx.restaurantShiftSwapRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('still lets an employee request a swap before any attendance exists', async () => {
+    const { db, tx } = swapRequestDb(unclockedShift);
+    await expect(
+      requestShiftSwap(db, {
+        shiftId: 'shift_1',
+        userId: 'user_1',
+        replacementStaffProfileId: 'staff_2',
+        idempotencyKey: 'swap-1',
+      })
+    ).resolves.toMatchObject({ id: 'swap_1' });
+    expect(tx.restaurantShiftSwapRequest.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to approve a swap once attendance exists only as a time repair', async () => {
+    const { db, tx } = swapReviewDb({
+      ...unclockedShift,
+      breaks: [],
+      adjustments: [{ id: 'adj_1' }],
+    });
+    await expect(reviewShiftSwap(db, approve)).rejects.toMatchObject({
+      reason: 'CONFLICT',
+      message: 'A shift with recorded attendance cannot be reassigned.',
+    });
+    expect(tx.restaurantShift.update).not.toHaveBeenCalled();
+    expect(tx.restaurantShiftSwapDecision.create).not.toHaveBeenCalled();
+  });
+
+  it('reassigns a shift that has no recorded attendance', async () => {
+    const { db, tx } = swapReviewDb({ ...unclockedShift, breaks: [], adjustments: [] });
+    await expect(reviewShiftSwap(db, approve)).resolves.toMatchObject({ id: 'decision_1' });
+    expect(tx.restaurantShift.update).toHaveBeenCalledWith({
+      where: { id: 'shift_1' },
+      data: { staffProfileId: 'staff_2' },
+    });
   });
 });

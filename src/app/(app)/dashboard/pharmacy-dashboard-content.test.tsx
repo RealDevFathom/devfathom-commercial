@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const query = (data: unknown, overrides: Record<string, unknown> = {}) => ({
@@ -206,6 +206,40 @@ describe('PharmacyDashboardContent states', () => {
       screen.queryByRole('link', { name: 'Review license and modules' })
     ).not.toBeInTheDocument();
   });
+  it('gives a cashier a pharmacy home with no owner title, editor or report read (DEV-602)', () => {
+    render(<PharmacyDashboardContent role="EMPLOYEE" reportAccess={false} />);
+    expect(mounted.hooks).toEqual([]);
+    expect(screen.queryByText('Owner command centre')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Pharmacy home' })).toBeVisible();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Owner reports are outside your access' })
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Branches could not be loaded.')).not.toBeInTheDocument();
+    // Plain language, never the raw permission key.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Operational reports access is required for the command centre.'
+    );
+    expect(screen.queryByText(/reports:operational/)).not.toBeInTheDocument();
+    // DEV-594's advice card lives only inside the owner command centre.
+    expect(screen.queryByRole('heading', { name: 'AI advice' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the command centre and its editor for a member with report access', () => {
+    render(<PharmacyDashboardContent role="ADMIN" reportAccess />);
+    expect(mounted.hooks).toEqual(expect.arrayContaining(REPORT_HOOKS));
+    expect(screen.getByRole('heading', { level: 1, name: 'Owner command centre' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Edit dashboard' })).toBeVisible();
+  });
+
+  it('offers no layout editor once the report reads are refused (DEV-602)', () => {
+    state.branches = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.preferences = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.command = query(undefined);
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save dashboard' })).not.toBeInTheDocument();
+  });
 
   it('labels cards and sources in plain language, never as tables or permission keys (DEV-594)', () => {
     state.catalog = query({
@@ -284,5 +318,51 @@ describe('PharmacyDashboardContent states', () => {
     state.command = query(undefined);
     render(<PharmacyDashboardContent role="EMPLOYEE" />);
     expect(screen.queryByRole('heading', { name: 'AI advice' })).not.toBeInTheDocument();
+  });
+
+  // DEV-729: a stock figure nobody has worked out must never read as "all fine".
+  const stockWidget = (container: HTMLElement) =>
+    within(container.querySelector<HTMLElement>('[data-widget="stock"]')!);
+  const withStockMetrics = (metrics: Record<string, number | null>) => {
+    state.command = query({
+      freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
+      permissions: { operational: true, financial: false },
+      metrics,
+    });
+  };
+
+  it('says stock signals are not calculated yet instead of showing 0 (DEV-729)', () => {
+    withStockMetrics({ openStockSignals: null, recommendedOrders: null });
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" />);
+    const stock = stockWidget(container);
+    expect(stock.getAllByText('Not calculated yet')).toHaveLength(2);
+    expect(stock.queryByText('0')).not.toBeInTheDocument();
+    expect(stock.queryByText('—')).not.toBeInTheDocument();
+    expect(stock.getAllByText(/Refresh them in Inventory/)).toHaveLength(2);
+  });
+
+  it('shows a calculated zero as a zero (DEV-729)', () => {
+    withStockMetrics({ openStockSignals: 0, recommendedOrders: 0 });
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" />);
+    const stock = stockWidget(container);
+    expect(stock.getAllByText('0')).toHaveLength(2);
+    expect(stock.queryByText('Not calculated yet')).not.toBeInTheDocument();
+  });
+
+  it('offers one Draft POs per distributor entry to the reorder board (DEV-729)', () => {
+    state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports', 'pharmacy-procurement'];
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" />);
+    const links = screen.getAllByRole('link', { name: 'Draft POs per distributor' });
+    expect(links).toHaveLength(1);
+    expect(
+      stockWidget(container).getByRole('link', { name: 'Draft POs per distributor' })
+    ).toHaveAttribute('href', '/pharmacy/purchasing/reorder');
+  });
+
+  it('offers no Draft POs entry without the procurement module (DEV-729)', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(
+      screen.queryByRole('link', { name: 'Draft POs per distributor' })
+    ).not.toBeInTheDocument();
   });
 });

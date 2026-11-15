@@ -40,6 +40,41 @@ describe('archiveWhatsAppConsentBeforeTenantPurge', () => {
     expect(JSON.stringify(record)).not.toContain('private-id');
   });
 
+  it('archives only the opt-in state, never the keyword text that changed it', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'test-only-secret');
+    const changedAt = new Date('2026-10-22T09:10:11.000Z');
+    const now = new Date('2026-10-28T12:00:00.000Z');
+    const createMany = vi.fn().mockResolvedValue({ count: 1 });
+    const findMany = vi
+      .fn()
+      .mockResolvedValue([
+        { id: 'customer-id', whatsappOptIn: true, whatsappOptInChangedAt: changedAt },
+      ]);
+    const db = {
+      pharmacyCustomer: { findMany },
+      pharmacyWhatsAppConsentArchive: { createMany, deleteMany: vi.fn() },
+    };
+
+    await archiveWhatsAppConsentBeforeTenantPurge(db as never, 'organization-id', now);
+
+    expect(findMany.mock.calls[0]![0].select).toEqual({
+      id: true,
+      whatsappOptIn: true,
+      whatsappOptInChangedAt: true,
+    });
+    const record = createMany.mock.calls[0]![0].data[0];
+    expect(Object.keys(record).sort()).toEqual([
+      'archivedAt',
+      'consentChangedAt',
+      'customerFingerprint',
+      'expiresAt',
+      'optedIn',
+      'organizationFingerprint',
+    ]);
+    expect(record.optedIn).toBe(true);
+    expect(JSON.stringify(record)).not.toMatch(/keyword|START|شروع|haan|ہاں/i);
+  });
+
   it('does not silently create linkable hashes without the platform secret', async () => {
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
     const db = {

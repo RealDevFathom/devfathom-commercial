@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   comparisonRead: vi.fn(),
   comparisonTx: {},
   transaction: vi.fn(),
+  windowCreate: vi.fn(),
+  windowCount: vi.fn(),
+  windowFindMany: vi.fn(),
+  windowDeleteMany: vi.fn(),
   saleFindMany: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
@@ -121,6 +125,12 @@ function context(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
       updateManyAndReturn: mocks.reportUpdateManyAndReturn,
     },
     pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+    pharmacySeasonalWindow: {
+      create: mocks.windowCreate,
+      count: mocks.windowCount,
+      findMany: mocks.windowFindMany,
+      deleteMany: mocks.windowDeleteMany,
+    },
     pharmacySale: { findMany: mocks.saleFindMany },
   };
   // Interactive transactions run against the same mocked client delegates.
@@ -762,6 +772,64 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     }
   );
 
+  // DEV-832 (F08 sibling): the DRAP safety export must not carry a seeded
+  // patient's CNIC, phone or address, nor the prescriber's phone.
+  it('exports only the minimal patient and prescriber fields', async () => {
+    const fullPatient = {
+      id: 'patient_1',
+      displayName: 'Synthetic Patient',
+      cnic: '35202-1234567-1',
+      phone: '+923001234567',
+      address: '12 Synthetic Road, Lahore',
+      dateOfBirth: new Date('1980-02-03'),
+    };
+    const fullPrescriber = {
+      id: 'doc_1',
+      name: 'Dr Synthetic',
+      registrationNumber: 'PMDC-1',
+      phone: '+923009999999',
+      facility: 'Synthetic Clinic',
+    };
+    const pick = (row: Record<string, unknown>, spec: unknown) =>
+      spec === true
+        ? row
+        : Object.fromEntries(
+            Object.keys((spec as { select: Record<string, true> }).select).map((key) => [
+              key,
+              row[key],
+            ])
+          );
+    mocks.reportFindMany.mockImplementation(
+      async ({ include }: { include: { patient: unknown; prescriber: unknown } }) => [
+        {
+          id: 'pv_1',
+          state: 'READY',
+          externalSubmissionState: 'NOT_SUBMITTED',
+          patient: pick(fullPatient, include.patient),
+          prescriber: pick(fullPrescriber, include.prescriber),
+        },
+      ]
+    );
+
+    const exported = await pvCaller().exportPharmacovigilanceDrap({
+      branchId: 'branch_1',
+      from: new Date('2026-09-01'),
+      to: new Date('2026-09-30'),
+    });
+
+    const body = JSON.stringify(exported);
+    for (const raw of [fullPatient.cnic, fullPatient.phone, fullPatient.address, '+923009999999'])
+      expect(body).not.toContain(raw);
+    expect(exported.reports[0]).toMatchObject({
+      patient: {
+        id: 'patient_1',
+        displayName: 'Synthetic Patient',
+        dateOfBirth: fullPatient.dateOfBirth,
+      },
+      prescriber: { id: 'doc_1', name: 'Dr Synthetic', registrationNumber: 'PMDC-1' },
+    });
+  });
+
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
@@ -822,6 +890,38 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     expect(mocks.reportUpdateManyAndReturn.mock.calls[0]?.[0].data.externalSubmissionState).toBe(
       'FAILED'
     );
+  });
+
+  it('rejects a second failure with a different reason and returns an exact retry without writing', async () => {
+    const failed = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'FAILED',
+      externalReference: null,
+      externalFailureReason: 'DRAP endpoint unavailable',
+    };
+    mocks.reportFindFirst.mockResolvedValue(failed);
+    mocks.reportUpdateManyAndReturn.mockClear();
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'FAILED',
+        failureReason: 'Different failure reason',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'FAILED',
+        failureReason: 'DRAP endpoint unavailable',
+      })
+    ).resolves.toEqual(failed);
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it('rejects a lifecycle transition when a concurrent writer changed the source state', async () => {
@@ -1517,4 +1617,103 @@ describe('category growth report input boundaries', () => {
       ]);
     }
   );
+});
+
+describe('DEV-74 branch seasonal calendar', () => {
+  const window = {
+    branchId: 'branch_1',
+    kind: 'DENGUE' as const,
+    label: 'Dengue season',
+    startDate: '2026-09-01',
+    endDateExclusive: '2026-11-01',
+  };
+
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.windowCount.mockResolvedValue(0);
+    mocks.windowCreate.mockResolvedValue({
+      id: 'win_1',
+      branchId: 'branch_1',
+      kind: 'DENGUE',
+      label: 'Dengue season',
+      startDate: new Date('2026-09-01T00:00:00Z'),
+      endDate: new Date('2026-11-01T00:00:00Z'),
+    });
+  });
+
+  it('lets the owner add a window for an authorized branch, recording the actor', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller().saveSeasonalWindow(window)).resolves.toEqual({
+      id: 'win_1',
+      branchId: 'branch_1',
+      kind: 'DENGUE',
+      label: 'Dengue season',
+      startDate: '2026-09-01',
+      endDateExclusive: '2026-11-01',
+    });
+    expect(mocks.windowCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          organizationId: 'org_1',
+          branchId: 'branch_1',
+          createdByUserId: 'user_admin',
+          updatedByUserId: 'user_admin',
+          startDate: new Date('2026-09-01T00:00:00Z'),
+          endDate: new Date('2026-11-01T00:00:00Z'),
+        }),
+      })
+    );
+  });
+
+  it('denies calendar edits without reports:financial before any tenant write', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(caller().saveSeasonalWindow(window)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      caller().deleteSeasonalWindow({ branchId: 'branch_1', id: 'win_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.windowCreate).not.toHaveBeenCalled();
+    expect(mocks.windowDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('denies calendar edits to a non-owner even with every capability', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('MEMBER').saveSeasonalWindow(window)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.windowCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a branch outside report scope and an inverted window on the server', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().saveSeasonalWindow({ ...window, branchId: 'branch_other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().saveSeasonalWindow({ ...window, endDateExclusive: '2026-08-01' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.windowCreate).not.toHaveBeenCalled();
+  });
+
+  it('scopes deletes and reads to the server-resolved tenant and branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.windowDeleteMany.mockResolvedValue({ count: 1 });
+    mocks.windowFindMany.mockResolvedValue([]);
+    await expect(
+      caller().deleteSeasonalWindow({ branchId: 'branch_1', id: 'win_1' })
+    ).resolves.toEqual({ deleted: true });
+    expect(mocks.windowDeleteMany).toHaveBeenCalledWith({
+      where: { id: 'win_1', organizationId: 'org_1', branchId: 'branch_1' },
+    });
+    await expect(caller('MEMBER').seasonalCalendar({ branchId: 'branch_1' })).resolves.toEqual({
+      windows: [],
+      canEdit: false,
+    });
+    expect(mocks.windowFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', branchId: 'branch_1' } })
+    );
+  });
 });

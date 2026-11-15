@@ -7,7 +7,9 @@ import {
   BranchOperationDeniedError,
   evaluateBranchRegulatoryStatus,
   isLegacyPlaceholderProfile,
+  pharmacistPresentAt,
   regulatoryProfileBindingDenial,
+  regulatoryStartInstant,
   type BranchOperationAction,
   type BranchRegulatoryState,
 } from './regulatory';
@@ -430,10 +432,7 @@ describe('assertStoredPharmacyMayOperate', () => {
         },
       },
     ],
-    [
-      'PROFILE_PREMISES_MISMATCH',
-      { premises: { addressLine: '99 Other Road', city: 'Lahore' } },
-    ],
+    ['PROFILE_PREMISES_MISMATCH', { premises: { addressLine: '99 Other Road', city: 'Lahore' } }],
     ['LICENCE_INVALID', { licenceValidTo: at }],
     ['QUALIFIED_PERSON_COVERAGE_MISSING', { qualifiedPersonCoverageRosterRef: '' }],
   ] as const)(
@@ -456,7 +455,11 @@ describe('assertStoredPharmacyMayOperate', () => {
         })
       ).rejects.toEqual(new BranchOperationDeniedError(reason));
       expect(recordAudit).toHaveBeenLastCalledWith(
-        expect.objectContaining({ organizationId: 'org-a', targetId: 'branch-a', errorCode: reason })
+        expect.objectContaining({
+          organizationId: 'org-a',
+          targetId: 'branch-a',
+          errorCode: reason,
+        })
       );
     }
   );
@@ -540,5 +543,227 @@ describe('evaluateBranchRegulatoryStatus', () => {
       licenceExpired: false,
       qualifiedPersonCoverageExpired: false,
     });
+  });
+});
+
+describe('DEV-298 start dates begin at the workspace’s local midnight', () => {
+  const KARACHI = 'Asia/Karachi';
+  // 00:00 and 04:59:59.999 PKT on 21 Oct 2026; 05:00 PKT is the old UTC boundary.
+  const pktMidnight = new Date('2026-10-20T19:00:00.000Z');
+  const pktBeforeFive = new Date('2026-10-20T23:59:59.999Z');
+  const pktLastMinuteBefore = new Date('2026-10-20T18:59:59.999Z');
+
+  function startsOn21October(): BranchRegulatoryState {
+    const state = validState();
+    state.licenceValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    state.qualifiedPersonValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    return state;
+  }
+
+  it('maps an instant to the stored encoding of the workspace day only when that is later', () => {
+    expect(regulatoryStartInstant(pktMidnight, KARACHI)).toEqual(
+      new Date('2026-10-21T00:00:00.000Z')
+    );
+    expect(regulatoryStartInstant(pktLastMinuteBefore, KARACHI)).toEqual(pktLastMinuteBefore);
+    expect(regulatoryStartInstant(pktMidnight, 'UTC')).toEqual(pktMidnight);
+    expect(regulatoryStartInstant(pktMidnight, null)).toEqual(pktMidnight);
+    const newYork = new Date('2026-10-21T02:00:00.000Z');
+    expect(regulatoryStartInstant(newYork, 'America/New_York')).toEqual(newYork);
+  });
+
+  it.each([pktMidnight, pktBeforeFive])(
+    'permits a PKT licence on its calendar start day at %s',
+    (instant) => {
+      const state = startsOn21October();
+      expect(() =>
+        assertBranchMayOperate(state, {
+          name: 'DISPENSE',
+          at: instant,
+          schedule: 'RX',
+          requiresQualifiedPerson: true,
+          timeZone: KARACHI,
+        })
+      ).not.toThrow();
+      expect(state.auditDenied).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still refuses a PKT licence the minute before its calendar start day', () => {
+    const state = startsOn21October();
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktLastMinuteBefore,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+  });
+
+  it('starts qualified-person coverage on its PKT calendar day', () => {
+    const state = validState();
+    state.qualifiedPersonValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktMidnight,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps the licence expiry boundary at the stored instant', () => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-10-21T00:00:00.000Z');
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: pktBeforeFive,
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'DISPENSE',
+        at: new Date('2026-10-21T00:00:00.000Z'),
+        requiresQualifiedPerson: true,
+        timeZone: KARACHI,
+      })
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+  });
+
+  it('reports a profile starting today as in force from PKT midnight', () => {
+    const { auditDenied: _auditDenied, ...profile } = startsOn21October();
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, pktMidnight, undefined, KARACHI)
+    ).toMatchObject({ inForce: true, licenceExpired: false });
+  });
+
+  it('runtime gate selects the profile and passes the licence using the organization zone', async () => {
+    const profile = {
+      ...startsOn21October(),
+      effectiveFrom: new Date('2026-10-21T00:00:00.000Z'),
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+      branch: { active: true, provinceCode: 'PB', addressLine: '12 Mall Road', city: 'Lahore' },
+      jurisdictionRuleSet: validState().ruleSet,
+    };
+    const findFirst = vi.fn(async () => profile);
+    const db = {
+      $queryRaw: vi.fn(async () => []),
+      organization: {
+        findUnique: vi.fn(async () => ({ status: 'ACTIVE', timezone: KARACHI })),
+      },
+      branchRegulatoryProfile: { findFirst },
+    };
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.tender',
+        at: pktBeforeFive,
+      })
+    ).resolves.toBeUndefined();
+    const dayStart = new Date('2026-10-21T00:00:00.000Z');
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          effectiveFrom: { lte: dayStart },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: dayStart } }],
+        }),
+      })
+    );
+  });
+});
+
+describe('pharmacist-presence hours (DEV-86)', () => {
+  // 2026-09-02 is a Wednesday (day 3); 12:00Z is 17:00 in Asia/Karachi.
+  const weekdays = {
+    provisional: false,
+    values: {
+      presenceHours: {
+        timeZone: 'Asia/Karachi',
+        windows: [{ days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }],
+      },
+    },
+  };
+
+  function dispense(state: BranchRegulatoryState, when: Date, presence = true) {
+    assertBranchMayOperate(state, {
+      name: 'DISPENSE',
+      at: when,
+      schedule: 'RX',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: presence,
+    });
+  }
+
+  it('permits a regulated dispense inside a presence window, in the rule set time zone', () => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date('2026-09-02T11:59:00.000Z'))).not.toThrow();
+    expect(() => dispense(state, new Date('2026-09-02T04:00:00.000Z'))).not.toThrow();
+    expect(state.auditDenied).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['at the window end (exclusive)', '2026-09-02T12:00:00.000Z'],
+    ['before the window opens', '2026-09-02T03:59:00.000Z'],
+    ['on a day without a window', '2026-09-06T06:00:00.000Z'],
+  ])('fails closed and audits a regulated dispense %s', (_case, iso) => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date(iso))).toThrowError(
+      new BranchOperationDeniedError('PHARMACIST_NOT_PRESENT')
+    );
+    expect(state.auditDenied).toHaveBeenCalledWith(
+      'PHARMACIST_NOT_PRESENT',
+      expect.objectContaining({ name: 'DISPENSE' })
+    );
+  });
+
+  it('does not apply presence hours to an act that does not need the pharmacist present', () => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date('2026-09-06T06:00:00.000Z'), false)).not.toThrow();
+  });
+
+  it('adds no hours restriction when the rule set declares no presence hours', () => {
+    expect(pharmacistPresentAt({ provisional: false, values: {} }, at)).toBe(true);
+    expect(
+      pharmacistPresentAt({ provisional: false, values: { dispenseGrantRequired: true } }, at)
+    ).toBe(true);
+  });
+
+  it.each([
+    ['empty windows', { windows: [] }],
+    ['no windows', {}],
+    ['a null declaration', null],
+    [
+      'an unknown time zone',
+      { timeZone: 'Mars/Base', windows: weekdays.values.presenceHours.windows },
+    ],
+    ['a malformed time', { windows: [{ days: [3], start: '9am', end: '17:00' }] }],
+    ['an inverted window', { windows: [{ days: [3], start: '18:00', end: '09:00' }] }],
+    ['an invalid weekday', { windows: [{ days: [7], start: '00:00', end: '24:00' }] }],
+    [
+      'one malformed window beside a valid one',
+      { windows: [{ days: [3], start: '00:00', end: '24:00' }, { days: [3] }] },
+    ],
+  ])('fails closed on declared but unreadable presence hours: %s', (_case, presenceHours) => {
+    expect(pharmacistPresentAt({ provisional: false, values: { presenceHours } }, at)).toBe(false);
+  });
+
+  it('accepts a full-day window ending at 24:00', () => {
+    expect(
+      pharmacistPresentAt(
+        {
+          provisional: false,
+          values: { presenceHours: { windows: [{ days: [3], start: '00:00', end: '24:00' }] } },
+        },
+        at
+      )
+    ).toBe(true);
   });
 });

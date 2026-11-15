@@ -193,6 +193,9 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  customerPortalLinks    PharmacyCustomerPortalLink[]
+  customerPortalSessions PharmacyCustomerPortalSession[]
+  customerPortalRequests PharmacyCustomerPortalRequest[]
   customerChurnScores             PharmacyCustomerChurnScore[]
   whatsappMessageLogs             PharmacyMessageLog[]
   aiUsages                        AIUsage[]
@@ -1288,6 +1291,7 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -1325,6 +1329,9 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  portalLinks      PharmacyCustomerPortalLink[]
+  portalSessions   PharmacyCustomerPortalSession[]
+  portalRequests   PharmacyCustomerPortalRequest[]
   churnScores      PharmacyCustomerChurnScore[]
   whatsappMessages PharmacyMessageLog[]
   hostedReceipts   PharmacyHostedReceipt[]
@@ -1372,6 +1379,7 @@ enum PharmacyKhataLimitDecisionKind {
 /// CRM-L02 retail payer grouping. Clinical records remain attached to each
 /// member's PharmacyPatient and are never copied onto this account.
 model PharmacyFamilyAccount {
+  portalPaymentRequests PharmacyCustomerPortalRequest[]
   id               String   @id @default(cuid())
   organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId         String
@@ -2239,6 +2247,88 @@ model PharmacyCustomerOrderEvent {
   @@unique([organizationId, id])
   @@index([organizationId, branchId, orderId, occurredAt])
   @@map("pharmacy_customer_order_events")
+}
+
+/// DEV-15 (#762): customer PWA sign-in link. Names exactly one customer; the
+/// one-time code goes to that customer's stored phone.
+model PharmacyCustomerPortalLink {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  customerId        String
+  tokenHash         String    @unique(map: "pharmacy_portal_links_token_key")
+  createdByUserId   String
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  otpHash           String?
+  otpExpiresAt      DateTime?
+  otpFailedAttempts Int       @default(0)
+  createdAt         DateTime  @default(now())
+
+  branch    PharmacyBranch                  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_branch_fkey")
+  customer  PharmacyCustomer                @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_customer_fkey")
+  createdBy User                            @relation("PharmacyPortalLinkCreator", fields: [organizationId, createdByUserId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_creator_fkey")
+  sessions  PharmacyCustomerPortalSession[]
+
+  @@unique([organizationId, id], map: "pharmacy_portal_links_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_portal_links_org_branch_id_key")
+  @@index([organizationId, customerId], map: "pharmacy_portal_links_org_customer_idx")
+  @@map("pharmacy_customer_portal_links")
+}
+
+/// DEV-15 (#762): a signed-in customer PWA session, scoped to one customer.
+model PharmacyCustomerPortalSession {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  customerId     String
+  linkId         String
+  tokenHash      String    @unique(map: "pharmacy_portal_sessions_token_key")
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  branch   PharmacyBranch             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_branch_fkey")
+  customer PharmacyCustomer           @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_customer_fkey")
+  link     PharmacyCustomerPortalLink @relation(fields: [organizationId, branchId, linkId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_link_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_portal_sessions_org_id_key")
+  @@index([organizationId, customerId], map: "pharmacy_portal_sessions_org_customer_idx")
+  @@map("pharmacy_customer_portal_sessions")
+}
+
+/// DEV-15 (#762): a customer request from the PWA. kind is REFILL, RX_ORDER or
+/// KHATA_PAYMENT; status is PENDING, VERIFIED, REJECTED or CANCELLED.
+model PharmacyCustomerPortalRequest {
+  id                    String    @id @default(cuid())
+  organizationId        String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  customerId            String
+  kind                  String
+  status                String    @default("PENDING")
+  note                  String?
+  prescriptionFileRef   String?
+  refillSaleId          String?
+  familyAccountId       String?
+  amountMinor           Int?
+  payerReference        String?
+  decidedByUserId       String?
+  decidedAt             DateTime?
+  decisionNote          String?
+  khataReceiptReference String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+
+  branch        PharmacyBranch         @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_branch_fkey")
+  customer      PharmacyCustomer       @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_customer_fkey")
+  refillSale    PharmacySale?          @relation(fields: [organizationId, branchId, refillSaleId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_requests_sale_fkey")
+  familyAccount PharmacyFamilyAccount? @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_requests_family_fkey")
+  decidedBy     User?                  @relation("PharmacyPortalRequestDecider", fields: [organizationId, decidedByUserId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_decider_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_portal_requests_org_id_key")
+  @@index([organizationId, customerId, createdAt], map: "pharmacy_portal_requests_org_customer_idx")
+  @@index([organizationId, branchId, status, createdAt], map: "pharmacy_portal_requests_org_branch_status_idx")
+  @@map("pharmacy_customer_portal_requests")
 }
 
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
@@ -3470,6 +3560,8 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
+  pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
   id                 String     @id @default(cuid())
   organizationId     String     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   organizationRoleId String?
@@ -3554,6 +3646,7 @@ model User {
   resignationsReviewed        Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
   mailboxes                   Mailbox[]
+  mailboxOAuthStates          MailboxOAuthState[]
   ssoTickets                  TenantSsoTicket[]
   // MEET-01
   meetingParticipants         MeetingParticipant[]
@@ -5509,6 +5602,28 @@ model Mailbox {
   @@map("mailboxes")
 }
 
+// F11 / DEV-833: a mailbox OAuth connect is honored only for the user, tenant,
+// session and provider that started it. Only a hash of the state is stored, and
+// each row is consumed once.
+model MailboxOAuthState {
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  provider       MailboxType
+  stateHash      String      @unique
+  sessionBinding String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([organizationId, expiresAt])
+  @@map("mailbox_oauth_states")
+}
+
 // A synced message belonging to a Mailbox. Provider-agnostic shape; bodies are
 // backfilled lazily on first open to keep the initial inbox paint fast.
 model EmailMessage {
@@ -5599,6 +5714,8 @@ model Organization {
   dataResidency                 String?
   primaryContactName            String?
   primaryContactEmail           String?
+  invoiceAddress                String?
+  taxId                         String?
   notes                         String?
   createdAt                     DateTime                       @default(now())
   updatedAt                     DateTime                       @updatedAt
@@ -5632,6 +5749,7 @@ model Organization {
   supportSessions                           PlatformSupportSession[]
   auditLogs                                 PlatformAuditLog[]
   ssoStates                                 OrganizationSsoState[]
+  mailboxOAuthStates                        MailboxOAuthState[]
   ssoTickets                                TenantSsoTicket[]
   insightLoyaltyLiabilities                 InsightLoyaltyLiability[]
   restaurantNotificationWebhook             RestaurantNotificationWebhook?
@@ -5925,6 +6043,7 @@ model RestaurantTaxRateBucketSnapshot {
   evidenceVersion         Int                    @default(0)
   allocationKind          String?
   billLineId              String?
+  sourceOrderItemId       String?
   unitOrdinal             Int?
   createdAt               DateTime               @default(now())
 
@@ -12580,6 +12699,12 @@ enum PharmacyReceivingExceptionKind {
   BONUS_SHORTAGE
   /// DEV-690 — goods arrived after the scheme on the order line had lapsed.
   SCHEME_EXPIRED
+  /// DEV-691 — the distributor bill charges for more paid packs than arrived.
+  BILLED_SHORTAGE
+  /// DEV-691 — the packs are a different batch from the one the bill names.
+  BATCH_CONFLICT
+  /// DEV-691 — the packs' expiry disagrees with the bill or is shorter than the order accepts.
+  EXPIRY_CONFLICT
 }
 
 enum PharmacyReceivingExceptionStatus {
@@ -12614,8 +12739,10 @@ model PharmacySupplier {
   goodsReceipts   PharmacyGoodsReceipt[]
   purchaseReturns PharmacyPurchaseReturn[]
   debitNotes      PharmacyDebitNote[]
+  receiptDebitNotes PharmacyReceiptDebitNote[]
   credits         PharmacySupplierCredit[]
   relationships   PharmacySupplierRelationship[]
+  priceLists      PharmacySupplierPriceList[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
@@ -13483,6 +13610,7 @@ model PharmacyGoodsReceipt {
   purchaseOrder PharmacyPurchaseOrder?       @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_goods_receipts_order_fkey")
   lines         PharmacyGoodsReceiptLine[]
   exceptions    PharmacyReceivingException[]
+  debitNoteDrafts PharmacyReceiptDebitNote[]
 
   @@unique([organizationId, id], map: "pharmacy_goods_receipts_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_goods_receipts_org_branch_id_key")
@@ -13551,6 +13679,11 @@ model PharmacyGoodsReceiptLine {
   /// Uppercase serial. Duplicate stock-in is rejected per organization and GTIN.
   serialKey                 String?
   gs1Warnings               String[]                @default([])
+  /// DEV-691: the distributor bill's own line, captured for the three-way
+  /// match. Null when the bill was not captured or does not print the field.
+  billedPacks               Int?
+  billedBatchNumber         String?
+  billedPrintedExpiry       DateTime?
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
@@ -13600,12 +13733,75 @@ model PharmacyReceivingException {
   goodsReceipt      PharmacyGoodsReceipt       @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_receipt_fkey")
   goodsReceiptLine  PharmacyGoodsReceiptLine   @relation(fields: [organizationId, branchId, goodsReceiptLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_line_fkey")
   purchaseOrderLine PharmacyPurchaseOrderLine? @relation(fields: [organizationId, purchaseOrderLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rex_order_line_fkey")
+  debitNoteLines    PharmacyReceiptDebitNoteLine[]
 
   @@unique([organizationId, id], map: "pharmacy_rex_org_id_key")
   @@unique([organizationId, goodsReceiptLineId, kind], map: "pharmacy_rex_org_line_kind_key")
   @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rex_org_branch_status_idx")
   @@index([organizationId, goodsReceiptId], map: "pharmacy_rex_org_receipt_idx")
   @@map("pharmacy_receiving_exceptions")
+}
+
+/// DEV-691 — a debit note the three-way match proposes. Raised as DRAFT when a
+/// receipt posts with packs billed but not delivered or an overcharge, and stays a draft until a person confirms or discards it. The
+/// amounts are computed from recorded numbers and never edited (trigger).
+enum PharmacyReceiptDebitNoteStatus {
+  DRAFT
+  CONFIRMED
+  DISCARDED
+}
+
+enum PharmacyReceiptDebitNoteReason {
+  BILLED_SHORTAGE
+  PRICE_OVERCHARGE
+}
+
+model PharmacyReceiptDebitNote {
+  id              String                         @id @default(cuid())
+  organizationId  String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  goodsReceiptId  String
+  supplierId      String
+  status          PharmacyReceiptDebitNoteStatus @default(DRAFT)
+  totalMinor      Int
+  raisedAt        DateTime                       @default(now())
+  decidedAt       DateTime?
+  decidedByUserId String?
+  decisionNote    String?
+
+  goodsReceipt PharmacyGoodsReceipt           @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rdn_receipt_fkey")
+  supplier     PharmacySupplier               @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdn_supplier_fkey")
+  lines        PharmacyReceiptDebitNoteLine[]
+
+  @@unique([organizationId, id], map: "pharmacy_rdn_org_id_key")
+  @@unique([organizationId, goodsReceiptId], map: "pharmacy_rdn_org_receipt_key")
+  @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rdn_org_branch_status_idx")
+  @@map("pharmacy_receipt_debit_notes")
+}
+
+/// DEV-691 — one claim on a draft receipt debit note, tied to the match
+/// exception that justifies it. Append-only.
+model PharmacyReceiptDebitNoteLine {
+  id                   String                         @id @default(cuid())
+  organizationId       String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  debitNoteId          String
+  receivingExceptionId String
+  lineNumber           Int
+  reason               PharmacyReceiptDebitNoteReason
+  detail               String
+  packs                Int
+  pricePerPackMinor    Int
+  amountMinor          Int
+  createdAt            DateTime                       @default(now())
+
+  debitNote          PharmacyReceiptDebitNote   @relation(fields: [organizationId, debitNoteId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdnl_note_fkey")
+  receivingException PharmacyReceivingException @relation(fields: [organizationId, receivingExceptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdnl_exception_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_rdnl_org_id_key")
+  @@unique([organizationId, debitNoteId, lineNumber], map: "pharmacy_rdnl_org_note_line_key")
+  @@index([organizationId, receivingExceptionId], map: "pharmacy_rdnl_org_exception_idx")
+  @@map("pharmacy_receipt_debit_note_lines")
 }
 
 // ===========================================================================
@@ -14700,18 +14896,31 @@ model PharmacyChurnScoringRun {
 /// DEV-27: a voucher carries its eligible-category allowlist. Only non-drug
 /// categories are allowed (database check); the POS refuses it on drug lines.
 model PharmacyVoucher {
-  id                 String    @id @default(cuid())
-  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId           String
-  code               String
-  name               String
-  body               String
-  discountMinor      Int
-  eligibleCategories String[]  @default(["NON_DRUG"])
-  active             Boolean   @default(true)
-  validUntil         DateTime?
-  issuedByUserId     String
-  createdAt          DateTime  @default(now())
+  id                   String    @id @default(cuid())
+  organizationId       String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  code                 String
+  name                 String
+  body                 String
+  discountMinor        Int
+  eligibleCategories   String[]  @default(["NON_DRUG"])
+  active               Boolean   @default(true)
+  /// DEV-819: an expiry is required.
+  validUntil           DateTime
+  issuedByUserId       String
+  /// DEV-819: redemptions allowed and taken; `usedCount <= maxUses` (database check).
+  maxUses              Int       @default(1)
+  usedCount            Int       @default(0)
+  /// DEV-819: the approval. Above the value cap this is a second manager, or the
+  /// solo owner's fresh PIN; never the issuer's issue alone.
+  approvedByUserId     String?
+  approvalPolicy       String?
+  approvalCredentialId String?
+  /// DEV-819: a revoked voucher is inactive and never redeems again.
+  revokedAt            DateTime?
+  revokedByUserId      String?
+  revokeReason         String?
+  createdAt            DateTime  @default(now())
 
   @@unique([organizationId, id], map: "pharmacy_vouchers_org_id_key")
   @@unique([organizationId, branchId, code], map: "pharmacy_vouchers_org_branch_code_key")
@@ -14755,6 +14964,31 @@ model PharmacyCampaign {
   @@unique([organizationId, id])
   @@index([organizationId, branchId, scheduledAt])
   @@map("pharmacy_campaigns")
+}
+
+/// DEV-24 — organization-wide marketing send policy. Caps, quiet hours and the
+/// block-rate threshold are configurable defaults (research figures are estimates,
+/// not facts). `pausedAt` is set automatically by a WhatsApp quality/account
+/// webhook or a block-rate rise and blocks capture and dispatch until an owner resumes.
+model PharmacyMarketingSendPolicy {
+  id                 String    @id @default(cuid())
+  organizationId     String    @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  weeklyMax          Int       @default(1)
+  monthlyMax         Int       @default(2)
+  quietStartHour     Int       @default(22)
+  quietEndHour       Int       @default(9)
+  blockRatePauseBps  Int       @default(200)
+  blockRateMinSample Int       @default(50)
+  pausedAt           DateTime?
+  pauseReason        String?
+  pauseEvidence      Json?
+  resumedAt          DateTime?
+  resumedByUserId    String?
+  updatedByUserId    String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("pharmacy_marketing_send_policies")
 }
 
 /// Capture mode only: records intended delivery; no provider delivery state exists.
@@ -16378,6 +16612,63 @@ model PharmacyPackPrice {
   @@map("pharmacy_pack_prices")
 }
 
+/// DEV-681 — one distributor price list as it was uploaded. The file's rows
+/// are kept, never edited; every comparison is computed by SQL from them.
+model PharmacySupplierPriceList {
+  id             String                          @id @default(cuid())
+  organizationId String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  supplierId     String
+  fileName       String
+  sourceHash     String
+  rowCount       Int
+  importedById   String
+  createdAt      DateTime                        @default(now())
+  supplier       PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  lines          PharmacySupplierPriceListLine[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, supplierId, sourceHash])
+  @@index([organizationId, createdAt])
+  @@map("pharmacy_supplier_price_lists")
+}
+
+/// DEV-681 — one row of a supplier price list, the records it was compared
+/// with at import, and the shelf-price draft a person approves or rejects.
+/// `draftStatus`: NONE (nothing to change), DRAFT, APPROVED or REJECTED.
+model PharmacySupplierPriceListLine {
+  id                       String                    @id @default(cuid())
+  organizationId           String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  priceListId              String
+  rowNumber                Int
+  productText              String
+  packText                 String?
+  barcode                  String?
+  matchStatus              String
+  medicineId               String?
+  packLevelId              String?
+  listTradePriceMinor      Int?
+  listMrpMinor             Int?
+  /// Snapshot at import: this supplier's last posted invoice price for the pack.
+  previousTradePriceMinor  Int?
+  /// Snapshot at import: the organization price policy the draft would replace.
+  currentPackPriceId       String?
+  currentMrpMinor          Int?
+  currentSellingPriceMinor Int?
+  draftStatus              String                    @default("NONE")
+  draftMrpMinor            Int?
+  draftSellingPriceMinor   Int?
+  decidedById              String?
+  decidedAt                DateTime?
+  packPriceId              String?
+  createdAt                DateTime                  @default(now())
+  priceList                PharmacySupplierPriceList @relation(fields: [organizationId, priceListId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, priceListId, rowNumber])
+  @@index([organizationId, draftStatus])
+  @@map("pharmacy_supplier_price_list_lines")
+}
+
 /// Cross-instance fixed-window counters. Not tenant data and not under RLS:
 /// a limit is taken before a tenant scope exists. Startup still refuses a
 /// SUPERUSER or BYPASSRLS application role.
@@ -16407,4 +16698,26 @@ model OutboundEffect {
   @@index([organizationId, status, createdAt])
   @@index([status, availableAt])
   @@map("outbound_effects")
+}
+
+/// DEV-74: owner-editable branch seasonal calendar. Each row is one dated occurrence
+/// (Ramadan and monsoon move year to year); uplift is learned from branch history, never stored.
+model PharmacySeasonalWindow {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  /// DENGUE | FLU | RAMADAN | MONSOON | CUSTOM (database CHECK).
+  kind            String
+  label           String
+  startDate       DateTime @db.Date
+  /// Exclusive end date.
+  endDate         DateTime @db.Date
+  createdByUserId String
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, id], map: "pharmacy_seasonal_windows_org_id_key")
+  @@index([organizationId, branchId, startDate], map: "pharmacy_seasonal_windows_org_branch_start_idx")
+  @@map("pharmacy_seasonal_windows")
 }

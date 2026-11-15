@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { workspaceDateRange } from '@/lib/timezone';
 
 import { grossMarginQuery } from './finance-reports';
+import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -78,7 +79,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'openStockSignals',
     'Open stock signals',
-    'Open low-stock, stockout, expiry, recall, quarantine, and related signals.',
+    'Open low-stock, stockout, expiry, recall, quarantine, and related signals. Unknown (not calculated yet) until stock signals have been evaluated for every selected branch; a zero is never asserted without that evidence.',
     'pharmacy_stock_signals',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -96,7 +97,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'recommendedOrders',
     'Recommended orders',
-    'Open stock signals with a linked requisition action.',
+    'Open stock signals with a linked requisition action. Unknown (not calculated yet) until stock signals have been evaluated for every selected branch.',
     'pharmacy_stock_signals + pharmacy_stock_signal_actions',
     'selected branches at read time',
     '/pharmacy/purchasing',
@@ -284,7 +285,10 @@ type MoneyCounts = {
   cashVarianceMinor: number;
 };
 
-async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: readonly string[]): Promise<number> {
+async function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[]
+): Promise<number> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -297,7 +301,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
-        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+        // A dishonoured cheque re-opens what it bounced, exactly as readKhataBalance counts it:
+        // linked to a payment it re-opens that payment's charge, linked to a charge it re-opens
+        // that charge, and otherwise it is owed now with no due date of its own.
+        Prisma.sql`WITH settlements AS (SELECT e."organizationId", e."branchId", e."kind", e."amountMinor"::bigint AS amount, COALESCE(bounced."settlesChargeId", e."settlesChargeId") AS "chargeId" FROM "pharmacy_khata_events" e LEFT JOIN "pharmacy_khata_events" bounced ON e."kind"='DISHONOURED_CHEQUE' AND bounced."kind"='PAYMENT' AND bounced."organizationId"=e."organizationId" AND bounced."branchId"=e."branchId" AND bounced."id"=e."settlesChargeId" WHERE e."organizationId"=current_setting('app.current_organization_id',true) AND e."branchId"=${branchId} AND e."kind" IN ('PAYMENT','DISHONOURED_CHEQUE')), payments AS (SELECT "organizationId", "branchId", "chargeId" AS "settlesChargeId", SUM(CASE WHEN "kind"='PAYMENT' THEN amount ELSE -amount END) AS paid FROM settlements WHERE "chargeId" IS NOT NULL GROUP BY "organizationId", "branchId", "chargeId"), unlinked AS (SELECT COALESCE(SUM(s.amount),0) AS owed FROM settlements s WHERE s."kind"='DISHONOURED_CHEQUE' AND NOT EXISTS (SELECT 1 FROM "pharmacy_khata_events" c WHERE c."organizationId"=s."organizationId" AND c."branchId"=s."branchId" AND c."id"=s."chargeId" AND c."kind"='CHARGE')) SELECT (COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)+(SELECT owed FROM unlinked))::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
       total += rows[0]?.value ?? BigInt(0);
     }
@@ -314,7 +321,10 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
   return value;
 }
 
-export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
+export async function readPharmacyOwnerCommandCentre(
+  db: Prisma.TransactionClient,
+  filters: PharmacyReportFilters
+) {
   const parsed = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
   // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.
@@ -355,9 +365,9 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
       db.branchRegulatoryProfile.count({
         where: {
           branchId: { in: filters.branchIds },
-          effectiveFrom: { lte: at },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-          qualifiedPersonValidFrom: { lte: at },
+          // DEV-298: profile and coverage start on the workspace's calendar day; expiry stays at `at`.
+          ...regulatoryProfileInForceWhere(at, filters.timeZone),
+          qualifiedPersonValidFrom: { lte: regulatoryStartInstant(at, filters.timeZone) },
           qualifiedPersonValidTo: { gt: at },
         },
       }),
@@ -369,6 +379,11 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
       ),
     ]);
   const khataAgingMinor = await readKhataAgingMinor(db, filters.branchIds);
+  // DEV-729: the evaluator leaves a signal row (in any status) wherever it has run. A
+  // branch with none has never been calculated, so a zero there is unknown, not "all fine".
+  const signalHistory = await db.$queryRaw<Array<{ evaluatedBranches: number }>>(
+    Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
+  );
   const m = money[0] ?? {
     salesMinor: 0,
     marginMinor: null,
@@ -377,6 +392,10 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
     cashVarianceMinor: 0,
   };
   const s = stock[0] ?? { open: 0, recommended: 0 };
+  // Stock signals and recommended orders are only a count once every selected
+  // branch has been evaluated; before that a zero would read as "all fine".
+  const signalsCalculated =
+    (signalHistory[0]?.evaluatedBranches ?? 0) >= new Set(filters.branchIds).size;
   const e = expiry[0] ?? { d30: 0, d60: 0, d90: 0, d180: 0, quarantine: 0 };
   return {
     filters,
@@ -390,9 +409,9 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
     },
     metrics: {
       ...m,
-      openStockSignals: s.open,
+      openStockSignals: signalsCalculated ? s.open : null,
       lostDemandEvents: lostDemand[0]?.value ?? 0,
-      recommendedOrders: s.recommended,
+      recommendedOrders: signalsCalculated ? s.recommended : null,
       expiryValueMinor30: e.d30,
       expiryValueMinor60: e.d60,
       expiryValueMinor90: e.d90,

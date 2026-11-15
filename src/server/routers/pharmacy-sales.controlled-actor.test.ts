@@ -17,6 +17,15 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),
 }));
+// DEV-629: the prescription reference rules have their own suites; here they resolve.
+vi.mock('@/lib/pharmacy/rx-prescription-reference', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/rx-prescription-reference')>()),
+  resolvePrescriptionReference: vi.fn(async () => ({
+    prescriptionLineId: 'rx-line-1',
+    patientId: 'patient-1',
+  })),
+  attachPrescriptionReference: vi.fn(async () => undefined),
+}));
 vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
   verifyOperatorCredential: vi.fn(),
@@ -54,7 +63,11 @@ const line = {
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 const COUNTER_GATE_DENIED = 'You do not have permission for this action.';
 
-function callerFor(permissions: Permission[], permissionOverrides: Permission[] = []) {
+function callerFor(
+  permissions: Permission[],
+  permissionOverrides: Permission[] = [],
+  organization: { id: string; timezone?: string } = { id: 'org-1' }
+) {
   const credential = vi.fn();
   const register = vi.fn();
   const lock = vi.fn();
@@ -115,7 +128,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
       expires: 'later',
       user: { id: 'cashier-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
     },
-    organization: { id: 'org-1' },
+    organization,
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -124,9 +137,14 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
 }
 
 function emergencyCallerFor(
-  jurisdictionRuleSet: { id: string; controlledRegisterFlags: unknown } | null
+  jurisdictionRuleSet: { id: string; controlledRegisterFlags: unknown } | null,
+  organization?: { id: string; timezone?: string }
 ) {
-  const fixture = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+  const fixture = callerFor(
+    [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+    [],
+    organization
+  );
   vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
   fixture.credential.mockResolvedValue({
     id: 'credential-1',
@@ -388,4 +406,69 @@ describe('pharmacySales.addLine controlled actor', () => {
       expect(addSaleLine).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('emergency supply rules on a profile start day (DEV-298)', () => {
+  it.each([
+    ['00:30 PKT on the start day', '2026-10-20T19:30:00.000Z', '2026-10-21T00:00:00.000Z'],
+    ['23:59 PKT the day before', '2026-10-20T18:59:00.000Z', '2026-10-20T18:59:00.000Z'],
+  ])('reads the profile in force on the workspace day at %s', async (_label, now, asOf) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(now));
+    try {
+      const { caller, profile } = emergencyCallerFor(
+        {
+          id: 'pk_pb_v2',
+          controlledRegisterFlags: {
+            values: { emergencySupply: { maxUnits: 1, repeatWindowHours: 24 } },
+          },
+        },
+        { id: 'org-1', timezone: 'Asia/Karachi' }
+      );
+      await caller.addLine(line);
+      expect(profile).toHaveBeenCalledOnce();
+      expect(profile.mock.calls[0][0].where).toMatchObject({
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        effectiveFrom: { lte: new Date(asOf) },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date(asOf) } }],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('pharmacySales.addLine prescription reference (DEV-629)', () => {
+  it('queues the pharmacist review that settlement waits on when a pharmacist attaches a prescription', async () => {
+    const { caller, db } = callerFor([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    db.medicine.findFirst = async () =>
+      ({
+        id: 'medicine-1',
+        controlled: false,
+        rx: true,
+        restricted: false,
+        manufacturer: 'Maker',
+      }) as never;
+    const review = vi.fn().mockResolvedValue({ id: 'review-1' });
+    Object.assign(db, { pharmacyPharmacistReviewItem: { create: review } });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'sale-line-1' } } as never);
+    await caller.addLine({
+      ...line,
+      controlledAuthorization: undefined,
+      idempotencyKey: 'counter:sale-1:rx',
+      prescription: { prescriptionLineId: 'rx-line-1', patientId: 'patient-1' },
+    });
+    expect(review).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        organizationId: 'org-1',
+        prescriptionLineId: 'rx-line-1',
+        saleLineId: 'sale-line-1',
+        requestedByUserId: 'cashier-1',
+      },
+    });
+  });
 });

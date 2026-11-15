@@ -176,17 +176,41 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
 }
 
 /** Cash tips are stored separately from bill principal, just like card tips. The
- * current terminal cash form does not collect one, so this updates the persisted
- * tender to exercise refunds of historical/imported tipped cash tenders. */
+ * current terminal cash form does not collect one, and captured tenders are
+ * append-only under the restricted runtime role, so this seeds the tip on the
+ * tender row as it is created to exercise refunds of historical/imported tipped
+ * cash tenders. Everything else runs through the real tender path. */
 async function tippedCashTender(
   device: string,
   tipAmount: string
 ): Promise<{ billId: string; tenderId: string }> {
-  const tender = await cashTender(device);
-  await read((tx) =>
-    tx.restaurantTender.update({ where: { id: tender.tenderId }, data: { tipAmount } })
-  );
-  return tender;
+  const billId = await openBill(1);
+  const result = await read((tx) => {
+    const seeding = new Proxy(tx, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== 'restaurantTender') return value;
+        return new Proxy(value as object, {
+          get(model, method, modelReceiver) {
+            const original = Reflect.get(model, method, modelReceiver);
+            if (method !== 'create') return original;
+            return (args: { data: Record<string, unknown> }) =>
+              (original as (args: unknown) => unknown).call(model, {
+                ...args,
+                data: { ...args.data, tipAmount },
+              });
+          },
+        });
+      },
+    }) as ScopedDb;
+    return deps.tenders.applyTenderInTransaction(seeding, {
+      billId,
+      tender: { type: 'CASH', amount: '12.50', cashReceived: '12.50' },
+      actor: actor(device),
+      now: AT,
+    });
+  });
+  return { billId, tenderId: result.tenderId };
 }
 
 async function openDrawer(device: string): Promise<void> {
@@ -1364,5 +1388,59 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
     expect(evidence.refundEvents).toBe(1);
     expect(evidence.payment?.status).toBe('PARTIALLY_REFUNDED');
     expect(evidence.idempotencyKeys).toBe(1);
+  });
+});
+
+describeIfDatabase('DEV-402 refunds require a settled bill (real DB)', () => {
+  it('refuses a partial-tender refund on an OPEN bill before any write; settlement stays whole', async () => {
+    const device = await newDevice('POS-open-bill-refund');
+    await openDrawer(device);
+    const billId = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
+      actor: actor(device),
+      now: AT,
+    });
+    expect(partial.settled).toBe(false);
+
+    const before = await sideEffectTotals(orgId);
+    await expect(
+      deps.refunds.refundTender(db, {
+        originalTenderId: partial.tenderId,
+        amount: '5.00',
+        reason: 'refund before settlement',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(device),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ name: 'RefundError', reason: 'BILL_NOT_SETTLED' });
+    expect(await sideEffectTotals(orgId)).toEqual(before);
+
+    // The 5.00 is still retained, so exactly the remaining 7.50 settles the bill.
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '7.50', cashReceived: '7.50' },
+      actor: actor(device),
+      now: AT,
+    });
+    expect(final.settled).toBe(true);
+    expect(
+      await read((tx) =>
+        tx.restaurantBill.findUniqueOrThrow({ where: { id: billId }, select: { status: true } })
+      )
+    ).toEqual({ status: 'SETTLED' });
+
+    // Once SETTLED, the same tender is refundable as before.
+    const refund = await deps.refunds.refundTender(db, {
+      originalTenderId: partial.tenderId,
+      amount: '5.00',
+      reason: 'refund after settlement',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(device),
+      now: AT,
+    });
+    expect(refund.amount.toString()).toBe('5');
   });
 });

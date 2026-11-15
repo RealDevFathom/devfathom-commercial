@@ -24,6 +24,7 @@ export const PURCHASING_TABS = [
   { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder' },
   { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in' },
   { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims' },
+  { href: `${PURCHASING_ROUTE}/price-lists`, label: 'Price lists' },
 ] as const;
 
 /**
@@ -104,6 +105,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     message: 'This pack level has no effective conversion. Set one on the medicine first.',
     field: 'packLevelId',
   },
+  PACK_CONVERSION_MISMATCH: {
+    message:
+      "The units per pack on this line do not match the medicine's pack setup. Reload the page so the line uses the current pack conversion.",
+    field: 'packLevelId',
+  },
   RETURN_WINDOW_CLOSED: {
     message: "The supplier's return window has closed for one of these lines.",
     field: 'returnWindowEndsAt',
@@ -175,6 +181,7 @@ const KNOWN_REJECTIONS = new Set([
   'EXPIRED_PACK',
   'GS1_INVALID',
   'GTIN_MEDICINE_MISMATCH',
+  'PACK_CONVERSION_MISMATCH',
   'SERIALIZED_PACK_QUANTITY',
   'REVERSAL_STOCK_MOVED',
   'REVERSAL_PACKS_OPENED',
