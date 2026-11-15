@@ -32,7 +32,6 @@ import {
 } from './tender-attempt-storage';
 
 import {
-  COUNTER_OVERRIDE_APPROVAL_POLICY,
   CounterCartPanel,
   CounterLotOverride,
   type CounterLotOverrideValue,
@@ -1185,10 +1184,10 @@ function ScopedPharmacyCounterConsole({
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
+                // #520: the server resolves who approved the override; the counter never names one.
                 override: {
                   inventoryLotId: overrideLotId,
                   reason: batchOverride.reason.trim(),
-                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
                 },
               }
             : {}),
