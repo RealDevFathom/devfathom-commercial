@@ -50,6 +50,14 @@ describe('counterErrorMessage', () => {
     expect(message).not.toBe(COUNTER_ERROR_MESSAGES.CONSENT_REQUIRED);
   });
 
+  /** DEV-748: a card that is unknown, replaced or from another organization reads the same. */
+  it('explains an unrecognised loyalty card without saying why', () => {
+    const message = counterErrorMessage(new PharmacyLoyaltyError('LOYALTY_CARD_NOT_RECOGNISED'));
+    expect(message).toBe(COUNTER_ERROR_MESSAGES.LOYALTY_CARD_NOT_RECOGNISED);
+    expect(message).toContain('not recognised or has been replaced');
+    expect(message).not.toContain('LOYALTY_CARD');
+  });
+
   it('never returns a raw reason code for an unmapped failure', () => {
     // Deliberately not in the map: a reason a later lane might add.
     const message = counterErrorMessage(new Error('SOME_FUTURE_REASON'));

@@ -111,6 +111,7 @@ import {
   readCustomerSnapshot,
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
+import { linkLoyaltyCardToSale } from '@/lib/pharmacy/loyalty-card';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
 import {
@@ -647,7 +648,7 @@ function fail(error: unknown): never {
   if (error instanceof PharmacyLoyaltyError) {
     throw new TRPCError({
       code:
-        error.reason === 'CUSTOMER_NOT_FOUND'
+        error.reason === 'CUSTOMER_NOT_FOUND' || error.reason === 'LOYALTY_CARD_NOT_RECOGNISED'
           ? 'NOT_FOUND'
           : error.reason === 'LOYALTY_CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
             ? 'FORBIDDEN'
@@ -1413,6 +1414,43 @@ export const pharmacySalesRouter = router({
         // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => linkCustomerToSale(txDb(tx), scope, input));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // DEV-748: a scanned (or typed) physical loyalty card links its customer to the open bill,
+  // through the same counter gate and consent checks as linking a customer by name.
+  scanLoyaltyCard: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          // Named so the audit layer redacts it from the recorded input, even on a refusal.
+          cardToken: z.string().trim().min(1).max(64),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const linked = await ctx.db.$transaction(async (tx) =>
+          linkLoyaltyCardToSale(txDb(tx), scope, { saleId: input.saleId, code: input.cardToken })
+        );
+        // The card code is a bearer token: it is never written to the audit log.
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          operation: 'UPDATE',
+          action: 'pharmacyLoyalty.scanCard',
+          targetType: 'PharmacySale',
+          targetId: input.saleId,
+          metadata: {
+            branchId: input.branchId,
+            cardId: linked.cardId,
+            customerId: linked.customerId,
+          },
+        });
+        return { id: linked.customerId, displayName: linked.displayName };
       } catch (error) {
         fail(error);
       }
