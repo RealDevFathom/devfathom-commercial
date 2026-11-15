@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { apiKeySource, extractAPIKey } from './ai-credentials';
-import { __setSecretsReaderForTests, loadProviderAPIKey } from './secrets';
+import { SECRET_READ_TIMEOUT_MS, __setSecretsReaderForTests, loadProviderAPIKey } from './secrets';
 
 const SECRET_ENV = {
   NODE_ENV: 'production',
@@ -64,7 +64,11 @@ describe('loadProviderAPIKey', () => {
       'key-for-devfathom/staging/openai-api-key'
     );
     expect(reader).toHaveBeenCalledTimes(2);
-    expect(reader).toHaveBeenCalledWith('devfathom/staging/anthropic-api-key', 'ap-southeast-1');
+    expect(reader).toHaveBeenCalledWith(
+      'devfathom/staging/anthropic-api-key',
+      'ap-southeast-1',
+      expect.any(AbortSignal)
+    );
   });
 
   it("extracts each provider's key when both providers share one secret", async () => {
@@ -125,6 +129,34 @@ describe('loadProviderAPIKey', () => {
       error: 'AccessDeniedException',
     });
     expect(JSON.stringify(error.mock.calls)).not.toContain('sk-live');
+  });
+
+  it('gives up on a stalled read after the deadline, aborts it and caches the failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let signal: AbortSignal | undefined;
+      const reader = vi.fn(
+        (_id: string, _region: string, abort: AbortSignal) =>
+          new Promise<never>(() => {
+            signal = abort;
+          })
+      );
+      __setSecretsReaderForTests(reader);
+      const pending = loadProviderAPIKey('anthropic', SECRET_ENV, 0);
+      await vi.advanceTimersByTimeAsync(SECRET_READ_TIMEOUT_MS);
+      await expect(pending).resolves.toBeNull();
+      expect(signal?.aborted).toBe(true);
+      expect(error).toHaveBeenCalledWith(
+        '[ai-secrets] could not read API key secret',
+        expect.objectContaining({ provider: 'anthropic', error: 'TimeoutError' })
+      );
+      // Within the failure window the launcher check answers at once, without a new read.
+      await expect(loadProviderAPIKey('anthropic', SECRET_ENV, 30_000)).resolves.toBeNull();
+      expect(reader).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses the local key outside production and never calls AWS', async () => {

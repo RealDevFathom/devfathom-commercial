@@ -389,7 +389,8 @@ export function orderErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||
       err.reason === 'NOTHING_TO_FIRE' ||
-      err.reason === 'PRINT_ROUTE_NOT_FOUND';
+      err.reason === 'PRINT_ROUTE_NOT_FOUND' ||
+      err.reason === 'IDEMPOTENCY_CONFLICT';
     const notFound = err.reason.endsWith('_NOT_FOUND') && err.reason !== 'PRINT_ROUTE_NOT_FOUND';
     const status = notFound ? 404 : conflict ? 409 : 400;
     return json({ error: err.message }, status);
@@ -714,7 +715,9 @@ export async function resolveTerminalEffectiveMenu(
         where: {
           branchId: input.branchId,
           status: 'PUBLISHED',
-          channels: { has: input.channel },
+          // An empty channel set means "every operational channel" (see
+          // `channelPublished`), so it must resolve for any requested channel.
+          OR: [{ channels: { has: input.channel } }, { channels: { isEmpty: true } }],
         },
         orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
         select: publicationSelect,

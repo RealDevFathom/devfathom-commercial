@@ -77,3 +77,39 @@ it('preserves the entered phone and focuses its field when the server rejects it
   expect(phone).toHaveAttribute('aria-describedby', 'premisesPhone-error');
   expect(screen.getByRole('alert')).toHaveTextContent('A phone number is at most 60 characters.');
 });
+
+it("replaces the previous branch's premises with the selected branch's and saves those", () => {
+  const twoBranches = {
+    ...initial,
+    branches: [
+      ...initial.branches,
+      {
+        id: 'branch-2',
+        name: 'Gulberg pharmacy',
+        addressLine: '7 Main Boulevard',
+        city: 'Faisalabad',
+        provinceCode: 'PK-PB',
+      },
+    ],
+  };
+  mocks.fetch.mockReturnValue(new Promise(() => {}));
+  render(<PharmacyRegulatoryProfileForm initial={twoBranches} />);
+  expect(screen.getByLabelText('Premises address')).toHaveValue('12 Mall Road');
+  expect(screen.getByLabelText('Premises city')).toHaveValue('Lahore');
+
+  fireEvent.change(screen.getByLabelText('Which branch is this profile for?'), {
+    target: { value: 'branch-2' },
+  });
+
+  const address = screen.getByLabelText('Premises address');
+  expect(address).toHaveValue('7 Main Boulevard');
+  expect(screen.getByLabelText('Premises city')).toHaveValue('Faisalabad');
+  fireEvent.submit(address.closest('form')!);
+  expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      branchId: 'branch-2',
+      premisesAddressLine: '7 Main Boulevard',
+      premisesCity: 'Faisalabad',
+    })
+  );
+});

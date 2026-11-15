@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+const postOpeningLedgerEntry = vi.hoisted(() => vi.fn());
+vi.mock('../finance-postings', () => ({ postOpeningLedgerEntry }));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   DEFAULT_MATERIALITY_THRESHOLD,
   missingAttributes,
+  postOpeningLedger,
   postOpeningSession,
 } from './opening-stock';
 
@@ -174,5 +177,44 @@ describe('opening stock expiry boundaries', () => {
     ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
     expect(models.pharmacyInventoryLot.create).not.toHaveBeenCalled();
     expect(models.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('MIG-03 opening ledger reaches the GL (DEV-131)', () => {
+  it('journals every non-zero opening balance in the same transaction', async () => {
+    postOpeningLedgerEntry.mockReset().mockResolvedValue({ id: 'entry' });
+    const openingAt = new Date('2026-09-01T00:00:00.000Z');
+    let created = 0;
+    const db = {
+      pharmacyOpeningSession: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'session',
+          branchId: SCOPE.branchId,
+          status: 'POSTED',
+          openingAt,
+        }),
+      },
+      pharmacyOpeningLedgerEntry: {
+        create: vi
+          .fn()
+          .mockImplementation(async ({ data }) => ({ id: `opening_${++created}`, ...data })),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await postOpeningLedger(db as unknown as ScopedDb, SCOPE, {
+      sessionId: 'session',
+      balances: [
+        { account: 'ACCOUNTS_PAYABLE', balanceMinor: BigInt(-45_000), sourceRef: 'ap' },
+        { account: 'CASH', balanceMinor: BigInt(0), sourceRef: 'cash' },
+        { account: 'BANK', balanceMinor: BigInt(12_000), sourceRef: 'bank' },
+      ],
+    });
+
+    expect(db.pharmacyOpeningLedgerEntry.create).toHaveBeenCalledTimes(3);
+    expect(postOpeningLedgerEntry.mock.calls).toEqual([
+      [db, SCOPE, { openingLedgerEntryId: 'opening_1', at: openingAt }],
+      [db, SCOPE, { openingLedgerEntryId: 'opening_3', at: openingAt }],
+    ]);
   });
 });

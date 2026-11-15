@@ -187,7 +187,7 @@ describe('inventory success notice', () => {
 });
 
 describe('Quarantine resolution forms', () => {
-  it.each(['AVAILABLE', 'QUARANTINE'])(
+  it.each(['AVAILABLE', 'QUARANTINE', 'DAMAGED'])(
     'submits the selected %s position with write-off custody evidence',
     async (disposition) => {
       lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition }] }]);
@@ -244,6 +244,12 @@ describe('Quarantine resolution forms', () => {
       })
     );
     await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+  });
+
+  it('never offers a damaged hold for release back to sale', async () => {
+    lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition: 'DAMAGED' }] }]);
+    await show();
+    expect(screen.queryByRole('button', { name: 'Release manual hold' })).not.toBeInTheDocument();
   });
 
   it.each(['RECALLED', 'QUARANTINED'])('hides manual release for a %s batch', async (state) => {

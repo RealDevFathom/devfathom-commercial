@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2, Printer, ArrowLeft, FileText } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { trpc } from '@/lib/trpc';
@@ -57,6 +58,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const amountPaid = Number(invoice.amountPaid);
   const balance = Number(invoice.balance);
   const primaryContact = invoice.client.contacts?.[0];
+  const issuer = invoice.issuer;
 
   return (
     <>
@@ -103,11 +105,26 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
         >
           {/* Header */}
           <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div>
+            <div data-testid="invoice-issuer" className="min-w-0 break-words">
+              {issuer.logoUrl && (
+                <Image
+                  src={issuer.logoUrl}
+                  alt=""
+                  width={160}
+                  height={48}
+                  unoptimized
+                  className="mb-3 h-12 w-auto max-w-[160px] object-contain"
+                />
+              )}
               <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
-                DevFathom
+                {issuer.displayName}
               </p>
-              <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
+              {issuer.legalName !== issuer.displayName && (
+                <p className="mt-1 text-xs text-slate-500">{issuer.legalName}</p>
+              )}
+              {issuer.supportEmail && (
+                <p className="mt-1 text-xs text-slate-500">{issuer.supportEmail}</p>
+              )}
             </div>
             <div className="text-right">
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">
