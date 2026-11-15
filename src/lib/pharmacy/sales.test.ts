@@ -319,6 +319,8 @@ describe('POS sale voiding', () => {
       pharmacyStockMovement: { findMany: async () => [] },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: unknown }) => data },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: async () => ({ count: 0 }) },
     };
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', {
       kind: 'COUNTER',
