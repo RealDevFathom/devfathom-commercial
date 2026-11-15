@@ -351,6 +351,22 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(calls[9]?.sql).toContain("set_config('app.current_branch_id'");
   });
 
+  it('counts lost demand between workspace midnights while business dates stay calendar dates', async () => {
+    const { db, calls } = makeDb(populated, populatedCounts);
+    await readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: 'Asia/Karachi' });
+    // 1 March on the Karachi clock: 19:00 UTC on 28 February to 19:00 UTC on 1 March.
+    expect(calls[2]?.values).toEqual([
+      BRANCH,
+      new Date('2026-02-28T19:00:00.000Z'),
+      new Date('2026-03-01T19:00:00.000Z'),
+    ]);
+    expect(calls[0]?.sql).toContain('s."businessDate">=');
+    expect(isoDates(calls[0]?.values ?? [])).toEqual([
+      '2026-03-01T00:00:00.000Z',
+      '2026-03-02T00:00:00.000Z',
+    ]);
+  });
+
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);

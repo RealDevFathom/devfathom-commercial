@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { workspaceDateRange } from '@/lib/timezone';
+
 import { grossMarginQuery } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
@@ -13,6 +15,8 @@ export type PharmacyReportFilters = {
   supplierId?: string;
   ingredientId?: string;
   batchId?: string;
+  /** Workspace IANA zone: event timestamps are bounded by its midnights (UTC when absent). */
+  timeZone?: string | null;
 };
 
 export type PharmacyMetricContract = {
@@ -312,6 +316,8 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
 
 export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
+  // Business-date columns compare against `parsed`; event timestamps use the workspace day.
+  const eventWindow = workspaceDateRange(filters.from, filters.to, filters.timeZone);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
@@ -331,7 +337,7 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
         Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
       ),
       db.$queryRaw<Array<{ value: number }>>(
-        Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${parsed.from} AND "createdAt"<${parsed.to}`
+        Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${eventWindow.from} AND "createdAt"<${eventWindow.to}`
       ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>

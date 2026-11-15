@@ -709,7 +709,11 @@ export const pharmacyReportsRouter = router({
     try {
       // Khata's branch context is transaction-local; keep it and all report reads together.
       const result = await ctx.db.$transaction((tx) =>
-        readPharmacyOwnerCommandCentre(tx, { ...input, branchIds })
+        readPharmacyOwnerCommandCentre(tx, {
+          ...input,
+          branchIds,
+          timeZone: ctx.organization?.timezone,
+        })
       );
       const financial = await can(
         subjectFromSession(ctx.session!.user),
