@@ -135,7 +135,7 @@ export async function marketingAction(
         break;
       case 'draft': {
         const field = text('field');
-        if (field !== 'receiptCount' && field !== 'daysSinceLastReceipt')
+        if (field !== 'receiptCount' && field !== 'daysSinceLastReceipt' && field !== 'churnScore')
           return { error: true, message: 'Choose a supported retail field.' };
         const draft = await caller.createDraft({
           branchId,

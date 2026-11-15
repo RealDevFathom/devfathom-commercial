@@ -193,6 +193,7 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  customerChurnScores    PharmacyCustomerChurnScore[]
   whatsappMessageLogs    PharmacyMessageLog[]
   aiUsages               AIUsage[]
   receiptLayout          Json?
@@ -1277,6 +1278,7 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  churnScores      PharmacyCustomerChurnScore[]
   whatsappMessages PharmacyMessageLog[]
   id               String               @id @default(cuid())
   organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -5180,6 +5182,7 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
+  pharmacyChurnScoringRuns PharmacyChurnScoringRun[]
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyMessageLogs      PharmacyMessageLog[]
   id                       String                     @id @default(cuid())
@@ -14269,6 +14272,42 @@ model PharmacyMarketingSegment {
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, name, version])
   @@map("pharmacy_marketing_segments")
+}
+
+/// DEV-83: nightly RFM churn score (0 retained .. 100 likely lapsed) per
+/// customer and branch. Inputs are commercial receipt facts only.
+model PharmacyCustomerChurnScore {
+  organizationId       String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  customerId           String
+  score                Int
+  recencyScore         Int
+  frequencyScore       Int
+  monetaryScore        Int
+  daysSinceLastReceipt Int
+  receiptCount         Int
+  monetaryMinor        BigInt
+  businessDate         DateTime         @db.Date
+  computedAt           DateTime
+  branch               PharmacyBranch   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_customer_churn_scores_branch_fkey")
+  customer             PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_customer_churn_scores_customer_fkey")
+
+  @@id([organizationId, branchId, customerId])
+  @@index([organizationId, branchId, score], map: "pharmacy_customer_churn_scores_branch_score_idx")
+  @@map("pharmacy_customer_churn_scores")
+}
+
+/// DEV-83: one completed churn-scoring pass per organization business day.
+model PharmacyChurnScoringRun {
+  id              String       @id @default(cuid())
+  organizationId  String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessDate    DateTime     @db.Date
+  customersScored Int
+  completedAt     DateTime     @default(now())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "pharmacy_churn_scoring_runs_organization_fkey")
+
+  @@unique([organizationId, businessDate])
+  @@map("pharmacy_churn_scoring_runs")
 }
 
 model PharmacyMarketingTemplate {

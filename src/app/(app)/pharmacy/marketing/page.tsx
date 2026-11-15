@@ -210,7 +210,7 @@ export default async function PharmacyMarketingPage({
               {review.rules.all
                 .map(
                   (rule) =>
-                    `${rule.field === 'receiptCount' ? 'Completed receipts' : 'Days since last receipt'} ${rule.operator === 'gte' ? 'at least' : rule.operator === 'lte' ? 'at most' : 'equal to'} ${rule.value}`
+                    `${rule.field === 'receiptCount' ? 'Completed receipts' : rule.field === 'churnScore' ? 'Churn score (0–100)' : 'Days since last receipt'} ${rule.operator === 'gte' ? 'at least' : rule.operator === 'lte' ? 'at most' : 'equal to'} ${rule.value}`
                 )
                 .join('; ')}
               .
@@ -505,6 +505,7 @@ export default async function PharmacyMarketingPage({
                 <select className={control} name="field">
                   <option value="receiptCount">Completed receipt count</option>
                   <option value="daysSinceLastReceipt">Days since last receipt</option>
+                  <option value="churnScore">Churn score, 0–100 (nightly)</option>
                 </select>
               </label>
               <label className="block text-sm">
