@@ -160,6 +160,7 @@ import {
   quoteSaleLineReturn,
   saleReturnValueMinor,
 } from '@/lib/pharmacy/sales';
+import { PharmacySerializedPackError } from '@/lib/pharmacy/serialized-pack-sale';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
@@ -690,6 +691,13 @@ function fail(error: unknown): never {
   }
   if (error instanceof PharmacyCounterKeymapError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  }
+  if (error instanceof PharmacySerializedPackError) {
+    // A pack that was already sold is a state conflict the operator must see.
+    throw new TRPCError({
+      code: error.reason === 'SERIAL_ALREADY_SOLD' ? 'CONFLICT' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   }
   if (error instanceof PharmacySaleError) {
     throw new TRPCError({
@@ -1948,6 +1956,11 @@ export const pharmacySalesRouter = router({
               reason: z.string().trim().min(1).max(500),
               approval: counterApprovalPin.optional(),
             })
+            .strict()
+            .optional(),
+          // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
+          scannedPack: z
+            .object({ payload: z.string().trim().min(1).max(256) })
             .strict()
             .optional(),
           idempotencyKey: z.string().trim().min(1).max(160),

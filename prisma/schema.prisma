@@ -1773,6 +1773,32 @@ model PharmacyReceiptPrintAllocation {
   @@map("pharmacy_receipt_print_allocations")
 }
 
+/// DEV-92: one GS1-serialized pack (AI 01 + AI 21) sold at the counter. A
+/// primary bottle or tube sold without a box carries its own DataMatrix, so the
+/// serial is claimed by the sale line that sold it. A second live claim of the
+/// same GTIN and serial in the organization is refused by a partial unique index
+/// (`releasedAt IS NULL`, migration only); voiding the sale releases the claim.
+model PharmacySoldPackSerial {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  gtin           String
+  /// Case-preserved serial from AI 21.
+  serialNumber   String
+  /// Uppercase serial, the same key goods-in uses.
+  serialKey      String
+  saleId         String
+  saleLineId     String
+  inventoryLotId String?
+  soldByUserId   String
+  releasedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, gtin, serialKey], map: "pharmacy_sold_pack_serials_org_gtin_serial_idx")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_sold_pack_serials_sale_idx")
+  @@map("pharmacy_sold_pack_serials")
+}
+
 /// POS-01: one counter operator's configurable shortcut map. Organization- and
 /// user-scoped rather than branch-scoped, because muscle memory belongs to the
 /// cashier and follows them between counters. `overrides` is a JSON map from

@@ -166,6 +166,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
       "A serialized pack is received one pack per line. Scan each pack's 2D code; its serial is never copied to other packs.",
     field: 'receivedPacks',
   },
+  CARTON_PACK_COUNT: {
+    message:
+      'This GS1-128 carton label states a different pack count. Receive the count printed on the carton, or enter the packs by hand.',
+    field: 'receivedPacks',
+  },
   EXPIRED_PACK: {
     message:
       'This pack is already expired. Reject the units into quarantine, or do not receive it.',
@@ -183,6 +188,7 @@ const KNOWN_REJECTIONS = new Set([
   'GTIN_MEDICINE_MISMATCH',
   'PACK_CONVERSION_MISMATCH',
   'SERIALIZED_PACK_QUANTITY',
+  'CARTON_PACK_COUNT',
   'REVERSAL_STOCK_MOVED',
   'REVERSAL_PACKS_OPENED',
 ]);

@@ -214,3 +214,89 @@ describe('parseGs1DataMatrix', () => {
     });
   });
 });
+
+// DEV-92: SRO 963(I)/2026 r.3A(4) — the 2D code moves to the primary pack when
+// there is no box, and homogeneous tertiary cartons carry GS1-128.
+describe('primary-pack and tertiary-carton fixtures', () => {
+  const SYRUP = '08961234500013';
+  const CREAM = '08961234500020';
+  const CARTON = '18961234500010';
+  const SSCC = '008961234000001233';
+
+  it('reads a syrup bottle DataMatrix as one serialized pack', () => {
+    const parsed = elementString(`]d201${SYRUP}1727123110SYR-0425${GS}21A1B2C3D4E5F6`);
+    expect(parsed).toEqual({
+      kind: 'parsed',
+      fields: {
+        gtin: SYRUP,
+        gtin13: SYRUP.slice(1),
+        batch: 'SYR-0425',
+        expiry: '271231',
+        expiryDate: '2027-12-31',
+        serial: 'A1B2C3D4E5F6',
+        unknownAis: [],
+        warnings: [],
+      },
+    });
+    if (parsed.kind !== 'parsed') throw new Error('expected a parsed bottle');
+    expect(receivedPacksForScan(parsed.fields.serial, 12)).toBe(1);
+  });
+
+  it('reads a cream tube DataMatrix as one serialized pack', () => {
+    expect(elementString(`]d201${CREAM}1728063010CRM-77${GS}210F1E2D3C4B5A`)).toMatchObject({
+      kind: 'parsed',
+      fields: { gtin: CREAM, batch: 'CRM-77', expiryDate: '2028-06-30', serial: '0F1E2D3C4B5A' },
+    });
+  });
+
+  it('reads a GS1-128 carton with its own GTIN, batch, expiry and SSCC', () => {
+    expect(elementString(`]C100${SSCC}01${CARTON}1727123110SYR-0425`)).toEqual({
+      kind: 'parsed',
+      fields: {
+        gtin: CARTON,
+        gtin13: null,
+        batch: 'SYR-0425',
+        expiry: '271231',
+        expiryDate: '2027-12-31',
+        serial: null,
+        sscc: SSCC,
+        unknownAis: [],
+        warnings: [],
+      },
+    });
+  });
+
+  it('reads a GS1-128 logistic label as a count of the contained packs', () => {
+    const parsed = elementString(`]C100${SSCC}02${SYRUP}1727123110SYR-0425${GS}3724`);
+    expect(parsed).toMatchObject({
+      kind: 'parsed',
+      fields: { gtin: SYRUP, batch: 'SYR-0425', serial: null, sscc: SSCC, count: 24 },
+    });
+    if (parsed.kind !== 'parsed') throw new Error('expected a parsed carton');
+    expect(parsed.fields.unknownAis).toEqual([]);
+    expect(receivedPacksForScan(parsed.fields.serial, 10, parsed.fields.count)).toBe(24);
+  });
+
+  it.each([
+    [`]C100${SSCC.slice(0, 17)}4${'01'}${CARTON}`, 'SSCC (AI 00) check digit does not match.'],
+    [
+      `(02)${SYRUP}(37)24`,
+      'A carton GTIN (AI 02) needs its SSCC (AI 00) and a pack count (AI 37).',
+    ],
+    [
+      `(00)${SSCC}(02)${SYRUP}`,
+      'A carton GTIN (AI 02) needs its SSCC (AI 00) and a pack count (AI 37).',
+    ],
+    [`(00)${SSCC}(01)${CARTON}(02)${SYRUP}(37)24`, 'A label cannot carry both AI 01 and AI 02.'],
+    [
+      `(00)${SSCC}(02)${SYRUP}(37)24(21)A1B2C3D4E5F6`,
+      'A carton of several packs cannot carry one serial (AI 21).',
+    ],
+  ])('refuses the malformed carton %s', (payload, reason) => {
+    expect(elementString(payload)).toEqual({ kind: 'invalid', reason });
+  });
+
+  it('keeps a legacy EAN-13 out of GS1 so batch and expiry are entered by hand', () => {
+    expect(parseGs1DataMatrix('8961234500013', NOW).kind).toBe('not-gs1');
+  });
+});
