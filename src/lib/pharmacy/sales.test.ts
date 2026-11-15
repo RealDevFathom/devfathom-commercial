@@ -205,6 +205,89 @@ describe('POS sale voiding', () => {
     expect(events).toEqual([expect.objectContaining({ kind: 'VOIDED' })]);
   });
 
+  it('keeps the void reason text and code on the void event and its reversals (DEV-508)', async () => {
+    let status = 'HELD';
+    const original = {
+      id: 'held-movement',
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf-a',
+      disposition: 'AVAILABLE',
+      quantityUnits: -20,
+      sealedPackDelta: -2,
+      looseUnitDelta: 0,
+      idempotencyKey: 'sale:held-line:0',
+    };
+    const reversals: Array<Record<string, unknown>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    const claims: Array<Record<string, unknown>> = [];
+    const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          claims.push(where);
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: {
+        findMany: async () => [{ stockMovementId: original.id }],
+      },
+      pharmacyStockMovement: {
+        findFirst: async ({ where }: { where: { id: string } }) =>
+          where.id === original.id ? original : null,
+        findMany: async () => [original],
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          reversals.push(data);
+          return { id: `reversal-${reversals.length}`, ...data };
+        },
+      },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          events.push(data);
+          return data;
+        },
+      },
+      // A part payment that was refunded in full no longer blocks the void.
+      pharmacyTender: {
+        findMany: async () => [{ amountMinor: 500, refunds: [{ amountMinor: 500 }] }],
+      },
+    };
+
+    await changeSaleStatus(
+      db as never,
+      scope,
+      'sale-held',
+      'void',
+      manager,
+      'Duplicate bill',
+      undefined,
+      { voidReasonCode: 'DUPLICATE_BILL' }
+    );
+
+    expect(status).toBe('VOID');
+    expect(reversals).toEqual([
+      expect.objectContaining({ reversesMovementId: 'held-movement', reason: 'Duplicate bill' }),
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'VOIDED',
+        actorId: 'user-a',
+        reason: 'Duplicate bill',
+        payload: { voidReasonCode: 'DUPLICATE_BILL' },
+      }),
+    ]);
+  });
+
   it.each(['OPEN', 'HELD'])(
     'refuses to void a %s bill that still holds unrefunded payment (DEV-623)',
     async (current) => {
@@ -474,6 +557,12 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      // DEV-830: the stored pack setup the server derives the line multiplier from.
+      packLevel: {
+        findMany: async () => [
+          { id: 'pack-level-a', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
+        ],
+      },
       user: {
         findFirst: async () => issuerRow,
         findUnique: async () =>

@@ -37,6 +37,7 @@ import {
   isResolvedItem,
   type OrderItemStatus,
   type OrderStatus,
+  canHandOffItemOnDelivery,
 } from './order-state-machine';
 import { appendOrderEvent } from './outbox';
 
@@ -406,11 +407,11 @@ export async function closeOrderAfterSettlement(
   return true;
 }
 
-/** Marking a delivery DELIVERED is the guest hand-off. Serve every remaining PREPARED
+/** Marking a delivery DELIVERED is the guest hand-off. Serve every remaining live
  * item in the caller's transaction (voided items stay voided) and re-derive the kitchen
  * aggregate, so a delivered, settled order is closable by {@link closeOrder}, which
- * still runs the one-time close bookkeeping. A live item that never reached PREPARED
- * blocks the hand-off. A terminal order is left untouched. The caller must hold the
+ * still runs the one-time close bookkeeping. Items the kitchen received but never marked
+ * prepared are served too; unsent (HELD) and remake-requested items block it. A terminal order is left untouched. The caller must hold the
  * order row lock. Returns the ids of the items it served. */
 export async function serveDeliveredOrderItems(
   tx: ScopedDb,
@@ -419,30 +420,36 @@ export async function serveDeliveredOrderItems(
 ): Promise<string[]> {
   const order = await loadOrder(tx, orderId);
   if (order.status === 'CLOSED' || order.status === 'CANCELLED') return [];
-  const unresolved = order.items.filter(
-    (item) => item.status !== 'PREPARED' && item.status !== 'SERVED' && item.status !== 'VOIDED'
+  // Items still unsent (HELD, including ones added after dispatch) or recalled
+  // (REMAKE_REQUESTED) were never made for this guest, so they block the hand-off
+  // rather than being billed and consumed from stock.
+  const blocking = order.items.filter(
+    (item) => item.status === 'HELD' || item.status === 'REMAKE_REQUESTED'
   );
-  if (unresolved.length > 0) {
+  if (blocking.length > 0) {
     throw new OrderCommandError(
-      'Kitchen handoff is not complete. Prepare every live item before marking the delivery delivered.',
+      'The delivery cannot be marked delivered while unsent or remake-requested items remain. Send, serve or void them first.',
       'ITEM_STATE'
     );
   }
-  const prepared = order.items.filter((item) => item.status === 'PREPARED');
-  for (const item of prepared) assertItemTransition(item.status, 'SERVED');
-  const servedIds = prepared.map((item) => item.id);
+  const handOff = order.items.filter((item) => canHandOffItemOnDelivery(item.status));
+  const servedIds = handOff.map((item) => item.id);
   if (servedIds.length > 0) {
     await tx.restaurantOrderItem.updateMany({
-      where: { orderId: order.id, id: { in: servedIds }, status: 'PREPARED' },
+      where: {
+        orderId: order.id,
+        id: { in: servedIds },
+        status: { in: ['QUEUED', 'FIRING', 'PREPARED'] },
+      },
       data: { status: 'SERVED' },
     });
-    for (const itemId of servedIds) {
+    for (const item of handOff) {
       await appendOrderEvent(tx, {
         orderId: order.id,
         eventType: 'item.advanced',
         actorStaffProfileId: actor.staffProfileId,
         actorDeviceId: actor.deviceId,
-        payload: { itemId, from: 'PREPARED', to: 'SERVED', via: 'delivery.delivered' },
+        payload: { itemId: item.id, from: item.status, to: 'SERVED', via: 'delivery.delivered' },
       });
     }
   }

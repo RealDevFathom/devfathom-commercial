@@ -41,6 +41,7 @@ import {
   validateLeasedReceiptReplay,
   createSale,
   addSaleLine,
+  assertSaleUnitConversion,
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
@@ -362,6 +363,8 @@ export async function replayCounterCommand(
     { batch: 'share' }
   );
   await lockSaleCandidates(db, scope, [...new Set(command.lines.map((line) => line.medicineId))]);
+  // DEV-830: a pack level revised after the signed sale must not refuse that sale.
+  const saleUnitAt = new Date(command.leasedReceipt.originalSaleAt);
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
       where: { id: line.medicineId, organizationId: scope.organizationId },
@@ -386,16 +389,25 @@ export async function replayCounterCommand(
       select: { id: true },
     });
     if (!pack || !presentation) throw new CounterTransportError('invalid_pack', 403);
+    // DEV-830 (F05): the signed device never chooses the multiplier; it is checked
+    // against the stored pack setup before any quota or stock is consumed.
+    try {
+      await assertSaleUnitConversion(db, scope, line, saleUnitAt);
+    } catch (error) {
+      if (error instanceof PharmacySaleError) throw new CounterTransportError('invalid_pack', 403);
+      throw error;
+    }
     const units = line.quantity * line.canonicalUnitsPerSaleUnit;
     const quota = await openDeviceLotQuota(db, scope, { ...line, deviceId });
     if (!quota || quota.quotaUnits - quota.consumedUnits < units)
       throw new CounterTransportError('quota_exhausted', 409);
     await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
-    const created = await addSaleLine(db, scope, {
-      ...line,
-      saleId: sale.id,
-      idempotencyKey: `${command.idempotencyKey}:${index}`,
-    });
+    const created = await addSaleLine(
+      db,
+      scope,
+      { ...line, saleId: sale.id, idempotencyKey: `${command.idempotencyKey}:${index}` },
+      { saleUnitAt }
+    );
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,

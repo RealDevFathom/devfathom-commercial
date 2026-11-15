@@ -216,6 +216,28 @@ export function assertItemTransition(from: OrderItemStatus, to: OrderItemStatus)
   }
 }
 
+/**
+ * The delivery hand-off is a distinct, explicit item transition: when a delivery is
+ * marked DELIVERED the guest has the food, so an item the kitchen has received but not
+ * yet marked prepared (QUEUED or FIRING) is served directly. Items the kitchen never
+ * received (HELD) and recalled items (REMAKE_REQUESTED) never hand off: they must be
+ * sent, resolved or voided first. SERVED and VOIDED are already resolved.
+ */
+export const DELIVERY_HANDOFF_ITEM_TRANSITIONS = {
+  HELD: [],
+  QUEUED: ['SERVED'],
+  FIRING: ['SERVED'],
+  PREPARED: ['SERVED'],
+  SERVED: [],
+  REMAKE_REQUESTED: [],
+  VOIDED: [],
+} as const satisfies Record<OrderItemStatus, readonly OrderItemStatus[]>;
+
+/** Whether an item in `from` is handed to the guest by a delivery hand-off. */
+export function canHandOffItemOnDelivery(from: OrderItemStatus): boolean {
+  return (DELIVERY_HANDOFF_ITEM_TRANSITIONS[from] as readonly OrderItemStatus[]).includes('SERVED');
+}
+
 // ---------------------------------------------------------------------------
 // Item classification helpers (the vocabulary the invariants are built on).
 // ---------------------------------------------------------------------------
