@@ -123,6 +123,68 @@ beforeEach(() => {
   lots.mockResolvedValue([lot]);
 });
 
+describe('physical count prerequisites', () => {
+  function countCard() {
+    return within(
+      screen
+        .getByRole('heading', { name: 'Physical count' })
+        .closest('[data-slot="section-card"]')! as HTMLElement
+    );
+  }
+
+  it.each([
+    ['no received lots', []],
+    ['depleted stock', [{ ...lot, balances: [{ ...available, onHandUnits: 0 }] }]],
+    [
+      'quarantined stock only',
+      [{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }],
+    ],
+  ])('explains unavailable stock with an existing location: %s', async (_state, rows) => {
+    lots.mockResolvedValue(rows);
+    await show();
+    const card = countCard();
+    expect(
+      card.getByText(
+        'No available received stock to count at this branch. Receive stock before starting a count.'
+      )
+    ).toBeVisible();
+    expect(card.getByRole('link', { name: 'Receive stock' })).toHaveAttribute(
+      'href',
+      `/pharmacy/purchasing/receiving?branch=${branch.id}`
+    );
+    expect(card.queryByText(/create a location/i)).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+    expect(card.queryByText('0', { exact: true })).not.toBeInTheDocument();
+  });
+
+  it('explains a missing location only when the branch has none', async () => {
+    ctx.db.pharmacyStockLocation.findMany.mockResolvedValue([]);
+    lots.mockResolvedValue([]);
+    await show();
+    const card = countCard();
+    expect(
+      card.getByText(
+        'No active stock location exists for this branch. Create a location in Locations, then receive stock before starting a count.'
+      )
+    ).toBeVisible();
+    expect(card.getByRole('link', { name: 'Receive stock' })).toHaveAttribute(
+      'href',
+      `/pharmacy/purchasing/receiving?branch=${branch.id}`
+    );
+    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+  });
+
+  it('offers the count form when available stock and a location exist', async () => {
+    await show();
+    const card = countCard();
+    expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
+    expect(card.getByRole('option', { name: 'Medicine A · batch B-100 · Rack' })).toHaveValue(
+      `${lot.id}:${location.id}`
+    );
+    expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
+  });
+});
+
 describe('inventory success notice', () => {
   const css = readFileSync(join(__dirname, '../../../globals.css'), 'utf8');
   function themeVariables(theme: 'light' | 'dark') {

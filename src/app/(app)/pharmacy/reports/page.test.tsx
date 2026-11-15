@@ -7,6 +7,7 @@ const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefine
 const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
 const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
+const expiryEmpty = vi.hoisted(() => ({ value: false }));
 const suppliers = vi.hoisted(() => vi.fn());
 const extraCatalog = vi.hoisted(() => ({
   reports: [] as Array<{ key: string; label: string; metrics: string[]; filters: string[] }>,
@@ -86,6 +87,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       ],
       expiryAdvice: async () => {
         if (expiryError.value) throw expiryError.value;
+        if (expiryEmpty.value) return [];
         return [
           {
             lotId: 'lot-1',
@@ -164,6 +166,7 @@ describe('pharmacy report catalog filters', () => {
     reportBranches.mockClear();
     commandCentre.mockClear();
     expiryError.value = null;
+    expiryEmpty.value = false;
     suppliers.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
     extraCatalog.reports = [];
     extraCatalog.metrics = [];
@@ -332,8 +335,12 @@ describe('pharmacy report catalog filters', () => {
       'Supplier names could not load. Apply filters again to retry.'
     );
     expect(filter).toHaveValue('sup1');
-    expect(within(filter).getByRole('option', { name: 'Selected supplier unavailable' })).toHaveProperty('selected', true);
-    expect(screen.getByText('Supplier names could not load. Apply filters again to retry.')).toBeVisible();
+    expect(
+      within(filter).getByRole('option', { name: 'Selected supplier unavailable' })
+    ).toHaveProperty('selected', true);
+    expect(
+      screen.getByText('Supplier names could not load. Apply filters again to retry.')
+    ).toBeVisible();
     expect(screen.queryByText('sup1')).not.toBeInTheDocument();
     expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
   });
@@ -367,6 +374,34 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply filters' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Selected period at a glance' })).toBeVisible();
+  });
+
+  it.each([
+    new Error('private database detail'),
+    new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'private database detail' }),
+  ])('logs an unexpected expiry failure on the server without exposing it: %s', async (error) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expiryError.value = error;
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      expect(log).toHaveBeenCalledWith('[pharmacy-reports] Expiry advice failed', error);
+      expect(screen.getByRole('alert')).toHaveTextContent('Expiry advice could not load.');
+      expect(screen.queryByText(/private database detail/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('shows an empty expiry result without an error or permission warning', async () => {
+    expiryEmpty.value = true;
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText('No future-expiry lots with available stock match this scope.')
+    ).toBeVisible();
+    expect(screen.queryByText(/Expiry advice could not load/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
   });
 
   it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(
