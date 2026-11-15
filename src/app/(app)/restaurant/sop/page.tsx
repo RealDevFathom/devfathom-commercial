@@ -152,6 +152,8 @@ type DetailEvidence = {
   storageRef: string | null;
   uploaderStaffProfileId: string | null;
   capturedAt: string;
+  /** DEV-837: stored and hashed by the capture route, not caller-supplied metadata. */
+  serverCaptured: boolean;
 };
 
 type DetailVerification = {
@@ -675,8 +677,11 @@ function SopBoardView(props: SopBoardViewProps) {
                 </div>
                 <ol className="mt-3 divide-y divide-border-subtle">
                   {selected.steps.map((step) => {
+                    // DEV-837: only captured proof counts, exactly as the server gate does.
                     const stepEvidence = selected.evidence.filter(
-                      (evidence) => evidence.occurrenceStepId === step.occurrenceStepId
+                      (evidence) =>
+                        evidence.occurrenceStepId === step.occurrenceStepId &&
+                        evidence.serverCaptured
                     );
                     const hasPhoto = stepEvidence.some((evidence) =>
                       evidence.mimeType.includes('evidence=photo')
@@ -929,12 +934,27 @@ function SopBoardView(props: SopBoardViewProps) {
                   <ul className="mt-3 divide-y divide-border-subtle">
                     {selected.evidence.map((evidence) => (
                       <li className="py-4 first:pt-0 last:pb-0" key={evidence.id}>
-                        <p className="font-medium text-text-strong">
-                          {evidence.occurrenceStepId
-                            ? (occurrenceStepNames.get(evidence.occurrenceStepId) ??
-                              evidence.occurrenceStepId)
-                            : 'Whole occurrence'}
-                        </p>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <p className="min-w-0 font-medium break-words text-text-strong">
+                            {evidence.occurrenceStepId
+                              ? (occurrenceStepNames.get(evidence.occurrenceStepId) ??
+                                evidence.occurrenceStepId)
+                              : 'Whole occurrence'}
+                          </p>
+                          <StatusPill
+                            status={evidence.serverCaptured ? 'CAPTURED' : 'UNVERIFIED'}
+                            label={
+                              evidence.serverCaptured ? 'Captured proof' : 'Unverified metadata'
+                            }
+                            tone={evidence.serverCaptured ? 'success' : 'warning'}
+                          />
+                        </div>
+                        {evidence.serverCaptured ? null : (
+                          <p className="mt-2 text-xs text-text-muted">
+                            Recorded from details the submitter supplied. No captured file backs it,
+                            so it does not count as photo or signature proof.
+                          </p>
+                        )}
                         <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
                           <div>
                             <dt className="text-text-muted">Content hash</dt>
@@ -1308,6 +1328,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             storageRef: evidence.storageRef,
             uploaderStaffProfileId: evidence.uploaderStaffProfileId,
             capturedAt: evidence.capturedAt.toISOString(),
+            serverCaptured: evidence.serverCaptured,
           })),
           verifications: detail.verifications.map((verification) => ({
             id: verification.id,

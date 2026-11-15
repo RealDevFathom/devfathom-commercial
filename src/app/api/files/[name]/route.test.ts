@@ -30,6 +30,13 @@ const db = {
   restaurantStaffProfile: { findMany: vi.fn() },
   restaurantStaffJobRole: { findMany: vi.fn() },
   restaurantSopTemplateVersion: { findFirst: vi.fn() },
+  uploadedFile: { findFirst: vi.fn() },
+  uploadedFileLegacyBinding: { findMany: vi.fn() },
+  projectFile: { findUnique: vi.fn() },
+  taskAttachment: { findUnique: vi.fn() },
+  contract: { findUnique: vi.fn() },
+  projectMember: { findUnique: vi.fn() },
+  task: { findUnique: vi.fn() },
 };
 function actor(role = 'EMPLOYEE') {
   return { session: { user: { id: 'user_1', role } }, organization: { id: 'org_a' } };
@@ -47,6 +54,14 @@ beforeEach(() => {
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
+  // A registered upload no record has bound yet (DEV-837).
+  db.uploadedFile.findFirst.mockResolvedValue({ ownerType: null, ownerId: null });
+  db.uploadedFileLegacyBinding.findMany.mockResolvedValue([]);
+  db.projectFile.findUnique.mockResolvedValue(null);
+  db.taskAttachment.findUnique.mockResolvedValue(null);
+  db.contract.findUnique.mockResolvedValue(null);
+  db.projectMember.findUnique.mockResolvedValue(null);
+  db.task.findUnique.mockResolvedValue(null);
   mocks.granted = new Set();
 });
 describe('private attachment delivery', () => {
@@ -120,7 +135,10 @@ describe('private attachment delivery', () => {
   });
 
   it('keeps the SOP branch membership gate and admin exception', async () => {
-    db.restaurantSopEvidence.findFirst.mockResolvedValue({ occurrence: { branchId: 'branch_a' } });
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      serverCaptured: true,
+      occurrence: { branchId: 'branch_a' },
+    });
     expect((await read('sop.png')).status).toBe(404);
     expect(db.pharmacySopSite.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_a', sopBranchId: 'branch_a' } })
@@ -220,6 +238,221 @@ describe('private attachment delivery', () => {
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
       expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
       expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DEV-837: SOP proof binding (F17)', () => {
+    const LEGACY_CAPTURE = 'sop-12345678-1234-1234-1234-123456789abc.jpg';
+
+    it('ignores a caller-attached SOP reference to an unrelated file', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: false,
+        uploaderStaffProfileId: 'staff_x',
+        occurrence: { branchId: 'branch_other' },
+      });
+      const response = await read('company-logo.png');
+      expect(response.status).toBe(200);
+      expect(db.restaurantSopEvidence.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { storageRef: '/api/files/company-logo.png' },
+          orderBy: [{ serverCaptured: 'desc' }, { createdAt: 'asc' }],
+        })
+      );
+      expect(db.restaurantBranchAssignment.findUnique).not.toHaveBeenCalled();
+      expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('keeps the branch gate on proof captured before the provenance flag', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: false,
+        occurrence: { branchId: 'branch_a' },
+      });
+      expect((await read(LEGACY_CAPTURE)).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'assignment_1' });
+      expect((await read(LEGACY_CAPTURE)).status).toBe(200);
+    });
+
+    it('denies a capture-named blob that no evidence row binds, even to admins', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read(LEGACY_CAPTURE)).status).toBe(404);
+      expect((await read('pharmacy-sop-orphan.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DEV-837: server-recorded upload ownership at download (F15)', () => {
+    const bound = (ownerType: string, ownerId: string) =>
+      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId });
+
+    it('looks the object up in the upload registry by name', async () => {
+      expect((await read('plan.pdf')).status).toBe(200);
+      expect(db.uploadedFile.findFirst).toHaveBeenCalledWith({
+        where: { name: 'plan.pdf' },
+        select: { ownerType: true, ownerId: true },
+      });
+    });
+
+    it('denies an object the registry does not know, even to admins', async () => {
+      db.uploadedFile.findFirst.mockResolvedValue(null);
+      for (const role of ['EMPLOYEE', 'ADMIN']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read('legacy-orphan.pdf')).status).toBe(404);
+      }
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('denies a removed project member a saved project file URL and allows members', async () => {
+      bound('PROJECT_FILE', 'pf_1');
+      db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
+
+      expect((await read('plan.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      expect(db.projectFile.findUnique).toHaveBeenCalledWith({
+        where: { id: 'pf_1' },
+        select: { projectId: true },
+      });
+      expect(db.projectMember.findUnique).toHaveBeenCalledWith({
+        where: { projectId_userId: { projectId: 'project_1', userId: 'user_1' } },
+        select: { role: true },
+      });
+
+      db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
+      expect((await read('plan.pdf')).status).toBe(200);
+
+      db.projectMember.findUnique.mockResolvedValue(null);
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('plan.pdf')).status).toBe(200);
+    });
+
+    it('resolves a task attachment to its project and denies a removed member', async () => {
+      bound('TASK_ATTACHMENT', 'ta_1');
+      db.taskAttachment.findUnique.mockResolvedValue({ taskId: 'task_1' });
+      db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_2' } } });
+      expect((await read('spec.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+
+      db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
+      expect((await read('spec.png')).status).toBe(200);
+      expect(db.projectMember.findUnique).toHaveBeenLastCalledWith({
+        where: { projectId_userId: { projectId: 'project_2', userId: 'user_1' } },
+        select: { role: true },
+      });
+    });
+
+    it('denies a demoted administrator a signed contract document', async () => {
+      bound('CONTRACT', 'contract_1');
+      db.contract.findUnique.mockResolvedValue({ id: 'contract_1' });
+      for (const role of ['EMPLOYEE', 'MANAGER']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read('signed-contract.pdf')).status).toBe(404);
+      }
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('signed-contract.pdf')).status).toBe(200);
+    });
+
+    it.each([
+      ['project file', 'PROJECT_FILE', 'projectFile'],
+      ['task attachment', 'TASK_ATTACHMENT', 'taskAttachment'],
+      ['contract', 'CONTRACT', 'contract'],
+    ] as const)(
+      'keeps denying after the owning %s is deleted, even to admins',
+      async (_label, ownerType, model) => {
+        bound(ownerType, 'deleted_owner');
+        db[model].findUnique.mockResolvedValue(null);
+        db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
+        for (const role of ['EMPLOYEE', 'ADMIN']) {
+          mocks.actor.mockResolvedValue(actor(role));
+          expect((await read('was-attached.pdf')).status).toBe(404);
+        }
+        expect(mocks.getUpload).not.toHaveBeenCalled();
+      }
+    );
+
+    describe('a file several records shared before the registry (grandfathered)', () => {
+      beforeEach(() => {
+        bound('PROJECT_FILE', 'pf_1');
+        db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
+        db.uploadedFileLegacyBinding.findMany.mockResolvedValue([
+          { ownerType: 'PROJECT_FILE', ownerId: 'pf_1' },
+          { ownerType: 'TASK_ATTACHMENT', ownerId: 'ta_1' },
+        ]);
+        db.taskAttachment.findUnique.mockResolvedValue({ taskId: 'task_1' });
+        db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_2' } } });
+      });
+      const memberOf = (projects: string[]) =>
+        db.projectMember.findUnique.mockImplementation(
+          async ({ where }: { where: { projectId_userId: { projectId: string } } }) =>
+            projects.includes(where.projectId_userId.projectId) ? { role: 'MEMBER' } : null
+        );
+
+      it("keeps it readable for the other record's members", async () => {
+        memberOf(['project_2']);
+        expect((await read('shared.pdf')).status).toBe(200);
+        expect(db.uploadedFileLegacyBinding.findMany).toHaveBeenCalledWith({
+          where: { name: 'shared.pdf' },
+          select: { ownerType: true, ownerId: true },
+        });
+      });
+
+      it("keeps it readable for the primary record's members", async () => {
+        memberOf(['project_1']);
+        expect((await read('shared.pdf')).status).toBe(200);
+      });
+
+      it('denies someone who can read none of its records', async () => {
+        memberOf(['project_9']);
+        expect((await read('shared.pdf')).status).toBe(404);
+        expect(mocks.getUpload).not.toHaveBeenCalled();
+      });
+
+      it('denies once every record it was shared by is deleted', async () => {
+        memberOf(['project_1', 'project_2']);
+        db.projectFile.findUnique.mockResolvedValue(null);
+        db.taskAttachment.findUnique.mockResolvedValue(null);
+        expect((await read('shared.pdf')).status).toBe(404);
+      });
+    });
+
+    it('denies an object bound to an owner kind it does not know', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      bound('SOMETHING_ELSE', 'x');
+      expect((await read('odd.pdf')).status).toBe(404);
+    });
+
+    it('lets the binding alone decide: other rows naming the URL are not consulted', async () => {
+      bound('PROJECT_FILE', 'pf_1');
+      db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
+      db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
+      expect((await read('plan.pdf')).status).toBe(200);
+      expect(db.contract.findUnique).not.toHaveBeenCalled();
+      expect(db.taskAttachment.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('leaves SOP proof to its own rules and never to the registry', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: true,
+        occurrence: { branchId: 'branch_a' },
+      });
+      db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'assignment_1' });
+      db.uploadedFile.findFirst.mockResolvedValue(null);
+      expect((await read('sop-proof.jpg')).status).toBe(200);
+      expect(db.uploadedFile.findFirst).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'restaurant-menu-import__cm0import1.pdf',
+      'owner-data-export-cm0job1.zip',
+      'Restaurant-Menu-Import__cm0import1.PNG',
+    ])('never serves server-only blob %s, even to admins', async (name) => {
+      for (const role of ['EMPLOYEE', 'ADMIN']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read(name)).status).toBe(404);
+      }
+      expect(mocks.tenantDb).not.toHaveBeenCalled();
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
   });
 

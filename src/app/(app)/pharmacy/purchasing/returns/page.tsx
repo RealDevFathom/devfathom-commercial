@@ -12,6 +12,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { formatLotExpiry } from '@/lib/pharmacy/product-class';
 import type { PurchaseReturnDetail, PurchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 import {
   BranchPicker,
@@ -581,7 +582,7 @@ export default async function PharmacyReturnsPage({
                         notice={notice}
                         options={lots.map((balance) => ({
                           value: `${balance.lot.id}|${balance.location.id}`,
-                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · expires ${dateOnly(balance.lot.batch.expiresAt)} · ${balance.onHandUnits} available in ${balance.location.name}`,
+                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
                         }))}
                         placeholder="Skip this line"
                       />
@@ -852,7 +853,8 @@ function ReturnDetail({
               />
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              Batch {line.lot.batch.batchNumber} · expires {dateOnly(line.lot.batch.expiresAt)} ·{' '}
+              Batch {line.lot.batch.batchNumber} ·{' '}
+              {formatLotExpiry(line.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} ·{' '}
               {units(line.quantityUnits)} from {line.location.name} · expects{' '}
               {money(line.expectedCreditMinor)} · {line.reason}
             </p>
