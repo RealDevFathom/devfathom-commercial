@@ -98,6 +98,13 @@ export default async function DashboardPage({
     ? pharmacistLanding(pharmacyCapabilities, ssr?.entitlements.enabledModules)
     : null;
   if (signInLanding && pharmacist?.home) redirect(pharmacist.home);
+  // DEV-602: should DEV-20's staff home below be unavailable, a member who holds no
+  // operational-reports grant (the cashier template) still gets a pharmacy home, never the
+  // owner title and layout editor. The administrator keeps the command centre, as in DEV-20,
+  // and unknown access (a failed read) keeps the server-gated command centre.
+  const reportAccess = pharmacyCapabilities
+    ? user?.role === 'ADMIN' || pharmacyCapabilities.includes('reports:operational')
+    : undefined;
 
   // DEV-20: after DEV-95's pharmacist home, only the owner/administrator or a manager who holds
   // the operational-reports grant gets the Owner command centre. Every other pharmacy member
@@ -167,7 +174,7 @@ export default async function DashboardPage({
       ) : pharmacyStaffHome ? (
         <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (
-        <PharmacyDashboardContent role={ssr.session?.user?.role} />
+        <PharmacyDashboardContent role={ssr.session?.user?.role} reportAccess={reportAccess} />
       ) : restaurant ? (
         <RestaurantDashboardContent
           enabledModules={ssr.entitlements.enabledModules}

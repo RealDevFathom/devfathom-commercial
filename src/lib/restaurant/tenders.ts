@@ -709,6 +709,16 @@ async function loadSettlementContext(
   // against whichever policy happens to be effective when payment is collected.
   const serviceAmount = formatMoney(bill.serviceChargeTotal);
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
+  // Principal already returned by a refund is no longer retained by the bill, so it
+  // must not count toward settlement; otherwise a bill could settle short.
+  const refundedPrincipal = money(
+    (
+      await tx.restaurantRefund.aggregate({
+        where: { billId: bill.id },
+        _sum: { amount: true },
+      })
+    )._sum.amount ?? ZERO
+  );
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -725,7 +735,7 @@ async function loadSettlementContext(
     at,
     proposedTenderType,
     priorTenderWeights: taxablePriorTenders,
-    acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
+    acceptedPrincipal: sub(sum(priorTenders.map((tender) => tender.amount)), refundedPrincipal),
     afterTaxDiscount,
     serviceCharge: { amount: serviceAmount, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,

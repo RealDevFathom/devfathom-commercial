@@ -52,6 +52,7 @@ import { PharmacyStaffHome } from './pharmacy-staff-home';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacistHome } from './pharmacist-home';
+import { PHARMACY_COMMAND_CENTRE_ACTIONS } from '@/lib/pharmacy/staff-home';
 
 function helpers() {
   return {
@@ -216,7 +217,8 @@ describe('PHARMACY first-run capability gate', () => {
     // DEV-20: a member with no command-centre grant lands on their own staff home.
     if (role === 'ADMIN' || allowed) {
       expect(page.props.children.type).toBe(PharmacyDashboardContent);
-      expect(page.props.children.props).toEqual({ role });
+      // DEV-602: the command centre is told this member holds report access.
+      expect(page.props.children.props).toEqual({ role, reportAccess: true });
     } else {
       expect(page.props.children.type).toBe(PharmacyStaffHome);
     }
@@ -276,7 +278,8 @@ describe('PHARMACY dashboard role routing (DEV-20)', () => {
   ])('keeps the Owner command centre for a %s', async (_name, role, grants) => {
     const { page } = await render(role, grants);
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
-    expect(page.props.children.props).toEqual({ role });
+    // DEV-602: the command centre is told this member holds report access.
+    expect(page.props.children.props).toEqual({ role, reportAccess: true });
     expect(mocks.loadPharmacyStaffHome).not.toHaveBeenCalled();
   });
 
@@ -377,6 +380,60 @@ describe('PHARMACY pharmacist landing (DEV-95)', () => {
     expect(error).toHaveBeenCalledWith('[dashboard] pharmacy access read unavailable', {
       error: 'TypeError',
     });
+    error.mockRestore();
+  });
+});
+
+describe('PHARMACY report access for the dashboard (DEV-602)', () => {
+  function pharmacySession(capabilities: string[], role = 'EMPLOYEE') {
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
+      capabilities.includes(action)
+    );
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: 'u', role, status: 'ACTIVE' } },
+      organization: { id: 'tenant' },
+      entitlements: {
+        vertical: 'PHARMACY',
+        enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-reports'],
+      },
+    });
+  }
+
+  it('keeps a cashier off the owner surface when the staff home is unavailable', async () => {
+    pharmacySession(['pharmacy:counter', 'pharmacy:orders']);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.loadPharmacyStaffHome.mockRejectedValue(new TypeError('unavailable'));
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBe(false);
+    error.mockRestore();
+  });
+
+  it('tells the command centre an owner-operator holds report access', async () => {
+    pharmacySession([...PHARMACY_COMMAND_CENTRE_ACTIONS, 'pharmacy:counter']);
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBe(true);
+  });
+
+  it('keeps the administrator on the command centre, as DEV-20 decides', async () => {
+    pharmacySession([], 'ADMIN');
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBe(true);
+  });
+
+  it('leaves report access unknown when the access read fails', async () => {
+    pharmacySession([]);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) => {
+      if (action === 'admin:access') return false;
+      throw new TypeError('unavailable');
+    });
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBeUndefined();
     error.mockRestore();
   });
 });

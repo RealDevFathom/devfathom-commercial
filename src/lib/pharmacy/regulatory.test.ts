@@ -7,6 +7,7 @@ import {
   BranchOperationDeniedError,
   evaluateBranchRegulatoryStatus,
   isLegacyPlaceholderProfile,
+  pharmacistPresentAt,
   regulatoryProfileBindingDenial,
   regulatoryStartInstant,
   type BranchOperationAction,
@@ -673,5 +674,96 @@ describe('DEV-298 start dates begin at the workspace’s local midnight', () => 
         }),
       })
     );
+  });
+});
+
+describe('pharmacist-presence hours (DEV-86)', () => {
+  // 2026-09-02 is a Wednesday (day 3); 12:00Z is 17:00 in Asia/Karachi.
+  const weekdays = {
+    provisional: false,
+    values: {
+      presenceHours: {
+        timeZone: 'Asia/Karachi',
+        windows: [{ days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }],
+      },
+    },
+  };
+
+  function dispense(state: BranchRegulatoryState, when: Date, presence = true) {
+    assertBranchMayOperate(state, {
+      name: 'DISPENSE',
+      at: when,
+      schedule: 'RX',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: presence,
+    });
+  }
+
+  it('permits a regulated dispense inside a presence window, in the rule set time zone', () => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date('2026-09-02T11:59:00.000Z'))).not.toThrow();
+    expect(() => dispense(state, new Date('2026-09-02T04:00:00.000Z'))).not.toThrow();
+    expect(state.auditDenied).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['at the window end (exclusive)', '2026-09-02T12:00:00.000Z'],
+    ['before the window opens', '2026-09-02T03:59:00.000Z'],
+    ['on a day without a window', '2026-09-06T06:00:00.000Z'],
+  ])('fails closed and audits a regulated dispense %s', (_case, iso) => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date(iso))).toThrowError(
+      new BranchOperationDeniedError('PHARMACIST_NOT_PRESENT')
+    );
+    expect(state.auditDenied).toHaveBeenCalledWith(
+      'PHARMACIST_NOT_PRESENT',
+      expect.objectContaining({ name: 'DISPENSE' })
+    );
+  });
+
+  it('does not apply presence hours to an act that does not need the pharmacist present', () => {
+    const state = validState();
+    state.ruleSet.pharmacistCoverageRule = weekdays;
+    expect(() => dispense(state, new Date('2026-09-06T06:00:00.000Z'), false)).not.toThrow();
+  });
+
+  it('adds no hours restriction when the rule set declares no presence hours', () => {
+    expect(pharmacistPresentAt({ provisional: false, values: {} }, at)).toBe(true);
+    expect(
+      pharmacistPresentAt({ provisional: false, values: { dispenseGrantRequired: true } }, at)
+    ).toBe(true);
+  });
+
+  it.each([
+    ['empty windows', { windows: [] }],
+    ['no windows', {}],
+    ['a null declaration', null],
+    [
+      'an unknown time zone',
+      { timeZone: 'Mars/Base', windows: weekdays.values.presenceHours.windows },
+    ],
+    ['a malformed time', { windows: [{ days: [3], start: '9am', end: '17:00' }] }],
+    ['an inverted window', { windows: [{ days: [3], start: '18:00', end: '09:00' }] }],
+    ['an invalid weekday', { windows: [{ days: [7], start: '00:00', end: '24:00' }] }],
+    [
+      'one malformed window beside a valid one',
+      { windows: [{ days: [3], start: '00:00', end: '24:00' }, { days: [3] }] },
+    ],
+  ])('fails closed on declared but unreadable presence hours: %s', (_case, presenceHours) => {
+    expect(pharmacistPresentAt({ provisional: false, values: { presenceHours } }, at)).toBe(false);
+  });
+
+  it('accepts a full-day window ending at 24:00', () => {
+    expect(
+      pharmacistPresentAt(
+        {
+          provisional: false,
+          values: { presenceHours: { windows: [{ days: [3], start: '00:00', end: '24:00' }] } },
+        },
+        at
+      )
+    ).toBe(true);
   });
 });

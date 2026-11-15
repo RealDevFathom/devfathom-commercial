@@ -404,6 +404,14 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-86: an Rx, restricted or controlled line is dispensed only inside the rule set's
+  // pharmacist-presence hours, on every line path, before any stock is allocated.
+  if (medicine.rx || medicine.restricted || medicine.controlled)
+    await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+      name: 'pharmacy.sale.dispense_regulated',
+      requiresQualifiedPerson: true,
+      requiresPharmacistPresence: true,
+    });
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.
