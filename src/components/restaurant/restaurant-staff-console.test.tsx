@@ -242,6 +242,37 @@ describe('Restaurant staff credential UI', () => {
     expect(within(dialog).getByLabelText('Primary branch')).toHaveValue('branch_1');
   });
 
+  it.each([false, true])(
+    'offers the Team invitation path when the user directory is empty: %s',
+    (empty) => {
+      const users = mocks.eligibleUsers;
+      if (empty) mocks.eligibleUsers = [];
+      try {
+        render(
+          <EntitlementsProvider value={entitlements}>
+            <RestaurantStaffConsole />
+          </EntitlementsProvider>
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+        const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+        expect(within(dialog).getByRole('link', { name: 'Invite from Team' })).toHaveAttribute(
+          'href',
+          '/team'
+        );
+        expect(dialog).toHaveTextContent('organization administrator');
+        expect(dialog).toHaveTextContent('After they accept');
+        expect(dialog).toHaveTextContent('Job roles');
+        expect(mocks.noopMutate).not.toHaveBeenCalled();
+
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+        expect(screen.queryByRole('link', { name: 'Invite from Team' })).not.toBeInTheDocument();
+      } finally {
+        mocks.eligibleUsers = users;
+      }
+    }
+  );
+
   it('selects organization users by human identity and marks linked users unavailable', () => {
     render(
       <EntitlementsProvider value={entitlements}>
