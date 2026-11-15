@@ -98,6 +98,17 @@ export function isNoExpiryDate(value: Date | string | null | undefined): boolean
 }
 
 export const NO_EXPIRY_LABEL = 'No expiry';
+
+/**
+ * QA-3 — the one way a lot expiry is shown or printed: "No expiry" for the marker, otherwise the
+ * caller's own rendering of the date (each surface keeps its date style).
+ */
+export function formatLotExpiry<T extends Date | string>(
+  value: T,
+  render: (value: T) => string
+): string {
+  return isNoExpiryDate(value) ? NO_EXPIRY_LABEL : render(value);
+}
 export const NON_DRUG_HOUSE_BATCH_PREFIX = 'RETAIL-';
 
 export type ReceiptBatchResolution =
