@@ -8,7 +8,10 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
   counterPaymentErrorMessage,
+  RX_SALE_COMPLETING_ROLE_NAMES,
 } from './counter-messages';
+import { capabilityMatches } from '@/lib/abac/capabilities';
+import { PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS } from '@/lib/vertical-catalog';
 import { PharmacyLoyaltyError } from './customer-loyalty';
 import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
@@ -133,11 +136,28 @@ describe('DEV-622: the counter names who can finish the bill', () => {
   const RX_DENIED =
     'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.';
 
+  const WHO =
+    'Someone with the “Owner / Operator” or “Pharmacist and cashier” role can complete this sale.';
+
+  it('names only the roles whose grants pass the Rx sale gate and take payment', () => {
+    expect(RX_SALE_COMPLETING_ROLE_NAMES).toEqual(['Owner / Operator', 'Pharmacist and cashier']);
+    // Wildcards never reach the exact dispensing grant: the plain Owner and the workspace
+    // administrator cannot sell a prescription line, so the counter must not name them.
+    expect(RX_SALE_COMPLETING_ROLE_NAMES).not.toContain('Owner');
+    for (const grant of ['*', 'pharmacy:*', ...PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS])
+      expect(capabilityMatches(grant, 'pharmacy:dispense'), grant).toBe(false);
+    // The default Pharmacist and Cashier each lack one of the two grants.
+    expect(RX_SALE_COMPLETING_ROLE_NAMES).not.toContain('Pharmacist');
+    expect(RX_SALE_COMPLETING_ROLE_NAMES).not.toContain('Cashier');
+  });
+
   it('tells a default Cashier on a prescription line who can sell it', () => {
     const message = counterErrorMessage(trpcFailure(RX_DENIED, 'FORBIDDEN'));
     expect(message).toBe(COUNTER_RX_NEEDS_PHARMACIST_MESSAGE);
-    expect(message).toMatch(/owner/);
-    expect(message).toMatch(/Pharmacist and cashier role/);
+    expect(message).toBe(
+      `Only a pharmacist can sell a prescription-only or restricted medicine. ${WHO}`
+    );
+    expect(message).not.toMatch(/the owner/i);
     // Payment refusals on a prescription line say the same thing.
     expect(counterPaymentErrorMessage(trpcFailure(RX_DENIED, 'FORBIDDEN'))).toBe(message);
   });
@@ -145,8 +165,8 @@ describe('DEV-622: the counter names who can finish the bill', () => {
   it('tells a default Pharmacist at payment or the drawer who can take payment', () => {
     const message = counterPaymentErrorMessage(trpcFailure(NO_PERMISSION, 'FORBIDDEN'));
     expect(message).toBe(COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE);
-    expect(message).toMatch(/owner/);
-    expect(message).toMatch(/Pharmacist and cashier role/);
+    expect(message).toBe(`Your role does not take payments or open the cash drawer. ${WHO}`);
+    expect(message).not.toMatch(/the owner/i);
   });
 
   it('keeps every other payment failure as it was', () => {

@@ -11,17 +11,41 @@
  * imports `counterErrorMessage` and never formats a failure itself.
  */
 
+import { capabilityMatches } from '@/lib/abac/capabilities';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+
 /** The refusal the server sends when the actor may not sell a prescription-only line. */
 const RX_SALE_DENIED_SERVER_MESSAGE =
   'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.';
 
+/**
+ * DEV-622: the shipped pharmacy roles that can finish a prescription sale alone. They hold
+ * both the exact `pharmacy:dispense` grant the Rx sale gate checks and `pharmacy:counter`
+ * for payment, matched by the same rule the server uses. Wildcards never reach the
+ * dispensing grant, so the plain Owner (`pharmacy:*`) and the workspace administrator
+ * (`*`) are not named: they cannot sell a prescription line either.
+ */
+export const RX_SALE_COMPLETING_ROLE_NAMES: readonly string[] = PHARMACY_ROLE_TEMPLATES.filter(
+  (role) =>
+    (['pharmacy:dispense', 'pharmacy:counter'] as const).every((action) =>
+      role.capabilities.some((grant) => capabilityMatches(grant, action))
+    )
+).map((role) => role.name);
+
+function whoCanCompleteSale(names: readonly string[]): string {
+  const quoted = names.map((name) => `“${name}”`);
+  const list =
+    quoted.length <= 2
+      ? quoted.join(' or ')
+      : `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}`;
+  return `Someone with the ${list} role can complete this sale.`;
+}
+
 /** DEV-622: shown when someone without the dispensing grant reaches a prescription line. */
-export const COUNTER_RX_NEEDS_PHARMACIST_MESSAGE =
-  'Only a pharmacist can sell a prescription-only or restricted medicine. Ask the owner, or a colleague with the Pharmacist and cashier role, to add it and take payment.';
+export const COUNTER_RX_NEEDS_PHARMACIST_MESSAGE = `Only a pharmacist can sell a prescription-only or restricted medicine. ${whoCanCompleteSale(RX_SALE_COMPLETING_ROLE_NAMES)}`;
 
 /** DEV-622: shown when someone without counter (payment) access tries to take payment. */
-export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE =
-  'Your role does not take payments or open the cash drawer. The owner, or a colleague with the Pharmacist and cashier role, can take payment for this bill.';
+export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE = `Your role does not take payments or open the cash drawer. ${whoCanCompleteSale(RX_SALE_COMPLETING_ROLE_NAMES)}`;
 
 /** The server's generic capability refusal (no `pharmacy:counter` for payment and drawer). */
 const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action.';
