@@ -49,11 +49,12 @@ import {
   assertSaleableOnReceipt,
   matchReceiptLine,
   PharmacyReceivingError,
+  receiptLineAllocatedChargeMinor,
   type MatchException,
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { assertSupplierEligible } from './purchasing';
+import { assertSupplierEligible, landedCost } from './purchasing';
 import {
   readSupplierCompliancePolicy,
   recordSupplierComplianceSkip,
@@ -188,6 +189,105 @@ export async function lockReceivablePurchaseOrder(
     throw new PharmacyReceivingError('INVALID_TRANSITION');
   }
   return order;
+}
+
+/**
+ * PUR-03: the order terms a goods receipt against a purchase order is costed
+ * with. The order's freight and other charges are allocated across its lines
+ * exactly as the order's landed cost shows them, and `termsFor` hands each
+ * delivered lot its order line's rebate and its share of that line's charge.
+ * The share is cumulative from the paid units already posted against the line
+ * and advances lot by lot, so a split or over-delivered line never capitalises
+ * its charge more than once. Drafting a receipt and re-verifying a prepared
+ * draft both cost through here, so they always agree.
+ */
+export async function orderReceiptCostTerms(
+  db: ScopedDb,
+  organizationId: string,
+  order: { id: string; freightMinor: number; otherChargesMinor: number }
+) {
+  const orderLines = new Map(
+    (
+      await db.pharmacyPurchaseOrderLine.findMany({
+        where: { purchaseOrderId: order.id },
+        orderBy: { lineNumber: 'asc' },
+        select: {
+          id: true,
+          medicineId: true,
+          packLevelId: true,
+          orderedPacks: true,
+          bonusPacks: true,
+          canonicalUnitsPerPack: true,
+          listPricePerPackMinor: true,
+          discountBps: true,
+          rebateBps: true,
+          taxBps: true,
+          taxCreditable: true,
+        },
+      })
+    ).map((line) => [line.id, line] as const)
+  );
+
+  const charges = new Map<string, number>();
+  if (orderLines.size > 0 && order.freightMinor + order.otherChargesMinor > 0) {
+    const lines = [...orderLines.values()];
+    const costed = landedCost({
+      lines,
+      freightMinor: order.freightMinor,
+      otherChargesMinor: order.otherChargesMinor,
+    });
+    lines.forEach((line, index) => charges.set(line.id, costed.lines[index]!.allocatedChargeMinor));
+  }
+
+  const paidUnitsReceived = new Map<string, number>();
+  if (charges.size > 0) {
+    for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
+      where: {
+        organizationId,
+        purchaseOrderLineId: { in: [...charges.keys()] },
+        goodsReceipt: { status: 'POSTED' },
+      },
+      select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
+    })) {
+      if (!earlier.purchaseOrderLineId) continue;
+      paidUnitsReceived.set(
+        earlier.purchaseOrderLineId,
+        (paidUnitsReceived.get(earlier.purchaseOrderLineId) ?? 0) + earlier.receivedCanonicalUnits
+      );
+    }
+  }
+
+  return {
+    orderLines,
+    /**
+     * The rebate and allocated charge for one lot of `receivedPaidCanonicalUnits`
+     * paid units against `orderLineId`. A lot with no order line carries neither:
+     * the order's charges were allocated over its ordered lines only.
+     */
+    termsFor(
+      orderLineId: string | null | undefined,
+      receivedPaidCanonicalUnits: number
+    ): { rebateBps: number; allocatedChargeMinor: number } {
+      const orderLine = orderLineId ? orderLines.get(orderLineId) : undefined;
+      if (!orderLine) return { rebateBps: 0, allocatedChargeMinor: 0 };
+      const charge = charges.get(orderLine.id);
+      if (charge === undefined) return { rebateBps: orderLine.rebateBps, allocatedChargeMinor: 0 };
+      const previouslyReceivedPaidCanonicalUnits = paidUnitsReceived.get(orderLine.id) ?? 0;
+      paidUnitsReceived.set(
+        orderLine.id,
+        previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits
+      );
+      return {
+        rebateBps: orderLine.rebateBps,
+        allocatedChargeMinor: receiptLineAllocatedChargeMinor({
+          orderLineAllocatedChargeMinor: charge,
+          orderedPaidCanonicalUnits: orderLine.orderedPacks * orderLine.canonicalUnitsPerPack,
+          previouslyReceivedPaidCanonicalUnits,
+          receivedPaidCanonicalUnits,
+        }),
+      };
+    },
+  };
 }
 
 export async function postGoodsReceipt(

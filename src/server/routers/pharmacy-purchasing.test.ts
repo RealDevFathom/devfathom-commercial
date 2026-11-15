@@ -1518,6 +1518,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     );
   });
 
+  it('costs an unordered line on an order receipt at its invoice terms alone', async () => {
+    chargedOrder(10_000);
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, purchaseOrderLineId: undefined, bonusPacks: 0 }],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // The order's charges were allocated over its ordered lines only, and an
+    // unordered item has no order-line rebate: 100_000 over 100 units.
+    expect(line).toMatchObject({ purchaseOrderLineId: null, unitCostMinor: 1_000 });
+  });
+
   it('adds no order charge or rebate to a direct purchase line', async () => {
     db.pharmacyPurchaseOrderLine.findMany.mockClear();
     await caller().createGoodsReceipt({

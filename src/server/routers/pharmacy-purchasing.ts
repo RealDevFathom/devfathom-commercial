@@ -19,6 +19,7 @@ import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
   lockReceivablePurchaseOrder,
+  orderReceiptCostTerms,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -77,7 +78,6 @@ import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
   receiptLineQuantities,
-  receiptLineAllocatedChargeMinor,
   receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
@@ -1467,7 +1467,8 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          let orderCharges = { freightMinor: 0, otherChargesMinor: 0 };
+          let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
+            null;
           if (input.purchaseOrderId) {
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
@@ -1475,7 +1476,8 @@ const purchasingRouter = router({
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
             });
-            orderCharges = {
+            costedOrder = {
+              id: input.purchaseOrderId,
               freightMinor: order.freightMinor,
               otherChargesMinor: order.otherChargesMinor,
             };
@@ -1543,68 +1545,11 @@ const purchasingRouter = router({
             if ('blocked' in attempt) return attempt;
           }
 
-          const ownOrderLines = new Map(
-            input.purchaseOrderId
-              ? (
-                  await db.pharmacyPurchaseOrderLine.findMany({
-                    where: { purchaseOrderId: input.purchaseOrderId },
-                    orderBy: { lineNumber: 'asc' },
-                    select: {
-                      id: true,
-                      medicineId: true,
-                      packLevelId: true,
-                      orderedPacks: true,
-                      bonusPacks: true,
-                      canonicalUnitsPerPack: true,
-                      listPricePerPackMinor: true,
-                      discountBps: true,
-                      rebateBps: true,
-                      taxBps: true,
-                      taxCreditable: true,
-                    },
-                  })
-                ).map((line) => [line.id, line] as const)
-              : []
-          );
-          // PUR-03: the order's freight and other charges are allocated across
-          // its lines exactly as the order's landed cost shows them, so the lot
-          // carries the same landed cost the order was approved at.
-          const orderLineCharges = new Map<string, number>();
-          if (
-            ownOrderLines.size > 0 &&
-            orderCharges.freightMinor + orderCharges.otherChargesMinor > 0
-          ) {
-            const orderLines = [...ownOrderLines.values()];
-            const costed = landedCost({
-              lines: orderLines,
-              freightMinor: orderCharges.freightMinor,
-              otherChargesMinor: orderCharges.otherChargesMinor,
-            });
-            orderLines.forEach((orderLine, index) =>
-              orderLineCharges.set(orderLine.id, costed.lines[index]!.allocatedChargeMinor)
-            );
-          }
-          // Paid units already booked against each charged order line by posted
-          // receipts, advanced lot by lot below, so a split or over-delivered
-          // line never capitalises its charge more than once.
-          const paidUnitsReceived = new Map<string, number>();
-          if (orderLineCharges.size > 0) {
-            for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
-              where: {
-                organizationId: scope.organizationId,
-                purchaseOrderLineId: { in: [...orderLineCharges.keys()] },
-                goodsReceipt: { status: 'POSTED' },
-              },
-              select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
-            })) {
-              if (!earlier.purchaseOrderLineId) continue;
-              paidUnitsReceived.set(
-                earlier.purchaseOrderLineId,
-                (paidUnitsReceived.get(earlier.purchaseOrderLineId) ?? 0) +
-                  earlier.receivedCanonicalUnits
-              );
-            }
-          }
+          // PUR-03: the lot carries the landed cost the order was approved at:
+          // its line rebate and its share of the order's freight and charges.
+          const orderTerms = costedOrder
+            ? await orderReceiptCostTerms(db, scope.organizationId, costedOrder)
+            : null;
 
           const lines = [];
           const seenSerials = new Set<string>();
@@ -1617,7 +1562,7 @@ const purchasingRouter = router({
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
             const orderLine = line.purchaseOrderLineId
-              ? ownOrderLines.get(line.purchaseOrderLineId)
+              ? orderTerms?.orderLines.get(line.purchaseOrderLineId)
               : undefined;
             if (line.purchaseOrderLineId) {
               if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
@@ -1638,21 +1583,10 @@ const purchasingRouter = router({
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               rejectedCanonicalUnits: line.rejectedCanonicalUnits,
             });
-            const orderLineCharge = orderLine ? orderLineCharges.get(orderLine.id) : undefined;
-            let allocatedChargeMinor = 0;
-            if (orderLine && orderLineCharge !== undefined) {
-              const previouslyReceivedPaidCanonicalUnits = paidUnitsReceived.get(orderLine.id) ?? 0;
-              allocatedChargeMinor = receiptLineAllocatedChargeMinor({
-                orderLineAllocatedChargeMinor: orderLineCharge,
-                orderedPaidCanonicalUnits: orderLine.orderedPacks * orderLine.canonicalUnitsPerPack,
-                previouslyReceivedPaidCanonicalUnits,
-                receivedPaidCanonicalUnits: quantities.receivedCanonicalUnits,
-              });
-              paidUnitsReceived.set(
-                orderLine.id,
-                previouslyReceivedPaidCanonicalUnits + quantities.receivedCanonicalUnits
-              );
-            }
+            const orderCostTerms = orderTerms?.termsFor(
+              line.purchaseOrderLineId,
+              quantities.receivedCanonicalUnits
+            ) ?? { rebateBps: 0, allocatedChargeMinor: 0 };
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
               batchNumber: line.batchNumber,
@@ -1731,10 +1665,10 @@ const purchasingRouter = router({
                 canonicalUnitsPerPack: line.canonicalUnitsPerPack,
                 invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
                 discountBps: line.discountBps,
-                rebateBps: orderLine?.rebateBps ?? 0,
+                rebateBps: orderCostTerms.rebateBps,
                 taxBps: line.taxBps,
                 taxCreditable: line.taxCreditable,
-                allocatedChargeMinor,
+                allocatedChargeMinor: orderCostTerms.allocatedChargeMinor,
               }),
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
