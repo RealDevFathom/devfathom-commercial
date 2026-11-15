@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS "pharmacy_competitor_price_observations" (
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
   "branchId" TEXT NOT NULL,
   "medicineId" TEXT NOT NULL,
+  "packLevelId" TEXT NOT NULL,
   "competitorLabel" TEXT NOT NULL,
   "observedPriceMinor" INTEGER NOT NULL,
   "observedAt" TIMESTAMP(3) NOT NULL,
@@ -33,10 +34,14 @@ CREATE TABLE IF NOT EXISTS "pharmacy_competitor_price_observations" (
   CONSTRAINT "pharmacy_competitor_price_obs_medicine_fkey"
     FOREIGN KEY ("organizationId", "medicineId")
     REFERENCES "pharmacy_medicines" ("organizationId", "id") ON DELETE RESTRICT,
+  CONSTRAINT "pharmacy_competitor_price_obs_pack_level_fkey"
+    FOREIGN KEY ("organizationId", "packLevelId")
+    REFERENCES "pharmacy_pack_levels" ("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_competitor_price_obs_check" CHECK (
     length(btrim("id")) > 0 AND
     length(btrim("branchId")) > 0 AND
     length(btrim("medicineId")) > 0 AND
+    length(btrim("packLevelId")) > 0 AND
     length(btrim("competitorLabel")) BETWEEN 1 AND 80 AND
     length(btrim("recordedByUserId")) > 0 AND
     "observedPriceMinor" > 0
@@ -45,7 +50,7 @@ CREATE TABLE IF NOT EXISTS "pharmacy_competitor_price_observations" (
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_competitor_price_observations_org_id_key"
   ON "pharmacy_competitor_price_observations" ("organizationId", "id");
 CREATE INDEX IF NOT EXISTS "pharmacy_competitor_price_obs_medicine_idx"
-  ON "pharmacy_competitor_price_observations" ("organizationId", "branchId", "medicineId", "observedAt");
+  ON "pharmacy_competitor_price_observations" ("organizationId", "branchId", "medicineId", "packLevelId", "observedAt");
 
 ALTER TABLE "pharmacy_competitor_price_observations" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_competitor_price_observations" FORCE ROW LEVEL SECURITY;

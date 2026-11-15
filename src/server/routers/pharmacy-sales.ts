@@ -902,6 +902,7 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           medicineId: z.string().trim().min(1).max(128),
+          packLevelId: z.string().trim().min(1).max(128),
           competitorLabel: z.string().trim().min(1).max(80),
           observedPriceMinor: z.number().int().positive().max(1_000_000_000),
           observedAt: z.coerce.date(),

@@ -66,16 +66,22 @@ export async function recordCompetitorPrice(
   scope: LedgerScope,
   input: {
     medicineId: string;
+    packLevelId: string;
     competitorLabel: string;
     observedPriceMinor: number;
     observedAt: Date;
   }
 ) {
-  const medicine = await db.medicine.findFirst({
-    where: { organizationId: scope.organizationId, id: input.medicineId },
+  // The pack level must be a pack of this medicine, so the price is like for like.
+  const packLevel = await db.packLevel.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      id: input.packLevelId,
+      presentation: { medicineId: input.medicineId },
+    },
     select: { id: true },
   });
-  if (!medicine) throw new TRPCError({ code: 'NOT_FOUND' });
+  if (!packLevel) throw new TRPCError({ code: 'NOT_FOUND' });
   if (input.observedAt.getTime() > Date.now() + 5 * 60_000)
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Observation is in the future.' });
   return db.pharmacyCompetitorPriceObservation.create({
@@ -83,6 +89,7 @@ export async function recordCompetitorPrice(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       medicineId: input.medicineId,
+      packLevelId: input.packLevelId,
       competitorLabel: input.competitorLabel,
       observedPriceMinor: input.observedPriceMinor,
       observedAt: input.observedAt,
@@ -131,7 +138,11 @@ export async function readDiscountSuggestions(
         where: {
           organizationId: scope.organizationId,
           branchId: scope.branchId,
-          receivedExpiresAt: { gt: now },
+          // Only stock the branch can sell now: received, active and unexpired
+          // batch, and an available balance above zero.
+          receivedAt: { not: null },
+          batch: { state: 'ACTIVE', expiresAt: { gt: now }, medicine: { saleable: true } },
+          balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
           packLevel: { presentation: { medicineId: medicine.id } },
         },
         select: {
@@ -156,6 +167,7 @@ export async function readDiscountSuggestions(
             organizationId: scope.organizationId,
             branchId: scope.branchId,
             medicineId: medicine.id,
+            packLevelId,
             observedAt: { gte: competitorSince },
           },
           orderBy: { observedPriceMinor: 'asc' },

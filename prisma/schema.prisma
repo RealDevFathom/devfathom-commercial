@@ -15968,13 +15968,16 @@ model OutboundEffect {
 
 /// DEV-66: APPEND-ONLY competitor discount log. A manager records the price a
 /// nearby competitor was seen charging for a medicine; the newest unexpired
-/// observations feed discount suggestions. `medicineId` references
-/// pharmacy_medicines through a SQL-only tenant-composite foreign key.
+/// observations for the same pack level feed discount suggestions. `medicineId`
+/// and `packLevelId` reference pharmacy_medicines and pharmacy_pack_levels
+/// through SQL-only tenant-composite foreign keys.
 model PharmacyCompetitorPriceObservation {
   id                 String   @id @default(cuid())
   organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId           String
   medicineId         String
+  /// The sealed pack the observed price is for; prices compare only like for like.
+  packLevelId        String
   competitorLabel    String
   observedPriceMinor Int
   observedAt         DateTime
@@ -15984,6 +15987,6 @@ model PharmacyCompetitorPriceObservation {
   branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
-  @@index([organizationId, branchId, medicineId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
   @@map("pharmacy_competitor_price_observations")
 }
