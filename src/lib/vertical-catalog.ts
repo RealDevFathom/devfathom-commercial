@@ -936,7 +936,15 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     capabilities: ['pharmacy:procurement'],
   },
   { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
-  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
+  {
+    key: 'finance',
+    name: 'Finance',
+    isSystem: true,
+    // DEV-519: every pharmacy financial report lives inside the Reports command
+    // centre, whose rail entry, page and procedures check `reports:operational`.
+    // Granting only `reports:financial` left Finance with no reachable report.
+    capabilities: ['reports:operational', 'reports:financial'],
+  },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
 

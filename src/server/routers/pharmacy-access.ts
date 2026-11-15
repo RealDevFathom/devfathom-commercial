@@ -15,6 +15,8 @@ import { canAccessPharmacyCounter, canClosePharmacyDay } from './pharmacy-sales'
  * - `pharmacy:close` — the day-close console, answered by the procedures' own
  *   close gate for some branch (an administrator, a member granted
  *   `pharmacy:close`, or a manager actively assigned to a branch).
+ * - `pharmacy:safety` — with `pharmacy:dispense`, opens the substitution workspace
+ *   (DEV-35), so the counter only links there for a holder of either.
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
@@ -23,6 +25,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'reports:operational',
   'pharmacy:counter',
   'pharmacy:close',
+  'pharmacy:safety',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];
