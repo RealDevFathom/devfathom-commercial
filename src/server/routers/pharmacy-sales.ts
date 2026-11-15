@@ -1117,9 +1117,12 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-607: the same member, capability and branch-assignment gate as
+        // `counterCart`, so nobody opens a bill they cannot then read or pay.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         // createSale enforces the persisted regulatory gate in this transaction.
         return await ctx.db.$transaction(async (tx) =>
-          createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
+          createSale(txDb(tx), scope, input.quotation)
         );
       } catch (error) {
         fail(error);
@@ -1209,9 +1212,10 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        // DEV-607: refused before any stock is allocated, with the gate `counterCart` uses.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
