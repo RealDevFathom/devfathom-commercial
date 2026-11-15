@@ -1,6 +1,7 @@
 import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
 import { BasketPanel } from './basket-panel';
+import { ProfilePanel } from './profile-panel';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 import { Button } from '@/components/ui/button';
@@ -202,6 +203,7 @@ export default async function PharmacyMarketingPage({
         unavailable={basketsUnavailable}
         timeZone={zone}
       />
+      <ProfilePanel branchId={branchId} />
       {review && (
         <SectionCard
           key={review.campaign.id}
