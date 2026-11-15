@@ -731,7 +731,9 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Sold line').selectOption({ index: 1 });
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
   await dialog.getByLabel('Return quantity (base units)').fill('5');
-  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
+  // Nothing is pre-selected: the cashier taps a reason and a stock outcome.
+  await pressControl(dialog.getByRole('button', { name: 'Wrong item / strip', exact: true }));
+  await pressControl(dialog.getByRole('button', { name: /^Restock/ }));
   await dialog
     .getByLabel('Inspection and integrity decision')
     .fill('Intact strip, correct storage verified');
@@ -752,7 +754,8 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   // The remaining physical units have no verifiable lot. Keep separate quarantine custody.
   await dialog.getByLabel('Returned lot / batch').selectOption('');
   await dialog.getByLabel('Return quantity (base units)').fill('5');
-  await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
+  await pressControl(dialog.getByRole('button', { name: "Keep aside — don't resell" }));
+  await dialog.getByLabel('Keep-aside (quarantine) location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision')
     .fill('Batch marking unreadable; pharmacist verification required');

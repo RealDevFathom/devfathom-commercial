@@ -82,6 +82,53 @@ type Props = {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
+/** Return reasons. No reason is pre-selected: the cashier must tap one (DEV-732). */
+const returnReasons = [
+  { value: 'WRONG_ITEM', label: 'Wrong item / strip' },
+  { value: 'DAMAGED', label: 'Damaged' },
+  { value: 'CUSTOMER_CHANGED_MIND', label: 'Customer changed mind' },
+  { value: 'OTHER', label: 'Other — explain in inspection' },
+] as const;
+type Disposition = 'RESTOCK' | 'QUARANTINE';
+
+/** Tap-to-choose buttons with no default selection. */
+function ChoiceGroup<T extends string>({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: T | '';
+  options: ReadonlyArray<{ value: T; label: string; disabled?: boolean }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p id={id} className="text-sm font-medium text-text-strong">
+        {label}
+      </p>
+      <div role="group" aria-labelledby={id} className="grid gap-2 sm:grid-cols-2">
+        {options.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant={value === option.value ? 'default' : 'outline'}
+            className="h-auto min-h-11 w-full whitespace-normal"
+            aria-pressed={value === option.value}
+            disabled={option.disabled}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
   const [open, setOpen] = useState(false);
   // DEV-647: cashiers record returns only; refunds stay with managers and owners.
@@ -160,8 +207,10 @@ export function ReturnForm({
   const [lineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState('1');
-  const [reason, setReason] = useState('WRONG_ITEM');
-  const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
+  // No pre-set reason or disposition: a hurried submit must not record audit data the
+  // cashier never chose.
+  const [reason, setReason] = useState('');
+  const [disposition, setDisposition] = useState<Disposition | ''>('');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
   const [tenderId, setTenderId] = useState('');
@@ -566,7 +615,7 @@ export function ReturnForm({
                 setWitnessStaffId('');
                 setWitnessPin('');
                 setLotId('');
-                setDisposition('QUARANTINE');
+                setDisposition('');
                 setConfirmed(false);
               }}
             >
@@ -589,22 +638,22 @@ export function ReturnForm({
               value={lotId}
               onChange={(event) => {
                 setLotId(event.target.value);
-                setDisposition('QUARANTINE');
+                setDisposition('');
                 setConfirmed(false);
               }}
             >
-              <option value="">Lot cannot be verified — quarantine</option>
+              <option value="">Can&apos;t tell which batch → keep aside (don&apos;t resell)</option>
               {line?.lots.map((lot) => (
                 <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
                   {lot.batchNumber} · {lot.lotId} · {lot.returnableUnits} units remaining
-                  {lot.restockAllowed ? '' : ' · quarantine only'}
+                  {lot.restockAllowed ? '' : ' · keep aside only'}
                 </option>
               ))}
             </select>
             {!lotId && (
               <p className="text-sm text-text-muted">
-                Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
-                receives available stock.
+                Stock from an unknown batch is kept aside (not resold) with a
+                pharmacist-verification task. No lot receives available stock.
               </p>
             )}
             <Label htmlFor="return-units">Return quantity (base units)</Label>
@@ -627,39 +676,41 @@ export function ReturnForm({
                 {line.canonicalUnitsPerSaleUnit} base units.
               </p>
             )}
-            <Label htmlFor="return-reason">Reason</Label>
-            <select
+            <ChoiceGroup
               id="return-reason"
-              className={selectClass}
+              label="Reason"
               value={reason}
-              onChange={(event) => {
-                setReason(event.target.value);
+              options={returnReasons}
+              onChange={(next) => {
+                setReason(next);
                 setConfirmed(false);
               }}
-            >
-              <option value="WRONG_ITEM">Wrong item / strip</option>
-              <option value="DAMAGED">Damaged</option>
-              <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
-              <option value="OTHER">Other — explain in inspection</option>
-            </select>
-            <Label htmlFor="return-disposition">Stock disposition</Label>
-            <select
+            />
+            <ChoiceGroup<Disposition>
               id="return-disposition"
-              className={selectClass}
+              label="What happens to the stock?"
               value={disposition}
-              onChange={(event) => {
-                setDisposition(event.target.value as typeof disposition);
+              options={[
+                {
+                  value: 'RESTOCK',
+                  label: 'Restock — back on the shelf for sale',
+                  disabled: !selectedLot?.restockAllowed,
+                },
+                { value: 'QUARANTINE', label: "Keep aside — don't resell" },
+              ]}
+              onChange={(next) => {
+                setDisposition(next);
                 setConfirmed(false);
               }}
-            >
-              <option value="QUARANTINE">Quarantine for review</option>
-              <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
-                Restock to verified lot and original shelf
-              </option>
-            </select>
+            />
+            {lotId && !selectedLot?.restockAllowed && (
+              <p className="text-sm text-text-muted">
+                This batch cannot be restocked. Keep it aside for review.
+              </p>
+            )}
             {disposition === 'QUARANTINE' && (
               <>
-                <Label htmlFor="return-location">Quarantine location</Label>
+                <Label htmlFor="return-location">Keep-aside (quarantine) location</Label>
                 <select
                   id="return-location"
                   className={selectClass}
@@ -712,6 +763,8 @@ export function ReturnForm({
               variant="destructive"
               disabled={
                 !line ||
+                !reason ||
+                !disposition ||
                 !confirmed ||
                 !integrity.trim() ||
                 !Number.isSafeInteger(Number(units)) ||
@@ -721,7 +774,8 @@ export function ReturnForm({
                 (disposition === 'QUARANTINE' && !location) ||
                 !witnessReady
               }
-              onClick={() =>
+              onClick={() => {
+                if (!reason || !disposition) return;
                 void execute(
                   {
                     kind: 'return',
@@ -739,8 +793,8 @@ export function ReturnForm({
                     },
                   },
                   witness
-                )
-              }
+                );
+              }}
             >
               Record return
             </Button>
@@ -796,6 +850,11 @@ export function ReturnForm({
                   reversal required. I will reconcile the original provider separately.
                 </label>
               )}
+              {!reason && (
+                <p className="text-sm text-text-muted">
+                  Choose the reason in step 1 before refunding.
+                </p>
+              )}
               {!attempt && managerPinField}
               <Button
                 variant="destructive"
@@ -806,7 +865,8 @@ export function ReturnForm({
                   amountMinor <= 0 ||
                   amountMinor > available ||
                   (manualRequired && !manual) ||
-                  !managerPinReady
+                  !managerPinReady ||
+                  !reason
                 }
                 onClick={() =>
                   void execute(
