@@ -407,6 +407,8 @@ describe('counter receipt authorization', () => {
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
+    // DEV-298: the workspace zone picks the profile in force on the completion's local day.
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
     vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
       ntn: 'HISTORICAL-NTN',
       strn: 'HISTORICAL-STRN',
@@ -420,13 +422,22 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'Asia/Karachi'
+    );
+    expect(readDispensingLabelSources).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      expect.objectContaining({ receiptNumber: 7 }),
+      'Asia/Karachi'
     );
   });
 
   it('supplies the completion-time regulatory identity to browser receipts', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
+    // DEV-298: the workspace zone picks the profile in force on the completion's local day.
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
     vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
       ntn: 'NTN-HISTORICAL',
       strn: 'STRN-HISTORICAL',
@@ -440,7 +451,8 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'Asia/Karachi'
     );
   });
 

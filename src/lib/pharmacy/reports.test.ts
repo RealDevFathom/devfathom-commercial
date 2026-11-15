@@ -390,3 +390,47 @@ describe('PH-RPT aggregate corrections', () => {
     ).toThrow('Too many');
   });
 });
+
+describe('pharmacist coverage count on a profile start day (DEV-298)', () => {
+  it.each([
+    ['00:30 PKT on the start day', '2026-10-20T19:30:00.000Z', '2026-10-21T00:00:00.000Z'],
+    ['23:59 PKT the day before', '2026-10-20T18:59:00.000Z', '2026-10-20T18:59:00.000Z'],
+  ])(
+    'starts profile and coverage on the workspace day at %s; expiry stays at the instant',
+    async (_label, now, asOf) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(now));
+      try {
+        const queryRaw = vi.fn().mockResolvedValue([]);
+        const count = vi.fn().mockResolvedValue(0);
+        await readPharmacyOwnerCommandCentre(
+          {
+            $queryRaw: queryRaw,
+            pharmacyRecallNotice: { count },
+            pharmacySupplierClaim: { count },
+            pharmacyReceivingException: { count },
+            branchRegulatoryProfile: { count },
+          } as never,
+          {
+            branchIds: ['branch_1'],
+            from: '2026-10-21',
+            to: '2026-10-21',
+            timeZone: 'Asia/Karachi',
+          }
+        );
+        const coverage = count.mock.calls.find(
+          ([args]) => (args as { where: Record<string, unknown> }).where.qualifiedPersonValidTo
+        )![0] as { where: Record<string, unknown> };
+        expect(coverage.where).toEqual({
+          branchId: { in: ['branch_1'] },
+          effectiveFrom: { lte: new Date(asOf) },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date(asOf) } }],
+          qualifiedPersonValidFrom: { lte: new Date(asOf) },
+          qualifiedPersonValidTo: { gt: new Date(now) },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+});

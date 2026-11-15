@@ -135,6 +135,7 @@ export async function composeOwnerDigest(
     readLicenceRenewalReminders(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
+      timeZone: input.timeZone,
     }).catch((): RenewalReminder[] => []),
   ]);
   const config = ownerBriefingConfig();

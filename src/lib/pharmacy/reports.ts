@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { workspaceDateRange } from '@/lib/timezone';
 
 import { grossMarginQuery } from './finance-reports';
+import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -364,9 +365,9 @@ export async function readPharmacyOwnerCommandCentre(
       db.branchRegulatoryProfile.count({
         where: {
           branchId: { in: filters.branchIds },
-          effectiveFrom: { lte: at },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-          qualifiedPersonValidFrom: { lte: at },
+          // DEV-298: profile and coverage start on the workspace's calendar day; expiry stays at `at`.
+          ...regulatoryProfileInForceWhere(at, filters.timeZone),
+          qualifiedPersonValidFrom: { lte: regulatoryStartInstant(at, filters.timeZone) },
           qualifiedPersonValidTo: { gt: at },
         },
       }),
