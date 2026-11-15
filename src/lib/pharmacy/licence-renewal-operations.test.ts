@@ -51,7 +51,7 @@ describe('#720 readLicenceRenewalReminders', () => {
     expect(reminders).toEqual([]);
   });
 
-  it("uses each supplier's latest unsuperseded licence", async () => {
+  it("uses each supplier's latest verified, unsuperseded licence", async () => {
     const db = dbWith(
       [],
       [
@@ -68,7 +68,10 @@ describe('#720 readLicenceRenewalReminders', () => {
       ['Due supplier', 60],
     ]);
     const licences = db.pharmacySupplier.findMany.mock.calls[0]![0].select.licences;
-    expect(licences.where).toMatchObject({ supersededBy: { none: {} } });
+    expect(licences.where).toMatchObject({
+      verifiedAt: { not: null },
+      supersededBy: { none: {} },
+    });
     expect(licences).toMatchObject({ orderBy: { expiresAt: 'desc' }, take: 1 });
   });
 });

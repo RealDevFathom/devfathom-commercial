@@ -13,9 +13,9 @@ import {
  * Branch licence and qualified-person registration come from the branch's
  * currently effective, non-placeholder regulatory profile, so saving the
  * renewed licence as a new profile version stops the reminder. Supplier
- * licences use each active supplier's latest unsuperseded filing, so filing the
- * renewed licence stops it too. Every query carries the organizationId
- * predicate; row-level security is the second wall.
+ * licences use each active supplier's latest verified, unsuperseded filing, so
+ * filing and verifying the renewed licence stops it too. Every query carries
+ * the organizationId predicate; row-level security is the second wall.
  */
 export async function readLicenceRenewalReminders(
   db: ScopedDb,
@@ -50,7 +50,10 @@ export async function readLicenceRenewalReminders(
       select: {
         name: true,
         licences: {
-          where: { organizationId, supersededBy: { none: {} } },
+          // Purchasing only trades on verified, unsuperseded evidence
+          // (supplierLicenceStatus), so an unverified renewal filing must not
+          // clear the reminder for the licence that is actually usable.
+          where: { organizationId, verifiedAt: { not: null }, supersededBy: { none: {} } },
           orderBy: { expiresAt: 'desc' },
           take: 1,
           select: { licenceNumber: true, expiresAt: true },
