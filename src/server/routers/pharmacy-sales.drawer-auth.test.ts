@@ -49,6 +49,7 @@ vi.mock('@/lib/pharmacy/receipt-print', async (original) => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { readCounterCart } from '@/lib/pharmacy/counter';
 import { readPharmacyReceiptFormat } from '@/lib/pharmacy/receipt-print';
 import {
@@ -636,4 +637,49 @@ describe('counter receipt reads and cash tender keep DENY over ALLOW (DEV-659)',
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('settlementAccess decides who sees the counter payment controls (DEV-97)', () => {
+  const roleRules = (key: string): Rule[] =>
+    PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => ({
+      capability,
+      effect: 'ALLOW',
+    }));
+
+  it.each([
+    ['pharmacist', false],
+    ['cashier', true],
+  ])('answers for the default %s role: %s', async (key, authorized) => {
+    const f = fixture(roleRules(key));
+    await expect(f.caller().settlementAccess()).resolves.toEqual({
+      authorized,
+      userId: 'user-a',
+      organizationId: 'org-a',
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows a pharmacist an owner granted pharmacy:counter, without changing the role', async () => {
+    const f = fixture(roleRules('pharmacist'), { overrides: [COUNTER] });
+    await expect(f.caller().settlementAccess()).resolves.toMatchObject({ authorized: true });
+  });
+
+  it('honours an explicit counter DENY over the cashier grant', async () => {
+    const f = fixture(roleRules('cashier'), {
+      overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+    await expect(f.caller().settlementAccess()).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('still refuses a drawer to a default pharmacist on the server', async () => {
+    const f = fixture(roleRules('pharmacist'), { assigned: ['branch-a'] });
+    await expect(
+      f.caller().openDrawer({
+        branchId: 'branch-a',
+        deviceId: 'device-a',
+        businessDate: new Date(),
+        openingFloatMinor: 0,
+      })
+    ).rejects.toMatchObject(NO_PERMISSION);
+  });
 });

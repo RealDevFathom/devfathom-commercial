@@ -1628,6 +1628,14 @@ export const pharmacySalesRouter = router({
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-97: only someone who takes payment opens a drawer. A pharmacist without
+        // `pharmacy:counter` builds the bill and hands it to counter staff, whose
+        // tender keeps its own capability and drawer checks.
+        const takesPayment =
+          !input.quotation &&
+          (await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+            db: ctx.db,
+          }));
         // createSale enforces the persisted regulatory gate in this transaction.
         // DEV-725: opening the drawer is the first step of the shift. A counter
         // bill is never started on a device with no OPEN drawer, so the cashier
@@ -1636,7 +1644,7 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
-            if (input.quotation) return;
+            if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
             await lockOpenPharmacyDrawer(db, scope, input.deviceId);
           });
@@ -2726,6 +2734,18 @@ export const pharmacySalesRouter = router({
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
+
+  /**
+   * DEV-97: whether the counter offers the drawer and payment controls. Presentation
+   * only: openDrawer and tender keep their own `pharmacy:counter` checks.
+   */
+  settlementAccess: protectedProcedure.query(async ({ ctx }) => ({
+    userId: ctx.session.user.id,
+    organizationId: ctx.session.user.organizationId,
+    authorized: await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+    }),
+  })),
 
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
