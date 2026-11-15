@@ -34,6 +34,7 @@ function previewFor(kind: SaleUnitKind, quantity: number, availableUnits = 500) 
 function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnitToggle>> = {}) {
   const props = {
     options: OPTIONS,
+    onHandUnits: 500,
     selected: 'STRIP' as SaleUnitKind | null,
     quantity: '2',
     preview: previewFor('STRIP', 2),
@@ -178,5 +179,16 @@ describe('CounterUnitToggle (POS-03)', () => {
     renderToggle({ options: [], selected: null, preview: null });
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.getByRole('status').textContent).toContain('No sale unit is available');
+    expect(screen.getByRole('status')).toHaveTextContent('pack hierarchy does not match');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Out of stock');
+  });
+
+  it.each([false, true])('explains exhausted stock without a pack warning (inline: %s)', (inline) => {
+    renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null, inline });
+    expect(screen.getByRole('status')).toHaveTextContent('Out of stock');
+    expect(screen.getByRole('status')).toHaveTextContent('Capture as unfulfilled demand');
+    expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
   });
 });

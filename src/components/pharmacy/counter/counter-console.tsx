@@ -2480,6 +2480,7 @@ function ScopedPharmacyCounterConsole({
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
+                      onHandUnits={activeRow.onHandUnits}
                       selected={saleUnit}
                       quantity={quantityText}
                       preview={preview}
