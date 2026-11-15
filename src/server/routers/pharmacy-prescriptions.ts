@@ -184,7 +184,7 @@ export const pharmacyPrescriptionsRouter = router({
   workspace: fileProcedure
     .input(
       z
-        .object({ branchId: z.string().trim().min(1).optional() })
+        .object({ branchId: z.string().trim().min(1).max(200).optional() })
         .strict()
         .optional()
     )
@@ -311,13 +311,13 @@ export const pharmacyPrescriptionsRouter = router({
     .input(
       z
         .object({
-          patientId: z.string().min(1),
+          patientId: z.string().min(1).max(200),
           purpose,
           channel,
           version: z.number().int().positive().optional(),
           granted: z.boolean(),
           source: z.enum(['COUNTER_TABLET', 'QR']).default('COUNTER_TABLET'),
-          supersedesId: z.string().optional(),
+          supersedesId: z.string().max(200).optional(),
         })
         .strict()
     )
@@ -524,7 +524,7 @@ export const pharmacyPrescriptionsRouter = router({
     }),
 
   readPatient: capabilityProcedure('pharmacy:prescriptions')
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+    .input(z.object({ patientId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
         where: { id: input.patientId },
@@ -538,7 +538,7 @@ export const pharmacyPrescriptionsRouter = router({
     }),
 
   exportPatient: capabilityProcedure('pharmacy:prescriptions')
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+    .input(z.object({ patientId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
         where: { id: input.patientId },
@@ -562,8 +562,8 @@ export const pharmacyPrescriptionsRouter = router({
     .input(
       z
         .object({
-          id: z.string().min(1),
-          prescriptionLineId: z.string().min(1),
+          id: z.string().min(1).max(200),
+          prescriptionLineId: z.string().min(1).max(200),
           fillSequence: z.number().int().positive(),
           quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
@@ -665,7 +665,7 @@ export const pharmacyPrescriptionsRouter = router({
    * patient is still a protected read (RX-01), not an exemption.
    */
   counterPatientPanel: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+    .input(z.object({ patientId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       await requireCounterPatientAccess(ctx);
       try {

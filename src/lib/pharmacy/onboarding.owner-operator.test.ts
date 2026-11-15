@@ -137,6 +137,37 @@ describe('medicine catalogue readiness needs a saleable pack with a barcode (DEV
   });
 });
 
+describe('licences gate starts on the workspace calendar day (DEV-298)', () => {
+  it('selects a profile dated today from 00:00 PKT and passes the zone to the guard', async () => {
+    const { db } = readinessDb({ standard: standardRoleKeys });
+    (db.organization.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      packageId: 'pharmacy',
+      package: { vertical: 'PHARMACY' },
+      timezone: 'Asia/Karachi',
+    });
+    const { assertStoredBranchMayOperate } = await import('./regulatory');
+    const at = new Date('2026-10-20T19:00:00.000Z');
+    const dayStart = new Date('2026-10-21T00:00:00.000Z');
+
+    await evaluatePharmacyReadiness(db, 'standard', at);
+
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          effectiveFrom: { lte: dayStart },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: dayStart } }],
+        }),
+      })
+    );
+    expect(assertStoredBranchMayOperate).toHaveBeenLastCalledWith(db, 'standard', 'branch-1', {
+      name: 'ONBOARDING_READINESS',
+      at,
+      timeZone: 'Asia/Karachi',
+      requiresQualifiedPerson: true,
+    });
+  });
+});
+
 describe('Owner / Operator template grants (#975)', () => {
   const ownerOperator = roleTemplatesForVertical('PHARMACY').find(
     (role) => role.key === 'owner-operator'

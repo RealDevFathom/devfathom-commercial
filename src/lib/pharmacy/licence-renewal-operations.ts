@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
 import {
   licenceRenewalReminders,
   type RenewalReminder,
@@ -19,7 +20,7 @@ import {
  */
 export async function readLicenceRenewalReminders(
   db: ScopedDb,
-  input: { organizationId: string; branchId?: string; at?: Date }
+  input: { organizationId: string; branchId?: string; at?: Date; timeZone?: string | null }
 ): Promise<RenewalReminder[]> {
   const at = input.at ?? new Date();
   const { organizationId } = input;
@@ -29,8 +30,8 @@ export async function readLicenceRenewalReminders(
         organizationId,
         ...(input.branchId ? { branchId: input.branchId } : {}),
         isPlaceholder: false,
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        // DEV-298: the version dated today is current from the workspace's local midnight.
+        ...regulatoryProfileInForceWhere(at, input.timeZone),
         branch: { active: true },
       },
       orderBy: { effectiveFrom: 'desc' },
