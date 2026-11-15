@@ -794,6 +794,7 @@ function ScopedPharmacyCounterConsole({
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
+  const paidMinor = currentBill ? cart.totals.tenderedMinor : 0;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
   const billState: CounterTenderBillState =
@@ -1512,10 +1513,14 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
+          // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
+          // different paid balances; a double tap at the same balance still replays.
           idempotencyKey:
             input.familyAccountId || input.payerName !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
-              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
+              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
+                  paidMinor > 0 ? `:after:${paidMinor}` : ''
+                }`,
           ...(input.familyAccountId
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
@@ -1583,6 +1588,7 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       discardReceiptIntent,
+      paidMinor,
       recoveryScope,
       refreshTenderBill,
       saleId,
@@ -2875,6 +2881,7 @@ function ScopedPharmacyCounterConsole({
           signUpKhata={signUpKhata}
           khataSignupPatient={khataSignupPatient}
           balanceMinor={balanceMinor}
+          tenders={currentBill ? cart.tenders : undefined}
           state={billState}
           blocked={blocked}
           pending={pending === 'tender'}

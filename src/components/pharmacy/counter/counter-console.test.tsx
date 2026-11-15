@@ -601,6 +601,52 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
   });
 });
 
+describe('PharmacyCounterConsole split tender (#722)', () => {
+  it('sends two equal cash rows as distinct payments and lists each recorded row', async () => {
+    const cash = (index: number) => ({
+      tenderId: `cash-${index}`,
+      type: 'CASH',
+      amountMinor: 12500,
+    });
+    mocks.mutations.tender!.mockImplementation(async () => {
+      const count = mocks.mutations.tender!.mock.calls.length;
+      return { ...accepted(count === 2 ? 0 : 12500), tenderId: `cash-${count - 1}` };
+    });
+    mocks.refetch.mockImplementation(async () => {
+      const count = mocks.mutations.tender!.mock.calls.length;
+      mocks.queries.counterCart!.data = cart({
+        status: count === 2 ? 'COMPLETED' : 'OPEN',
+        receiptNumber: count === 2 ? 42 : null,
+        tenders: Array.from({ length: count }, (_, index) => cash(index)),
+        totals: {
+          grossMinor: 25000,
+          discountMinor: 0,
+          netMinor: 25000,
+          tenderedMinor: count * 12500,
+        },
+      });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(1));
+    expect(screen.queryByText('Settled')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await screen.findByText('Settled');
+    expect(mocks.mutations.tender!.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      'counter-tender:sale-a:CASH:12500',
+      'counter-tender:sale-a:CASH:12500:after:12500',
+    ]);
+    // The settled receipt drawer hides the panel from assistive tech; the rows remain.
+    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
+  });
+});
+
 describe('PharmacyCounterConsole tender recovery', () => {
   it('#710 submits manual evidence and clears its recovery record only after acceptance', async () => {
     mocks.queries.manualPaymentSettings = query({
