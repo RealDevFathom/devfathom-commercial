@@ -63,6 +63,7 @@ export type RefundKind = 'REFUND' | 'VOID_REVERSAL';
 
 export type RefundErrorReason =
   | 'TENDER_NOT_FOUND'
+  | 'BILL_NOT_SETTLED'
   | 'PAYMENT_NOT_FOUND'
   | 'UNSUPPORTED_PAYMENT_PROVIDER'
   | 'INVALID_AMOUNT'
@@ -175,6 +176,13 @@ export async function refundTender(
     // unknown tender and cannot burn a key or write co-auth/payment/drawer rows.
     const branchId = await loadActorBranch(tx, input.actor.deviceId, input.branchId);
     const tender = await loadTender(tx, input.originalTenderId, branchId);
+    // Serialize concurrent refunds and tenders against this bill so Σ(refunds) cannot
+    // overshoot the tender (the bill row carries a full RLS policy, so FOR UPDATE is
+    // valid). Under that lock, only a SETTLED bill is refundable: refunding a partial
+    // tender on an OPEN bill would return money while settlement still credits it.
+    // This runs before the idempotency claim, co-authorization and every ledger write.
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${tender.billId} FOR UPDATE`;
+    await requireSettledBill(tx, tender.billId);
     // Reject card channels without an authoritative reversal adapter before claiming
     // an idempotency key or creating any refund-related records. The transaction is
     // still the final atomicity boundary, but this ordering also keeps non-transactional
@@ -194,10 +202,6 @@ export async function refundTender(
       hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
     });
     if (idem.replay) return replayRefundResult(tx, idem.resultRef, idem.resultPayload);
-
-    // Serialize concurrent refunds against this bill so Σ(refunds) cannot overshoot
-    // the tender (the bill row carries a full RLS policy, so FOR UPDATE is valid).
-    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${tender.billId} FOR UPDATE`;
 
     // Cap: Σ(refunds) ≤ tender amount; Σ(tip refunds) ≤ tender tip.
     const priorRefunds = await tx.restaurantRefund.aggregate({
@@ -488,6 +492,16 @@ async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Pro
     throw new RefundError('The original tender does not exist.', 'TENDER_NOT_FOUND');
   }
   return tender as LoadedTender;
+}
+
+async function requireSettledBill(tx: ScopedDb, billId: string): Promise<void> {
+  const bill = await tx.restaurantBill.findFirst({
+    where: { id: billId, status: 'SETTLED' },
+    select: { id: true },
+  });
+  if (!bill) {
+    throw new RefundError('Only a settled bill can be refunded.', 'BILL_NOT_SETTLED');
+  }
 }
 
 async function requireOpenDrawer(
