@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { WHATSAPP_REPLIES } from './messages';
+import { consentKeyword, WHATSAPP_REPLIES } from './messages';
 
 describe('WhatsApp replies', () => {
   it('includes the order facts, but never the medicine name, in both languages', () => {
@@ -16,4 +16,21 @@ describe('WhatsApp replies', () => {
     ]);
     expect(confirmation).not.toContain('Panadol');
   });
+});
+
+describe('consentKeyword', () => {
+  it.each(['START', 'start', 'شروع'])('treats a whole-message %s as START', (text) => {
+    expect(consentKeyword(text)).toBe('START');
+  });
+
+  it.each(['yes', 'haan', 'ہاں'])('does not treat the affirmative %s as START', (text) => {
+    expect(consentKeyword(text)).toBeNull();
+  });
+
+  it.each(['START please', 'اب شروع'])(
+    'ignores a START keyword inside a longer message: %s',
+    (text) => {
+      expect(consentKeyword(text)).toBeNull();
+    }
+  );
 });
