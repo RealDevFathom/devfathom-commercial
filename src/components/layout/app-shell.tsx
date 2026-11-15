@@ -10,7 +10,7 @@ import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { isModuleGranted, moduleForPath } from '@/lib/module-catalog';
+import { isModuleGranted, moduleDefinitionForKey, moduleForPath } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
@@ -158,6 +158,14 @@ function WorkspaceIdentityMismatch() {
   );
 }
 
+/**
+ * DEV-502: the module-disabled notice names the module as the catalog does
+ * ("Pharmacy Reports"), never its internal key (`pharmacy-reports`).
+ */
+export function moduleDisplayName(moduleKey: string | null): string {
+  return (moduleKey && moduleDefinitionForKey(moduleKey)?.name) || 'this module';
+}
+
 export function isPathModuleEnabled(
   pathname: string,
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
@@ -296,8 +304,8 @@ export function AppShell({
                 </h1>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-text-muted">
                   Your organization’s current package, contract, or module override does not include{' '}
-                  <span className="font-semibold">{currentModule}</span>. Organization
-                  administrators can review the license ledger in settings.
+                  <span className="font-semibold">{moduleDisplayName(currentModule)}</span>.
+                  Organization administrators can review the license ledger in settings.
                 </p>
                 <Link
                   href="/organization"
