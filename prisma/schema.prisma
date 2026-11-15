@@ -243,6 +243,7 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  promotions                               PharmacyPromotion[]
   sopSite                                  PharmacySopSite?
   sopRecordLinks                           PharmacySopRecordLink[]
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
@@ -653,6 +654,7 @@ model Medicine {
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
+  promotions                   PharmacyPromotion[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -1665,6 +1667,36 @@ model PharmacyCounterKeymapPreference {
   @@map("pharmacy_counter_keymap_preferences")
 }
 
+/// #727: a dated, branch-scoped automatic counter offer, authorized by the manager who
+/// created it. Rule content is immutable; disable it and create a replacement. A sale
+/// line snapshots the applied name and discount, so issued receipts never reprice.
+model PharmacyPromotion {
+  id                 String             @id @default(cuid())
+  organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  name               String
+  medicineId         String?
+  /// Half-open window: effectiveFrom <= instant < effectiveTo.
+  effectiveFrom      DateTime
+  effectiveTo        DateTime
+  benefitBasisPoints Int?
+  benefitMinor       Int?
+  priority           Int                @default(0)
+  active             Boolean            @default(true)
+  createdByUserId    String
+  createdAt          DateTime           @default(now())
+  disabledAt         DateTime?
+  disabledByUserId   String?
+  branch             PharmacyBranch     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_promotions_branch_fkey")
+  medicine           Medicine?          @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_promotions_medicine_fkey")
+  saleLines          PharmacySaleLine[]
+
+  @@unique([organizationId, id], map: "pharmacy_promotions_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_promotions_org_branch_id_key")
+  @@index([organizationId, branchId, active, effectiveFrom, effectiveTo], map: "pharmacy_promotions_active_window_idx")
+  @@map("pharmacy_promotions")
+}
+
 model PharmacySaleLine {
   id                        String                           @id @default(cuid())
   organizationId            String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1687,6 +1719,9 @@ model PharmacySaleLine {
   voucherId                 String?
   approvalPolicy            String?
   approvedByUserId          String?
+  /// #727: the automatic offer applied, and its name as issued on the receipt.
+  promotionId               String?
+  promotionName             String?
   prescriptionLineId        String?
   prescriptionPatientId     String?
   idempotencyKey            String
@@ -1696,6 +1731,7 @@ model PharmacySaleLine {
   presentation              Presentation                     @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   packLevel                 PackLevel                        @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
   prescriptionLine          PrescriptionLine?                @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  promotion                 PharmacyPromotion?               @relation(fields: [organizationId, branchId, promotionId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_sale_lines_promotion_fkey")
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
