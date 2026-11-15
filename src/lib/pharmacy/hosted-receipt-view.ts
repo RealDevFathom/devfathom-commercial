@@ -1,8 +1,9 @@
 import { COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
 
 /**
- * DEV-16: what a hosted receipt page may show. Built from the same counter
- * receipt model as paper, minus staff identity, batch and allocation detail.
+ * DEV-16: what a hosted receipt page shows to the link holder: every purchased
+ * line, like paper, built from the same counter receipt model, minus staff
+ * identity, batch and allocation detail.
  */
 export type HostedReceiptView = {
   branchName: string;
@@ -20,9 +21,6 @@ export type HostedReceiptView = {
   tenders: { id: string; label: string; amountMinor: number }[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number };
 };
-
-/** What the page shows before a code: shop, number, date, totals and methods, never an item. */
-export type HostedReceiptSummary = Omit<HostedReceiptView, 'lines'>;
 
 export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | null {
   if (receipt.receiptNumber === null || !receipt.completedAt) return null;

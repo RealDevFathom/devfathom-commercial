@@ -6,13 +6,10 @@ import {
   HOSTED_RECEIPT_TOKEN_PATTERN,
   HostedReceiptError,
   assertNeutralWhatsAppParameters,
-  hashHostedReceiptOtp,
   hashHostedReceiptToken,
   hostedReceiptExpiresAt,
-  hostedReceiptOtpMatches,
   hostedReceiptTtlDays,
   isRxSaleLine,
-  mintHostedReceiptOtp,
   mintHostedReceiptToken,
   namesMedicineContent,
   receiptLinkParameters,
@@ -139,20 +136,5 @@ describe('DEV-16 neutral receipt template', () => {
         false
       );
     }
-  });
-});
-
-describe('DEV-16 receipt one-time code', () => {
-  it('is six digits, salted, and only the right code matches', () => {
-    const otp = mintHostedReceiptOtp();
-    expect(otp).toMatch(/^\d{6}$/);
-    const stored = hashHostedReceiptOtp(otp);
-    expect(stored).not.toContain(otp);
-    expect(hashHostedReceiptOtp(otp)).not.toBe(stored);
-    expect(hostedReceiptOtpMatches(stored, otp)).toBe(true);
-    const wrong = String((Number(otp) + 1) % 1_000_000).padStart(6, '0');
-    expect(hostedReceiptOtpMatches(stored, wrong)).toBe(false);
-    expect(hostedReceiptOtpMatches(stored, '12345')).toBe(false);
-    expect(hostedReceiptOtpMatches('malformed', otp)).toBe(false);
   });
 });

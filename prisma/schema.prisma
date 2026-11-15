@@ -15328,26 +15328,21 @@ model PharmacyMessageLog {
 
 /// DEV-16: a tokenized hosted receipt sent by WhatsApp on the customer's request.
 /// Only the SHA-256 of the 160-bit random token is stored. Links expire (30-90
-/// days, configured) and no item is shown until a one-time code sent to the
-/// customer's phone is verified. `rxProtected` records whether the sale had Rx lines.
+/// days, configured); the link holder sees the whole receipt (owner decision).
+/// `rxProtected` records, for audit, whether the sale had Rx lines.
 model PharmacyHostedReceipt {
-  id                String    @id @default(cuid())
-  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId          String
-  saleId            String
-  customerId        String
-  tokenHash         String    @unique
-  rxProtected       Boolean
-  expiresAt         DateTime
-  revokedAt         DateTime?
-  createdByUserId   String
-  otpHash           String?
-  otpExpiresAt      DateTime?
-  otpSendCount      Int       @default(0)
-  otpFailedAttempts Int       @default(0)
-  lastOtpSentAt     DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  saleId          String
+  customerId      String
+  tokenHash       String    @unique
+  rxProtected     Boolean
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sale         PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)

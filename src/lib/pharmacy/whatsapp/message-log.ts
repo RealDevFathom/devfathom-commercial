@@ -16,8 +16,7 @@ export type MessageLogKind =
   | 'OPT_OUT'
   | 'OPT_IN'
   | 'CONSENT_ACK'
-  | 'RECEIPT_LINK'
-  | 'RECEIPT_OTP';
+  | 'RECEIPT_LINK';
 
 export type MessageLogEntry = {
   organizationId: string;

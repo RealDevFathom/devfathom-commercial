@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CounterReceipt } from './counter-receipt';
-import { hashHostedReceiptToken, hashHostedReceiptOtp } from './hosted-receipt';
+import { hashHostedReceiptToken } from './hosted-receipt';
 import { MockWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 
 type Link = {
@@ -15,11 +15,6 @@ type Link = {
   expiresAt: Date;
   revokedAt: Date | null;
   createdByUserId: string;
-  otpHash: string | null;
-  otpExpiresAt: Date | null;
-  otpSendCount: number;
-  otpFailedAttempts: number;
-  lastOtpSentAt: Date | null;
 };
 
 const state = vi.hoisted(() => ({
@@ -83,21 +78,36 @@ function counterReceipt(): CounterReceipt {
         discountMinor: 0,
         lineTotalMinor: 100_000,
       },
+      {
+        saleLineId: 'line-2',
+        identityStatus: 'ISSUED',
+        medicineName: 'Calpol',
+        strength: '500 mg',
+        presentation: 'Tablet',
+        batchNumber: 'B-12',
+        expiresAt: '2027-06-01',
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnits: 10,
+        unitPriceMinor: 20_000,
+        discountMinor: 0,
+        lineTotalMinor: 20_000,
+      },
     ],
     tenders: [
       {
         tenderId: 'tender-1',
         type: 'CASH',
-        amountMinor: 100_000,
-        cashReceivedMinor: 100_000,
+        amountMinor: 120_000,
+        cashReceivedMinor: 120_000,
         changeGivenMinor: 0,
       },
     ],
     totals: {
-      grossMinor: 100_000,
+      grossMinor: 120_000,
       discountMinor: 0,
-      netMinor: 100_000,
-      tenderedMinor: 100_000,
+      netMinor: 120_000,
+      tenderedMinor: 120_000,
       changeMinor: 0,
     },
   };
@@ -115,13 +125,7 @@ function matches(link: Link, where: Record<string, unknown>): boolean {
 }
 
 function applyUpdate(link: Link, data: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(data)) {
-    if (value && typeof value === 'object' && 'increment' in value)
-      (link as Record<string, unknown>)[key] =
-        ((link as Record<string, unknown>)[key] as number) +
-        (value as { increment: number }).increment;
-    else (link as Record<string, unknown>)[key] = value;
-  }
+  Object.assign(link, data);
 }
 
 const db = {
@@ -151,11 +155,6 @@ const db = {
         const link: Link = {
           id: `link-${state.links.length + 1}`,
           revokedAt: null,
-          otpHash: null,
-          otpExpiresAt: null,
-          otpSendCount: 0,
-          otpFailedAttempts: 0,
-          lastOtpSentAt: null,
           ...data,
         };
         state.links.push(link);
@@ -173,13 +172,6 @@ const db = {
         return { count: link ? 1 : 0 };
       }
     ),
-    update: vi.fn(
-      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
-        const link = state.links.find((row) => row.id === where.id)!;
-        applyUpdate(link, data);
-        return { ...link };
-      }
-    ),
   },
   $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
   pharmacyMessageLog: {
@@ -187,7 +179,6 @@ const db = {
       state.claimCommitted ? { id: where.id } : null
     ),
   },
-  $queryRaw: vi.fn(async () => []),
 };
 
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -196,15 +187,14 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
   ),
 }));
 
-const { openHostedReceipt, sendHostedReceiptOtp, sendWhatsAppReceiptLink, verifyHostedReceiptOtp } =
-  await import('./hosted-receipt-service');
+const { openHostedReceipt, sendWhatsAppReceiptLink } = await import('./hosted-receipt-service');
+const { readCounterReceipt } = await import('./counter');
 const { HostedReceiptError } = await import('./hosted-receipt');
 
 const config = readWhatsAppConfig({
   PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org-1',
   PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'phone-1',
   PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_LINK: 'receipt_link_v1',
-  PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_OTP: 'receipt_code_v1',
 });
 const scope = { organizationId: 'org-1', branchId: 'branch-1' };
 const now = new Date('2026-11-15T07:05:00.000Z');
@@ -300,12 +290,21 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
       templateName: 'receipt_link_v1',
     });
     const parameters = call.kind === 'template' ? call.parameters : [];
-    expect(parameters.slice(0, 4)).toEqual(['Gulberg Branch', '1042', 'PKR 1000.00', 'Cash']);
+    expect(parameters.slice(0, 4)).toEqual(['Gulberg Branch', '1042', 'PKR 1200.00', 'Cash']);
     expect(parameters[4]).toMatch(
       /^https:\/\/acme\.devfathom\.app\/receipt\/[0-9a-hjkmnp-tv-z]{32}$/
     );
     const text = parameters.join(' ').toLowerCase();
-    for (const item of ['augmentin', 'amoxicillin', '625', 'strip', 'tablet', 'b-77'])
+    for (const item of [
+      'augmentin',
+      'amoxicillin',
+      'calpol',
+      '625',
+      '500',
+      'strip',
+      'tablet',
+      'b-77',
+    ])
       expect(text).not.toContain(item);
 
     const token = tokenFrom(provider);
@@ -334,7 +333,7 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
     });
   });
 
-  it('marks a sale with Rx lines as needing a one-time code', async () => {
+  it('records for audit whether the sale had Rx lines', async () => {
     state.sale = saleWith({ rx: true });
     await expect(send()).resolves.toMatchObject({ rxProtected: true });
     state.sale = saleWith({ prescriptionLineId: 'rx-line-1' });
@@ -454,23 +453,14 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
     expect(state.links[0]!.revokedAt).toEqual(now);
   });
 
-  it('refuses any receipt link when the one-time code template is not set up', async () => {
-    for (const rx of [true, false]) {
-      state.sale = saleWith({ rx });
-      await expect(
-        sendWhatsAppReceiptLink({
-          db: db as never,
-          scope,
-          saleId: 'sale-1',
-          actorUserId: 'cashier-1',
-          now,
-          config: { ...config, templates: { ...config.templates, receiptOtp: null } },
-          defer: () => undefined,
-        })
-      ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
-    }
-    expect(state.claims).toHaveLength(0);
-    expect(state.links).toHaveLength(0);
+  it('needs only the receipt-link template: no code template or code message exists', async () => {
+    const provider = new MockWhatsAppProvider(config);
+    state.sale = saleWith({ rx: true });
+    await expect(send({ provider })).resolves.toMatchObject({ outcome: 'QUEUED' });
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]).toMatchObject({ template: 'receiptLink' });
+    expect(Object.keys(config.templates)).not.toContain('receiptOtp');
+    expect(state.claims.map((claim) => claim.kind)).toEqual(['RECEIPT_LINK']);
   });
 
   it('sends at most one receipt message per sale per day', async () => {
@@ -483,47 +473,78 @@ describe('DEV-16 sendWhatsAppReceiptLink', () => {
 });
 
 describe('DEV-16 hosted receipt access', () => {
-  it('shows an over-the-counter receipt only as shop, number, date and totals until a code is verified', async () => {
-    state.sale = saleWith({ rx: false });
-    const provider = new MockWhatsAppProvider(config);
-    const result = await send({ provider });
-    expect(result.rxProtected).toBe(false);
-    const token = tokenFrom(provider);
-
-    const opened = await openHostedReceipt('org-1', token, now);
-    expect(opened).toMatchObject({
-      kind: 'locked',
-      phoneLast4: '4567',
-      summary: {
-        receiptNumber: 1042,
-        branchName: 'Gulberg Branch',
-        completedAt: '2026-11-15T07:00:00.000Z',
-        totals: { netMinor: 100_000 },
-        tenders: [{ label: 'Cash', amountMinor: 100_000 }],
+  const fullReceipt = {
+    branchName: 'Gulberg Branch',
+    receiptNumber: 1042,
+    completedAt: '2026-11-15T07:00:00.000Z',
+    currency: 'PKR',
+    lines: [
+      {
+        id: 'line-1',
+        name: 'Augmentin',
+        strength: '625 mg',
+        quantity: 2,
+        saleUnit: 'strip',
+        lineTotalMinor: 100_000,
       },
+      {
+        id: 'line-2',
+        name: 'Calpol',
+        strength: '500 mg',
+        quantity: 1,
+        saleUnit: 'strip',
+        lineTotalMinor: 20_000,
+      },
+    ],
+    tenders: [{ id: 'tender-1', label: 'Cash', amountMinor: 120_000 }],
+    totals: { grossMinor: 120_000, discountMinor: 0, netMinor: 120_000 },
+  };
+
+  for (const [kind, line] of [
+    ['an over-the-counter', { rx: false }],
+    ['a prescription', { rx: true, prescriptionLineId: 'rx-line-1' }],
+  ] as const) {
+    it(`shows the link holder every purchased line of ${kind} receipt, with no code`, async () => {
+      state.sale = saleWith(line);
+      const provider = new MockWhatsAppProvider(config);
+      await send({ provider });
+      const token = tokenFrom(provider);
+
+      const opened = await openHostedReceipt('org-1', token, now);
+      expect(opened).toEqual(fullReceipt);
+      // Only this link's sale is read; staff identity and batch never leave the counter.
+      expect(readCounterReceipt).toHaveBeenLastCalledWith(
+        db,
+        { organizationId: 'org-1', branchId: 'branch-1' },
+        'sale-1',
+        { name: 'Gulberg Branch', currency: 'PKR' }
+      );
+      for (const hidden of ['Cashier Name', 'B-77', 'B-12'])
+        expect(JSON.stringify(opened)).not.toContain(hidden);
+      // Nothing is sent to the customer when the page opens.
+      expect(provider.calls).toHaveLength(1);
+      expect(state.claims.map((claim) => claim.kind)).toEqual(['RECEIPT_LINK']);
     });
-    expect(opened?.summary).not.toHaveProperty('lines');
-    // No item, strength, staff identity or batch reaches an unverified visitor.
-    for (const hidden of ['Augmentin', '625 mg', 'Cashier Name', 'B-77'])
-      expect(JSON.stringify(opened)).not.toContain(hidden);
+  }
 
-    const otpProvider = new MockWhatsAppProvider(config);
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })
-    ).resolves.toBe('SENT');
-    const call = otpProvider.calls[0]!;
-    const otp = call.kind === 'template' ? call.parameters[0]! : '';
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp, now })
-    ).resolves.toMatchObject({ lines: [{ name: 'Augmentin', strength: '625 mg' }] });
+  it('shows nothing for a wrong, malformed or expired token', async () => {
+    state.sale = saleWith({ rx: true });
+    const provider = new MockWhatsAppProvider(config);
+    await send({ provider });
+    const token = tokenFrom(provider);
+    vi.mocked(readCounterReceipt).mockClear();
 
-    await expect(
-      openHostedReceipt('org-1', token, new Date('2026-12-15T07:05:00.001Z'))
-    ).resolves.toBeNull();
-    await expect(openHostedReceipt('org-1', 'not-a-token', now)).resolves.toBeNull();
+    const wrong = `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`;
+    await expect(openHostedReceipt('org-1', wrong, now)).resolves.toBeNull();
     await expect(
       openHostedReceipt('org-1', '0123456789abcdefghjkmnpqrstvwxyz', now)
     ).resolves.toBeNull();
+    await expect(openHostedReceipt('org-1', 'not-a-token', now)).resolves.toBeNull();
+    await expect(openHostedReceipt('org-1', token.toUpperCase(), now)).resolves.toBeNull();
+    await expect(
+      openHostedReceipt('org-1', token, new Date('2026-12-15T07:05:00.001Z'))
+    ).resolves.toBeNull();
+    expect(readCounterReceipt).not.toHaveBeenCalled();
   });
 
   it('never shows a revoked link', async () => {
@@ -533,93 +554,10 @@ describe('DEV-16 hosted receipt access', () => {
     await expect(openHostedReceipt('org-1', tokenFrom(provider), now)).resolves.toBeNull();
   });
 
-  it('requires a one-time code before an Rx receipt shows any line', async () => {
-    state.sale = saleWith({ rx: true });
-    const linkProvider = new MockWhatsAppProvider(config);
-    await send({ provider: linkProvider });
-    const token = tokenFrom(linkProvider);
-
-    const gated = await openHostedReceipt('org-1', token, now);
-    expect(gated).toMatchObject({
-      kind: 'locked',
-      phoneLast4: '4567',
-      summary: { branchName: 'Gulberg Branch', receiptNumber: 1042 },
-    });
-    expect(JSON.stringify(gated)).not.toContain('Augmentin');
-
-    // Verifying before any code is sent reveals nothing.
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp: '123456', now })
-    ).resolves.toBeNull();
-
-    const otpProvider = new MockWhatsAppProvider(config);
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })
-    ).resolves.toBe('SENT');
-    const call = otpProvider.calls[0]!;
-    expect(call).toMatchObject({ kind: 'template', template: 'receiptOtp', to: '923001234567' });
-    const otp = call.kind === 'template' ? call.parameters[0]! : '';
-    expect(otp).toMatch(/^\d{6}$/);
-    expect(state.links[0]!.otpHash).not.toContain(otp);
-    expect(state.claims.at(-1)).toMatchObject({ kind: 'RECEIPT_OTP' });
-
-    const wrong = String((Number(otp) + 1) % 1_000_000).padStart(6, '0');
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp: wrong, now })
-    ).resolves.toBeNull();
-    expect(state.links[0]!.otpFailedAttempts).toBe(1);
-
-    const revealed = await verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp, now });
-    expect(revealed).toMatchObject({ receiptNumber: 1042, lines: [{ name: 'Augmentin' }] });
-
-    // The code is single use.
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp, now })
-    ).resolves.toBeNull();
-  });
-
-  it('expires codes, locks after repeated failures and throttles resends', async () => {
-    state.sale = saleWith({ rx: true });
-    const linkProvider = new MockWhatsAppProvider(config);
-    await send({ provider: linkProvider });
-    const token = tokenFrom(linkProvider);
-    const link = state.links[0]!;
-
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config })
-    ).resolves.toBe('SENT');
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config })
-    ).resolves.toBe('WAIT');
-
-    link.otpHash = hashHostedReceiptOtp('111111');
-    link.otpFailedAttempts = 5;
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp: '111111', now })
-    ).resolves.toBeNull();
-
-    link.otpFailedAttempts = 0;
-    link.otpExpiresAt = new Date(now.getTime() - 1);
-    await expect(
-      verifyHostedReceiptOtp({ organizationId: 'org-1', token, otp: '111111', now })
-    ).resolves.toBeNull();
-
-    link.lastOtpSentAt = null;
-    link.otpSendCount = 5;
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config })
-    ).resolves.toBe('UNAVAILABLE');
-  });
-
-  it('sends no code to a customer who opted out', async () => {
+  it('shows nothing once the sale is no longer completed', async () => {
     const provider = new MockWhatsAppProvider(config);
     await send({ provider });
-    const token = tokenFrom(provider);
-    const otpProvider = new MockWhatsAppProvider(config);
-    state.customer = { ...state.customer!, whatsappOptIn: false };
-    await expect(
-      sendHostedReceiptOtp({ organizationId: 'org-1', token, now, config, provider: otpProvider })
-    ).resolves.toBe('UNAVAILABLE');
-    expect(otpProvider.calls).toHaveLength(0);
+    state.sale = { ...saleWith(), status: 'VOIDED' };
+    await expect(openHostedReceipt('org-1', tokenFrom(provider), now)).resolves.toBeNull();
   });
 });

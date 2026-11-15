@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { COUNTER_RECEIPT_STRINGS, formatMinor } from './counter-receipt';
 import { containsMedicineName, normalizeNameText } from './medicine-names';
@@ -10,9 +10,10 @@ import { containsMedicineName, normalizeNameText } from './medicine-names';
  *
  * The WhatsApp utility template carries only the branch, receipt number, total,
  * payment method and a secure link — never an item. The link token is 160 random
- * bits, only its SHA-256 is stored, it expires after a configured 30-90 days, and
- * no receipt shows an item or strength until a one-time code sent to the
- * customer's phone is verified.
+ * bits, only its SHA-256 is stored and it expires after a configured 30-90 days.
+ * Owner decision (15 Nov 2026): whoever holds the link sees the whole receipt,
+ * every line like paper, with no further check; the token is the only key and
+ * it opens that one receipt alone.
  */
 
 export class HostedReceiptError extends Error {
@@ -204,25 +205,4 @@ export function assertNeutralWhatsAppParameters(
 ): void {
   if (parameters.some((value) => namesMedicineContent(value, medicineNames)))
     throw new HostedReceiptError('NOT_NEUTRAL');
-}
-
-export const HOSTED_RECEIPT_OTP_TTL_MS = 10 * 60_000;
-export const HOSTED_RECEIPT_OTP_MAX_SENDS = 5;
-export const HOSTED_RECEIPT_OTP_MAX_FAILURES = 5;
-export const HOSTED_RECEIPT_OTP_RESEND_MS = 60_000;
-
-export function mintHostedReceiptOtp(): string {
-  return String(randomBytes(4).readUInt32BE() % 1_000_000).padStart(6, '0');
-}
-
-export function hashHostedReceiptOtp(otp: string, salt = randomBytes(16).toString('hex')): string {
-  return `${salt}.${createHash('sha256').update(`${salt}:${otp}`).digest('hex')}`;
-}
-
-export function hostedReceiptOtpMatches(stored: string, otp: string): boolean {
-  const [salt, expected] = stored.split('.');
-  if (!salt || !expected || !/^\d{6}$/.test(otp)) return false;
-  const actual = createHash('sha256').update(`${salt}:${otp}`).digest();
-  const expectedBytes = Buffer.from(expected, 'hex');
-  return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes);
 }

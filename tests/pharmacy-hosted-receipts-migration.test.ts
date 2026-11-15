@@ -37,7 +37,7 @@ describe('DEV-16 hosted receipt migration contract', () => {
     expect(sql).toContain('REFERENCES "pharmacy_customers"("organizationId", "id")');
   });
 
-  it('keeps every existing WhatsApp kind while adding the receipt kinds', () => {
+  it('keeps every existing WhatsApp kind while adding the receipt link kind', () => {
     for (const kind of [
       'REFILL_REMINDER',
       'KHATA_REMINDER',
@@ -49,8 +49,11 @@ describe('DEV-16 hosted receipt migration contract', () => {
       'OPT_IN',
       'CONSENT_ACK',
       'RECEIPT_LINK',
-      'RECEIPT_OTP',
     ])
       expect(sql).toContain(`'${kind}'`);
+  });
+
+  it('keeps no one-time code state: the token alone opens the receipt', () => {
+    expect(sql).not.toMatch(/otp/i);
   });
 });
