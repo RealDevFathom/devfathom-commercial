@@ -658,7 +658,7 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
             Printable / shareable list
           </Link>
         }
-        eyebrow={`INV-09 · expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
+        eyebrow={`Expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
         title="Expiry board"
         titleLevel={2}
       >

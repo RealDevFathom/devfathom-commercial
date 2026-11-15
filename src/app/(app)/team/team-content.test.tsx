@@ -287,6 +287,32 @@ describe('vertical-aware invitation copy', () => {
       );
     });
 
+    // DEV-622: the one-person "Pharmacist and cashier" role explains itself and stays staff.
+    it('explains the Pharmacist and cashier role and invites it as staff', () => {
+      state.roles.data = [
+        ...state.roles.data,
+        { id: 'role_combined', key: 'pharmacist-cashier', name: 'Pharmacist and cashier' },
+      ];
+      render(<AddMemberModal onClose={vi.fn()} />);
+      fillPharmacy();
+      const picker = screen.getByLabelText('Role');
+      const help = document.getElementById('invite-role-template-help')!;
+      expect(screen.getByRole('option', { name: 'Pharmacist and cashier' })).toHaveValue(
+        'role_combined'
+      );
+      expect(help).not.toHaveTextContent(/one-person shop/);
+      fireEvent.change(picker, { target: { value: 'role_combined' } });
+      expect(help).toHaveTextContent(
+        'Dispenses prescriptions and takes payment, for a one-person shop or a pharmacist who also runs the till.'
+      );
+      expect(help).toHaveTextContent('Access level: Staff.');
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ role: 'EMPLOYEE', organizationRoleId: 'role_combined' }),
+        expect.any(Object)
+      );
+    });
+
     it('explains how each owner-type role differs and shows the access level', () => {
       render(<AddMemberModal onClose={vi.fn()} />);
       const picker = screen.getByLabelText('Role');

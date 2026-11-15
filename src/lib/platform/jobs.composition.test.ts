@@ -20,6 +20,7 @@ const m = vi.hoisted(() => ({
   archiveCreate: vi.fn(),
   archiveDelete: vi.fn(),
   platformAudit: vi.fn(),
+  exportJobs: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -37,6 +38,7 @@ const db = {
     updateMany: m.updateMany,
     update: m.update,
     findUnique: m.findJob,
+    findMany: m.exportJobs,
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
@@ -91,6 +93,7 @@ beforeEach(() => {
   vi.setSystemTime(now);
   m.scope.mockImplementation(async (work) => work(db));
   m.query.mockResolvedValue([]);
+  m.exportJobs.mockResolvedValue([]);
   m.updateMany.mockResolvedValue({ count: 2 });
   m.findJob.mockResolvedValue({ status: 'RUNNING' });
   m.createMany.mockResolvedValue({ count: 0 });

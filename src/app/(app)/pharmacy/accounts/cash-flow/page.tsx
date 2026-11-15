@@ -12,6 +12,7 @@ import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
 import { financeEntryDescription } from '@/lib/finance/source-labels';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 export const metadata: Metadata = { title: 'Classified cash-flow projection' };
 
@@ -156,7 +157,7 @@ export default async function CashFlowPage({
           <SectionCard title="Opening-to-closing reconciliation">
             <p className="text-sm text-text-muted">
               Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
-              {projection.metadata.retrievedAt.toISOString()}. Completeness: unknown —{' '}
+              {formatUtcInstant(projection.metadata.retrievedAt)}. Completeness: unknown —{' '}
               {projection.metadata.completenessReason} Discrepancy is canonical CASH plus BANK
               account closing from the financial statements, read in the same snapshot, minus the
               projected closing.
@@ -225,7 +226,7 @@ export default async function CashFlowPage({
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {entry.occurredAt.toISOString()} · {entry.classification} · {entry.currency}{' '}
+                  {formatUtcInstant(entry.occurredAt)} · {entry.classification} · {entry.currency}{' '}
                   {money(entry.netMinor)} · {financeEntryDescription(entry.description)}
                 </summary>
                 <p className="break-all text-xs text-text-muted">

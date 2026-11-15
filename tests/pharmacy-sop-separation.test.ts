@@ -26,6 +26,9 @@ import { describe, expect, it } from 'vitest';
  *    escalation, sweep or restaurant job. The per-branch automatic-scheduling
  *    setting is read by no pharmacy operation code, and only that job module
  *    calls the automatic generator.
+ * 5. The one exception to 4 is opt-in overdue escalation (OFF by default): one
+ *    module enqueues its own sweep and the shared engine's escalation job, and
+ *    nothing else; no other SOP code enqueues either.
  */
 
 const ROOT = join(__dirname, '..');
@@ -39,6 +42,7 @@ const SOP_FILES = new Set([
   'src/lib/pharmacy/sop-shared.ts',
   'src/lib/pharmacy/sop-settings.ts',
   'src/lib/pharmacy/sop-auto-schedule-job.ts',
+  'src/lib/pharmacy/sop-overdue-escalation.ts',
   'src/server/routers/pharmacy-sop.ts',
   'src/app/api/pharmacy/sop/evidence/route.ts',
 ]);
@@ -46,6 +50,9 @@ const SOP_DIRS = ['src/components/pharmacy/sop/', 'src/app/(app)/pharmacy/sop/']
 
 /** The one SOP module allowed to enqueue a job (its own type only). */
 const AUTO_SCHEDULE_JOB_MODULE = 'src/lib/pharmacy/sop-auto-schedule-job.ts';
+
+/** The one SOP module allowed to enqueue overdue escalation (opt-in per branch). */
+const ESCALATION_JOB_MODULE = 'src/lib/pharmacy/sop-overdue-escalation.ts';
 
 /** Read-only touch points, each limited to what is listed. */
 const READ_ONLY_EXCEPTIONS: Record<string, RegExp[]> = {
@@ -197,7 +204,7 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
       ];
       for (const [, names, module] of imports) {
         if (
-          /^sop-(adapter|library|evidence|evidence-mac|shared|settings|auto-schedule-job)$/.test(
+          /^sop-(adapter|library|evidence|evidence-mac|shared|settings|auto-schedule-job|overdue-escalation)$/.test(
             module!
           )
         )
@@ -221,7 +228,9 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
       /restaurantJob\b|restaurant_jobs\b|@\/lib\/restaurant\/(scheduler|job-handlers)|\benqueue[A-Z]?\w*\s*\(|SOP_GENERATE_OCCURRENCES_JOB|SOP_ESCALATION_JOB|'sop\.(generateOccurrences|runEscalation)'/;
     const offenders = sopSources.filter(
       (file) =>
-        file !== AUTO_SCHEDULE_JOB_MODULE && ENQUEUE.test(readFileSync(join(ROOT, file), 'utf8'))
+        file !== AUTO_SCHEDULE_JOB_MODULE &&
+        file !== ESCALATION_JOB_MODULE &&
+        ENQUEUE.test(readFileSync(join(ROOT, file), 'utf8'))
     );
     expect(offenders).toEqual([]);
 
@@ -261,11 +270,46 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     expect(references).toEqual([AUTO_SCHEDULE_JOB_MODULE, 'src/lib/restaurant/job-handlers.ts']);
   });
 
+  it('opt-in overdue escalation enqueues only its own sweep and the shared escalation job', () => {
+    const job = readFileSync(join(ROOT, ESCALATION_JOB_MODULE), 'utf8');
+    expect(job).toContain(
+      "export const PHARMACY_SOP_ESCALATE_OVERDUE_JOB = 'pharmacy.sop.escalateOverdue';"
+    );
+    // Exactly two enqueue calls: the next sweep, and one shared escalation job
+    // per overdue occurrence. No engine generation, late/missed sweep or other job.
+    expect(job.match(/\benqueue[A-Z]?\w*\s*\(/g)).toEqual(['enqueue(', 'enqueue(']);
+    expect(job.match(/\btype: [A-Z_]+,/g)).toEqual([
+      'type: PHARMACY_SOP_ESCALATE_OVERDUE_JOB,',
+      'type: SOP_ESCALATION_JOB,',
+    ]);
+    expect(job).not.toMatch(/\.restaurantJob\.\w+/);
+    expect(job).not.toMatch(
+      /SOP_(GENERATE_OCCURRENCES|LATE_MISSED)_JOB|'sop\.\w+'|sop-late-missed|@\/lib\/restaurant\/job-handlers'/
+    );
+    // It never writes an escalation event or notification itself: the shared
+    // handler does, under its own lock.
+    expect(job).not.toMatch(/restaurantSopEscalationEvent|appendNotificationRequest/);
+    // Its type is registered once (job-handlers.ts) and referenced nowhere else.
+    const references = [...walk('src'), ...walk('scripts')]
+      .filter((file) => !file.startsWith('src/generated/'))
+      .filter((file) =>
+        /PHARMACY_SOP_ESCALATE_OVERDUE_JOB|pharmacy\.sop\.escalateOverdue/.test(
+          readFileSync(join(ROOT, file), 'utf8')
+        )
+      )
+      .sort();
+    expect(references).toEqual([ESCALATION_JOB_MODULE, 'src/lib/restaurant/job-handlers.ts']);
+  });
+
   it('the automatic-scheduling code never opens a client or transaction of its own', () => {
     // The worker hands each handler ONE tenant transaction; the request path
     // hands its own. Opening another client would compete with it for a pool
     // connection (the platform rule in scoped-db.ts).
-    for (const file of [AUTO_SCHEDULE_JOB_MODULE, 'src/lib/pharmacy/sop-settings.ts']) {
+    for (const file of [
+      AUTO_SCHEDULE_JOB_MODULE,
+      ESCALATION_JOB_MODULE,
+      'src/lib/pharmacy/sop-settings.ts',
+    ]) {
       // Code only: the modules' comments explain the rule by naming these.
       const source = readFileSync(join(ROOT, file), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '')

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table';
 import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
@@ -46,10 +47,11 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
   return (
     <div className="min-w-0 space-y-3">
       <p className="break-words text-sm text-text-muted">
-        Previous: {report.periods.previous.from.toISOString()} to{' '}
-        {report.periods.previous.to.toISOString()}. Current:{' '}
-        {report.periods.current.from.toISOString()} to {report.periods.current.to.toISOString()}.{' '}
-        UTC; start inclusive, end exclusive. Same branch, equal elapsed duration.
+        Previous: {formatUtcInstant(report.periods.previous.from)} to{' '}
+        {formatUtcInstant(report.periods.previous.to)}. Current:{' '}
+        {formatUtcInstant(report.periods.current.from)} to{' '}
+        {formatUtcInstant(report.periods.current.to)}. Periods are start inclusive, end exclusive.
+        Same branch, equal elapsed duration.
       </p>
       {!report.previous.hasEntries || !report.current.hasEntries ? (
         <p role="status" className="text-sm text-text-muted">

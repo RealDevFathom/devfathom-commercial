@@ -313,7 +313,7 @@ export default async function PharmacyMarketingPage({
               {delivery.attempts.map((attempt) => (
                 <li key={attempt.id}>
                   {attempt.provider} attempt {attempt.attemptNumber} ·{' '}
-                  {attempt.reservedAt.toISOString()} ·{' '}
+                  {localDateTimeLabel(attempt.reservedAt, zone)} ·{' '}
                   {attempt.contradictory
                     ? 'Conflicting evidence — resend blocked'
                     : attempt.delivered

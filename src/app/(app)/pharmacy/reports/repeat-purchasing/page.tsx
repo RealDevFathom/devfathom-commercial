@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { REPEAT_DEFINITION, REPEAT_LIMITS } from '@/lib/pharmacy/repeat-purchasing';
+import { formatUtcInstant, toUtcMinuteInput, utcInstantFromInput } from '@/lib/utc-instant';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -21,7 +22,10 @@ export default async function RepeatPurchasingPage({
 }) {
   const query = await searchParams;
   const now = new Date();
-  const asOf = scalar(query.asOf) ?? now.toISOString();
+  const rawAsOf = scalar(query.asOf);
+  // The picker is minute precision; default to the current minute so the frozen
+  // cutoff round-trips through the form unchanged.
+  const asOf = rawAsOf ? utcInstantFromInput(rawAsOf) : `${now.toISOString().slice(0, 16)}:00Z`;
   const from =
     scalar(query.from) ?? new Date(now.getTime() - 179 * 86_400_000).toISOString().slice(0, 10);
   const to =
@@ -42,7 +46,7 @@ export default async function RepeatPurchasingPage({
       cause instanceof TRPCError && cause.code === 'FORBIDDEN'
         ? 'Owner financial-report access, an enabled pharmacy reports module and an authorized active branch are required. Contact your workspace administrator.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
-          ? 'Check the enrollment dates (maximum 90 days) and nonfuture ISO UTC cutoff, then apply again.'
+          ? 'Check the enrollment dates (maximum 90 days) and a cutoff that is not in the future, then apply again.'
           : 'Report unavailable. The complete report could not be generated. Retry or select a single branch using the filters; no partial rates are shown.';
   }
   return (
@@ -69,11 +73,12 @@ export default async function RepeatPurchasingPage({
             <Input className="mt-1 min-h-11" type="date" name="to" defaultValue={to} required />
           </label>
           <label className="text-sm text-text-body">
-            As-of cutoff (ISO UTC)
+            As-of cutoff (UTC)
             <Input
               className="mt-1 min-h-11"
+              type="datetime-local"
               name="asOf"
-              defaultValue={asOf}
+              defaultValue={toUtcMinuteInput(asOf)}
               required
               aria-describedby="repeat-window-help"
             />
@@ -118,7 +123,7 @@ export default async function RepeatPurchasingPage({
           <SectionCard title="Identity coverage" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">
               Completed original receipts in enrollment window, before purchase exclusions. Frozen
-              cutoff: {result.asOf}.
+              cutoff: {formatUtcInstant(result.asOf)}.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat

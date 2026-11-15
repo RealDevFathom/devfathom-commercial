@@ -268,7 +268,7 @@ export async function pharmacyLoyaltyAndInventoryFacts(
     WHERE c."organizationId"=${scope.organizationId} AND c.active
       AND consent.granted AND consent."revokedAt" IS NULL AND consent."recordedAt"<=${now}
       AND EXISTS (SELECT 1 FROM pharmacy_loyalty_points_entries l WHERE l."organizationId"=c."organizationId"
-        AND l."branchId"=${scope.branchId} AND l."customerId"=c.id AND l.kind='EARN'
+        AND l."branchId"=${scope.branchId} AND l."customerId"=c.id AND l.kind IN ('EARN','KHATA_EARN')
         AND l."occurredAt">=${from} AND l."occurredAt"<${cutoff})
   `);
   const eligible = loyalty[0]?.count ?? 0;

@@ -15,6 +15,8 @@ import {
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { EMPTY_LEDGER_LABELS, type LedgerLabels } from '@/lib/pharmacy/finance-labels';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatUtcInstant } from '@/lib/utc-instant';
+import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
@@ -104,12 +106,16 @@ function Metadata({ report, branchName }: { report: Report; branchName: string }
       </p>
       <p>{report.definition}</p>
       <p>
-        Built only from entries posted to the books (source: {report.source}); completeness{' '}
+        Built only from entries posted to the books (source:{' '}
+        {plainReportSource(report.source) ?? 'posted accounts'}); completeness{' '}
         {report.coverage.completeness}. Refunds count only once they are posted as reversals.
       </p>
       <p>
-        Retrieved: {report.freshness.retrievedAt.toISOString()}. Latest posting:{' '}
-        {report.freshness.latestPostingAt ?? 'unknown'}.
+        Retrieved: {formatUtcInstant(report.freshness.retrievedAt)}. Latest posting:{' '}
+        {report.freshness.latestPostingAt
+          ? formatUtcInstant(report.freshness.latestPostingAt)
+          : 'unknown'}
+        .
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>

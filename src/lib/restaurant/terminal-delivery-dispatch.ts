@@ -161,6 +161,8 @@ export function transitionDeliveryFromKds(
     idempotencyKey: string;
     fulfillmentId: string;
     status: 'DISPATCHED' | 'DELIVERED';
+    /** The acting operator recorded on the order events a DELIVERED hand-off writes. */
+    staffProfileId?: string;
   }
 ): Promise<DeliveryTransitionResult> {
   return transaction(db, async (tx) => {
@@ -215,6 +217,9 @@ export function transitionDeliveryFromKds(
       branchId: input.branchId,
       fulfillmentId: input.fulfillmentId,
       status: input.status,
+      actor: input.staffProfileId
+        ? { staffProfileId: input.staffProfileId, deviceId: input.deviceId }
+        : null,
     });
     const result: DeliveryTransitionResult = {
       fulfillmentId: delivery.id,
@@ -266,6 +271,7 @@ export const deliveryTransitionRoute = withTerminalAuth(
       idempotencyKey: key,
       fulfillmentId: parsed.data.fulfillmentId,
       status: parsed.data.status,
+      staffProfileId: operator.staffProfileId,
     });
     return NextResponse.json(delivery);
   },

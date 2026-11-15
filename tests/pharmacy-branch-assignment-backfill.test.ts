@@ -17,6 +17,9 @@ const original = readFileSync(
   'utf8'
 );
 
+/** DEV-622: opt-in role templates introduced after this backfill shipped. */
+const TEMPLATES_ADDED_AFTER_BACKFILL = new Set(['pharmacist-cashier']);
+
 describe('pharmacy branch assignment backfill', () => {
   it('assigns every pharmacy role template and pharmacy capability inside pharmacy organizations only', () => {
     expect(sql).toContain(`o."vertical" = 'PHARMACY'`);
@@ -25,7 +28,16 @@ describe('pharmacy branch assignment backfill', () => {
     expect(sql).toContain(`p."capability" LIKE 'pharmacy.%'`);
     expect(sql).toContain(`p."capability" LIKE 'pharmacy:%'`);
     expect(sql).toContain('ON CONFLICT ("organizationId", "branchId", "userId") DO NOTHING');
-    for (const role of PHARMACY_ROLE_TEMPLATES) expect(sql).toContain(`'${role.key}'`);
+    for (const role of PHARMACY_ROLE_TEMPLATES) {
+      if (TEMPLATES_ADDED_AFTER_BACKFILL.has(role.key)) {
+        // A shipped migration cannot name a later template. The backfill's capability
+        // clause (asserted above) covers it: every grant it holds is a pharmacy: action.
+        expect(role.capabilities.length, role.key).toBeGreaterThan(0);
+        for (const grant of role.capabilities) expect(grant, role.key).toMatch(/^pharmacy:/);
+      } else {
+        expect(sql).toContain(`'${role.key}'`);
+      }
+    }
     const elevate = sql.indexOf("SELECT set_config('app.is_platform_admin', 'true', true);");
     const insert = sql.indexOf('INSERT INTO "pharmacy_branch_assignments"');
     const guard = sql.indexOf(
