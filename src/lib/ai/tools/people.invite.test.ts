@@ -37,7 +37,7 @@ vi.mock('@/lib/entitlements', () => ({
 
 import { buildPeopleTools } from './people';
 import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
-import { templates } from '@/lib/email';
+import { sendEmail, templates } from '@/lib/email';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
 const db = {
@@ -105,6 +105,30 @@ describe('assistant inviteMember guards', () => {
       expect(mocks.create).not.toHaveBeenCalled();
     }
   );
+
+  // DEV-838 (F20): the accept link is a bearer credential. It must reach only
+  // the invitee's inbox, never the tool result that flows into the next model
+  // call (and from there into the action ledger).
+  it.each([
+    ['delivered', true],
+    ['failed', false],
+  ])('keeps the invitation token out of the model-visible result (%s email)', async (_, ok) => {
+    mocks.findFirst.mockResolvedValue(null);
+    if (!ok) vi.mocked(sendEmail).mockRejectedValueOnce(new Error('smtp down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await inviteTool().execute({ ...base, email: 'new.person@company.com' });
+
+    const { acceptUrl } = vi.mocked(templates.inviteMember).mock.calls[0]![0];
+    const token = acceptUrl.split('/invite/')[1]!;
+    expect(token.length).toBeGreaterThan(20);
+    expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ email: 'new.person@company.com', emailed: ok });
+    expect(result).not.toHaveProperty('inviteUrl');
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain('/invite/');
+    error.mockRestore();
+  });
 
   it('stores the canonical form for a genuinely new member', async () => {
     mocks.findFirst.mockResolvedValue(null);

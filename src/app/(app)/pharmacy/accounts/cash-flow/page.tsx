@@ -109,7 +109,7 @@ export default async function CashFlowPage({
   const pageHref = (target: number) =>
     `?${new URLSearchParams({ branch: query.branch ?? '', from, to, page: String(target) })}`;
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Classified cash-flow projection"
@@ -267,6 +267,6 @@ export default async function CashFlowPage({
           </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }

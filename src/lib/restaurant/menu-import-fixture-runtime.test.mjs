@@ -108,7 +108,9 @@ function setup(node = 'test', selected = 'FIXTURE') {
     },
   };
   const cache = {};
-  function load(name) {
+  function load(specifier) {
+    // Sibling imports (`./menu-extraction-fixtures`) name the same module as their alias.
+    const name = specifier.startsWith('./') ? `@/lib/restaurant/${specifier.slice(2)}` : specifier;
     if (boundaries[name]) return boundaries[name];
     if (cache[name]) return cache[name];
     assert.match(
@@ -273,8 +275,18 @@ for (const selected of [undefined, '', 'disabled', 'typo']) {
     assert.equal(f.events.length, 0);
   });
 }
-test('production core has no fixture import and missing injection fails before storage', async () => {
-  const f = setup();
+test('production core refuses the fixture and missing injection fails before storage', async () => {
+  // The core resolves FIXTURE only for an explicitly configured test/dev sandbox
+  // (the HTTP and worker path the e2e database runs); production never does.
+  const sandbox = setup('test');
+  const sandboxMenu = sandbox.load('@/lib/restaurant/menu-import');
+  assert.equal(
+    await sandboxMenu.defaultMenuImportRuntime.resolveAdapter('FIXTURE').extract(),
+    sandbox.result
+  );
+  assert.deepEqual(sandbox.events, ['fixture-factory', 'fixture-extract']);
+
+  const f = setup('production');
   const menu = f.load('@/lib/restaurant/menu-import');
   assert.throws(() => menu.defaultMenuImportRuntime.resolveAdapter('FIXTURE'), {
     reason: 'ADAPTER_UNAVAILABLE',
@@ -287,10 +299,7 @@ test('production core has no fixture import and missing injection fails before s
       ['status', 'EXTRACTION_FAILED'],
     ])
   );
-  assert.doesNotMatch(
-    fs.readFileSync(path.join(__dirname, 'menu-import.ts'), 'utf8'),
-    /menu-extraction-fixtures|createFixtureMenuExtractionAdapter/
-  );
+  assert.ok(!f.events.includes('fixture-factory'));
 });
 test('legacy composition retains VISION resolver and explicit runtime override', async () => {
   const f = setup('test', 'VISION');
@@ -443,6 +452,9 @@ test('commit accepts priced variants in the current organization currency', asyn
     extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('500'),
     extractedCurrency: 'PKR',
     extractedVariants: [{ name: 'Large', price: { amount: '650', currency: 'pkr' } }],
+    reviewedVariants: confirmedAsPrinted([
+      { name: 'Large', price: { amount: '650', currency: 'pkr' } },
+    ]),
     reviewedCategoryName: null,
     reviewedProductName: null,
     reviewedDescription: null,
@@ -477,6 +489,9 @@ test('commit rejects a foreign priced variant even when the base price has a rev
     extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('10'),
     extractedCurrency: 'USD',
     extractedVariants: [{ name: 'Large', price: { amount: '15', currency: 'USD' } }],
+    reviewedVariants: confirmedAsPrinted([
+      { name: 'Large', price: { amount: '15', currency: 'USD' } },
+    ]),
     reviewedCategoryName: null,
     reviewedProductName: null,
     reviewedDescription: null,
@@ -493,8 +508,22 @@ test('commit rejects a foreign priced variant even when the base price has a rev
   assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
 
+/** Sizes as a reviewer confirms them unchanged: stored in the extracted shape,
+ * keeping each printed currency (see normalizeReviewedVariants). Commit imports
+ * only reviewer-confirmed sizes, never the raw extraction. */
+function confirmedAsPrinted(variants) {
+  return variants.map((variant) => ({
+    name: variant.name,
+    price: {
+      amount: variant.price?.amount ?? null,
+      currency: variant.price?.currency?.toUpperCase() ?? null,
+      raw: null,
+    },
+  }));
+}
+
 function currencylessVariantLine(Decimal, overrides) {
-  return {
+  const line = {
     id: 'line_1',
     reviewStatus: 'ACCEPTED',
     sortOrder: 1,
@@ -513,6 +542,7 @@ function currencylessVariantLine(Decimal, overrides) {
     mergeVariantId: null,
     ...overrides,
   };
+  return { reviewedVariants: confirmedAsPrinted(line.extractedVariants), ...line };
 }
 
 for (const [label, overrides] of [

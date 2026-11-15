@@ -10,23 +10,43 @@ import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { formatSoldQuantity, soldUnitNoun } from '@/lib/pharmacy/stock-breakdown';
+import {
+  formatSoldQuantity,
+  soldUnitNoun,
+  soldUnitPluralNoun,
+} from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 
+const returnInputSchema = z.object({
+  branchId: z.string(),
+  saleLineId: z.string(),
+  lotId: z.string().optional(),
+  canonicalUnits: z.number().int().positive(),
+  disposition: z.enum(['RESTOCK', 'QUARANTINE']),
+  quarantineLocationId: z.string().optional(),
+  reason: z.string(),
+  integrityDecision: z.string(),
+  idempotencyKey: z.string(),
+});
 const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('return'),
     saleId: z.string(),
-    input: z.object({
-      branchId: z.string(),
-      saleLineId: z.string(),
-      lotId: z.string().optional(),
-      canonicalUnits: z.number().int().positive(),
-      disposition: z.enum(['RESTOCK', 'QUARANTINE']),
-      quarantineLocationId: z.string().optional(),
-      reason: z.string(),
-      integrityDecision: z.string(),
-      idempotencyKey: z.string(),
+    input: returnInputSchema,
+  }),
+  // DEV-501: one confirm records the return and refunds it in a single server transaction.
+  z.object({
+    kind: z.literal('returnRefund'),
+    saleId: z.string(),
+    input: returnInputSchema.extend({
+      refund: z.object({
+        originalTenderId: z.string(),
+        deviceId: z.string(),
+        businessDate: z.string(),
+        // Omitted: the server refunds this return's exact value.
+        amountMinor: z.number().int().positive().optional(),
+        manualCashFallback: z.boolean(),
+      }),
     }),
   }),
   z.object({
@@ -47,6 +67,11 @@ const attemptSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 type Attempt = z.infer<typeof attemptSchema>;
+const attemptLabel: Record<Attempt['kind'], string> = {
+  return: 'return',
+  returnRefund: 'return and refund',
+  refund: 'refund',
+};
 /** Transient witness credential. Never persisted with the saved attempt. */
 type ControlledWitness = { staffProfileId: string; pin: string };
 const witnessPinPattern = /^\d{4,8}$/;
@@ -71,6 +96,20 @@ export function isBlockedResult(result: unknown): result is { blocked: string } 
     typeof (result as { blocked: unknown }).blocked === 'string'
   );
 }
+/** Parses a whole, non-negative count typed at the counter; blank reads as zero. */
+function wholeCount(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+}
+
+const REASONS = [
+  ['WRONG_ITEM', 'Wrong item / strip'],
+  ['DAMAGED', 'Damaged'],
+  ['CUSTOMER_CHANGED_MIND', 'Customer changed mind'],
+  ['OTHER', 'Other — explain in inspection'],
+] as const;
+
 type Props = {
   branchId: string;
   organizationId: string;
@@ -99,7 +138,7 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {refundAuthorized
-              ? 'Find the original receipt, record returned stock, then refund its original tenders.'
+              ? 'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
               : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
           </DialogDescription>
           {open && (
@@ -157,18 +196,23 @@ export function ReturnForm({
   );
   const [number, setNumber] = useState('');
   const [searched, setSearched] = useState<{ value: number | null } | null>(null);
-  const [saleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
-  const [lineId, setLineId] = useState('');
+  const [chosenSaleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
+  const [chosenLineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
-  const [units, setUnits] = useState('1');
+  // DEV-501: quantity is typed in the unit the line was sold in, plus any loose units.
+  // null keeps the default for the selected line and lot.
+  const [quantity, setQuantity] = useState<{ sold: string; loose: string } | null>(null);
   const [reason, setReason] = useState('WRONG_ITEM');
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
-  const [location, setLocation] = useState('');
+  const [chosenLocation, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
+  // The tender refunded with the return: '' (choose), 'none' (record only) or a tender id.
+  const [chosenReturnTender, setReturnTender] = useState('');
+  const [returnAmount, setReturnAmount] = useState<string | null>(null);
+  const [returnManual, setReturnManual] = useState(false);
   const [tenderId, setTenderId] = useState('');
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
@@ -187,6 +231,10 @@ export function ReturnForm({
   );
   // A reference with no receipt sequence (for example QA-0000) cannot match any receipt.
   const unparsed = !!searched && searched.value === null;
+  // DEV-501: a scan or search with exactly one match in this branch opens that receipt.
+  const onlyMatch =
+    !unparsed && !!searched?.value && lookup.data?.length === 1 ? lookup.data[0] : undefined;
+  const saleId = chosenSaleId || (onlyMatch?.branchId === branchId ? onlyMatch.id : '');
   const history = trpc.pharmacySales.returnHistory.useQuery(
     { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
@@ -196,15 +244,66 @@ export function ReturnForm({
     { enabled: ready && online && !!saleId, retry: false }
   );
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
+  const returnAndRefund = trpc.pharmacySales.returnAndRefund.useMutation();
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
+  const returnable = data?.lines.filter((row) => row.returnedUnits < row.canonicalUnits) ?? [];
+  // A receipt with one returnable line selects it.
+  const lineId = chosenLineId || (returnable.length === 1 ? returnable[0].id : '');
   const line = data?.lines.find((row) => row.id === lineId);
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
+  const perSold = line && line.canonicalUnitsPerSaleUnit > 1 ? line.canonicalUnitsPerSaleUnit : 1;
+  const soldNoun = line ? soldUnitNoun(line.saleUnit, line.levelLabel) : 'unit';
+  const soldPlural = line ? soldUnitPluralNoun(line.saleUnit, line.levelLabel) : 'units';
+  // Default: one sold unit, or every returnable loose unit when less than one remains.
+  const quantityInput = quantity ?? {
+    sold: perSold > 1 && maximumUnits < perSold ? '0' : '1',
+    loose: perSold > 1 && maximumUnits < perSold ? String(Math.max(0, maximumUnits)) : '0',
+  };
+  const units =
+    wholeCount(quantityInput.sold) * perSold + (perSold > 1 ? wholeCount(quantityInput.loose) : 0);
+  const unitsValid = Number.isSafeInteger(units) && units >= 1 && units <= maximumUnits;
+  const location = chosenLocation || (data?.locations.length === 1 ? data.locations[0].id : '');
+  const reasonLabel = REASONS.find(([value]) => value === reason)?.[1] ?? reason;
+  const integrityDecision = integrity.trim() || `Inspected at the counter: ${reasonLabel}`;
+  const refundableTenders =
+    data?.tenders.filter((row) => row.refundedMinor < row.amountMinor) ?? [];
+  // A sale paid with one tender refunds to it.
+  const returnTenderId =
+    chosenReturnTender || (refundableTenders.length === 1 ? refundableTenders[0].id : '');
+  const returnTender = data?.tenders.find((row) => row.id === returnTenderId);
+  const refundNow = !!returnTender;
+  // The server prices the proposed return exactly as it will snapshot it, from the selected
+  // lot's own allocation prices, so the confirmed refund is the refund recorded.
+  const quote = trpc.pharmacySales.returnQuote.useQuery(
+    { branchId, saleLineId: lineId, lotId: lotId || undefined, canonicalUnits: units },
+    {
+      enabled: ready && online && refundAuthorized && refundNow && !!line && unitsValid,
+      retry: false,
+    }
+  );
+  const quoted =
+    refundNow && line && unitsValid && quote.isSuccess && !quote.isFetching
+      ? quote.data.valueMinor
+      : undefined;
+  const returnValueMinor = quoted ?? 0;
+  const returnTenderRemaining = returnTender
+    ? returnTender.amountMinor - returnTender.refundedMinor
+    : 0;
+  // The refund is prefilled from the returned quantity and bounded by it and the tender.
+  const returnRefundMax = Math.min(returnValueMinor, returnTenderRemaining);
+  const returnAmountMinor =
+    returnAmount === null
+      ? returnRefundMax
+      : /^\d+(\.\d{1,2})?$/.test(returnAmount.trim())
+        ? Math.round(Number(returnAmount.trim()) * 100)
+        : 0;
+  const returnManualRequired = returnTender?.type === 'CARD' || returnTender?.type === 'WALLET';
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
-  const witnessLineId = attempt?.kind === 'return' ? attempt.input.saleLineId : lineId;
+  const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
   const witnessRequired = !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && witnessRequired,
@@ -225,6 +324,31 @@ export function ReturnForm({
   const stale = history.isFetching || history.isError;
 
   const managerPinReady = witnessPinPattern.test(managerPin);
+  const returnReady =
+    !!line &&
+    unitsValid &&
+    !(disposition === 'RESTOCK' && !selectedLot?.restockAllowed) &&
+    !(disposition === 'QUARANTINE' && !location) &&
+    witnessReady &&
+    managerPinReady &&
+    (returnTenderId === 'none' ||
+      (refundNow &&
+        quoted !== undefined &&
+        Number.isSafeInteger(returnAmountMinor) &&
+        returnAmountMinor > 0 &&
+        returnAmountMinor <= returnRefundMax &&
+        !(returnManualRequired && !returnManual)));
+
+  function resetReturn() {
+    setLineId('');
+    setLotId('');
+    setQuantity(null);
+    setDisposition('QUARANTINE');
+    setIntegrity('');
+    setReturnTender('');
+    setReturnAmount(null);
+    setReturnManual(false);
+  }
 
   async function execute(next: Attempt, controlledWitness?: ControlledWitness, pin?: string) {
     if (latch.current || !online || !ready) return;
@@ -241,13 +365,25 @@ export function ReturnForm({
       // The witness PIN is deliberately excluded from persistent storage.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
-      if (next.kind === 'return') {
+      let refundedMinor: number | undefined;
+      if (next.kind !== 'refund') {
         // DEV-621: the manager PIN is sent with the request only, never saved with the attempt.
-        const result = await returnLine.mutateAsync({
-          ...next.input,
-          ...(controlledWitness ? { controlledWitness } : {}),
-          managerPin: pin ?? '',
-        });
+        const result =
+          next.kind === 'return'
+            ? await returnLine.mutateAsync({
+                ...next.input,
+                ...(controlledWitness ? { controlledWitness } : {}),
+                managerPin: pin ?? '',
+              })
+            : await returnAndRefund.mutateAsync({
+                ...next.input,
+                refund: {
+                  ...next.input.refund,
+                  businessDate: new Date(next.input.refund.businessDate),
+                },
+                ...(controlledWitness ? { controlledWitness } : {}),
+                managerPin: pin ?? '',
+              });
         if (isBlockedResult(result)) {
           // The server refused before any stock change. A fresh attempt is definitely not
           // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
@@ -265,6 +401,9 @@ export function ReturnForm({
           );
           return;
         }
+        const refunded = (result as { refund?: { amountMinor?: unknown } } | undefined)?.refund
+          ?.amountMinor;
+        if (typeof refunded === 'number') refundedMinor = refunded;
       } else {
         // The manager PIN is sent with the request only, never saved with the attempt.
         const result = await refund.mutateAsync({
@@ -289,13 +428,14 @@ export function ReturnForm({
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
-      setConfirmed(false);
-      setUnits('1');
+      resetReturn();
       setAmount('');
       setMessage(
         next.kind === 'return'
           ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
-          : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
+          : next.kind === 'returnRefund'
+            ? `Return recorded and refunded${refundedMinor === undefined ? '' : `: PKR ${formatMinor(refundedMinor)}`}. Loyalty tender refunds restore redeemed points. Reprint the receipt below.`
+            : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
@@ -314,6 +454,45 @@ export function ReturnForm({
       latch.current = false;
       setBusy(false);
     }
+  }
+
+  function confirmReturn() {
+    if (!returnReady || !line) return;
+    const input = {
+      branchId,
+      saleLineId: line.id,
+      lotId: lotId || undefined,
+      canonicalUnits: units,
+      disposition,
+      quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
+      reason,
+      integrityDecision,
+      idempotencyKey: browserUuid(),
+    };
+    void execute(
+      returnTenderId === 'none'
+        ? { kind: 'return', saleId, input }
+        : {
+            kind: 'returnRefund',
+            saleId,
+            input: {
+              ...input,
+              refund: {
+                originalTenderId: returnTenderId,
+                deviceId: deviceId(),
+                businessDate: businessDate().toISOString(),
+                // The untouched prefill refunds the return's exact server-side value.
+                amountMinor:
+                  returnAmount === null && returnValueMinor <= returnTenderRemaining
+                    ? undefined
+                    : returnAmountMinor,
+                manualCashFallback: returnManualRequired && returnManual,
+              },
+            },
+          },
+      witness,
+      managerPin
+    );
   }
 
   const witnessFields = (
@@ -348,7 +527,7 @@ export function ReturnForm({
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
-          <Button variant="outline" onClick={() => void pharmacists.refetch()}>
+          <Button type="button" variant="outline" onClick={() => void pharmacists.refetch()}>
             Reload pharmacists
           </Button>
         </p>
@@ -430,6 +609,12 @@ export function ReturnForm({
     }
   }
 
+  const quantitySummary = line
+    ? perSold > 1
+      ? `${units} base units (${Math.floor(units / perSold)} ${Math.floor(units / perSold) === 1 ? soldNoun : soldPlural}${units % perSold ? ` + ${units % perSold} loose` : ''})`
+      : `${units} ${units === 1 ? soldNoun : soldPlural}`
+    : '';
+
   return (
     <div className="space-y-4">
       {!online && <p role="alert">Offline. Returns and refunds require a connection.</p>}
@@ -444,8 +629,8 @@ export function ReturnForm({
           managerPinField
         ) : (
           <p role="note" className="text-sm text-text-muted">
-            This saved {attempt.kind} is kept for reconciliation. A manager or owner must retry it
-            with their PIN.
+            This saved {attemptLabel[attempt.kind]} is kept for reconciliation. A manager or owner
+            must retry it with their PIN.
           </p>
         ))}
       {attempt && (
@@ -457,24 +642,23 @@ export function ReturnForm({
             !online ||
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
-            (attempt.kind === 'return' && (!data || !witnessReady)) ||
+            (attempt.kind !== 'refund' && (!data || !witnessReady)) ||
             !refundAuthorized ||
             !managerPinReady
           }
         >
-          Retry saved {attempt.kind}
+          Retry saved {attemptLabel[attempt.kind]}
         </Button>
       )}
-      {attempt?.kind === 'return' && witnessRequired && witnessFields}
+      {attempt && attempt.kind !== 'refund' && witnessRequired && witnessFields}
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           setSearched({ value: parseReceiptNumber(number) });
           setSaleId('');
-          setLineId('');
+          resetReturn();
           setTenderId('');
-          setConfirmed(false);
         }}
       >
         <div>
@@ -484,6 +668,7 @@ export function ReturnForm({
             type="text"
             autoComplete="off"
             spellCheck={false}
+            enterKeyHint="search"
             maxLength={40}
             required
             aria-describedby="return-receipt-hint"
@@ -502,7 +687,7 @@ export function ReturnForm({
           Find receipt
         </Button>
         <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
-          Enter the number printed on the receipt, for example 1042 or QA-1042.
+          Scan the receipt or type the number printed on it, for example 1042 or QA-1042.
         </p>
       </form>
       {lookup.isFetching && !!searched?.value && <p role="status">Looking up receipt…</p>}
@@ -519,7 +704,9 @@ export function ReturnForm({
       )}
       {!unparsed && !!lookup.data?.length && (
         <div className="space-y-2">
-          <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
+          {lookup.data.length > 1 && (
+            <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
+          )}
           {lookup.data.map((row) => (
             <Button
               key={row.id}
@@ -529,9 +716,8 @@ export function ReturnForm({
               aria-pressed={row.id === saleId}
               onClick={() => {
                 setSaleId(row.id);
-                setLineId('');
+                resetReturn();
                 setTenderId('');
-                setConfirmed(false);
               }}
             >
               Receipt {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
@@ -558,216 +744,290 @@ export function ReturnForm({
       )}
       {data && (
         <>
-          {/* DEV-621: one PIN entry approves the next return or refund; it clears after each. */}
-          {refundAuthorized && !attempt && managerPinField}
           {refundAuthorized && (
-            <fieldset
-              disabled={locked || stale}
-              className="space-y-3 rounded-lg border border-border-subtle p-4"
+            <form
+              aria-label="Return and refund"
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                confirmReturn();
+              }}
             >
-              <legend className="px-1 font-semibold">1. Record returned stock</legend>
-              <Label htmlFor="return-line">Sold line</Label>
-              <select
-                id="return-line"
-                className={selectClass}
-                value={lineId}
-                onChange={(event) => {
-                  setLineId(event.target.value);
-                  setWitnessStaffId('');
-                  setWitnessPin('');
-                  setLotId('');
-                  setDisposition('QUARANTINE');
-                  setConfirmed(false);
-                }}
+              <fieldset
+                disabled={locked || stale}
+                className="space-y-3 rounded-lg border border-border-subtle p-4"
               >
-                <option value="">Choose a line</option>
-                {data.lines.map((row) => (
-                  <option
-                    key={row.id}
-                    value={row.id}
-                    disabled={row.returnedUnits === row.canonicalUnits}
-                  >
-                    {row.name} · {formatSoldQuantity(row)} ·{' '}
-                    {row.canonicalUnits - row.returnedUnits} units returnable
-                  </option>
-                ))}
-              </select>
-              <Label htmlFor="return-lot">Returned lot / batch</Label>
-              <select
-                id="return-lot"
-                className={selectClass}
-                value={lotId}
-                onChange={(event) => {
-                  setLotId(event.target.value);
-                  setDisposition('QUARANTINE');
-                  setConfirmed(false);
-                }}
-              >
-                <option value="">Lot cannot be verified — quarantine</option>
-                {line?.lots.map((lot) => (
-                  <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                    Batch {lot.batchNumber}
-                    {lot.expiresAt
-                      ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
-                      : ''}{' '}
-                    · {lot.returnableUnits} units remaining
-                    {lot.restockAllowed ? '' : ' · quarantine only'}
-                  </option>
-                ))}
-              </select>
-              {!lotId && (
-                <p className="text-sm text-text-muted">
-                  Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
-                  receives available stock.
-                </p>
-              )}
-              <Label htmlFor="return-units">Return quantity (base units)</Label>
-              <Input
-                id="return-units"
-                className="h-11"
-                type="number"
-                min="1"
-                max={maximumUnits}
-                step="1"
-                value={units}
-                onChange={(event) => {
-                  setUnits(event.target.value);
-                  setConfirmed(false);
-                }}
-              />
-              {line && (
-                <p className="text-sm text-text-muted">
-                  One sold {soldUnitNoun(line.saleUnit, line.levelLabel)} contains{' '}
-                  {line.canonicalUnitsPerSaleUnit} base units.
-                </p>
-              )}
-              <Label htmlFor="return-reason">Reason</Label>
-              <select
-                id="return-reason"
-                className={selectClass}
-                value={reason}
-                onChange={(event) => {
-                  setReason(event.target.value);
-                  setConfirmed(false);
-                }}
-              >
-                <option value="WRONG_ITEM">Wrong item / strip</option>
-                <option value="DAMAGED">Damaged</option>
-                <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
-                <option value="OTHER">Other — explain in inspection</option>
-              </select>
-              <Label htmlFor="return-disposition">Stock disposition</Label>
-              <select
-                id="return-disposition"
-                className={selectClass}
-                value={disposition}
-                onChange={(event) => {
-                  setDisposition(event.target.value as typeof disposition);
-                  setConfirmed(false);
-                }}
-              >
-                <option value="QUARANTINE">Quarantine for review</option>
-                <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
-                  Restock to verified lot and original shelf
-                </option>
-              </select>
-              {disposition === 'QUARANTINE' && (
-                <>
-                  <Label htmlFor="return-location">Quarantine location</Label>
-                  <select
-                    id="return-location"
-                    className={selectClass}
-                    value={location}
-                    onChange={(event) => {
-                      setLocation(event.target.value);
-                      setConfirmed(false);
-                    }}
-                  >
-                    <option value="">Choose location</option>
-                    {data.locations.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        {row.name}
-                      </option>
-                    ))}
-                  </select>
-                  {data.locations.length === 0 && (
-                    <p role="alert">
-                      No quarantine location is configured for this branch. Ask a supervisor to
-                      configure one.
-                    </p>
+                <legend className="px-1 font-semibold">Return and refund</legend>
+                <Label htmlFor="return-line">Sold line</Label>
+                <select
+                  id="return-line"
+                  className={selectClass}
+                  value={lineId}
+                  onChange={(event) => {
+                    setLineId(event.target.value);
+                    setWitnessStaffId('');
+                    setWitnessPin('');
+                    setLotId('');
+                    setQuantity(null);
+                    setDisposition('QUARANTINE');
+                    setReturnAmount(null);
+                  }}
+                >
+                  <option value="">Choose a line</option>
+                  {data.lines.map((row) => (
+                    <option
+                      key={row.id}
+                      value={row.id}
+                      disabled={row.returnedUnits === row.canonicalUnits}
+                    >
+                      {row.name} · {formatSoldQuantity(row)} ·{' '}
+                      {row.canonicalUnits - row.returnedUnits} units returnable
+                    </option>
+                  ))}
+                </select>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="return-units">Return quantity ({soldPlural})</Label>
+                    <Input
+                      id="return-units"
+                      className="h-11"
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      max={Math.floor(maximumUnits / perSold)}
+                      step="1"
+                      aria-invalid={!!line && !unitsValid}
+                      aria-describedby="return-units-hint"
+                      value={quantityInput.sold}
+                      onChange={(event) => {
+                        setQuantity({ ...quantityInput, sold: event.target.value });
+                        setReturnAmount(null);
+                      }}
+                    />
+                  </div>
+                  {perSold > 1 && (
+                    <div className="space-y-2">
+                      <Label htmlFor="return-loose">Plus loose units</Label>
+                      <Input
+                        id="return-loose"
+                        className="h-11"
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        max={perSold - 1}
+                        step="1"
+                        aria-invalid={!!line && !unitsValid}
+                        aria-describedby="return-units-hint"
+                        value={quantityInput.loose}
+                        onChange={(event) => {
+                          setQuantity({ ...quantityInput, loose: event.target.value });
+                          setReturnAmount(null);
+                        }}
+                      />
+                    </div>
                   )}
-                </>
-              )}
-              <Label htmlFor="return-integrity">Inspection and integrity decision</Label>
-              <Input
-                id="return-integrity"
-                className="h-11"
-                value={integrity}
-                onChange={(event) => {
-                  setIntegrity(event.target.value);
-                  setConfirmed(false);
-                }}
-              />
-              <p className="text-sm text-text-muted">
-                Restock only inspected medicine with acceptable storage and intact packaging.
-                Expired or recalled lots are refused by the server.
-              </p>
-              {!attempt && witnessRequired && witnessFields}
-              <label className="flex min-h-11 items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={confirmed}
-                  onChange={(event) => setConfirmed(event.target.checked)}
+                </div>
+                <p id="return-units-hint" className="text-sm text-text-muted" aria-live="polite">
+                  {!line
+                    ? 'Choose the sold line to return.'
+                    : unitsValid
+                      ? `Returning ${quantitySummary}.`
+                      : `Enter between 1 and ${maximumUnits} base units.`}{' '}
+                  {line &&
+                    perSold > 1 &&
+                    `One sold ${soldNoun} contains ${line.canonicalUnitsPerSaleUnit} base units.`}
+                </p>
+                <Label htmlFor="return-reason">Reason</Label>
+                <select
+                  id="return-reason"
+                  className={selectClass}
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                >
+                  {REASONS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <Label htmlFor="return-lot">Returned lot / batch</Label>
+                <select
+                  id="return-lot"
+                  className={selectClass}
+                  value={lotId}
+                  onChange={(event) => {
+                    setLotId(event.target.value);
+                    setQuantity(null);
+                    setDisposition('QUARANTINE');
+                    setReturnAmount(null);
+                  }}
+                >
+                  <option value="">Lot cannot be verified — quarantine</option>
+                  {line?.lots.map((lot) => (
+                    <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
+                      Batch {lot.batchNumber}
+                      {lot.expiresAt
+                        ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
+                        : ''}{' '}
+                      · {lot.returnableUnits} units remaining
+                      {lot.restockAllowed ? '' : ' · quarantine only'}
+                    </option>
+                  ))}
+                </select>
+                {!lotId && (
+                  <p className="text-sm text-text-muted">
+                    Unidentified stock stays in quarantine with a pharmacist-verification task. No
+                    lot receives available stock.
+                  </p>
+                )}
+                <Label htmlFor="return-disposition">Stock disposition</Label>
+                <select
+                  id="return-disposition"
+                  className={selectClass}
+                  value={disposition}
+                  onChange={(event) => setDisposition(event.target.value as typeof disposition)}
+                >
+                  <option value="QUARANTINE">Quarantine for review</option>
+                  <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
+                    Restock to verified lot and original shelf
+                  </option>
+                </select>
+                {disposition === 'QUARANTINE' && (
+                  <>
+                    <Label htmlFor="return-location">Quarantine location</Label>
+                    <select
+                      id="return-location"
+                      className={selectClass}
+                      value={location}
+                      onChange={(event) => setLocation(event.target.value)}
+                    >
+                      <option value="">Choose location</option>
+                      {data.locations.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.name}
+                        </option>
+                      ))}
+                    </select>
+                    {data.locations.length === 0 && (
+                      <p role="alert">
+                        No quarantine location is configured for this branch. Ask a supervisor to
+                        configure one.
+                      </p>
+                    )}
+                  </>
+                )}
+                <Label htmlFor="return-integrity">
+                  Inspection and integrity decision (optional)
+                </Label>
+                <Input
+                  id="return-integrity"
+                  className="h-11"
+                  placeholder={integrityDecision}
+                  value={integrity}
+                  onChange={(event) => setIntegrity(event.target.value)}
                 />
-                I confirm the quantity, inspection and stock disposition.
-              </label>
-              <Button
-                className="h-11"
-                variant="destructive"
-                disabled={
-                  !line ||
-                  !confirmed ||
-                  !integrity.trim() ||
-                  !Number.isSafeInteger(Number(units)) ||
-                  Number(units) < 1 ||
-                  Number(units) > maximumUnits ||
-                  (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                  (disposition === 'QUARANTINE' && !location) ||
-                  !witnessReady ||
-                  !managerPinReady
-                }
-                onClick={() =>
-                  void execute(
-                    {
-                      kind: 'return',
-                      saleId,
-                      input: {
-                        branchId,
-                        saleLineId: lineId,
-                        lotId: lotId || undefined,
-                        canonicalUnits: Number(units),
-                        disposition,
-                        quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
-                        reason,
-                        integrityDecision: integrity,
-                        idempotencyKey: browserUuid(),
-                      },
-                    },
-                    witness,
-                    managerPin
-                  )
-                }
-              >
-                Record return
-              </Button>
-            </fieldset>
+                <p className="text-sm text-text-muted">
+                  Restock only inspected medicine with acceptable storage and intact packaging.
+                  Expired or recalled lots are refused by the server.
+                </p>
+                <Label htmlFor="return-refund-tender">Refund to</Label>
+                <select
+                  id="return-refund-tender"
+                  className={selectClass}
+                  value={returnTenderId}
+                  onChange={(event) => {
+                    setReturnTender(event.target.value);
+                    setReturnAmount(null);
+                    setReturnManual(false);
+                  }}
+                >
+                  <option value="">Choose tender</option>
+                  {data.tenders.map((row) => (
+                    <option
+                      key={row.id}
+                      value={row.id}
+                      disabled={row.refundedMinor >= row.amountMinor}
+                    >
+                      {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                    </option>
+                  ))}
+                  <option value="none">No refund now — record the return only</option>
+                </select>
+                {refundNow && (
+                  <>
+                    <Label htmlFor="return-refund-amount">Refund for this return (PKR)</Label>
+                    <Input
+                      id="return-refund-amount"
+                      className="h-11"
+                      inputMode="decimal"
+                      aria-describedby="return-refund-amount-hint"
+                      aria-invalid={
+                        returnAmount !== null &&
+                        !(returnAmountMinor > 0 && returnAmountMinor <= returnRefundMax)
+                      }
+                      disabled={quoted === undefined}
+                      value={
+                        returnAmount ?? (quoted === undefined ? '' : formatMinor(returnRefundMax))
+                      }
+                      onChange={(event) => setReturnAmount(event.target.value)}
+                    />
+                    <p id="return-refund-amount-hint" className="text-sm text-text-muted">
+                      {quoted !== undefined
+                        ? `Prefilled from the returned quantity. You can lower it, up to PKR ${formatMinor(returnRefundMax)}. Loyalty refunds restore redeemed points.`
+                        : quote.isError
+                          ? `${counterErrorMessage(quote.error)} The refund cannot be priced yet.`
+                          : line && unitsValid
+                            ? 'Pricing the returned quantity…'
+                            : 'Enter the quantity to price the refund.'}
+                    </p>
+                    {quote.isError && (
+                      <Button type="button" variant="outline" onClick={() => void quote.refetch()}>
+                        Reprice refund
+                      </Button>
+                    )}
+                    {returnManualRequired && (
+                      <label className="flex min-h-11 items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={returnManual}
+                          onChange={(event) => setReturnManual(event.target.checked)}
+                        />
+                        No provider refund adapter is configured. Issue CASH from this drawer;
+                        manual reversal required. I will reconcile the original provider separately.
+                      </label>
+                    )}
+                  </>
+                )}
+                {!attempt && witnessRequired && witnessFields}
+                {/* DEV-621: one PIN entry approves the next return or refund; it clears after each. */}
+                {!attempt && managerPinField}
+                {line && unitsValid && (
+                  <p className="text-sm text-text-muted">
+                    Confirming records {quantitySummary} of {line.name} as inspected (
+                    {disposition === 'RESTOCK' ? 'restock' : 'quarantine'})
+                    {returnTender && returnAmountMinor > 0
+                      ? ` and refunds PKR ${formatMinor(returnAmountMinor)} to ${returnTender.type}`
+                      : ''}
+                    .
+                  </p>
+                )}
+                <Button
+                  type="submit"
+                  className="h-11"
+                  variant="destructive"
+                  disabled={!returnReady}
+                >
+                  {returnTenderId === 'none' ? 'Record return' : 'Confirm return & refund'}
+                </Button>
+              </fieldset>
+            </form>
           )}
-          {refundAuthorized && (
+          {refundAuthorized && (data.refundableMinor > 0 || !!tenderId) && (
             <fieldset
               disabled={locked || stale}
               className="space-y-3 rounded-lg border border-border-subtle p-4"
             >
-              <legend className="px-1 font-semibold">2. Refund original tender</legend>
+              <legend className="px-1 font-semibold">Refund returned value awaiting refund</legend>
               <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
               <Label htmlFor="refund-tender">Original tender</Label>
               <select

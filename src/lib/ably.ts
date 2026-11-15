@@ -16,7 +16,8 @@
  *    can therefore never forge a message/reaction/read event.
  *  - Typing rides a separate `typing:{id}` channel that clients may publish to;
  *    the typist's identity is the token `clientId`, so it cannot be spoofed.
- *  - Presence rides Ably's built-in presence on `presence:global`.
+ *  - Presence rides Ably's built-in presence on the tenant-scoped
+ *    `presence:org:{orgId}` channel.
  */
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import * as Ably from 'ably';

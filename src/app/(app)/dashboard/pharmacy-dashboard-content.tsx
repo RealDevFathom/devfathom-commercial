@@ -51,6 +51,21 @@ const formatMetric = (key: string, value: number | null) =>
       ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
       : value.toLocaleString();
 
+/**
+ * DEV-729: stock signals and recommended orders come back null until the evaluator has
+ * run for every branch in scope. Say that plainly instead of a dash or a zero, which an
+ * owner reads as "nothing to reorder".
+ */
+const UNCALCULATED_METRICS = new Set(['openStockSignals', 'recommendedOrders']);
+const metricValue = (key: string, value: number | null) =>
+  value == null && UNCALCULATED_METRICS.has(key) ? 'Not calculated yet' : formatMetric(key, value);
+const metricSub = (key: string, value: number | null, source: string | null | undefined) =>
+  value != null
+    ? sourceLine(source)
+    : UNCALCULATED_METRICS.has(key)
+      ? 'Stock signals have not been worked out for this scope. Refresh them in Inventory.'
+      : 'No data recorded yet';
+
 // Only reached when the metric catalog has not delivered a label for a key.
 // Reads the camelCase metric key as words rather than the raw, unspaced key the
 // `.eyebrow` style would otherwise shout back (e.g. OPENSTOCKSIGNALS).
@@ -135,8 +150,8 @@ function WidgetState({
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
-          value={formatMetric(item.metrics[index]!, value)}
-          sub={value == null ? 'No data recorded yet' : sourceLine(contract?.source)}
+          value={metricValue(item.metrics[index]!, value)}
+          sub={metricSub(item.metrics[index]!, value, contract?.source)}
         />
       ))}
     </div>
@@ -327,6 +342,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     preferences.error?.data?.code ?? ''
   );
   const canEdit = !branchesDenied && !preferencesDenied;
+  const procurement = isModuleGranted('pharmacy-procurement', enabledModules);
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -549,6 +565,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       catalog.data?.metrics.find((metric) => metric.key === item.metrics[0])
                         ?.drillThrough ? (
                         <Link
+                          aria-label={`Open report: ${item.label}`}
                           className="text-sm font-medium text-text-strong underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           href={
                             catalog.data.metrics.find((metric) => metric.key === item.metrics[0])!
@@ -568,6 +585,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       branchCount={branches.data?.branches.length ?? 0}
                       metricsReady={Boolean(catalog.data) || Boolean(catalog.error)}
                     />
+                    {item.key === 'stock' && procurement ? (
+                      // DEV-729: one entry to the per-distributor reorder board (DEV-678),
+                      // which still checks procurement access on the server.
+                      <Link
+                        href={`/pharmacy/purchasing/reorder${branchId ? `?${new URLSearchParams({ branch: branchId })}` : ''}`}
+                        className={buttonVariants({ variant: 'outline', className: 'mt-5' })}
+                      >
+                        <ShoppingCart aria-hidden />
+                        Draft POs per distributor
+                      </Link>
+                    ) : null}
                   </SectionCard>
                 </section>
               );

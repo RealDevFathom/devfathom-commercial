@@ -83,6 +83,9 @@ describe('DEV-730 Khata page', () => {
     await show({ notice: 'reminder-no-consent' });
     expect(screen.getByRole('alert')).toHaveTextContent('has not consented');
     cleanup();
+    await show({ notice: 'reminder-quiet-hours' });
+    expect(screen.getByRole('alert')).toHaveTextContent('only between 9 am and 10 pm');
+    cleanup();
     await show({ notice: 'reminder-sent' });
     expect(screen.getAllByRole('status')[0]).toHaveTextContent('WhatsApp reminder sent');
     cleanup();
@@ -111,8 +114,9 @@ describe('DEV-730 Khata page', () => {
   });
 
   it('has a textual loading state', () => {
-    render(<KhataLoading />);
-    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    const { container } = render(<KhataLoading />);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Loading branch balances');
   });
 });

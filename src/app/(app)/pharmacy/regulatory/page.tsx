@@ -33,7 +33,7 @@ export default async function PharmacyRegulatoryPage({
     initial = await caller.regulatory(requested ? { branchId: requested } : undefined);
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy"
           heading="Branch regulatory profile"
@@ -46,7 +46,7 @@ export default async function PharmacyRegulatoryPage({
             assigns it.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -55,7 +55,7 @@ export default async function PharmacyRegulatoryPage({
   const fbrTier1 = await caller.fbrTier1Status().catch(() => null);
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Branch regulatory profile"
@@ -63,6 +63,6 @@ export default async function PharmacyRegulatoryPage({
       />
       <PharmacyRegulatoryProfileForm initial={initial} />
       {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
-    </main>
+    </div>
   );
 }

@@ -60,7 +60,7 @@ describe('fresh controlled restoration authorization', () => {
       const { db } = fixture();
       const work =
         action === 'void'
-          ? changeSaleStatus(db as never, scope, 'sale', 'void')
+          ? changeSaleStatus(db as never, scope, 'sale', 'void', { kind: 'COUNTER', actorIsManager: true })
           : returnSaleLine(db as never, scope, {
               saleLineId: 'line',
               canonicalUnits: 1,
