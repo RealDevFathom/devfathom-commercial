@@ -99,7 +99,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Open stock signals with a linked requisition action.',
     'pharmacy_stock_signals + pharmacy_stock_signal_actions',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing',
     'reports:operational',
   ],
   [
@@ -144,7 +144,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Recall notices still open in the tenant.',
     'pharmacy_recall_notices',
     'organization',
-    '/pharmacy/safety',
+    '/pharmacy/inventory',
     'reports:operational',
   ],
   [
@@ -162,7 +162,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Supplier claims not released or submitted.',
     'pharmacy_supplier_claims',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing/returns',
     'reports:operational',
   ],
   [
@@ -171,7 +171,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Unresolved three-way-match receiving exceptions.',
     'pharmacy_receiving_exceptions',
     'selected branches at read time',
-    '/pharmacy/procurement',
+    '/pharmacy/purchasing/receiving',
     'reports:operational',
   ],
   [
@@ -180,7 +180,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Branches with a current regulatory qualified-person coverage record.',
     'pharmacy_branch_regulatory_profiles',
     'selected branches at read time',
-    '/pharmacy/safety',
+    '/pharmacy/regulatory',
     'reports:operational',
   ],
   [
@@ -189,7 +189,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Unsigned pharmacist review items plus open controlled-register incidents.',
     'pharmacy_pharmacist_review_items + pharmacy_pharmacist_review_decisions + pharmacy_register_incidents',
     'selected branches at read time',
-    '/pharmacy/safety',
+    '/pharmacy/pharmacist-queue',
     'reports:operational',
   ],
   [
