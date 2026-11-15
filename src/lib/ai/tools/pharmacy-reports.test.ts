@@ -304,6 +304,10 @@ describe('Ask Fathom pharmacy reports', () => {
   });
 
   it('maps every numeric claim to a complete metric contract citation', async () => {
+    // DEV-729: the branch has signal history, so its stock count is a real number.
+    queryRaw.mockImplementation(async (query: { sql: string }) =>
+      query.sql.includes('AS "evaluatedBranches"') ? [{ evaluatedBranches: 1 }] : []
+    );
     const result = await toolExecute()({
       metricKeys: ['salesMinor', 'openStockSignals'],
       branch: 'Main Pharmacy',
@@ -331,6 +335,19 @@ describe('Ask Fathom pharmacy reports', () => {
       });
       expect(typeof claim.value).toBe('number');
     }
+  });
+
+  it('cites never-calculated stock signals as unknown, not zero (DEV-729)', async () => {
+    const result = await toolExecute()({
+      metricKeys: ['openStockSignals', 'recommendedOrders'],
+      branch: 'Main Pharmacy',
+      from: '2026-09-05',
+      to: '2026-09-05',
+    });
+    expect(result.kind).toBe('answer');
+    const claims = result.claims as Array<Record<string, unknown>>;
+    expect(claims.map((claim) => claim.value)).toEqual([null, null]);
+    for (const claim of claims) expect(claim.definition).toMatch(/not calculated yet/);
   });
 
   it('returns cannot-answer for unknown or unavailable metrics without querying reports', async () => {

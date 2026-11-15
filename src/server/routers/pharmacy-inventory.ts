@@ -90,6 +90,10 @@ import {
   verifyPurchaseApprover,
 } from '@/lib/pharmacy/purchase-approval';
 import {
+  authorizeWriteOffWitness,
+  recordWriteOffWitnessEvidence,
+} from '@/lib/pharmacy/write-off-witness';
+import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
@@ -163,11 +167,13 @@ function domainError(error: unknown): never {
     const code =
       error.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : error.reason === 'CROSS_TENANT_REFERENCE' ||
-            error.reason === 'CROSS_BRANCH_REFERENCE' ||
-            error.reason === 'BLOCKED_STOCK'
-          ? 'FORBIDDEN'
-          : 'BAD_REQUEST';
+        : error.reason === 'IDEMPOTENCY_CONFLICT'
+          ? 'CONFLICT'
+          : error.reason === 'CROSS_TENANT_REFERENCE' ||
+              error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'BLOCKED_STOCK'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST';
     throw new TRPCError({ code, message: error.reason });
   }
   if (error instanceof PharmacyStockSignalError) {
@@ -694,7 +700,7 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
 type VarianceReceiptInput = {
   transferId: string;
   lines: ReadonlyArray<{ lineId: string; receivedUnits: number }>;
-  variance?: { reason: string; witnessId: string; evidenceRef: string };
+  variance?: { reason: string; witnessId: string; witnessPin: string; evidenceRef: string };
   idempotencyKeyPrefix: string;
 };
 
@@ -795,15 +801,13 @@ async function receiveTransferWithVariance(
   }
 
   const short = plan.some((step) => step.varianceUnits > 0);
+  // DEV-628: a shortfall is a stock loss, so it takes the same two-person
+  // control as a write-off: a witness assigned to this branch, confirming with
+  // their own PIN (or a solo owner/pharmacist's own fresh PIN).
+  let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
   if (short) {
-    const evidence = input.variance;
-    if (!evidence || evidence.witnessId === scope.actorId)
-      throw new PharmacyInventoryError('COAUTH_REQUIRED');
-    const witness = await db.user.findFirst({
-      where: { id: evidence.witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    witness = await authorizeWriteOffWitness(db, scope, input.variance);
   }
 
   const postedVariances = [];
@@ -852,6 +856,7 @@ async function receiveTransferWithVariance(
         evidenceRef: evidence.evidenceRef,
       },
     });
+    await recordWriteOffWitnessEvidence(db, scope, witness!, movement.id);
     postedVariances.push({ lineId: step.line.id, units: step.varianceUnits, movement, custody });
   }
 
@@ -1378,7 +1383,7 @@ export const pharmacyInventoryRouter = router({
       }
       try {
         // Both legs and the source lock commit together, so the units are never
-        // AVAILABLE at the origin and IN_TRANSIT at the destination at once.
+        // AVAILABLE at the origin and at the destination at once (DEV-608).
         return await ctx.db.$transaction(async (tx) =>
           transferStock(txDb(tx), await admittedScopeFor(ctx, input.branchId), {
             inventoryLotId: input.inventoryLotId,
@@ -1543,6 +1548,8 @@ export const pharmacyInventoryRouter = router({
           stockLocationId: z.string().min(1),
           units: z.number().int().positive(),
           witnessId: z.string().trim().min(1),
+          // DEV-628: the witness confirms with their own PIN at the point of write-off.
+          witnessPin: z.string().regex(/^\d{4,8}$/),
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
@@ -1555,7 +1562,15 @@ export const pharmacyInventoryRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await admittedScopeFor(ctx, input.branchId);
-          const written = await writeOff(db, scope, input);
+          const { witnessPin, ...writeOffInput } = input;
+          const witness = await authorizeWriteOffWitness(db, scope, {
+            witnessId: input.witnessId,
+            witnessPin,
+          });
+          const written = await writeOff(db, scope, writeOffInput, {
+            soloSelfWitness: witness.soloSelfWitness,
+          });
+          await recordWriteOffWitnessEvidence(db, scope, witness, written.movement.id);
           await postWriteOffEntry(db, scope, {
             stockMovementId: written.movement.id,
             at: written.movement.occurredAt,
@@ -2783,6 +2798,7 @@ export const pharmacyInventoryRouter = router({
             .object({
               reason: z.string().trim().min(1).max(500),
               witnessId: z.string().trim().min(1).max(200),
+              witnessPin: z.string().regex(/^\d{4,8}$/),
               evidenceRef: z.string().trim().min(1).max(200),
             })
             .strict()

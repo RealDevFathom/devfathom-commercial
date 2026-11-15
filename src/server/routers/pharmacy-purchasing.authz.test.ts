@@ -238,7 +238,7 @@ beforeEach(() => {
   m('medicine').findFirst.mockResolvedValue({ id: 'medicine_a' });
   m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
   // pack_a is a box of 10, matching RECEIPT_LINE.canonicalUnitsPerPack.
-  m('packLevel').findMany.mockResolvedValue([
+  const packALevels = [
     {
       id: 'pack_a',
       level: 'BOX',
@@ -247,7 +247,16 @@ beforeEach(() => {
       effectiveFrom: PAST,
       effectiveTo: null,
     },
-  ]);
+  ];
+  // createPurchaseOrder resolves its lines' medicines and pack levels by ID in one query each.
+  type IdQuery = { where?: { id?: { in?: string[] } } };
+  const ids = (args?: IdQuery) => args?.where?.id?.in;
+  m('medicine').findMany.mockImplementation(async (args?: IdQuery) =>
+    (ids(args) ?? []).map((id) => ({ id }))
+  );
+  m('packLevel').findMany.mockImplementation(async (args?: IdQuery) =>
+    ids(args) ? ids(args)!.map((id) => ({ id })) : packALevels
+  );
   m('restaurantOperatorCredential').findFirst.mockResolvedValue({
     id: 'credential_a',
     credentialHash: APPROVER_HASH,

@@ -136,7 +136,13 @@ describe('transfers take stock locks in the global order', () => {
     ]);
     const db = {
       $queryRaw: trace.$queryRaw,
-      pharmacyStockMovement: { create: movementCreate(trace) },
+      pharmacyStockLocation: {
+        findFirst: vi.fn(async () => ({ id: 'shelf-a', kind: 'RACK_BIN', coldChain: false })),
+      },
+      pharmacyInventoryLot: {
+        findFirst: vi.fn(async () => ({ batch: { medicine: { coldChain: false } } })),
+      },
+      pharmacyStockMovement: { findMany: vi.fn(async () => []), create: movementCreate(trace) },
     };
     await transferStock(db as never, scope, {
       inventoryLotId: 'lot-a',
@@ -146,7 +152,7 @@ describe('transfers take stock locks in the global order', () => {
       at: new Date(),
       idempotencyKeyPrefix: 'move',
     });
-    expect(trace.balanceKeys()).toEqual(['lot-a/shelf-a/IN_TRANSIT', 'lot-a/shelf-z/AVAILABLE']);
+    expect(trace.balanceKeys()).toEqual(['lot-a/shelf-a/AVAILABLE', 'lot-a/shelf-z/AVAILABLE']);
     expectLockedBeforeWrites(trace);
   });
 

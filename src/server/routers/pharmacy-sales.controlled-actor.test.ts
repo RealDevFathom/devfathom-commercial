@@ -63,7 +63,11 @@ const line = {
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 const COUNTER_GATE_DENIED = 'You do not have permission for this action.';
 
-function callerFor(permissions: Permission[], permissionOverrides: Permission[] = []) {
+function callerFor(
+  permissions: Permission[],
+  permissionOverrides: Permission[] = [],
+  organization: { id: string; timezone?: string } = { id: 'org-1' }
+) {
   const credential = vi.fn();
   const register = vi.fn();
   const lock = vi.fn();
@@ -124,7 +128,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
       expires: 'later',
       user: { id: 'cashier-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
     },
-    organization: { id: 'org-1' },
+    organization,
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -133,9 +137,14 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
 }
 
 function emergencyCallerFor(
-  jurisdictionRuleSet: { id: string; controlledRegisterFlags: unknown } | null
+  jurisdictionRuleSet: { id: string; controlledRegisterFlags: unknown } | null,
+  organization?: { id: string; timezone?: string }
 ) {
-  const fixture = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+  const fixture = callerFor(
+    [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+    [],
+    organization
+  );
   vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
   fixture.credential.mockResolvedValue({
     id: 'credential-1',
@@ -417,6 +426,37 @@ describe('pharmacySales.addLine controlled actor', () => {
     expect(lock.mock.invocationCallOrder[registerLock]).toBeLessThan(
       vi.mocked(addSaleLine).mock.invocationCallOrder[0]!
     );
+  });
+});
+
+describe('emergency supply rules on a profile start day (DEV-298)', () => {
+  it.each([
+    ['00:30 PKT on the start day', '2026-10-20T19:30:00.000Z', '2026-10-21T00:00:00.000Z'],
+    ['23:59 PKT the day before', '2026-10-20T18:59:00.000Z', '2026-10-20T18:59:00.000Z'],
+  ])('reads the profile in force on the workspace day at %s', async (_label, now, asOf) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(now));
+    try {
+      const { caller, profile } = emergencyCallerFor(
+        {
+          id: 'pk_pb_v2',
+          controlledRegisterFlags: {
+            values: { emergencySupply: { maxUnits: 1, repeatWindowHours: 24 } },
+          },
+        },
+        { id: 'org-1', timezone: 'Asia/Karachi' }
+      );
+      await caller.addLine(line);
+      expect(profile).toHaveBeenCalledOnce();
+      expect(profile.mock.calls[0][0].where).toMatchObject({
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        effectiveFrom: { lte: new Date(asOf) },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date(asOf) } }],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

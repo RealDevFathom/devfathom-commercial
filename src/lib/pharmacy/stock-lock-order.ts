@@ -41,8 +41,9 @@
  * (`allocateForSale`), reserved sale and customer-order handoff, reservation
  * candidates (customer orders, refills), offline replay, checkout batch safety,
  * controlled dispensing, void, return, goods-in posting and reversal, the
- * controlled register, transfers out (`dispatchTransfer`, `transferStock`) and
- * in (`receiveTransferWithVariance`), count approval, quarantine and its
+ * controlled register, location moves (`transferStock`), transfers out
+ * (`dispatchTransfer`) and in (`receiveTransferWithVariance`), count approval,
+ * quarantine and its
  * release, expiry write-off and quarantine, recall creation, close, DRAP recall
  * confirmation and its reversal, supplier claims and purchase returns (submit,
  * dispatch), customer-delivery physical returns and the opening owner import.
