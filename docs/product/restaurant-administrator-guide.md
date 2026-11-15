@@ -342,9 +342,10 @@ total cost`; margin % is `margin ÷ quoted total × 100` and is unavailable with
   and the total classified for one movement cannot exceed the original consumption. Replaying the
   same idempotency key is safe; changing its payload is rejected. Orders that carry a historical
   automatic reversal must be reconciled before a disposition can be recorded.
-- **Financial refund is separate:** Dispositions only move stock. Returning a deposit or other
-  payment to the customer is a separate money step following the normal refund rules (manager or
-  owner PIN). Recording an unused return does not refund money, and refunding money does not
+- **Financial refund is separate:** Dispositions only move stock. Returning a catering deposit or
+  other payment is a separate catering money-evidence entry of kind REFUND, which names the
+  original receipt. The operator needs `catering:manage` and `payments:refund`, plus `cash:adjust`
+  for a cash refund; this flow does not use the bill-refund PIN approval. Recording an unused return does not refund money, and refunding money does not
   restore stock.
 - **Common failure/recovery:** Resolve a missing active recipe version or exact unit conversion in
   Catalog before preparing or costing the event. Review quote, lines, portions, recipe costs,
