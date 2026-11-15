@@ -175,6 +175,8 @@ function saleDb(
       findMany: vi.fn(async () => []),
     },
     pharmacyControlledRegisterEntry: { findMany: vi.fn(async () => []) },
+    // No payment was taken on the bill, so it may be voided.
+    pharmacyTender: { findMany: vi.fn(async () => []) },
     pharmacySaleEvent: { create: vi.fn() },
   };
   return { db, claims };
