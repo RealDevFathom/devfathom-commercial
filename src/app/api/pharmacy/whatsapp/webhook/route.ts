@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
+import {
+  evaluateMarketingBlockRate,
+  marketingPauseSignal,
+  pauseMarketingSending,
+} from '@/lib/pharmacy/marketing-send-policy';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -150,6 +155,31 @@ export async function POST(request: Request) {
           );
         }
       }
+  // DEV-24 — a quality drop or account restriction pauses marketing sending.
+  // The signature and the tenant-bound app config authenticate these changes;
+  // pausing is fail-safe, so no sender metadata is required on them.
+  const accountPayload = z
+    .object({
+      entry: z
+        .array(
+          z.object({
+            changes: z
+              .array(z.object({ field: z.string().max(64).optional(), value: z.unknown() }))
+              .max(500),
+          })
+        )
+        .max(500),
+    })
+    .safeParse(payload);
+  if (accountPayload.success)
+    for (const entry of accountPayload.data.entry)
+      for (const change of entry.changes) {
+        const signal = change.field ? marketingPauseSignal(change.field, change.value) : null;
+        if (signal)
+          await withTenantDb(organization.id, (db) =>
+            pauseMarketingSending(db, organization.id, signal)
+          );
+      }
   const messages = provider
     .parseInbound(payload)
     .filter(
@@ -159,6 +189,9 @@ export async function POST(request: Request) {
   for (const message of messages) {
     outcomes.push(await handleInboundWhatsAppMessage(organization.id, provider, message));
   }
+  // A STOP is a block signal: re-check the block rate once per delivery batch.
+  if (outcomes.includes('OPTED_OUT'))
+    await withTenantDb(organization.id, (db) => evaluateMarketingBlockRate(db, organization.id));
   // Meta retries non-2xx responses; handled and ignored messages both return 200.
   return json({ received: messages.length, outcomes });
 }

@@ -36,6 +36,7 @@ let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
 let dateOfBirth: Date | null;
+let policyRow: Record<string, unknown> | null;
 let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
@@ -86,13 +87,18 @@ function database() {
     patientConsent: {
       findFirst: vi.fn(async () => ({ granted: true, revokedAt, recordedAt: now })),
     },
+    pharmacyMarketingSendPolicy: { findUnique: vi.fn(async () => policyRow) },
     pharmacyCampaignCapture: {
       count: vi.fn(
         async ({ where }) =>
           captures.filter(
             (c) =>
               (!where.campaignId || c.campaignId === where.campaignId) &&
-              (!where.customerId || c.customerId === where.customerId)
+              (!where.customerId || c.customerId === where.customerId) &&
+              (!(c.capturedAt instanceof Date) ||
+                !where.capturedAt ||
+                (c.capturedAt >= where.capturedAt.gte &&
+                  (!where.capturedAt.lte || c.capturedAt <= where.capturedAt.lte)))
           ).length
       ),
       create: vi.fn(async ({ data }) => {
@@ -116,6 +122,7 @@ beforeEach(() => {
   optIn = true;
   revokedAt = null;
   dateOfBirth = null;
+  policyRow = null;
   mock = database();
   db = mock as unknown as ScopedDb;
 });
@@ -318,5 +325,61 @@ describe('marketing age eligibility', () => {
     dateOfBirth = new Date('2010-01-01');
     expect(await marketingConsent(db, scope, 'customer-a', now)).toBe('UNDER_18');
     expect(mock.patientConsent.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization marketing send policy (DEV-24)', () => {
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
+  beforeEach(() => {
+    // A generous campaign cap isolates the organization-wide weekly/monthly caps.
+    row.frequencyCap = { max: 10, windowDays: 90 };
+  });
+  it('applies the default 1-per-week cap across campaigns', async () => {
+    captures.push({ campaignId: 'other', customerId: 'customer-a', capturedAt: daysAgo(3) });
+    expect(await captureMarketingCampaign(db, scope, row.id, now)).toMatchObject({
+      prepared: 0,
+      exclusions: { FREQUENCY_CAP: 1 },
+    });
+  });
+  it('applies the default 2-per-month cap even when the week is clear', async () => {
+    captures.push(
+      { campaignId: 'one', customerId: 'customer-a', capturedAt: daysAgo(10) },
+      { campaignId: 'two', customerId: 'customer-a', capturedAt: daysAgo(20) }
+    );
+    expect(await captureMarketingCampaign(db, scope, row.id, now)).toMatchObject({
+      prepared: 0,
+      exclusions: { FREQUENCY_CAP: 1 },
+    });
+  });
+  it('allows a second message this month once a week has passed', async () => {
+    captures.push({ campaignId: 'one', customerId: 'customer-a', capturedAt: daysAgo(10) });
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
+  });
+  it('reads configured caps instead of the defaults', async () => {
+    policyRow = { weeklyMax: 2, monthlyMax: 4 };
+    captures.push({ campaignId: 'one', customerId: 'customer-a', capturedAt: daysAgo(3) });
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
+  });
+  it.each([
+    ['2026-10-06T17:00:00Z', true], // 22:00 PKT
+    ['2026-10-06T03:30:00Z', true], // 08:30 PKT: campaign window open, policy quiet
+    ['2026-10-06T04:00:00Z', false], // 09:00 PKT
+    ['2026-10-06T16:59:00Z', false], // 21:59 PKT
+  ])('enforces default 22:00-09:00 PKT quiet hours at %s', async (at, quiet) => {
+    row.scheduledAt = new Date('2026-10-01T00:00:00Z');
+    mock.patientConsent.findFirst.mockResolvedValue({
+      granted: true,
+      revokedAt: null,
+      recordedAt: row.scheduledAt,
+    });
+    const run = captureMarketingCampaign(db, scope, row.id, new Date(at));
+    if (quiet) await expect(run).rejects.toThrow('quiet hours');
+    else await expect(run).resolves.toMatchObject({ prepared: 1 });
+  });
+  it('refuses preview and capture while sending is auto-paused', async () => {
+    policyRow = { pausedAt: now, pauseReason: 'QUALITY_DROP' };
+    await expect(previewMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('paused');
+    await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('paused');
+    expect(captures).toEqual([]);
   });
 });

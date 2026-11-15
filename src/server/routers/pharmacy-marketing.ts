@@ -47,6 +47,12 @@ import {
   reviewMarketingCampaign,
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
+import {
+  marketingSendPolicyInput,
+  readMarketingSendPolicy,
+  resumeMarketingSending,
+  updateMarketingSendPolicy,
+} from '@/lib/pharmacy/marketing-send-policy';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
@@ -257,6 +263,26 @@ export const pharmacyMarketingRouter = router({
   history: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => execute(ctx, input.branchId, marketingHistory)),
+  sendPolicy: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, scope) => readMarketingSendPolicy(db, scope.organizationId))
+    ),
+  updateSendPolicy: protectedProcedure
+    .input(marketingSendPolicyInput)
+    .mutation(({ ctx, input }) => {
+      const { branchId, ...settings } = input;
+      return execute(ctx, branchId, (db, scope) =>
+        updateMarketingSendPolicy(db, scope.organizationId, scope.actorId, settings)
+      );
+    }),
+  resumeSending: protectedProcedure
+    .input(marketingScopeInput)
+    .mutation(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, scope) =>
+        resumeMarketingSending(db, scope.organizationId, scope.actorId)
+      )
+    ),
   approveTemplate: protectedProcedure
     .input(marketingTemplateInput)
     .mutation(({ ctx, input }) =>

@@ -56,15 +56,18 @@ let failPersist: boolean;
 let transaction: MarketingTransaction;
 let db: ScopedDb;
 let index: number;
+let policyRow: Record<string, unknown> | null;
 beforeEach(() => {
   attempts = [];
   events = [];
   optedOut = false;
   failPersist = false;
   index = 0;
+  policyRow = null;
   const capture = { id: 'capture-a', customerId: 'customer-a', campaignId: 'campaign-a' };
   db = {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'p', patientId: 'p' }]),
+    pharmacyMarketingSendPolicy: { findUnique: async () => policyRow },
     pharmacyCampaignCapture: {
       findMany: async () => [capture],
       findFirst: async () => capture,
@@ -198,6 +201,21 @@ it('persists STOP suppression without calling the adapter', async () => {
   const result = await dispatchSandboxCampaign(transaction, input, now);
   expect(result).toMatchObject({ attempted: 0, suppressed: 1, accepted: 0 });
   expect(events[0]).toMatchObject({ state: 'SUPPRESSED', reason: 'OPTED_OUT' });
+});
+it('suppresses dispatch without calling the adapter while sending is auto-paused', async () => {
+  policyRow = { pausedAt: now, pauseReason: 'QUALITY_DROP' };
+  const result = await dispatchSandboxCampaign(transaction, input, now);
+  expect(result).toMatchObject({ attempted: 0, suppressed: 1, accepted: 0 });
+  expect(events).toEqual([
+    expect.objectContaining({ state: 'SUPPRESSED', reason: 'MARKETING_PAUSED' }),
+  ]);
+});
+it('closes the dispatch window inside the organization policy quiet hours', async () => {
+  policyRow = { quietStartHour: 11, quietEndHour: 13 };
+  await dispatchSandboxCampaign(transaction, input, now);
+  expect(events).toEqual([
+    expect.objectContaining({ state: 'SUPPRESSED', reason: 'WINDOW_CLOSED' }),
+  ]);
 });
 it('retains contradictory evidence regardless of callback ordering', () => {
   const rows = [

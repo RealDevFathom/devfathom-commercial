@@ -11,6 +11,7 @@ import {
   MarketingWorkflowError,
   type MarketingScope,
 } from './marketing-service';
+import { marketingPolicyCapReason, readMarketingSendPolicy } from './marketing-send-policy';
 import { z } from 'zod';
 
 export const sandboxDispatchInput = z
@@ -163,8 +164,9 @@ export async function reserveSandboxAttempt(
   if (campaign.status !== 'CAPTURED')
     throw new MarketingWorkflowError('Capture the approved campaign first.');
   let reason: string | null = await marketingConsent(db, scope, capture.customerId, now);
+  const policy = await readMarketingSendPolicy(db, scope.organizationId);
   try {
-    requireCaptureWindow(campaign, scope, now);
+    requireCaptureWindow(campaign, scope, now, policy);
   } catch (error) {
     if (!(error instanceof MarketingWorkflowError)) throw error;
     reason = 'WINDOW_CLOSED';
@@ -180,6 +182,17 @@ export async function reserveSandboxAttempt(
     },
   });
   if (others >= frequencyCap.max) reason = 'FREQUENCY_CAP';
+  if (!reason)
+    reason = await marketingPolicyCapReason(
+      db,
+      scope.organizationId,
+      capture.customerId,
+      policy,
+      now,
+      capture.id
+    );
+  // A quality or block-rate auto-pause suppresses every attempt until an owner resumes.
+  if (policy.pausedAt) reason = 'MARKETING_PAUSED';
   const attempt = await db.pharmacyCampaignDispatchAttempt.create({
     data: {
       organizationId: scope.organizationId,

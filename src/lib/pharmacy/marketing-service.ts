@@ -5,6 +5,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import {
+  isQuietHour,
+  MARKETING_SEND_POLICY_DEFAULTS,
+  marketingPolicyCapReason,
+  readMarketingSendPolicy,
+  type MarketingSendPolicy,
+} from './marketing-send-policy';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -169,10 +176,22 @@ export async function approveMarketingCampaign(
   return { status: 'APPROVED' as const };
 }
 
+export function requireMarketingNotPaused(policy: Pick<MarketingSendPolicy, 'pausedAt'>) {
+  if (policy.pausedAt)
+    throw new MarketingWorkflowError(
+      'Marketing sending is paused after a WhatsApp quality or block-rate warning. An owner must resume it.'
+    );
+}
+
+/** Campaign quiet hours AND the organization policy's quiet hours both apply. */
 export function requireCaptureWindow(
   campaign: Awaited<ReturnType<typeof reviewMarketingCampaign>>['campaign'],
   scope: MarketingScope,
-  now: Date
+  now: Date,
+  policy: Pick<
+    MarketingSendPolicy,
+    'quietStartHour' | 'quietEndHour'
+  > = MARKETING_SEND_POLICY_DEFAULTS
 ) {
   if (
     !['APPROVED', 'CAPTURED'].includes(campaign.status) ||
@@ -192,10 +211,8 @@ export function requireCaptureWindow(
     }).format(now)
   );
   if (
-    hours.startHour === hours.endHour ||
-    (hours.startHour > hours.endHour
-      ? hour >= hours.startHour || hour < hours.endHour
-      : hour >= hours.startHour && hour < hours.endHour)
+    isQuietHour(hour, hours.startHour, hours.endHour) ||
+    isQuietHour(hour, policy.quietStartHour, policy.quietEndHour)
   )
     throw new MarketingWorkflowError('The campaign is inside workspace quiet hours.');
 }
@@ -264,7 +281,9 @@ async function evaluateCampaign(
       replay: true,
       body: template.body,
     };
-  requireCaptureWindow(campaign, scope, now);
+  const policy = await readMarketingSendPolicy(db, scope.organizationId);
+  requireMarketingNotPaused(policy);
+  requireCaptureWindow(campaign, scope, now, policy);
   const cap = frequencyCap.parse(campaign.frequencyCap);
   // Only commercial receipt counts and recency. Never select names, phone,
   // medicine, line details, prescriptions, or clinical segmentation fields.
@@ -319,6 +338,15 @@ async function evaluateCampaign(
       });
       if (prior >= cap.max) reason = 'FREQUENCY_CAP';
     }
+    // Organization-wide weekly and monthly caps apply on top of the campaign cap.
+    if (!reason)
+      reason = await marketingPolicyCapReason(
+        db,
+        scope.organizationId,
+        sale.customerId,
+        policy,
+        now
+      );
     if (reason) {
       exclusions[reason] = (exclusions[reason] ?? 0) + 1;
       if (persist)

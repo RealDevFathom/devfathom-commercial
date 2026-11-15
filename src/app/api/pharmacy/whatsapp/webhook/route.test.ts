@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
+  pause: vi.fn(),
+  blockRate: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
   readWhatsAppConfig: mocks.config,
@@ -13,6 +15,16 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
+vi.mock('@/lib/pharmacy/marketing-send-policy', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/pharmacy/marketing-send-policy')>(
+    '@/lib/pharmacy/marketing-send-policy'
+  );
+  return {
+    marketingPauseSignal: actual.marketingPauseSignal,
+    pauseMarketingSending: mocks.pause,
+    evaluateMarketingBlockRate: mocks.blockRate,
+  };
+});
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
 }));
@@ -104,4 +116,43 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   mocks.callback.mockClear();
   expect((await POST(payload('sender-a'))).status).toBe(401);
   expect(mocks.callback).not.toHaveBeenCalled();
+});
+
+const accountUpdate = (field: string, value: Record<string, unknown>) =>
+  new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+    method: 'POST',
+    body: JSON.stringify({ entry: [{ id: 'waba-a', changes: [{ field, value }] }] }),
+  });
+it.each([
+  ['phone_number_quality_update', { event: 'DOWNGRADE', current_limit: 'TIER_1K' }],
+  ['phone_number_quality_update', { event: 'FLAGGED' }],
+  ['account_update', { event: 'ACCOUNT_RESTRICTION' }],
+  ['account_update', { quality_rating: 'RED' }],
+])('pauses marketing sending on a %s quality drop %j', async (field, value) => {
+  mocks.parse.mockReturnValue([]);
+  expect((await POST(accountUpdate(field, value))).status).toBe(200);
+  expect(mocks.pause).toHaveBeenCalledWith(
+    {},
+    'org-a',
+    expect.objectContaining({ reason: expect.stringMatching(/QUALITY_DROP|ACCOUNT_RESTRICTION/) })
+  );
+});
+it('does not pause on benign account updates or before signature verification', async () => {
+  mocks.parse.mockReturnValue([]);
+  await POST(accountUpdate('phone_number_quality_update', { event: 'UPGRADE' }));
+  await POST(accountUpdate('account_update', { event: 'VERIFIED_ACCOUNT' }));
+  expect(mocks.pause).not.toHaveBeenCalled();
+  mocks.verify.mockReturnValue(false);
+  expect(
+    (await POST(accountUpdate('account_update', { event: 'ACCOUNT_RESTRICTION' }))).status
+  ).toBe(401);
+  expect(mocks.pause).not.toHaveBeenCalled();
+});
+it('re-checks the block rate after a STOP opt-out only', async () => {
+  await POST(request());
+  expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
+  mocks.blockRate.mockClear();
+  mocks.inbound.mockResolvedValue('ORDER_PLACED');
+  await POST(request());
+  expect(mocks.blockRate).not.toHaveBeenCalled();
 });
