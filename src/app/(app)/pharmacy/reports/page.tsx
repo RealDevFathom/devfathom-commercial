@@ -125,7 +125,9 @@ export default async function PharmacyReportsPage({
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
-  const branch = value(query.branch);
+  const branch =
+    value(query.branch) ??
+    (branchResult.branches.length === 1 ? branchResult.branches[0]?.id : undefined);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
   try {
@@ -497,7 +499,23 @@ export default async function PharmacyReportsPage({
             title="Selected period at a glance"
             titleLevel={2}
           >
-            <p className="mb-4 text-sm text-text-muted">
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+              {cards.map(([label, figure]) => (
+                <Stat
+                  key={label}
+                  label={label}
+                  value={figure}
+                  className="min-w-0"
+                  valueClassName="break-words"
+                  sub={
+                    branch
+                      ? 'Selected branch · ledger source'
+                      : 'All available branches · ledger source'
+                  }
+                />
+              ))}
+            </div>
+            <p className="mt-6 text-sm text-text-muted">
               Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
               {branch
                 ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
@@ -517,22 +535,6 @@ export default async function PharmacyReportsPage({
               filters do not apply to these KPI totals, the daily work pack or observed demand.
               Those panels use branch/date scope only; current snapshots use branch scope only.
             </p>
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(([label, figure]) => (
-                <Stat
-                  key={label}
-                  label={label}
-                  value={figure}
-                  className="min-w-0"
-                  valueClassName="break-words"
-                  sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
-                  }
-                />
-              ))}
-            </div>
             <div className="mt-6">
               <Stat
                 label="Organization-wide safety queue"
