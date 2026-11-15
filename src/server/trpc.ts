@@ -23,6 +23,7 @@ import {
   recordTrpcAudit,
 } from '@/server/audit';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/demo-isolation';
+import { isPrismaError, mapPrismaError } from '@/server/trpc-database-errors';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -135,7 +136,11 @@ const t = initTRPC
       // message on the server, where the tRPC route's `onError` logs it, and the
       // client is told only that something went wrong. Deliberate errors and every
       // other code are untouched; outside production the pass-through is unchanged.
-      const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
+      // A Prisma error's message names the ORM, the model and the operation, so it
+      // is withheld in every environment, not only production (#318).
+      const withheld =
+        isUnexpectedInternalError(error) &&
+        (process.env.NODE_ENV === 'production' || isPrismaError(error.cause));
       // Never publish the server stack. tRPC attaches `data.stack` outside
       // production, which leaks file paths and bundle chunk names onto ordinary
       // client errors (e.g. an intentional 403). Drop it for every error code.
@@ -150,7 +155,24 @@ const t = initTRPC
   });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+/**
+ * Outermost middleware on every procedure: a known Prisma request error that
+ * escaped a resolver (a stale-record update or delete, a unique or foreign-key
+ * violation) becomes a typed error with user-facing words — NOT_FOUND, CONFLICT
+ * or BAD_REQUEST — instead of a 500 carrying Prisma's own message (#318).
+ */
+const mapDatabaseErrors = t.middleware(async ({ next }) => {
+  const result = await next();
+  if (result.ok) return result;
+  const mapped = mapPrismaError(result.error);
+  if (mapped) throw mapped;
+  return result;
+});
+
+const baseProcedure = t.procedure.use(mapDatabaseErrors);
+
+export const publicProcedure = baseProcedure;
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -377,26 +399,26 @@ const requireDeclaredCapabilities = t.middleware(async ({ ctx, next, path, type,
 });
 
 // Protected procedure — audit (outer) wraps the auth guard.
-export const protectedProcedure = t.procedure
+export const protectedProcedure = baseProcedure
   .use(auditMutations)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, module-aware procedure for sensitive tenant reads. */
-export const auditedProtectedProcedure = t.procedure
+export const auditedProtectedProcedure = baseProcedure
   .use(auditAll)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
-export const entitlementIndependentHistoryProcedure = t.procedure
+export const entitlementIndependentHistoryProcedure = baseProcedure
   .use(auditAll)
   .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
 // role ADMIN). Identical behaviour to the previous literal check, but the
 // decision flows through the one engine. Audits mutations AND sensitive reads.
-export const adminProcedure = t.procedure
+export const adminProcedure = baseProcedure
   .use(auditAll)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
@@ -406,12 +428,12 @@ export const adminProcedure = t.procedure
  * Keeps active-session, ADMIN capability, tenant scope, and audit enforcement;
  * deliberately omits only the module entitlement check.
  */
-export const entitlementIndependentAdminProcedure = t.procedure
+export const entitlementIndependentAdminProcedure = baseProcedure
   .use(auditAll)
   .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
-export const hrProcedure = t.procedure
+export const hrProcedure = baseProcedure
   .use(auditAll)
   .use(requireCapability('hr:access'))
   .use(requireLicensedModule);
@@ -421,7 +443,7 @@ export const hrProcedure = t.procedure
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
 export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+  return baseProcedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
 }
 
 /**
@@ -431,7 +453,7 @@ export function capabilityProcedure(action: Action) {
  * refused. Routers that must never fall back to "any signed-in member with the
  * module" build on this instead of `protectedProcedure`.
  */
-export const denyByDefaultProcedure = t.procedure
+export const denyByDefaultProcedure = baseProcedure
   .use(auditAll)
   .use(requireDeclaredCapabilities)
   .use(requireLicensedModule);
