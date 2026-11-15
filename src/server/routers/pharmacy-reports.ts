@@ -671,6 +671,7 @@ export const pharmacyReportsRouter = router({
           branches: available.branches,
           from: input.from,
           to: input.to,
+          timeZone: ctx.organization?.timezone,
         })
       );
     }),
