@@ -3,12 +3,23 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  confirmDrapRecall,
   dismissDrapPriceAlert,
+  dismissDrapRecall,
+  drapRecallReviewQueue,
   FileDrapNoticeSource,
   ingestDrapNotice,
   listDrapPriceAlerts,
 } from './drap-monitoring';
 import { officialPriceText } from './official-price';
+
+const quarantinePart = vi.hoisted(() =>
+  vi.fn(async () => ({ removed: { id: 'move-removed' }, held: { id: 'move-held' } }))
+);
+vi.mock('./inventory-operations', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./inventory-operations')>()),
+  quarantinePart,
+}));
 
 describe('DRAP monitoring', () => {
   it('parses the shipped file adapter without implying a live feed', async () => {
@@ -84,6 +95,260 @@ describe('DRAP monitoring', () => {
         reason: 'Changed',
       })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
+  describe('DEV-692 recall review queue', () => {
+    const scope = { organizationId: 'org-a', actorId: 'pharmacist-a' };
+    const notice = {
+      kind: 'RECALL' as const,
+      sourceReference: 'DRAP-WEB:I/S/10-26-45:1',
+      drapRegistrationNumber: '060235',
+      batchNumbers: ['26A059'],
+      reason: 'Substandard',
+      productName: 'Carapamin Injection 200mg',
+    };
+
+    function matchedDb() {
+      const ingestCreate = vi.fn(async ({ data }) => ({ id: 'ingest-1', ...data }));
+      const db = {
+        $queryRaw: vi.fn(async () => []),
+        pharmacyDrapIngest: { findFirst: vi.fn(async () => null), create: ingestCreate },
+        medicine: { findMany: vi.fn(async () => [{ id: 'med-a' }]) },
+        pharmacyManufacturingBatch: {
+          findMany: vi.fn(async () => [{ id: 'batch-a', batchNumber: '26A059' }]),
+          updateMany: vi.fn(),
+        },
+        pharmacyRecallNotice: { create: vi.fn() },
+        pharmacyStockBalance: { findMany: vi.fn(async () => []) },
+        pharmacyRecallQuarantineAction: { create: vi.fn() },
+      };
+      return { db, ingestCreate };
+    }
+
+    it('files a matched alert as a pending draft and never recalls or quarantines', async () => {
+      const { db, ingestCreate } = matchedDb();
+      const result = await ingestDrapNotice(db as unknown as ScopedDb, scope, 'DRAP_WEB', notice);
+      expect(result).toMatchObject({
+        matchStatus: 'MATCHED',
+        reviewStatus: 'PENDING_REVIEW',
+        adapter: 'DRAP_WEB',
+        matchDetails: { medicineId: 'med-a', batchIds: ['batch-a'], recallScope: 'BATCH' },
+        recallPayload: expect.objectContaining({ productName: 'Carapamin Injection 200mg' }),
+      });
+      expect(ingestCreate.mock.calls[0]![0].data).not.toHaveProperty('recallNoticeId');
+      expect(db.pharmacyRecallNotice.create).not.toHaveBeenCalled();
+      expect(db.pharmacyManufacturingBatch.updateMany).not.toHaveBeenCalled();
+      expect(db.pharmacyStockBalance.findMany).not.toHaveBeenCalled();
+      expect(quarantinePart).not.toHaveBeenCalled();
+    });
+
+    it('queues an alert without a registration number as NO_MATCH without a catalog lookup', async () => {
+      const { db } = matchedDb();
+      const result = await ingestDrapNotice(db as unknown as ScopedDb, scope, 'DRAP_WEB', {
+        ...notice,
+        drapRegistrationNumber: '',
+      });
+      expect(result).toMatchObject({ matchStatus: 'NO_MATCH', reviewStatus: 'PENDING_REVIEW' });
+      expect(db.medicine.findMany).not.toHaveBeenCalled();
+    });
+
+    function draftDb(draft: Record<string, unknown>) {
+      const state = { ...draft };
+      const db = {
+        $queryRaw: vi.fn(async () => []),
+        pharmacyDrapIngest: {
+          findFirst: vi.fn(async () => state),
+          findFirstOrThrow: vi.fn(async () => state),
+          updateMany: vi.fn(async ({ where, data }) => {
+            if (state.reviewStatus !== where.reviewStatus) return { count: 0 };
+            Object.assign(state, data);
+            return { count: 1 };
+          }),
+        },
+        pharmacyManufacturingBatch: {
+          findMany: vi.fn(async () => [{ id: 'batch-a' }]),
+          updateMany: vi.fn(),
+        },
+        pharmacyRecallNotice: { create: vi.fn(async () => ({ id: 'recall-1' })) },
+        pharmacyStockBalance: {
+          findMany: vi.fn(async () => [
+            {
+              branchId: 'branch-a',
+              inventoryLotId: 'lot-a',
+              stockLocationId: 'loc-a',
+              onHandUnits: 12,
+            },
+          ]),
+        },
+        pharmacyRecallQuarantineAction: { create: vi.fn() },
+      };
+      return { db, state };
+    }
+    const matchedDraft = {
+      id: 'ingest-1',
+      kind: 'RECALL',
+      sourceReference: notice.sourceReference,
+      matchStatus: 'MATCHED',
+      reviewStatus: 'PENDING_REVIEW',
+      recallPayload: notice,
+      matchDetails: { medicineId: 'med-a', batchIds: ['batch-a'] },
+    };
+
+    it('opens the recall and quarantines stock only when a person confirms', async () => {
+      quarantinePart.mockClear();
+      const { db, state } = draftDb(matchedDraft);
+      await confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1', 'Checked shelf');
+      expect(db.pharmacyRecallNotice.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          batchId: 'batch-a',
+          reference: notice.sourceReference,
+          reason: 'Substandard',
+          createdById: 'pharmacist-a',
+        }),
+      });
+      expect(state).toMatchObject({
+        reviewStatus: 'CONFIRMED',
+        recallNoticeId: 'recall-1',
+        reviewedById: 'pharmacist-a',
+        reviewNote: 'Checked shelf',
+      });
+      expect(db.pharmacyManufacturingBatch.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ state: 'RECALLED' }) })
+      );
+      expect(quarantinePart).toHaveBeenCalledTimes(1);
+      expect(db.pharmacyRecallQuarantineAction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ ingestId: 'ingest-1', quantityUnits: 12 }),
+      });
+      await expect(
+        confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1')
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    });
+
+    it('recalls every current batch when an alert that names no batch is confirmed', async () => {
+      const { db } = draftDb({
+        ...matchedDraft,
+        matchDetails: {
+          medicineId: 'med-a',
+          batchIds: ['batch-a', 'batch-b'],
+          batchesNamed: false,
+        },
+      });
+      db.pharmacyManufacturingBatch.findMany.mockResolvedValue([
+        { id: 'batch-a' },
+        { id: 'batch-b' },
+        { id: 'batch-received-later' },
+      ]);
+      await confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1');
+      expect(db.pharmacyManufacturingBatch.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-a', medicineId: 'med-a' },
+        select: { id: true },
+      });
+      expect(db.pharmacyRecallNotice.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ medicineId: 'med-a', batchId: undefined }),
+      });
+      expect(db.pharmacyManufacturingBatch.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            organizationId: 'org-a',
+            id: { in: ['batch-a', 'batch-b', 'batch-received-later'] },
+          },
+        })
+      );
+    });
+
+    it('refuses to broaden a named-batch draft when another batch has since arrived', async () => {
+      const { db } = draftDb({
+        ...matchedDraft,
+        matchDetails: { medicineId: 'med-a', batchIds: ['batch-a', 'batch-b'], batchesNamed: true },
+      });
+      db.pharmacyManufacturingBatch.findMany.mockResolvedValue([
+        { id: 'batch-a' },
+        { id: 'batch-b' },
+        { id: 'batch-received-later' },
+      ]);
+      await expect(
+        confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1')
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      expect(db.pharmacyRecallNotice.create).not.toHaveBeenCalled();
+      expect(db.pharmacyManufacturingBatch.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('files an alert whose batches could not be read as AMBIGUOUS, never medicine-wide', async () => {
+      const { db } = matchedDb();
+      const result = await ingestDrapNotice(db as unknown as ScopedDb, scope, 'DRAP_WEB', {
+        ...notice,
+        batchNumbers: undefined,
+        batchNumbersUnresolved: true,
+      });
+      expect(result).toMatchObject({
+        matchStatus: 'AMBIGUOUS',
+        reviewStatus: 'PENDING_REVIEW',
+        matchDetails: { batchNumbersUnresolved: true },
+      });
+    });
+
+    it.each(['AMBIGUOUS', 'NO_MATCH'])('refuses to confirm a %s draft', async (matchStatus) => {
+      const { db } = draftDb({ ...matchedDraft, matchStatus });
+      await expect(
+        confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1')
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      expect(db.pharmacyRecallNotice.create).not.toHaveBeenCalled();
+    });
+
+    it('dismisses a draft with a reason and leaves stock untouched', async () => {
+      const { db, state } = draftDb(matchedDraft);
+      await expect(
+        dismissDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1', '  ')
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      await dismissDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1', 'Not stocked');
+      expect(state).toMatchObject({ reviewStatus: 'DISMISSED', reviewNote: 'Not stocked' });
+      expect(db.pharmacyRecallNotice.create).not.toHaveBeenCalled();
+      expect(db.pharmacyStockBalance.findMany).not.toHaveBeenCalled();
+    });
+
+    it('lists pending drafts with matched batches and available units from SQL', async () => {
+      const db = {
+        $queryRaw: vi.fn(async () => [{ batchId: 'batch-a', units: 12 }]),
+        pharmacyDrapIngest: {
+          findMany: vi.fn(async ({ where }) =>
+            where.reviewStatus === 'PENDING_REVIEW'
+              ? [
+                  {
+                    ...matchedDraft,
+                    adapter: 'DRAP_WEB',
+                    createdAt: new Date('2026-11-15'),
+                    reviewNote: null,
+                    reviewedAt: null,
+                    recallNoticeId: null,
+                    matchDetails: {
+                      ...matchedDraft.matchDetails,
+                      batches: [{ id: 'batch-a', batchNumber: '26A059' }],
+                    },
+                  },
+                ]
+              : []
+          ),
+        },
+        medicine: {
+          findMany: vi.fn(async () => [
+            {
+              id: 'med-a',
+              productName: 'Dopamine',
+              brandName: 'Carapamin',
+              drapRegistrationNumber: '060235',
+            },
+          ]),
+        },
+      };
+      const queue = await drapRecallReviewQueue(db as unknown as ScopedDb, scope);
+      expect(queue.pending[0]).toMatchObject({
+        recallScope: 'BATCH',
+        medicine: { id: 'med-a' },
+        batches: [{ id: 'batch-a', batchNumber: '26A059', availableUnits: 12 }],
+        alert: { registrationNumber: '060235', batchNumbers: ['26A059'] },
+      });
+      expect(queue.decided).toEqual([]);
+    });
   });
 });
 

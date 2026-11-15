@@ -163,6 +163,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterReceiptBrowserPrint',
         'counterReceiptBrowserPrintDispatched',
         'counterReceiptBrowserPrintFailed',
+        'counterReceiptWhatsApp',
         'openDrawer',
         'captureDemand',
         'setDemandOutcome',
