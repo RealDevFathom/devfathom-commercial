@@ -236,7 +236,18 @@ beforeEach(() => {
   });
   m('pharmacySupplier').findFirst.mockResolvedValue(SUPPLIER);
   m('medicine').findFirst.mockResolvedValue({ id: 'medicine_a' });
-  m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a' });
+  m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+  // pack_a is a box of 10, matching RECEIPT_LINE.canonicalUnitsPerPack.
+  m('packLevel').findMany.mockResolvedValue([
+    {
+      id: 'pack_a',
+      level: 'BOX',
+      unitsPerParent: 10,
+      parentPackLevelId: null,
+      effectiveFrom: PAST,
+      effectiveTo: null,
+    },
+  ]);
   m('restaurantOperatorCredential').findFirst.mockResolvedValue({
     id: 'credential_a',
     credentialHash: APPROVER_HASH,
