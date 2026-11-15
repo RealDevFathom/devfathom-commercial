@@ -94,7 +94,11 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  looseSaleUnitOption,
+  previewSaleLine,
+  type SaleUnitKind,
+} from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
   formatReceiptDate,
@@ -631,9 +635,11 @@ function ScopedPharmacyCounterConsole({
   const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
     retry: false,
   });
-  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation({
-    retry: false,
-  });
+  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation(
+    {
+      retry: false,
+    }
+  );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -873,10 +879,9 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
       ? lastReceipt.receipt
       : null;
-  const currentReceipt =
-    !receiptAccessDenied
-      ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
-      : null;
+  const currentReceipt = !receiptAccessDenied
+    ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
+    : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
 
   const refreshTenderBill = useCallback(
@@ -1912,14 +1917,27 @@ function ScopedPharmacyCounterConsole({
         case 'selectLooseUnit': {
           const kind: SaleUnitKind =
             action === 'selectPackUnit' ? 'PACK' : action === 'selectStripUnit' ? 'STRIP' : 'UNIT';
-          if (activeRow?.saleUnits.some((option) => option.kind === kind)) {
-            setSaleUnit(kind);
-          } else {
-            setNotice({
-              tone: 'warning',
-              message: `This medicine is not sold by ${kind.toLowerCase()}.`,
-            });
+          const options = activeRow?.saleUnits ?? [];
+          const option =
+            kind === 'UNIT'
+              ? looseSaleUnitOption(options)
+              : (options.find((entry) => entry.kind === kind) ?? null);
+          if (option) {
+            setSaleUnit(option.kind);
+            return;
           }
+          setNotice({
+            tone: 'warning',
+            message: !activeRow
+              ? 'Select a medicine before choosing a unit.'
+              : options.length === 0
+                ? 'This medicine has no sellable unit. Check its pack setup or capture the demand.'
+                : kind === 'UNIT'
+                  ? `No loose unit is sellable for this medicine. Sell by ${options
+                      .map((entry) => entry.levelLabel.toLowerCase())
+                      .join(' or ')}.`
+                  : `This medicine is not sold by ${kind.toLowerCase()}.`,
+          });
           return;
         }
         case 'addToCart':
@@ -2675,7 +2693,11 @@ function ScopedPharmacyCounterConsole({
                 >
                   Preview receipt
                 </Button>
-                <Button variant="outline" className="h-11 w-full" onClick={() => void printReceipt()}>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void printReceipt()}
+                >
                   Print · {formatBinding(keymap.bindings.printReceipt)}
                 </Button>
               </div>

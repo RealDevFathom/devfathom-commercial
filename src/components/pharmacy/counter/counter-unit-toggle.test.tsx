@@ -46,6 +46,28 @@ function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnit
 }
 
 describe('CounterUnitToggle (POS-03)', () => {
+  it('keys a standalone pack and its loose unit apart when they share a pack level', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const standalone = saleUnitOptions({
+      packLevels: [{ id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 }],
+      rootPackLevelId: 'flat',
+      unitsPerPack: 10,
+    });
+    const props = {
+      selected: 'UNIT' as SaleUnitKind | null,
+      quantity: '1',
+      preview: null,
+      onSelect: vi.fn(),
+      onQuantityChange: vi.fn(),
+    };
+    const view = render(<CounterUnitToggle {...props} options={standalone} />);
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    view.rerender(<CounterUnitToggle {...props} options={OPTIONS} />);
+    expect(screen.getAllByRole('radio')).toHaveLength(3);
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    errors.mockRestore();
+  });
+
   it('renders one radio per sale unit the lot actually supports', () => {
     renderToggle();
     const radios = screen.getAllByRole('radio');
