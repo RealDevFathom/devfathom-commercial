@@ -53,6 +53,12 @@ import {
   readSaleKhataAccounts,
   readSaleKhataStatement,
 } from '@/lib/pharmacy/family-khata';
+import {
+  KHATA_REPAYMENT_TENDERS,
+  recordKhataRepayment,
+  searchKhataRepaymentAccounts,
+} from '@/lib/pharmacy/khata-repayment';
+import { PharmacyBookkeepingError } from '@/lib/pharmacy/bookkeeping';
 
 import {
   PharmacyCounterError,
@@ -261,6 +267,8 @@ function fail(error: unknown): never {
   if (error instanceof PharmacyPaymentSandboxError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof FamilyKhataError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  if (error instanceof PharmacyBookkeepingError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   // #633: the transaction rolled back, so the counter may treat this as a refused payment.
   if (error instanceof PharmacySaleBatchError)
@@ -777,6 +785,47 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
           return readSaleKhataStatement(db, scope, input.saleId, input.familyAccountId);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // K4 (DEV-731): the counter's khata repayment picker. Not tied to a sale: the
+  // customer walks in to pay down the account, so any active account of the branch.
+  khataPaymentAccounts: protectedProcedure
+    .input(z.object({ branchId, query: z.string().trim().max(100).default('') }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await khataScope(ctx, input.branchId, 'read');
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return searchKhataRepaymentAccounts(db, scope, input.query);
+      });
+    }),
+  // K4 (DEV-731): receive a khata repayment at the counter. Counter (write) access only;
+  // cash is paid into this device's open drawer, and a retried key returns the same slip.
+  recordKhataPayment: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          familyAccountId: z.string().trim().min(1).max(128),
+          amountMinor: z.number().int().positive().max(2147483647),
+          tender: z.enum(KHATA_REPAYMENT_TENDERS),
+          deviceId: z.string().min(1).optional(),
+          payerReference: z.string().trim().min(4).max(40).optional(),
+          businessDate: z.date(),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return recordKhataRepayment(db, scope, input);
         });
       } catch (error) {
         fail(error);

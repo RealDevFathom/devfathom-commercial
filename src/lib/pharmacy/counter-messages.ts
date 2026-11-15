@@ -72,6 +72,12 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  // Khata repayments (K4, DEV-731).
+  PAYMENT_EXCEEDS_BALANCE:
+    'That payment is more than the khata balance still owed. Enter the amount owed or less.',
+  ACCOUNT_NOT_FOUND: 'That khata account is not active on this branch. Search again.',
+  REFERENCE_REQUIRED: 'Enter the transfer or wallet reference for a non-cash payment.',
+  PERIOD_CLOSED: 'The accounting period for today is closed. Ask the owner to reopen it.',
 };
 
 /**
