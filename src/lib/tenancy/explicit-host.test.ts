@@ -209,12 +209,12 @@ describe('resolveExplicitOrganizationByHost', () => {
     await expect(resolveExplicitOrganizationByHost('who-is-this.example.com')).resolves.toBeNull();
   });
 
-  it('treats Azure Container Apps as an opaque deployment provider', async () => {
+  it('treats AWS ECS as an opaque deployment provider', async () => {
     fakeDb({
       deployments: [
         {
           url: 'https://portal.acme.com',
-          provider: 'AZURE_CONTAINER_APPS',
+          provider: 'AWS_ECS',
           organization: ORGANIZATION,
         },
       ],

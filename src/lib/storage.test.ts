@@ -7,34 +7,12 @@ const io = vi.hoisted(() => ({
   readFile: vi.fn(),
   rm: vi.fn(),
   writeFile: vi.fn(),
-  credential: vi.fn(),
-  service: vi.fn(),
-  container: vi.fn(),
-  blob: vi.fn(),
-  upload: vi.fn(),
-  download: vi.fn(),
-  remove: vi.fn(),
   fetch: vi.fn(),
   s3client: vi.fn(),
   s3send: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => io);
 vi.mock('node:fs', () => ({ realpathSync: io.realpath }));
-vi.mock('@azure/identity', () => ({
-  DefaultAzureCredential: class {
-    constructor() {
-      io.credential();
-    }
-  },
-}));
-vi.mock('@azure/storage-blob', () => ({
-  BlobServiceClient: class {
-    constructor(...args: unknown[]) {
-      io.service(...args);
-    }
-    getContainerClient = io.container;
-  },
-}));
 vi.mock('@aws-sdk/client-s3', () => {
   const command = (name: string) =>
     class {
@@ -70,14 +48,6 @@ beforeEach(() => {
   vi.stubGlobal('fetch', io.fetch);
   vi.stubEnv('STORAGE_ADAPTER', 'disabled');
   vi.stubEnv('NODE_ENV', 'production');
-  vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', 'inertaccount');
-  vi.stubEnv('AZURE_STORAGE_CONTAINER', 'inert-container');
-  io.container.mockReturnValue({ getBlockBlobClient: io.blob });
-  io.blob.mockReturnValue({
-    uploadData: io.upload,
-    downloadToBuffer: io.download,
-    deleteIfExists: io.remove,
-  });
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -93,8 +63,8 @@ const unavailable = [
   { STORAGE_ADAPTER: 'local', NODE_ENV: 'production' },
   { STORAGE_ADAPTER: 'local', NODE_ENV: undefined },
   { STORAGE_ADAPTER: 'local', NODE_ENV: 'staging' },
-  { STORAGE_ADAPTER: 'azure', AZURE_STORAGE_ACCOUNT_NAME: '' },
-  { STORAGE_ADAPTER: 'azure', AZURE_STORAGE_CONTAINER: ' ' },
+  // The removed Azure adapter fails closed even with its former settings present.
+  { STORAGE_ADAPTER: 'azure', AZURE_STORAGE_ACCOUNT_NAME: 'fake', AZURE_STORAGE_CONTAINER: 'fake' },
   { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: undefined, AWS_REGION: 'me-central-1' },
   { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: ' ', AWS_REGION: 'me-central-1' },
   { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: 'inert-bucket', AWS_REGION: undefined },
@@ -127,11 +97,11 @@ test('preflight is pure and returns stable reasons', () => {
   });
   expect(
     assertStorageAvailable({
-      STORAGE_ADAPTER: 'azure',
-      AZURE_STORAGE_ACCOUNT_NAME: 'fake',
-      AZURE_STORAGE_CONTAINER: 'fake',
+      STORAGE_ADAPTER: 's3',
+      S3_UPLOADS_BUCKET: 'fake',
+      AWS_REGION: 'me-central-1',
     }).adapter
-  ).toBe('azure');
+  ).toBe('s3');
   for (const operation of Object.values(io)) expect(operation).not.toHaveBeenCalled();
 });
 test.each(['test', 'development'])(
@@ -151,8 +121,8 @@ test.each(['test', 'development'])(
     expect(io.rm).toHaveBeenCalledWith(expect.stringContaining('/private-uploads/org-a/file.png'), {
       force: true,
     });
-    expect(io.service).not.toHaveBeenCalled();
-    expect(io.credential).not.toHaveBeenCalled();
+    expect(io.s3client).not.toHaveBeenCalled();
+    expect(io.s3send).not.toHaveBeenCalled();
   }
 );
 test.each(['test', 'development'])(
@@ -173,7 +143,7 @@ test.each(['test', 'development'])(
       expect(io.readFile).toHaveBeenLastCalledWith(`${root}/org-a/file.png`);
       expect(io.rm).toHaveBeenLastCalledWith(`${root}/org-a/file.png`, { force: true });
     }
-    expect(io.service).not.toHaveBeenCalled();
+    expect(io.s3client).not.toHaveBeenCalled();
     expect(io.s3send).not.toHaveBeenCalled();
   }
 );
@@ -251,27 +221,6 @@ test('configured local root never enables production local storage', () => {
   expect(io.realpath).not.toHaveBeenCalled();
 });
 
-test('configured Azure uses fake SDK and disabling afterward blocks cached client', async () => {
-  vi.stubEnv('STORAGE_ADAPTER', 'azure');
-  const bytes = Buffer.from('data');
-  io.download.mockResolvedValue(bytes);
-  await putUpload('org-a', 'file.png', bytes, 'image/png');
-  expect(await getUpload('org-a', 'file.png')).toBe(bytes);
-  await deleteUpload('org-a', 'file.png');
-  expect(io.credential).toHaveBeenCalledOnce();
-  expect(io.service).toHaveBeenCalledOnce();
-  expect(io.blob).toHaveBeenCalledWith('org-a/file.png');
-  expect(io.upload).toHaveBeenCalledWith(bytes, {
-    blobHTTPHeaders: { blobContentType: 'image/png' },
-  });
-  expect(io.remove).toHaveBeenCalledOnce();
-  for (const fn of [io.mkdir, io.readFile, io.rm, io.writeFile, io.fetch])
-    expect(fn).not.toHaveBeenCalled();
-  vi.clearAllMocks();
-  vi.stubEnv('STORAGE_ADAPTER', 'disabled');
-  await expect(deleteUpload('org-a', 'file.png')).rejects.toBeInstanceOf(StorageUnavailableError);
-  for (const fn of Object.values(io)) expect(fn).not.toHaveBeenCalled();
-});
 test('local delete failure rejects rather than claiming retention cleanup', async () => {
   vi.stubEnv('STORAGE_ADAPTER', 'local');
   vi.stubEnv('NODE_ENV', 'test');
@@ -319,15 +268,7 @@ test('configured S3 uses fake SDK, keys by organization, and disabling afterward
     { command: 'GetObject', input: { Bucket: 'uploads-bucket', Key: 'org-a/file.png' } },
     { command: 'DeleteObject', input: { Bucket: 'uploads-bucket', Key: 'org-a/file.png' } },
   ]);
-  for (const fn of [
-    io.mkdir,
-    io.readFile,
-    io.rm,
-    io.writeFile,
-    io.fetch,
-    io.service,
-    io.credential,
-  ])
+  for (const fn of [io.mkdir, io.readFile, io.rm, io.writeFile, io.fetch])
     expect(fn).not.toHaveBeenCalled();
   vi.clearAllMocks();
   vi.stubEnv('STORAGE_ADAPTER', 'disabled');
