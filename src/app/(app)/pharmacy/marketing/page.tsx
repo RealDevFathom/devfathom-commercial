@@ -19,7 +19,7 @@ import {
 
 export const metadata = { title: 'Marketing · Pharmacy' };
 const control =
-  'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring';
+  'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:bg-muted disabled:text-text-muted';
 const scalar = (value: string | string[] | undefined) =>
   typeof value === 'string' ? value : undefined;
 
