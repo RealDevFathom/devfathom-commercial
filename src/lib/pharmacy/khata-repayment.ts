@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type Currency } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { KHATA_REPAYMENT_KEY_PREFIX, postBookkeepingTransaction } from './bookkeeping';
+import { postBookkeepingTransaction } from './bookkeeping';
 import {
   FamilyKhataError,
   readKhataBalance,
@@ -60,7 +60,7 @@ function repaymentIdentity(scope: FamilyKhataScope, idempotencyKey: string) {
     .update(`${scope.organizationId}:${scope.branchId}:${idempotencyKey}`)
     .digest('hex');
   return {
-    idempotencyKey: `${KHATA_REPAYMENT_KEY_PREFIX}${digest}`,
+    idempotencyKey: `khata-repayment:${digest}`,
     receiptReference: `KP-${digest.slice(0, 10).toUpperCase()}`,
   };
 }
@@ -190,11 +190,18 @@ export async function recordKhataRepayment(
       amountMinor: input.amountMinor,
       reason: `Khata payment ${identity.receiptReference}`,
     });
-  } else {
-    await requirePharmacyDayOpen(db, scope, input.businessDate);
   }
-
   const recordedAt = new Date();
+  if (input.tender !== 'CASH') {
+    // The receipt is stamped at recordedAt, so the day it posts to must be open too,
+    // whatever business date the caller supplied.
+    await requirePharmacyDayOpen(db, scope, input.businessDate);
+    await requirePharmacyDayOpen(
+      db,
+      scope,
+      new Date(`${recordedAt.toISOString().slice(0, 10)}T00:00:00.000Z`)
+    );
+  }
   await settleFamilyKhata(db, scope, {
     familyAccountId: account.id,
     amountMinor: input.amountMinor,
