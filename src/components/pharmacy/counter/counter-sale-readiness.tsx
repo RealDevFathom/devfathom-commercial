@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
+import { cn } from '@/lib/utils';
 import {
   counterSetupAdvice,
   isCounterSetupReason,
@@ -39,10 +40,10 @@ export function CounterSetupNextStep({ advice }: { advice: CounterSetupAdvice })
         <Link
           href={advice.link.href}
           prefetch={false}
-          className={buttonVariants({
-            variant: 'outline',
-            className: 'h-auto min-h-11 whitespace-normal',
-          })}
+          className={cn(
+            buttonVariants({ variant: 'outline' }),
+            'h-auto min-h-11 max-w-full whitespace-normal'
+          )}
         >
           {advice.link.label}
         </Link>
