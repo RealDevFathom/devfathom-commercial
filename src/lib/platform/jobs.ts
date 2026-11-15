@@ -20,6 +20,7 @@ import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
+import { purgeExpiredPharmacyRecords } from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -837,6 +838,9 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        // DEV-96: the result (per-class counts, refused record ids and reasons;
+        // never record contents) is stored on the job row.
+        PHARMACY_RECORD_RETENTION_V1: (database) => purgeExpiredPharmacyRecords(database),
       };
       return handlers[job.type](db, job, payload);
     },
@@ -844,7 +848,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       timeout:
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
+        job.type === 'PHARMACY_RECORD_RETENTION_V1'
           ? 120_000
           : 30_000,
     }
@@ -902,11 +907,13 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
 
 const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
 const CAMERA_EVIDENCE_RETENTION_JOB = 'camera.evidence.retention.v1';
+const PHARMACY_RECORD_RETENTION_JOB = 'pharmacy.record.retention.v1';
 
 /**
  * CAM-2: turn pending counter evidence into snapshot jobs, and give every
  * organization with due retention work (a still past its gateway period, or a
- * capture past its window) at most one retention pass per UTC hour. Both are
+ * capture past its window) at most one retention pass per UTC hour. DEV-96
+ * adds one platform-wide pharmacy record retention purge per UTC hour. All are
  * keyed, so each worker run can repeat them without queueing anything twice.
  */
 async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
@@ -943,6 +950,12 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
           type: 'CAMERA_EVIDENCE_RETENTION_V1' as const,
           idempotencyKey: `${CAMERA_EVIDENCE_RETENTION_JOB}:${organizationId}:${hour}`,
         })),
+        // DEV-96: one pharmacy record retention purge per UTC hour, platform-wide.
+        {
+          organizationId: null,
+          type: 'PHARMACY_RECORD_RETENTION_V1' as const,
+          idempotencyKey: `${PHARMACY_RECORD_RETENTION_JOB}:${hour}`,
+        },
       ],
       skipDuplicates: true,
     });

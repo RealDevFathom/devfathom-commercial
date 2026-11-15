@@ -5,6 +5,7 @@ export const MARKETING_SEGMENT_FIELDS = [
   'restockInterest',
   'frontShopMarginMinor',
   'familyAccount',
+  'churnScore',
 ] as const;
 
 export type MarketingSegmentField = (typeof MARKETING_SEGMENT_FIELDS)[number];
