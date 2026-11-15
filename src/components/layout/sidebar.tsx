@@ -329,6 +329,8 @@ export const navigation: NavItem[] = [
   // #979: a cashier is not offered an entry that ends in "Day close unavailable".
   // DEV-127: the console opens for an administrator or a member granted
   // `pharmacy:close` (the Pharmacist template), exactly as its procedures do.
+  // DEV-505: the rail's `pharmacy:close` answer also admits a Manager actively
+  // assigned to a branch, and the console then lists only those branches.
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',

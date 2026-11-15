@@ -358,6 +358,47 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   });
 
+  // DEV-505: the Manager template's rail is derived from the server's answer for
+  // it — purchasing, inventory, day close and reports — and nothing admin-only.
+  it('offers a Manager day close, purchasing, inventory and reports only', () => {
+    renderNavigation({
+      role: 'EMPLOYEE',
+      // What the rail read answers for the Manager template (DEV-240 adds inventory/manage).
+      capabilities: [
+        'pharmacy:procurement',
+        'reports:operational',
+        'pharmacy:close',
+        'pharmacy:inventory',
+        'pharmacy:manage',
+      ],
+    });
+    for (const [label, href] of [
+      ['Day close', '/pharmacy/counter/close'],
+      ['Purchasing', '/pharmacy/purchasing'],
+      ['Inventory', '/pharmacy/inventory'],
+      ['Reports & Insights', '/pharmacy/reports'],
+    ]) {
+      expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toHaveAttribute(
+        'href',
+        href
+      );
+    }
+    for (const label of [
+      'Counter',
+      'Finance',
+      'Onboarding',
+      'Medicine catalog',
+      'Prescriptions',
+      'Pharmacist queue',
+      'Regulatory profile',
+      'Branch assignments',
+    ]) {
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
+    }
+  });
+
   it('offers a Pharmacist granted pharmacy:close the Day close destination (DEV-127)', () => {
     renderNavigation({
       role: 'MEMBER',
