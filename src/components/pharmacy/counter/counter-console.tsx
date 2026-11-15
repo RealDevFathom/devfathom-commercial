@@ -508,6 +508,12 @@ function ScopedPharmacyCounterConsole({
     (railAccess.data?.capabilities ?? []).some(
       (capability) => capability === 'pharmacy:dispense' || capability === 'pharmacy:safety'
     );
+  // DEV-323: prescription upload/capture need Pharmacy Dispensing and
+  // `pharmacy:prescriptions` on the server; a cashier is not offered them.
+  const canCapturePrescription =
+    dispensingLicensed &&
+    railAccess.data?.userId === accountId &&
+    (railAccess.data?.capabilities ?? []).includes('pharmacy:prescriptions');
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -3528,6 +3534,7 @@ function ScopedPharmacyCounterConsole({
           acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
           patient={patient}
           candidates={patientsQuery.data?.patients ?? []}
+          canCapturePrescription={canCapturePrescription}
           query={patientQuery}
           state={
             patientPanelQuery.isError &&

@@ -3100,6 +3100,56 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
   });
 });
 
+describe('PharmacyCounterConsole prescription capture access (DEV-323)', () => {
+  function capture() {
+    return mocks.rxPanelProps.mock.lastCall![0].canCapturePrescription;
+  }
+
+  it('does not offer prescription capture to a counter-only cashier', () => {
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:counter'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(false);
+  });
+
+  it('offers prescription capture to a pharmacist with the dispensing module', () => {
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:counter', 'pharmacy:prescriptions', 'pharmacy:dispense'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(true);
+  });
+
+  it('withholds capture without the dispensing module or for another member', () => {
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:prescriptions'],
+    });
+    const { unmount } = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(capture()).toBe(false);
+    unmount();
+
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-b',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:prescriptions'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(false);
+  });
+});
+
 describe('PharmacyCounterConsole module boundaries', () => {
   it('neither asks for approving pharmacists nor offers controlled authorization without Pharmacy Safety', () => {
     // Pharmacy Essentials sells the counter without Pharmacy Safety: no read it would refuse.
