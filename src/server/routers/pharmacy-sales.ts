@@ -10,6 +10,7 @@ import {
   fefoOverrideApprovalPolicy,
   isSoleActiveApprover,
   listCounterApprovers,
+  mayApproveCounterLine,
   type CounterApproval,
   type CounterApprovalKind,
   type CounterApprovalPin,
@@ -991,20 +992,20 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
 /**
  * DEV-290: the password route is the signed-in operator approving their own over-limit
  * charge, so the second-person rule applies: it is allowed only for an owner or manager
- * (or tenant ADMIN) who is genuinely the sole active owner/manager. Everyone else needs a
- * different manager's or owner's PIN at the till.
+ * (`pharmacy:manage`) who is genuinely the sole active owner/manager. Everyone else needs a
+ * different manager's or owner's PIN at the till. DEV-806: the tenant ADMIN role alone does
+ * not approve, on this route or the PIN route.
  */
 async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
-  const user = ctx.session!.user;
-  const subject = subjectFromSession(user);
-  const options = { db: ctx.db, source: 'TRPC' as const };
-  const approver =
-    (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options))) ||
-    (await can(subject, 'pharmacy:manage', undefined, options));
-  return (
-    approver &&
-    (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'))
+  const db = ctx.db as unknown as ScopedDb;
+  // DEV-806: the same approver check the till's PIN route applies to the PIN holder.
+  const approver = await mayApproveCounterLine(
+    db,
+    subjectFromSession(ctx.session!.user),
+    'KHATA_OVER_LIMIT',
+    { source: 'TRPC' }
   );
+  return approver && (await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'));
 }
 
 export const pharmacySalesRouter = router({
