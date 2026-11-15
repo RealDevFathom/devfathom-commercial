@@ -3730,7 +3730,7 @@ function ScopedPharmacyCounterConsole({
                       className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
                     >
                       <span>
-                        {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
+                        {entry.kind} · Receipt {entry.sale?.receiptNumber ?? '—'} ·{' '}
                         {new Date(entry.occurredAt).toISOString().slice(0, 10)}
                       </span>
                       <span className="font-mono tabular-nums">

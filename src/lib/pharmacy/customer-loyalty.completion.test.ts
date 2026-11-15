@@ -86,9 +86,13 @@ function fixture() {
       create: vi.fn().mockResolvedValue({ id: 'tender-a', createdAt: new Date() }),
     },
     pharmacySaleEvent: { create: vi.fn() },
+    // DEV-764: redemption reads the redemption value in force; none set means PKR 1 per point.
+    pharmacyLoyaltyProgramVersion: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyLoyaltyPointsEntry: {
       findUnique: vi.fn().mockResolvedValue(null),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 10 } }),
+      // DEV-764: no lot past expiry, so the whole balance can be spent.
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
     },
   };
@@ -157,5 +161,77 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
     });
     expect(await redeemSalePoints(db as never, scope, input)).toMatchObject({ replayed: true });
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-764 redemption at the owner-set point value', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('takes the current redemption value off the bill, not a fixed PKR 1', async () => {
+    const { db } = fixture();
+    // PKR 0.50 a point: 2 points take PKR 1 (100 minor) off a PKR 2 bill.
+    db.pharmacyLoyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program-2',
+      redemptionValueMinor: 50,
+    });
+    expect(await redeemSalePoints(db as never, scope, input)).toMatchObject({
+      points: 2,
+      amountMinor: 100,
+      settled: false,
+    });
+    expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ type: 'LOYALTY', amountMinor: 100 }),
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'REDEEM', points: -2, requestedPoints: 2 }),
+    });
+  });
+});
+
+describe('DEV-764 points past expiry cannot be redeemed before the sweep', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('refuses to spend points of a lot already past its expiry date', async () => {
+    const { db } = fixture();
+    // 10 points in the balance, all from one lot that expired yesterday and is not yet swept.
+    db.pharmacyLoyaltyPointsEntry.count.mockResolvedValue(1);
+    Object.assign(db.pharmacyLoyaltyPointsEntry, {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'earn-a',
+          kind: 'EARN',
+          points: 10,
+          saleId: 'sale-old',
+          tenderId: null,
+          programVersionId: 'program-1',
+          reversesEntryId: null,
+          expiresAt: new Date(Date.now() - 86_400_000),
+          occurredAt: new Date(Date.now() - 40 * 86_400_000),
+        },
+      ]),
+    });
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow(
+      'INSUFFICIENT_POINTS'
+    );
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-764 redemption reads the program under its lock, before the customer lock', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('takes the shared program lock, then reads the redemption value, then locks the customer', async () => {
+    const { db } = fixture();
+    await redeemSalePoints(db as never, scope, input);
+    const sql = (call: unknown[]) => (call[0] as { strings: string[] }).strings.join('');
+    const order = db.$queryRaw.mock.calls.map((call, index) => ({
+      text: sql(call),
+      at: db.$queryRaw.mock.invocationCallOrder[index]!,
+    }));
+    const programLock = order.find((q) => q.text.includes('pg_advisory_xact_lock_shared'));
+    const customerLock = order.find((q) => q.text.includes('pharmacy_customers'));
+    expect(programLock).toBeDefined();
+    expect(programLock!.at).toBeLessThan(
+      db.pharmacyLoyaltyProgramVersion.findFirst.mock.invocationCallOrder[0]!
+    );
+    expect(programLock!.at).toBeLessThan(customerLock!.at);
   });
 });
