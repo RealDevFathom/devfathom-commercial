@@ -714,18 +714,10 @@ export async function freshPharmacyFirstSale(
     await page.getByLabel('Opening cash', { exact: true }).fill('0');
     await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
     await expect(page.getByLabel('Scan or search', { exact: true })).toBeVisible();
-    // Barcode Enter already adds a pack. Stage by name before the explicit
-    // sale-unit selection and F6 add below.
-    await page.getByLabel('Scan or search', { exact: true }).fill(medicineName);
+    // Scan the reviewed barcode: Enter on a barcode with a single match adds one pack
+    // (scan-to-add), exactly as a cashier's scanner would.
+    await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
     await page.getByLabel('Scan or search', { exact: true }).press('Enter');
-    await click(
-      page
-        .getByRole('list', { name: 'Search results' })
-        .getByRole('button')
-        .filter({ hasText: medicineName })
-    );
-    await page.keyboard.press('F3');
-    await page.keyboard.press('F6');
     await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(medicineName);
     await page.keyboard.press('F9');
     const amount = page.getByLabel('Amount', { exact: true });
