@@ -182,6 +182,9 @@ vi.mock('@/lib/trpc', async () => {
         'refundAccess',
         'openBills',
         'saleReadiness',
+        // DEV-821: the till's cashier list and handover.
+        'drawerCashiers',
+        'handoverDrawer',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -484,6 +487,7 @@ beforeEach(() => {
     'navigation',
     'openBills',
     'saleReadiness',
+    'drawerCashiers',
   ])
     mocks.queries[name] = query();
   // DEV-97: the operator takes payment unless a test says otherwise.
@@ -516,6 +520,7 @@ beforeEach(() => {
     'khataSignup',
     'redeemPoints',
     'authenticatePack',
+    'handoverDrawer',
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());

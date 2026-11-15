@@ -5,11 +5,27 @@ import { generateApiToken } from '@/lib/api-auth';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 
+/**
+ * DEV-848: the columns an admin screen may see. `tokenHash` stays on the server, so a
+ * response can never hand a verifier for the bearer token to the browser.
+ */
+const API_TOKEN_FIELDS = {
+  id: true,
+  name: true,
+  prefix: true,
+  scopes: true,
+  userId: true,
+  lastUsedAt: true,
+  expiresAt: true,
+  createdAt: true,
+} as const;
+
 export const apiTokensRouter = router({
   list: entitlementIndependentAdminProcedure.query(async ({ ctx }) => {
     return ctx.db.apiToken.findMany({
       orderBy: { createdAt: 'desc' },
-      include: {
+      select: {
+        ...API_TOKEN_FIELDS,
         user: { select: { id: true, name: true, email: true, avatar: true, role: true } },
       },
     });
@@ -112,7 +128,7 @@ export const apiTokensRouter = router({
           userId: targetUserId,
           expiresAt,
         },
-        include: { user: { select: { id: true, name: true } } },
+        select: { ...API_TOKEN_FIELDS, user: { select: { id: true, name: true } } },
       });
 
       annotateAudit(ctx, {
@@ -143,7 +159,10 @@ export const apiTokensRouter = router({
   revoke: entitlementIndependentAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const deleted = await ctx.db.apiToken.delete({ where: { id: input.id } });
+      const deleted = await ctx.db.apiToken.delete({
+        where: { id: input.id },
+        select: API_TOKEN_FIELDS,
+      });
       annotateAudit(ctx, {
         targetType: 'ApiToken',
         targetId: deleted.id,

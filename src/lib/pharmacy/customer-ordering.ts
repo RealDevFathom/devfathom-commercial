@@ -10,6 +10,7 @@ import { saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
+import { lockStockRowsFrom } from './stock-lock-order';
 
 export type CustomerOrderFulfillment = 'COLLECT' | 'DELIVER';
 export type CustomerOrderStatus =
@@ -186,6 +187,29 @@ export async function reservationCandidates(
   medicineId: string,
   packLevelId: string
 ) {
+  const candidates = Prisma.sql`
+    FROM "pharmacy_stock_balances" balance
+    JOIN "pharmacy_inventory_lots" lot
+      ON lot."organizationId" = balance."organizationId"
+     AND lot."branchId" = balance."branchId" AND lot."id" = balance."inventoryLotId"
+    JOIN "pharmacy_manufacturing_batches" batch
+      ON batch."organizationId" = lot."organizationId" AND batch."id" = lot."manufacturingBatchId"
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
+      AND batch."medicineId" = ${medicineId}
+      AND lot."packLevelId" = ${packLevelId}`;
+  // DEV-825: lock the balances in the global key order (stock-lock-order.ts),
+  // the order a counter sale locks the same rows in, then read them in FEFO
+  // order in a separate statement so the read sees what committed during a wait.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
+    ${candidates}`,
+    { balance: true }
+  );
   return db.$queryRaw<ReservationCandidate[]>(Prisma.sql`
     SELECT balance."inventoryLotId", balance."stockLocationId", balance."organizationId", balance."branchId",
            batch."state"::text AS "batchState", balance."disposition"::text AS disposition,
@@ -202,19 +226,9 @@ export async function reservationCandidates(
                    AND reservation."inventoryLotId" = balance."inventoryLotId"
                    AND reservation."stockLocationId" = balance."stockLocationId"
                    AND reservation."status" = 'RESERVED'), 0))::integer AS "availableUnits"
-    FROM "pharmacy_stock_balances" balance
-    JOIN "pharmacy_inventory_lots" lot
-      ON lot."organizationId" = balance."organizationId"
-     AND lot."branchId" = balance."branchId" AND lot."id" = balance."inventoryLotId"
-    JOIN "pharmacy_manufacturing_batches" batch
-      ON batch."organizationId" = lot."organizationId" AND batch."id" = lot."manufacturingBatchId"
-    WHERE balance."organizationId" = ${scope.organizationId}
-      AND balance."branchId" = ${scope.branchId}
-      AND batch."medicineId" = ${medicineId}
-      AND lot."packLevelId" = ${packLevelId}
+    ${candidates}
     ORDER BY batch."expiresAt", lot."receivedAt" NULLS FIRST,
              balance."inventoryLotId", balance."stockLocationId"
-    FOR UPDATE OF balance
   `);
 }
 
@@ -609,28 +623,7 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
     where: { organizationId: scope.organizationId, branchId: scope.branchId, orderId },
     select: { id: true, canonicalUnits: true },
   });
-  const query = Prisma.sql`
-    /* handoff_reservations */
-    SELECT interest."orderLineId", reservation."reservedUnits",
-           balance."inventoryLotId", balance."stockLocationId",
-           balance."organizationId", balance."branchId",
-           balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
-           batch."expiresAt", lot."receivedAt",
-           medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
-           (balance."onHandUnits" - COALESCE((
-             SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
-             WHERE other."organizationId" = balance."organizationId"
-               AND other."branchId" = balance."branchId"
-               AND other."inventoryLotId" = balance."inventoryLotId"
-               AND other."stockLocationId" = balance."stockLocationId"
-               AND other.status = 'RESERVED' AND other.id <> reservation.id
-           ), 0) - COALESCE((
-             SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
-             WHERE claim."organizationId" = balance."organizationId"
-               AND claim."branchId" = balance."branchId"
-               AND claim."inventoryLotId" = balance."inventoryLotId"
-               AND claim.status = 'RESERVED'
-           ), 0))::integer AS "availableUnits"
+  const handoffRows = Prisma.sql`
     FROM "pharmacy_restock_reservations" reservation
     JOIN "pharmacy_restock_interests" interest
       ON interest."organizationId" = reservation."organizationId"
@@ -655,10 +648,45 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
       ON medicine."organizationId" = batch."organizationId" AND medicine.id = batch."medicineId"
     WHERE reservation."organizationId" = ${scope.organizationId}
       AND reservation."branchId" = ${scope.branchId} AND line."orderId" = ${orderId}
-      AND reservation.status = 'RESERVED'
+      AND reservation.status = 'RESERVED'`;
+  const query = Prisma.sql`
+    /* handoff_reservations */
+    SELECT interest."orderLineId", reservation."reservedUnits",
+           balance."inventoryLotId", balance."stockLocationId",
+           balance."organizationId", balance."branchId",
+           balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
+           batch."expiresAt", lot."receivedAt",
+           medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
+           (balance."onHandUnits" - COALESCE((
+             SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
+             WHERE other."organizationId" = balance."organizationId"
+               AND other."branchId" = balance."branchId"
+               AND other."inventoryLotId" = balance."inventoryLotId"
+               AND other."stockLocationId" = balance."stockLocationId"
+               AND other.status = 'RESERVED' AND other.id <> reservation.id
+           ), 0) - COALESCE((
+             SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
+             WHERE claim."organizationId" = balance."organizationId"
+               AND claim."branchId" = balance."branchId"
+               AND claim."inventoryLotId" = balance."inventoryLotId"
+               AND claim.status = 'RESERVED'
+           ), 0))::integer AS "availableUnits"
+    ${handoffRows}
     ORDER BY batch.id, lot.id, balance."stockLocationId", reservation.id
   `;
-  await db.$queryRaw(Prisma.sql`${query} FOR UPDATE OF batch, medicine, lot, balance, reservation`);
+  // DEV-825: batch, medicine, lot, then balance, each class in key order
+  // (stock-lock-order.ts), and only then the reservations hanging off them.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    /* handoff_reservations */
+    SELECT batch.id AS "batchId", medicine.id AS "medicineId", balance."branchId",
+           balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
+    ${handoffRows}`
+  );
+  await db.$queryRaw(Prisma.sql`${query} FOR UPDATE OF reservation`);
   // Read again after any lock wait so reservation/claim totals use a fresh
   // READ COMMITTED snapshot; competing stock writers also lock the balance.
   const reservations = await db.$queryRaw<

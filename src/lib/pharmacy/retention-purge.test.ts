@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { expiredRecordsSql, PURGE_AUDIT_SQL, purgeExpiredPharmacyRecords } from './retention-purge';
+import {
+  expiredRecordsSql,
+  parseRetentionPurgeResume,
+  previousRetentionPurgeResume,
+  PURGE_AUDIT_SQL,
+  purgeExpiredPharmacyRecords,
+} from './retention-purge';
 
 type Sql = { text?: string; sql?: string; strings?: string[]; values: unknown[] };
 const text = (query: Sql) => query.text ?? query.sql ?? query.strings?.join('?') ?? '';
@@ -157,5 +163,131 @@ describe('DEV-96 retention purge', () => {
     expect(executed.filter(([statement]) => statement.includes('"audit_logs"'))).toEqual([
       [PURGE_AUDIT_SQL, expect.any(String), 'org-a', 'FISCAL', 's', expect.any(String)],
     ]);
+  });
+
+  describe('QA-3 resume across runs', () => {
+    // A FISCAL backlog ordered by (anchor, id): 1,200 records the database keeps
+    // refusing (e.g. a legal hold), then one genuinely expired record behind them.
+    const base = Date.UTC(2010, 0, 1);
+    const rows = [
+      ...Array.from({ length: 1_200 }, (_, index) => ({
+        id: `held-${String(index).padStart(4, '0')}`,
+        anchor: new Date(base + index * 60_000),
+      })),
+      { id: 'expired-last', anchor: new Date(base + 1_200 * 60_000) },
+    ];
+
+    function cursorDb() {
+      const purgedIds: string[] = [];
+      const db = {
+        $queryRaw: vi.fn(async (query: Sql) => {
+          const sql = text(query);
+          if (sql.includes('set_config')) return [];
+          if (!sql.includes('JOIN "pharmacy_sales" r')) return [];
+          const values = query.values;
+          const limit = Number(values[values.length - 1]);
+          let candidates = rows;
+          if (sql.includes('r."id") > (')) {
+            const after = values[values.length - 3] as Date;
+            const afterId = values[values.length - 2] as string;
+            candidates = rows.filter(
+              (row) =>
+                row.anchor.getTime() > after.getTime() ||
+                (row.anchor.getTime() === after.getTime() && row.id > afterId)
+            );
+          }
+          return candidates
+            .filter((row) => !purgedIds.includes(row.id))
+            .slice(0, limit)
+            .map((row) => ({ ...row, organizationId: 'org-a', retentionDays: 3653 }));
+        }),
+        $executeRawUnsafe: vi.fn(async (statement: string, ...values: unknown[]) => {
+          if (statement.startsWith('DELETE')) {
+            if (String(values[1]).startsWith('held')) throw new Error('deletion refused: hold');
+            purgedIds.push(String(values[1]));
+            return 1;
+          }
+          return 0;
+        }),
+      };
+      return { db, purgedIds };
+    }
+
+    it('continues past 1,000 refused records on the next run instead of stalling', async () => {
+      const { db, purgedIds } = cursorDb();
+      const first = await purgeExpiredPharmacyRecords(db);
+      expect(first.purged.FISCAL).toBe(0);
+      expect(first.resumeAfter.FISCAL).toEqual({
+        anchor: rows[999].anchor.toISOString(),
+        id: 'held-0999',
+      });
+
+      // The job stores the result as JSON; the next run reads it back.
+      const stored = JSON.parse(JSON.stringify(first));
+      const second = await purgeExpiredPharmacyRecords(db, {
+        resumeAfter: parseRetentionPurgeResume(stored),
+      });
+      expect(second.purged.FISCAL).toBe(1);
+      expect(purgedIds).toEqual(['expired-last']);
+      // The scan reached the end, so the run after starts from the oldest again.
+      expect(second.resumeAfter.FISCAL).toBeNull();
+    });
+
+    it('wraps to the oldest record once a scan reaches the end of the backlog', async () => {
+      const { db } = cursorDb();
+      const result = await purgeExpiredPharmacyRecords(db, { maxScanned: 5_000 });
+      expect(result.purged.FISCAL).toBe(1);
+      expect(result.resumeAfter).toEqual({
+        CONTROLLED_REGISTER: null,
+        PRESCRIPTION: null,
+        FISCAL: null,
+      });
+    });
+
+    it('keeps the resume point when the purge budget, not the backlog, ended the run', async () => {
+      const { db } = fakeDb({
+        pharmacy_controlled_register_entries: [
+          { id: 'a', organizationId: 'org-a' },
+          { id: 'b', organizationId: 'org-a' },
+        ],
+      });
+      const result = await purgeExpiredPharmacyRecords(db, { maxPurgesPerClass: 1 });
+      expect(result.resumeAfter.CONTROLLED_REGISTER).toEqual({
+        anchor: '2020-01-01T00:00:00.000Z',
+        id: 'a',
+      });
+    });
+
+    it('ignores a malformed stored resume point rather than trusting it', () => {
+      expect(parseRetentionPurgeResume(null)).toEqual({});
+      expect(
+        parseRetentionPurgeResume({
+          resumeAfter: {
+            FISCAL: { anchor: 'not-a-date', id: 'x' },
+            PRESCRIPTION: { anchor: '2020-01-01T00:00:00.000Z', id: 42 },
+            AUDIT: { anchor: '2020-01-01T00:00:00.000Z', id: 'audit-1' },
+            CONTROLLED_REGISTER: { anchor: '2020-01-01T00:00:00.000Z', id: 'r-1' },
+          },
+        })
+      ).toEqual({
+        CONTROLLED_REGISTER: { anchor: new Date('2020-01-01T00:00:00.000Z'), id: 'r-1' },
+      });
+    });
+
+    it('reads the resume point from the latest successful retention purge job', async () => {
+      const queryRaw = vi.fn(async () => [
+        { result: { resumeAfter: { FISCAL: { anchor: '2020-01-01T00:00:00.000Z', id: 's-9' } } } },
+      ]);
+      const resume = await previousRetentionPurgeResume({
+        $queryRaw: queryRaw,
+        $executeRawUnsafe: vi.fn(),
+      });
+      expect(resume).toEqual({
+        FISCAL: { anchor: new Date('2020-01-01T00:00:00.000Z'), id: 's-9' },
+      });
+      const sql = text((queryRaw.mock.calls[0] as unknown as [Sql])[0]);
+      expect(sql).toContain(`"type" = 'pharmacy.record.retention.v1'`);
+      expect(sql).toContain(`"status" = 'SUCCEEDED'`);
+    });
   });
 });

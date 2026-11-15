@@ -3,7 +3,9 @@ import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { putUpload, StorageUnavailableError } from '@/lib/storage';
+import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { registerUpload } from '@/lib/uploads/registry';
 
 export async function POST(request: Request) {
   try {
@@ -11,6 +13,7 @@ export async function POST(request: Request) {
     if (!actor?.session.user?.id) {
       return new Response('Unauthorized', { status: 401 });
     }
+    const uploadedById = actor.session.user.id;
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -81,6 +84,18 @@ export async function POST(request: Request) {
       Buffer.from(await file.arrayBuffer()),
       baseType
     );
+    // DEV-837: record who uploaded this object, server-side. Attaching it to a
+    // project, task or contract later binds it, and only its uploader can.
+    // An object the registry does not know is never served, so a failed
+    // registration removes the stored object rather than leaving it orphaned.
+    try {
+      await withTenantDb(actor.organization.id, (db) =>
+        registerUpload(db, { name: filename, uploadedById })
+      );
+    } catch (error) {
+      await deleteUpload(actor.organization.id, filename).catch(() => undefined);
+      throw error;
+    }
 
     return NextResponse.json({
       url: '/api/files/' + filename,

@@ -216,6 +216,28 @@ describe('counter returns', () => {
     expect(lot).not.toHaveTextContent('cmvzl8u3u01pq4oqrosqy5nsi');
     expect(lot).toHaveValue('cmvzl8u3u01pq4oqrosqy5nsi');
   });
+  it('lists a no-expiry lot as "No expiry", never 9998-12-31 (QA-3)', () => {
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0] = {
+      ...history.data.lines[0],
+      lots: [
+        {
+          lotId: 'lot-retail',
+          batchNumber: 'RETAIL-NOEXP',
+          // The storage marker for a non-drug item stocked without an expiry.
+          expiresAt: new Date('9998-12-31T19:00:00.000Z'),
+          returnableUnits: 3,
+          restockAllowed: true,
+        },
+      ],
+    };
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    const lot = screen.getByRole('option', { name: /RETAIL-NOEXP/ });
+    expect(lot).toHaveTextContent('Batch RETAIL-NOEXP · No expiry · 3 units remaining');
+    expect(lot.textContent).not.toContain('9998');
+  });
   it('books the return and the refund to the active branch', async () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();

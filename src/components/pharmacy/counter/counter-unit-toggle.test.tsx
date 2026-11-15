@@ -214,4 +214,13 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
   });
+
+  it('wraps the inline price preview instead of using fixed columns that overlap the Add button', () => {
+    renderToggle({ inline: true });
+    const preview = screen.getByText('Unit price').closest('dl')!;
+    expect(preview.className).toContain('flex-wrap');
+    expect(preview.className).toContain('min-w-0');
+    expect(preview.className).not.toContain('grid-cols-3');
+    expect(preview.parentElement!.className).toContain('flex-wrap');
+  });
 });

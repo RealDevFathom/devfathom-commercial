@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { adviseExpiryLots, type ExpiryLotFact } from './expiry-advisor';
+import { lotDimension, type PharmacyReportDimensions } from './report-dimensions';
 import { createPurchaseReturn } from './supplier-returns-operations';
 
 type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays'> & {
@@ -10,8 +11,11 @@ type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays
   historyDays: number;
 };
 
-/** Server-resolved tenant and report branches; never accept these from a client. */
-export type ExpiryAdvisorScope = {
+/**
+ * Server-resolved tenant and report branches; never accept these from a client. The optional
+ * report dimensions (DEV-256) narrow the advice to the selected supplier, ingredient and batch.
+ */
+export type ExpiryAdvisorScope = PharmacyReportDimensions & {
   organizationId: string;
   branchIds: readonly string[];
 };
@@ -76,7 +80,7 @@ export async function readExpiryAdvice(db: ScopedDb, scope: ExpiryAdvisorScope, 
     LEFT JOIN "pharmacy_supplier_relationships" relationship ON relationship."organizationId"=lot."organizationId"
       AND relationship."branchId"=lot."branchId" AND relationship."supplierId"=source."supplierId" AND relationship."active"=true
     WHERE lot."organizationId"=${organizationId} AND lot."branchId" IN (${branches})
-      AND batch."expiresAt">${at}
+      AND batch."expiresAt">${at} ${lotDimension(Prisma.raw('lot'), scope, true)}
   `);
   return adviseExpiryLots(rows, at);
 }

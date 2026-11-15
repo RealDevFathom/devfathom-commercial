@@ -78,8 +78,14 @@ function store(
           receipts.find((row) => row.idempotencyKey === where.idempotencyKey) ?? null
       ),
     },
+    // DEV-821: the paying cashier runs this till.
     pharmacyDrawerSession: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', businessDate }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'drawer_1',
+        businessDate,
+        openedByActorId: 'cashier_1',
+        operatingCashierId: 'cashier_1',
+      }),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerMovement: {
@@ -314,5 +320,26 @@ describe('DEV-746 khata points are earned when the debt is paid', () => {
     expect(khataEarns(points)).toEqual([
       expect.objectContaining({ points: 2, netPaidMinor: 10_000, earnStartMinor: 0 }),
     ]);
+  });
+});
+
+describe('DEV-764 owner switch and expiry for khata earning', () => {
+  it('earns nothing on a khata payment when the owner has switched khata earning off', async () => {
+    const { db, points } = store({ program: { ...twoPercent, khataEarns: false } });
+    await recordKhataRepayment(db as never, scope, input);
+    expect(khataEarns(points)).toHaveLength(0);
+    // The debt is still settled: the switch governs points, not the repayment.
+    expect(await balance(db)).toBe(20_000);
+  });
+
+  it('dates each khata earn lot from the expiry period in force', async () => {
+    const { db, points } = store({ program: { ...twoPercent, khataEarns: true, expiryDays: 30 } });
+    const before = Date.now();
+    await recordKhataRepayment(db as never, scope, input);
+    const [earn] = khataEarns(points);
+    expect(earn).toMatchObject({ points: 6 });
+    const expiresAt = (earn!.expiresAt as Date).getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 30 * 86_400_000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 86_400_000);
   });
 });

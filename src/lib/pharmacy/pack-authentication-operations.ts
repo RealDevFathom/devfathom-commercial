@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { normalizeMedicineText } from './medicine';
 import { parseGs1DataMatrix } from './gs1-datamatrix';
 import { evaluatePackAuthentication } from './pack-authentication';
+import type { PharmacyReportDimensions } from './report-dimensions';
 
 type AuthenticationSource = 'RECEIVING' | 'DISPENSING';
 
@@ -148,10 +149,35 @@ export async function acknowledgePackAuthenticationFlag(
   });
 }
 
-export async function readPackAuthenticationFlags(db: ScopedDb, branchIds: string[]) {
+/**
+ * Unverified pack scans for the report branches. A scan records the medicine and manufacturing
+ * batch it matched, so batch and ingredient filters narrow it (DEV-256); it records no supplier,
+ * so a supplier filter cannot be applied and the flags read as unavailable (`null`).
+ */
+export async function readPackAuthenticationFlags(
+  db: ScopedDb,
+  branchIds: string[],
+  dimensions: PharmacyReportDimensions & { organizationId?: string } = {}
+) {
+  if (dimensions.supplierId) return null;
   if (!branchIds.length) return [];
+  if (dimensions.ingredientId && !dimensions.organizationId)
+    throw new Error('PACK_AUTHENTICATION_SCOPE_REQUIRED');
+  const medicineIds = dimensions.ingredientId
+    ? (
+        await db.medicineStrengthComponent.findMany({
+          where: { organizationId: dimensions.organizationId, ingredientId: dimensions.ingredientId },
+          select: { medicineId: true },
+        })
+      ).map((row) => row.medicineId)
+    : null;
   return db.pharmacyPackAuthenticationScan.findMany({
-    where: { branchId: { in: branchIds }, status: { not: 'VERIFIED' } },
+    where: {
+      branchId: { in: branchIds },
+      status: { not: 'VERIFIED' },
+      ...(dimensions.batchId ? { manufacturingBatchId: dimensions.batchId } : {}),
+      ...(medicineIds ? { medicineId: { in: medicineIds } } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: 200,
   });

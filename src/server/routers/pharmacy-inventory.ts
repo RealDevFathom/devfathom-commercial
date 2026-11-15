@@ -62,6 +62,7 @@ import {
   transferStock,
 } from '@/lib/pharmacy/stock-ledger';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -497,10 +498,16 @@ async function assertBranch(db: ScopedDb, scope: LedgerScope) {
 /**
  * Lock the lot row so two operators acting on the same lot serialize: the
  * second one re-reads the first one's draft or movement instead of racing it.
+ * FOR NO KEY UPDATE (DEV-825, stock-lock-order.ts): a sale that already holds a
+ * balance of this lot takes FOR KEY SHARE on it when it inserts its movement,
+ * and a FOR UPDATE here would make that wait the inverse of this path's order.
  */
 async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId: string) {
-  await db.$queryRaw(
-    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId} FOR UPDATE`
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT "id" AS "inventoryLotId" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId}`,
+    { lot: 'update' }
   );
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
@@ -749,6 +756,29 @@ async function receiveTransferWithVariance(
   if (open.some((line) => !answered.has(line.id)))
     throw new PharmacyInventoryError('INVALID_UNITS');
 
+  // DEV-628: a shortfall is a stock loss, so it takes the same two-person
+  // control as a write-off: a witness assigned to this branch, confirming with
+  // their own PIN (or a solo owner/pharmacist's own fresh PIN). DEV-825: the
+  // shortfall is known from the answers alone, so the witness credential (a
+  // document-class lock) is taken before any stock row (stock-lock-order.ts).
+  const short = open.some((line) => line.quantityUnits - line.receivedUnits > answered.get(line.id)!);
+  let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
+  if (short) {
+    if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    witness = await authorizeWriteOffWitness(db, scope, input.variance);
+  }
+
+  // DEV-825: lock every IN_TRANSIT balance this receipt writes, in the global
+  // key order (stock-lock-order.ts), before reading or writing any line.
+  await lockStockBalances(
+    db,
+    { organizationId: scope.organizationId, branchId: transfer.fromBranchId },
+    open.map((line) => ({
+      inventoryLotId: line.sourceLotId,
+      stockLocationId: line.sourceStockLocationId,
+      disposition: 'IN_TRANSIT',
+    }))
+  );
   const plan = [];
   for (const line of open) {
     const receivedUnits = answered.get(line.id)!;
@@ -756,7 +786,7 @@ async function receiveTransferWithVariance(
     const balances = await db.$queryRaw<
       Array<{ onHandUnits: number; sealedPacks: number; looseUnits: number; unitsPerPack: number }>
     >(
-      Prisma.sql`SELECT b."onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${transfer.fromBranchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='IN_TRANSIT' FOR UPDATE OF b`
+      Prisma.sql`SELECT b."onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${transfer.fromBranchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='IN_TRANSIT'`
     );
     const transit = balances[0];
     if (!transit || Number(transit.onHandUnits) < outstanding)
@@ -786,15 +816,6 @@ async function receiveTransferWithVariance(
     });
   }
 
-  const short = plan.some((step) => step.varianceUnits > 0);
-  // DEV-628: a shortfall is a stock loss, so it takes the same two-person
-  // control as a write-off: a witness assigned to this branch, confirming with
-  // their own PIN (or a solo owner/pharmacist's own fresh PIN).
-  let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
-  if (short) {
-    if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-    witness = await authorizeWriteOffWitness(db, scope, input.variance);
-  }
 
   const postedVariances = [];
   for (const step of plan) {

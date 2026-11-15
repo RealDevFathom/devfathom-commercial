@@ -113,7 +113,12 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         })),
       }),
     },
-    pharmacyDrawerSession: { findFirst: vi.fn().mockResolvedValue({ id: 'drawer-1' }) },
+    // DEV-821: the refunding actor runs this till.
+    pharmacyDrawerSession: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ id: 'drawer-1', openedByActorId: 'actor-1', operatingCashierId: 'actor-1' }),
+    },
     // F3: the business day is open.
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },

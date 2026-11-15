@@ -206,3 +206,89 @@ describe('SOP waiver credential form', () => {
     expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
   });
 });
+
+describe('DEV-837: captured proof versus unverified metadata', () => {
+  async function renderWithEvidence(serverCaptured: boolean) {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    const ctx = contextStub();
+    ctx.db.restaurantBranch.findMany.mockResolvedValue([
+      { id: 'branch-1', name: 'Main branch', timezone: 'UTC', businessDayCutoff: '00:00' },
+    ] as never);
+    ctx.db.restaurantStaffProfile.findMany.mockResolvedValue([
+      { id: 'staff-1', displayName: 'Line cook' },
+    ] as never);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    const date = new Date('2026-08-29T12:00:00Z');
+    const detail = {
+      id: 'occ-1',
+      status: 'IN_PROGRESS',
+      businessDate: date,
+      dueAt: date,
+      windowEndsAt: date,
+      assignment: { template: { name: 'Fridge check', category: 'Food safety' } },
+      templateVersion: {
+        versionNumber: 1,
+        steps: [
+          {
+            id: 'tmpl-step-1',
+            stepOrder: 1,
+            title: 'Photograph the fridge thermometer',
+            instructions: null,
+            requiresPhoto: true,
+            requiresSignature: false,
+            requiresNote: false,
+          },
+        ],
+      },
+      steps: [
+        {
+          id: 'occ-step-1',
+          templateStepId: 'tmpl-step-1',
+          completed: false,
+          completedAt: null,
+          completedByStaffProfileId: null,
+          note: null,
+        },
+      ],
+      evidence: [
+        {
+          id: 'ev-1',
+          occurrenceStepId: 'occ-step-1',
+          contentHash: 'a'.repeat(64),
+          mimeType: 'image/jpeg; evidence=photo',
+          sizeBytes: serverCaptured ? 2048 : 0,
+          storageRef: serverCaptured ? '/api/files/sop-proof.jpg' : null,
+          uploaderStaffProfileId: 'staff-1',
+          capturedAt: date,
+          serverCaptured,
+        },
+      ],
+      verifications: [],
+      escalationEvents: [],
+      claimable: false,
+    };
+    mocks.createCaller.mockReturnValue({
+      listOccurrences: vi.fn(async ({ status }: { status: string }) => ({
+        items: status === 'IN_PROGRESS' ? [detail] : [],
+        nextCursor: null,
+      })),
+      getOccurrence: vi.fn(async () => detail),
+    });
+    render(await SopPage({ searchParams }));
+  }
+
+  it('labels metadata-only proof as unverified and keeps the step blocked', async () => {
+    await renderWithEvidence(false);
+    expect(screen.getByText('Unverified metadata')).toBeInTheDocument();
+    expect(screen.queryByText('Captured proof')).toBeNull();
+    expect(screen.getByText(/does not count as photo or signature proof/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Complete step' })).toBeDisabled();
+  });
+
+  it('labels captured proof and lets the step complete', async () => {
+    await renderWithEvidence(true);
+    expect(screen.getByText('Captured proof')).toBeInTheDocument();
+    expect(screen.queryByText('Unverified metadata')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Complete step' })).toBeEnabled();
+  });
+});

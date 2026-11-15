@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { recordDeliveryCommand } from './customer-delivery';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 import { changeSaleStatus, returnSaleLine } from './sales';
+import { quarantinePart } from './inventory-operations';
 vi.mock('./settlement', () => ({
   applyPharmacyTender: vi.fn(),
   refundPharmacyTender: vi.fn(),
@@ -63,7 +64,9 @@ it('refunds actual partial cash before voiding a physically returned open sale',
   expect(refundPharmacyTender).toHaveBeenCalledWith(
     db,
     scope,
-    expect.objectContaining({ originalTenderId: 'tender-a', amountMinor: 400 })
+    expect.objectContaining({ originalTenderId: 'tender-a', amountMinor: 400 }),
+    // DEV-821: reached only after the manager/owner refund authorization.
+    { drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
   );
   expect(changeSaleStatus).toHaveBeenCalledWith(
     db,
@@ -180,7 +183,10 @@ it('records actual remittance through ordinary cash tender before custody eviden
   expect(applyPharmacyTender).toHaveBeenCalledWith(
     db,
     scope,
-    expect.objectContaining({ type: 'CASH', amountMinor: 300, cashReceivedMinor: 300 })
+    expect.objectContaining({ type: 'CASH', amountMinor: 300, cashReceivedMinor: 300 }),
+    undefined,
+    // DEV-821: without a manager decision, the remit goes only into a till the actor runs.
+    { drawerOperator: { kind: 'COUNTER', actorIsManager: false } }
   );
 });
 
@@ -202,6 +208,87 @@ it('rejects a conflicting trusted branch before rebinding, reading orders or wri
   expect(applyPharmacyTender).not.toHaveBeenCalled();
 });
 
+const balanceLock = (db: ReturnType<typeof fixture>['db']) => {
+  const statements = db.$queryRaw.mock.calls.map(
+    ([sql]) => sql as { strings?: string[]; values: unknown[] }
+  );
+  const index = statements.findIndex((sql) => sql.strings?.join('').includes('stock_lock:balance'));
+  return { index, sql: statements[index] };
+};
+
+it('DEV-825: locks every returned balance, sorted, before the void and the quarantine', async () => {
+  const { db, sale } = fixture();
+  sale.tenders = [];
+  sale.lines = [
+    {
+      allocations: [
+        { id: 'alloc-b', inventoryLotId: 'lot-b', stockMovementId: 'move-b', canonicalUnits: 1 },
+        { id: 'alloc-a', inventoryLotId: 'lot-a', stockMovementId: 'move-a', canonicalUnits: 1 },
+      ],
+    },
+  ] as never[];
+  Object.assign(db, {
+    pharmacyStockMovement: { findFirst: vi.fn(async () => ({ stockLocationId: 'shelf' })) },
+  });
+  await recordDeliveryCommand(db as never, scope, physicalReturn, {
+    authorizeRefund: async () => {},
+  });
+  const { index, sql } = balanceLock(db);
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(sql!.values.slice(2)).toEqual([
+    'lot-a',
+    'shelf',
+    'AVAILABLE',
+    'lot-a',
+    'shelf',
+    'QUARANTINE',
+    'lot-b',
+    'shelf',
+    'AVAILABLE',
+    'lot-b',
+    'shelf',
+    'QUARANTINE',
+  ]);
+  const lockedAt = db.$queryRaw.mock.invocationCallOrder[index]!;
+  expect(lockedAt).toBeLessThan(vi.mocked(changeSaleStatus).mock.invocationCallOrder[0]!);
+  expect(lockedAt).toBeLessThan(vi.mocked(quarantinePart).mock.invocationCallOrder[0]!);
+});
+
+it('DEV-825: locks every reserved balance once, sorted, before quarantining an unsold order', async () => {
+  const { db, order } = fixture();
+  Object.assign(order, {
+    counterSaleId: null,
+    counterSale: null,
+    deliveryEvidence: [{ action: 'REFUSED', amountMinor: null, requestKey: 'refuse-a' }],
+  });
+  Object.assign(db, {
+    pharmacyRestockReservation: {
+      findMany: vi.fn(async () => [
+        { id: 'r-b', inventoryLotId: 'lot-b', stockLocationId: 'shelf', reservedUnits: 1 },
+        { id: 'r-a', inventoryLotId: 'lot-a', stockLocationId: 'shelf', reservedUnits: 1 },
+      ]),
+    },
+  });
+  await recordDeliveryCommand(db as never, scope, physicalReturn);
+  const { index, sql } = balanceLock(db);
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(sql!.values.filter((value) => String(value).startsWith('lot-'))).toEqual([
+    'lot-a',
+    'lot-a',
+    'lot-b',
+    'lot-b',
+  ]);
+  expect(quarantinePart).toHaveBeenCalledTimes(2);
+  expect(db.$queryRaw.mock.invocationCallOrder[index]!).toBeLessThan(
+    vi.mocked(quarantinePart).mock.invocationCallOrder[0]!
+  );
+  // One sorted lock, not one per reservation.
+  expect(
+    db.$queryRaw.mock.calls.filter(([sql]) =>
+      ((sql as { strings?: string[] }).strings?.join('') ?? '').includes('pharmacy_stock_balances')
+    )
+  ).toHaveLength(1);
+});
 function completedSaleFixture(returnedUnits = 0) {
   const fx = fixture();
   fx.sale.status = 'COMPLETED';

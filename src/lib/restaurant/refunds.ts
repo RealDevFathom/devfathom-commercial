@@ -139,7 +139,7 @@ type LoadedTender = {
 
 type RefundableCardPayment = {
   id: string;
-  provider: 'MOCK';
+  provider: 'MOCK' | 'MANUAL';
   providerRef: string | null;
 };
 
@@ -541,7 +541,7 @@ async function requireRefundableCardPayment(
   if (!payment) {
     throw new RefundError('The card payment no longer exists.', 'PAYMENT_NOT_FOUND');
   }
-  if (payment.provider !== 'MOCK') {
+  if (payment.provider !== 'MOCK' && payment.provider !== 'MANUAL') {
     throw new RefundError(
       `Refunds are not supported for the ${payment.provider} payment provider.`,
       'UNSUPPORTED_PAYMENT_PROVIDER'
@@ -568,15 +568,36 @@ async function applyCardRefund(
   }
 ): Promise<PaymentStatus> {
   const capability: PaymentCapability = input.kind === 'VOID_REVERSAL' ? 'VOID' : 'REFUND';
-  const provider = getPaymentProvider(input.payment.provider);
   const operationRef = `${input.originalTenderId}:${input.actor.deviceId}:${input.actor.idempotencyKey}`;
-  const outcome = provider.execute({
-    capability,
-    amount: input.amount,
-    tipAmount: input.tipRefundAmount,
-    operationRef,
-    priorRef: input.payment.providerRef,
-  });
+  // A MANUAL card payment was taken on the shop's own card machine: no provider API can
+  // reverse it, so the refund is RECORDED here (after the manager/owner approval the
+  // refund rules already require) and the cashier returns the money on the machine.
+  const outcome =
+    input.payment.provider === 'MANUAL'
+      ? {
+          event: {
+            capability,
+            eventType: `${capability}_MANUALLY_RECORDED`,
+            amount: input.amount,
+            providerRef: input.payment.providerRef,
+            payload: {
+              provider: 'MANUAL',
+              manuallyConfirmed: true,
+              capability,
+              amount: input.amount.toString(),
+              tipAmount: input.tipRefundAmount.toString(),
+              recordedByStaffProfileId: input.actor.staffProfileId,
+              deviceId: input.actor.deviceId,
+            },
+          },
+        }
+      : getPaymentProvider('MOCK').execute({
+          capability,
+          amount: input.amount,
+          tipAmount: input.tipRefundAmount,
+          operationRef,
+          priorRef: input.payment.providerRef,
+        });
 
   // The normalized payment status: a void → VOIDED; a refund → REFUNDED once the
   // whole captured principal and tip are returned, else PARTIALLY_REFUNDED.

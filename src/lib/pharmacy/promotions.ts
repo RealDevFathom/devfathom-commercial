@@ -239,6 +239,8 @@ export async function promotionCreatorMayManage(
   try {
     const user = await db.user.findFirst({
       where: { id: userId, organizationId, status: 'ACTIVE' },
+      // Only what the permission check reads; never load the user's credentials here.
+      select: { id: true, organizationId: true, role: true, department: true, status: true },
     });
     if (!user || user.organizationId !== organizationId || user.status !== 'ACTIVE') return false;
     if (!(await can(subjectFromSession(user), 'pharmacy:manage', undefined, { db }))) return false;

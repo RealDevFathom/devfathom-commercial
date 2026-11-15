@@ -58,6 +58,10 @@ const BRANCH_A_TWO = `branch_a_two_${suffix}`;
 const BRANCH_A_THREE = `branch_a_three_${suffix}`;
 const BRANCH_GUC = `branch_guc_${suffix}`;
 const ACTOR = 'user_pharmacist';
+// A write-off witness must be an ACTIVE member of the organization holding an
+// active assignment to the branch (`writeOff`). A user id is a global primary
+// key, so the witness is suffixed per run like the branches above.
+const WITNESS = `user_witness_${suffix}`;
 const ruleSetIds: string[] = [];
 
 /** Fixed instants, so no case depends on the wall clock. */
@@ -314,6 +318,24 @@ async function recalledLot(db: ScopedDb, fixture: Scenario, manualUnits = 0) {
   return { lot, batch, recall };
 }
 
+/**
+ * A branch has one regulatory profile and its synthetic rule set has a fixed id
+ * per branch, so every case that needs the sale gate shares one seeding.
+ */
+const regulatoryProfiles = new Map<string, Promise<void>>();
+function regulatoryProfileFor(branchId: string): Promise<void> {
+  let seeded = regulatoryProfiles.get(branchId);
+  if (!seeded) {
+    seeded = import('@/lib/tenancy/scoped-db').then(async ({ withPlatformDb }) => {
+      ruleSetIds.push(
+        await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), branchId)
+      );
+    });
+    regulatoryProfiles.set(branchId, seeded);
+  }
+  return seeded;
+}
+
 /** Run one statement that is EXPECTED to fail, in its own transaction. */
 async function expectRejection(
   organizationId: string,
@@ -337,6 +359,42 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations, drap };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Tenant rows such as finance journal entries reference the organization
+  // itself (finance_journal_entries_visibility_fkey), so both tenants exist
+  // before any case posts to the ledger.
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: `Stock ledger ${id}`,
+        displayName: `Stock ledger ${id}`,
+        status: 'ACTIVE' as const,
+      })),
+      skipDuplicates: true,
+    })
+  );
+  await scopedDb.withTenantDb(ORG_A, async (db) => {
+    await db.organizationDepartment.createMany({
+      data: [{ organizationId: ORG_A, key: 'PHARMACY', name: 'Pharmacy' }],
+      skipDuplicates: true,
+    });
+    await db.user.create({
+      data: {
+        id: WITNESS,
+        organizationId: ORG_A,
+        name: 'Write-off witness',
+        email: `${WITNESS}@example.invalid`,
+        department: 'PHARMACY',
+        title: 'Pharmacist',
+        status: 'ACTIVE',
+      },
+    });
+    await ensureBranch(db, ORG_A, BRANCH_A);
+    await db.pharmacyBranchAssignment.create({
+      data: { organizationId: ORG_A, branchId: BRANCH_A, userId: WITNESS, active: true },
+    });
+  });
 }, 120_000);
 
 afterAll(async () => {
@@ -661,7 +719,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         stockLocationId: fixture.locationId,
         units: 10,
         disposition: 'QUARANTINE',
-        witnessId: 'user_witness',
+        witnessId: WITNESS,
         reason: 'Recall destruction',
         evidenceRef: 'destruction-certificate-1',
         idempotencyKey: tag('quarantine-write-off-destroy'),
@@ -677,7 +735,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       quantityUnits: -10,
     });
     expect(result.written.custody).toMatchObject({
-      witnessId: 'user_witness',
+      witnessId: WITNESS,
       evidenceRef: 'destruction-certificate-1',
     });
     expect(result.balances).toEqual(
@@ -740,7 +798,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             : deps.operations.writeOff(db, scopeOf(fixture), {
                 ...input,
                 disposition: 'QUARANTINE',
-                witnessId: 'user_witness',
+                witnessId: WITNESS,
                 evidenceRef: 'destruction-certificate',
                 idempotencyKey: tag('drap-write-off-guard-attempt'),
               })
@@ -843,7 +901,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             : await deps.operations.writeOff(db, scope, {
                 ...input,
                 disposition: 'QUARANTINE',
-                witnessId: 'user_witness',
+                witnessId: WITNESS,
                 evidenceRef: 'destruction-certificate',
                 idempotencyKey: tag('manual-arrangement-write-off'),
               });
@@ -933,7 +991,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           : deps.operations.writeOff(db, scopeOf(fixture), {
               ...input,
               disposition: 'QUARANTINE',
-              witnessId: 'user_witness',
+              witnessId: WITNESS,
               evidenceRef: 'destruction-certificate',
               idempotencyKey: tag('mixed-write-off-second'),
             });
@@ -1721,9 +1779,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         },
       })
     );
-    ruleSetIds.push(
-      await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), BRANCH_A)
-    );
+    await regulatoryProfileFor(BRANCH_A);
     const { lot, presentationId } = await inOrg(ORG_A, async (db) => {
       const medicine = await db.medicine.update({
         where: { id: fixture.medicineId },
@@ -1816,9 +1872,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         },
       })
     );
-    ruleSetIds.push(
-      await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), BRANCH_A)
-    );
+    await regulatoryProfileFor(BRANCH_A);
     const { batch, presentationId } = await inOrg(ORG_A, async (db) => {
       const medicine = await db.medicine.update({
         where: { id: fixture.medicineId },

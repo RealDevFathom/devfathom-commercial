@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { blockReasonFor, type BatchState, type BlockReason } from './inventory';
 import type { LedgerScope } from './stock-ledger';
+import { lockStockRowsFrom } from './stock-lock-order';
 
 export type SaleBatchErrorReason =
   'SALE_BATCH_RECALLED' | 'SALE_BATCH_QUARANTINED' | 'SALE_BATCH_EXPIRED' | 'SALE_BATCH_BLOCKED';
@@ -93,16 +94,25 @@ export async function assertSaleBatchesSellable(
   if (allocations.length === 0) return checked;
 
   const lotIds = [...new Set(allocations.map((allocation) => allocation.inventoryLotId))];
-  const lots = await db.$queryRaw<LotRow[]>(Prisma.sql`
-    SELECT lot.id AS "inventoryLotId", lot."organizationId", lot."branchId", lot."receivedAt",
-           batch."batchNumber", batch."state"::text AS "batchState", batch."expiresAt"
+  const lotBatches = Prisma.sql`
     FROM pharmacy_inventory_lots lot
     JOIN pharmacy_manufacturing_batches batch
       ON batch.id = lot."manufacturingBatchId" AND batch."organizationId" = lot."organizationId"
     WHERE lot."organizationId" = ${scope.organizationId}
-      AND lot.id IN (${Prisma.join(lotIds)})
-    ORDER BY batch.id, lot.id
-    FOR SHARE OF batch`);
+      AND lot.id IN (${Prisma.join(lotIds)})`;
+  // DEV-825: batch class, FOR SHARE, ascending id, through the shared helper. A
+  // transaction that also allocates stock (offline replay) takes these first.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT batch.id AS "batchId" ${lotBatches}`,
+    { batch: 'share' }
+  );
+  const lots = await db.$queryRaw<LotRow[]>(Prisma.sql`
+    SELECT lot.id AS "inventoryLotId", lot."organizationId", lot."branchId", lot."receivedAt",
+           batch."batchNumber", batch."state"::text AS "batchState", batch."expiresAt"
+    ${lotBatches}
+    ORDER BY batch.id, lot.id`);
   // PostgreSQL's transaction timestamp is fixed at BEGIN, and a JavaScript time
   // captured before the query can become stale while FOR SHARE waits. Read the
   // wall clock only after every batch lock has been acquired.

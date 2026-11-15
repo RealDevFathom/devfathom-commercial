@@ -17,10 +17,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn() }));
 import { readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
+import { Prisma } from '@/generated/prisma/client';
 import { parseDelimitedText } from './migration/source-values';
 import {
+  OWNER_DATA_EXPORT_BUILD_TIME_LIMIT_MS,
   OWNER_DATA_EXPORT_PAGE_SIZE,
   OWNER_DATA_EXPORT_REQUEST_LIMIT,
+  OwnerDataExportTimeLimitError,
   OwnerDataExportTooLargeError,
   basePackUnits,
   loadOwnerDataExportRows,
@@ -499,6 +502,42 @@ describe('runPharmacyOwnerDataExportJob', () => {
     expect(m.putUploadFile).not.toHaveBeenCalled();
     expect(await leftovers()).toEqual(before);
   });
+
+  it('writes every attempt of a job to the one archive name its payload reserved (DEV-844)', async () => {
+    const token = '0123456789abcdef0123456789abcdef';
+    const payload = { from: null, to: null, archiveToken: token };
+    const job = { id: 'job-10', organizationId: 'org-a' };
+    // A first attempt whose upload outlived its transaction, then the retry.
+    await runPharmacyOwnerDataExportJob(fakeDb() as never, job, payload);
+    const retried = await runPharmacyOwnerDataExportJob(fakeDb() as never, job, payload);
+    const names = m.putUploadFile.mock.calls.map(([, name]) => name);
+    expect(names).toEqual([
+      `owner-data-export-job-10-${token}.zip`,
+      `owner-data-export-job-10-${token}.zip`,
+    ]);
+    expect(retried.filename).toBe(`owner-data-export-job-10-${token}.zip`);
+  });
+
+  it('fails permanently past its build time limit, uploads nothing and leaves no temp file (DEV-844)', async () => {
+    const leftovers = async () =>
+      (await readdir(tmpdir())).filter((name) => name.startsWith('owner-data-export-'));
+    const before = await leftovers();
+    const error = await runPharmacyOwnerDataExportJob(
+      fakeDb() as never,
+      { id: 'job-11', organizationId: 'org-a' },
+      {},
+      () => new Date(),
+      { timeLimitMs: 0 }
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OwnerDataExportTimeLimitError);
+    expect((error as Error).message).toMatch(/shorter sales date range/);
+    expect(m.putUploadFile).not.toHaveBeenCalled();
+    expect(await leftovers()).toEqual(before);
+  });
+
+  it('builds within a time limit that leaves room to upload before the 120-second job timeout', () => {
+    expect(OWNER_DATA_EXPORT_BUILD_TIME_LIMIT_MS).toBeLessThan(120_000);
+  });
 });
 
 describe('owner data export paging', () => {
@@ -603,6 +642,19 @@ describe('queueOwnerDataExport', () => {
     });
   });
 
+  it('reserves an unguessable archive token on the job when it is queued (DEV-844)', async () => {
+    const first = platformDb();
+    const second = platformDb();
+    await queueOwnerDataExport(first as never, input);
+    await queueOwnerDataExport(second as never, input);
+    const tokens = [first, second].map(
+      (db) => db.platformJob.create.mock.calls[0]![0].data.payload.archiveToken
+    );
+    expect(tokens[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(tokens[1]).toMatch(/^[0-9a-f]{32}$/);
+    expect(tokens[1]).not.toBe(tokens[0]);
+  });
+
   it('refuses the owner once the daily limit is used and says when a slot frees', async () => {
     const recent = Array.from(
       { length: OWNER_DATA_EXPORT_REQUEST_LIMIT },
@@ -630,13 +682,14 @@ describe('queueOwnerDataExport', () => {
 describe('purgeExpiredOwnerDataExports', () => {
   it('deletes only archives past their 24-hour link and marks each job purged', async () => {
     const now = new Date('2026-11-15T10:00:00.000Z');
-    const findMany = vi.fn().mockResolvedValue([
+    const findMany = vi.fn().mockResolvedValueOnce([
       {
         id: 'job-old',
         organizationId: 'org-a',
         result: { filename: 'owner-data-export-job-old.zip', rowCounts: { 'customers.csv': 2 } },
       },
     ]);
+    findMany.mockResolvedValue([]);
     const update = vi.fn().mockResolvedValue({});
     const purged = await purgeExpiredOwnerDataExports(
       { platformJob: { findMany, update } } as never,
@@ -666,9 +719,98 @@ describe('purgeExpiredOwnerDataExports', () => {
     const filename = 'owner-data-export-job-new-0123456789abcdef0123456789abcdef.zip';
     const findMany = vi
       .fn()
-      .mockResolvedValue([{ id: 'job-new', organizationId: 'org-a', result: { filename } }]);
+      .mockResolvedValueOnce([{ id: 'job-new', organizationId: 'org-a', result: { filename } }])
+      .mockResolvedValue([]);
     const update = vi.fn().mockResolvedValue({});
     await purgeExpiredOwnerDataExports({ platformJob: { findMany, update } } as never);
     expect(m.deleteUpload).toHaveBeenCalledExactlyOnceWith('org-a', filename);
+  });
+});
+
+describe('purging archives of exports that never succeeded (DEV-844)', () => {
+  const now = new Date('2026-11-15T10:00:00.000Z');
+  const token = 'fedcba9876543210fedcba9876543210';
+  const UNRECORDED = {
+    type: 'PHARMACY_OWNER_DATA_EXPORT_V1',
+    status: { in: ['FAILED', 'CANCELLED'] },
+    finishedAt: { lt: new Date('2026-11-14T10:00:00.000Z') },
+    // Only jobs no result names an archive for: a recorded archive is never touched here.
+    result: { equals: Prisma.AnyNull },
+  };
+  const MARKER = { result: { filename: null, purgedAt: now.toISOString() } };
+
+  function platformDb(abandoned: unknown[], claims: number[] = []) {
+    const findMany = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(abandoned);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    for (const count of claims) updateMany.mockResolvedValueOnce({ count });
+    const update = vi.fn().mockResolvedValue({});
+    return { platformJob: { findMany, updateMany, update } };
+  }
+
+  it('claims, then deletes, the reserved archive of a failed or cancelled job 24 hours after it ended', async () => {
+    const db = platformDb([
+      { id: 'job-failed', organizationId: 'org-a', payload: { archiveToken: token } },
+      { id: 'job-cancelled', organizationId: 'org-b', payload: { archiveToken: token } },
+    ]);
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
+    expect(purged).toBe(2);
+    expect(db.platformJob.findMany.mock.calls[1]![0].where).toEqual(UNRECORDED);
+    // Each claim re-checks every condition on that one row, under its row lock.
+    expect(db.platformJob.updateMany.mock.calls).toEqual([
+      [{ where: { ...UNRECORDED, id: 'job-failed' }, data: MARKER }],
+      [{ where: { ...UNRECORDED, id: 'job-cancelled' }, data: MARKER }],
+    ]);
+    expect(m.deleteUpload.mock.calls).toEqual([
+      ['org-a', `owner-data-export-job-failed-${token}.zip`],
+      ['org-b', `owner-data-export-job-cancelled-${token}.zip`],
+    ]);
+    // Purge first: the claim is taken before anything is deleted.
+    expect(db.platformJob.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      m.deleteUpload.mock.invocationCallOrder[0]!
+    );
+    expect(db.platformJob.updateMany.mock.invocationCallOrder[1]).toBeLessThan(
+      m.deleteUpload.mock.invocationCallOrder[1]!
+    );
+    expect(db.platformJob.update).not.toHaveBeenCalled();
+  });
+
+  it('deletes nothing and overwrites nothing when a platform retry got there first', async () => {
+    // Read as failed, then retried (and perhaps rebuilt) before the claim: it matches no row.
+    const db = platformDb(
+      [
+        { id: 'job-retried', organizationId: 'org-a', payload: { archiveToken: token } },
+        { id: 'job-failed', organizationId: 'org-a', payload: { archiveToken: token } },
+      ],
+      [0, 1]
+    );
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
+    expect(purged).toBe(1);
+    expect(m.deleteUpload).toHaveBeenCalledExactlyOnceWith(
+      'org-a',
+      `owner-data-export-job-failed-${token}.zip`
+    );
+    expect(db.platformJob.update).not.toHaveBeenCalled();
+  });
+
+  it('stops before deleting anything else when a delete fails, so its claim rolls back', async () => {
+    const db = platformDb([
+      { id: 'job-a', organizationId: 'org-a', payload: { archiveToken: token } },
+      { id: 'job-b', organizationId: 'org-a', payload: { archiveToken: token } },
+    ]);
+    m.deleteUpload.mockRejectedValueOnce(new Error('storage down'));
+    await expect(purgeExpiredOwnerDataExports(db as never, now)).rejects.toThrow('storage down');
+    expect(m.deleteUpload).toHaveBeenCalledOnce();
+    expect(db.platformJob.updateMany).toHaveBeenCalledOnce();
+  });
+
+  it('marks a job without a reserved token swept without deleting anything', async () => {
+    const db = platformDb([
+      { id: 'job-legacy', organizationId: 'org-a', payload: { from: null } },
+      { id: 'job-bad', organizationId: 'org-a', payload: { archiveToken: '../../x' } },
+    ]);
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
+    expect(purged).toBe(0);
+    expect(m.deleteUpload).not.toHaveBeenCalled();
+    expect(db.platformJob.updateMany).toHaveBeenCalledTimes(2);
   });
 });

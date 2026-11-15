@@ -43,6 +43,7 @@ function makeDb() {
     restaurantSopOccurrence: model(),
     restaurantSopOccurrenceStep: model(),
     restaurantSopEvidence: model(),
+    pharmacySopEvidenceCapture: model(),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -59,6 +60,30 @@ const TMPL_STEP_ID = 'tmpl_step_1';
 beforeEach(() => {
   db = makeDb();
 });
+
+/** A proof row exactly as a server capture route writes it. */
+function capturedProof(id: string, mimeType: string) {
+  return {
+    id,
+    contentHash: 'c'.repeat(64),
+    mimeType,
+    sizeBytes: 2_048,
+    storageRef: `/api/files/sop-${id}.jpg`,
+    serverCaptured: true,
+  };
+}
+
+/** Caller-asserted metadata: a proof MIME label with no stored, hashed content. */
+function claimedProof(id: string, mimeType: string) {
+  return {
+    id,
+    contentHash: 'd'.repeat(64),
+    mimeType,
+    sizeBytes: 0,
+    storageRef: null,
+    serverCaptured: false,
+  };
+}
 
 // ── startOccurrence ────────────────────────────────────────────────────────────
 
@@ -203,8 +228,8 @@ describe('completeStep', () => {
       completedAt: null,
       templateStep: { requiresPhoto: true, requiresSignature: true },
       evidence: [
-        { mimeType: 'image/jpeg' },
-        { mimeType: 'application/vnd.devfathom.signature+json' },
+        capturedProof('ev_photo', 'image/jpeg'),
+        capturedProof('ev_signature', 'application/vnd.devfathom.signature+json'),
       ],
     });
     db.restaurantSopOccurrenceStep.update.mockResolvedValue({ id: STEP_ID, completedAt: NOW });
@@ -216,6 +241,105 @@ describe('completeStep', () => {
         actorStaffProfileId: 'staff_1',
       })
     ).resolves.toMatchObject({ completed: true });
+  });
+
+  describe('DEV-837: only server-captured proof satisfies a requirement', () => {
+    function primeStep(evidence: unknown[]) {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        status: 'IN_PROGRESS',
+        assignedStaffProfileId: 'staff_1',
+        poolJobRoleId: null,
+        claimedByStaffProfileId: null,
+      });
+      db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
+        id: STEP_ID,
+        completed: false,
+        completedAt: null,
+        templateStep: { requiresPhoto: true, requiresSignature: true, requiresNote: false },
+        evidence,
+      });
+      db.restaurantSopOccurrenceStep.update.mockResolvedValue({ id: STEP_ID, completedAt: NOW });
+    }
+    const complete = () =>
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_1',
+      });
+
+    it.each([
+      [
+        'zero-byte metadata-only claims',
+        [
+          claimedProof('ev_p', 'image/jpeg; evidence=photo'),
+          claimedProof('ev_s', 'image/png; evidence=signature'),
+        ],
+      ],
+      [
+        'claims naming a stored file but not captured by the server',
+        [
+          {
+            ...claimedProof('ev_p', 'image/jpeg; evidence=photo'),
+            sizeBytes: 10,
+            storageRef: '/api/files/logo.png',
+          },
+          {
+            ...claimedProof('ev_s', 'application/vnd.devfathom.signature+json'),
+            sizeBytes: 10,
+            storageRef: '/api/files/logo.png',
+          },
+        ],
+      ],
+      [
+        'server-flagged rows with no stored content',
+        [
+          { ...capturedProof('ev_p', 'image/jpeg; evidence=photo'), sizeBytes: 0 },
+          { ...capturedProof('ev_s', 'image/png; evidence=signature'), storageRef: null },
+        ],
+      ],
+    ])('keeps the step blocked for %s', async (_label, evidence) => {
+      primeStep(evidence);
+      await expect(complete()).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+      expect(db.restaurantSopOccurrenceStep.update).not.toHaveBeenCalled();
+    });
+
+    it('accepts server-captured photo and signature proof', async () => {
+      primeStep([
+        capturedProof('ev_p', 'image/jpeg; evidence=photo'),
+        capturedProof('ev_s', 'image/png; evidence=signature'),
+      ]);
+      await expect(complete()).resolves.toMatchObject({ completed: true });
+      expect(db.pharmacySopEvidenceCapture.findMany).not.toHaveBeenCalled();
+    });
+
+    it('accepts pharmacy proof only when its capture receipt matches the row', async () => {
+      const photo = {
+        ...capturedProof('ev_p', 'image/jpeg; evidence=photo'),
+        serverCaptured: false,
+      };
+      const signature = {
+        ...capturedProof('ev_s', 'image/png; evidence=signature'),
+        serverCaptured: false,
+      };
+      primeStep([photo, signature]);
+      db.pharmacySopEvidenceCapture.findMany.mockResolvedValue([
+        { evidenceId: 'ev_p', occurrenceId: OCC_ID, contentHash: photo.contentHash },
+        // A receipt whose digest does not match its row proves nothing.
+        { evidenceId: 'ev_s', occurrenceId: OCC_ID, contentHash: 'e'.repeat(64) },
+      ]);
+      await expect(complete()).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+      expect(db.pharmacySopEvidenceCapture.findMany).toHaveBeenCalledWith({
+        where: { occurrenceId: OCC_ID, evidenceId: { in: ['ev_p', 'ev_s'] } },
+        select: { evidenceId: true, occurrenceId: true, contentHash: true },
+      });
+
+      db.pharmacySopEvidenceCapture.findMany.mockResolvedValue([
+        { evidenceId: 'ev_p', occurrenceId: OCC_ID, contentHash: photo.contentHash },
+        { evidenceId: 'ev_s', occurrenceId: OCC_ID, contentHash: signature.contentHash },
+      ]);
+      await expect(complete()).resolves.toMatchObject({ completed: true });
+    });
   });
 
   it('allows only the direct assignee or role-pool claimant to complete work', async () => {
@@ -446,6 +570,89 @@ describe('attachEvidence', () => {
       contentHash: expectedHash,
       createdAt: NOW,
       created: false,
+    });
+  });
+
+  describe('DEV-837: server-capture provenance', () => {
+    beforeEach(() => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        assignedStaffProfileId: 'staff_1',
+        poolJobRoleId: null,
+        claimedByStaffProfileId: null,
+        status: 'IN_PROGRESS',
+      });
+    });
+    const base = {
+      occurrenceId: OCC_ID,
+      uploaderStaffProfileId: 'staff_1',
+      contentHashHex: expectedHash,
+      mimeType: 'image/jpeg; evidence=photo',
+    };
+
+    it('stores caller-asserted metadata as not server-captured', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        id: 'ev_1',
+        contentHash: expectedHash,
+        createdAt: NOW,
+        serverCaptured: false,
+      });
+      await attachEvidence(db as unknown as ScopedDb, {
+        ...base,
+        sizeBytes: 0,
+        storageRef: '/api/files/company-logo.png',
+      });
+      expect(db.restaurantSopEvidence.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ serverCaptured: false }) })
+      );
+    });
+
+    it('marks a capture route row as server-captured', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        id: 'ev_1',
+        contentHash: expectedHash,
+        createdAt: NOW,
+        serverCaptured: true,
+      });
+      await expect(
+        attachEvidence(db as unknown as ScopedDb, {
+          ...base,
+          sizeBytes: 100,
+          storageRef: '/api/files/sop-x.jpg',
+          serverCaptured: true,
+        })
+      ).resolves.toMatchObject({ evidenceId: 'ev_1', created: true });
+      expect(db.restaurantSopEvidence.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ serverCaptured: true }) })
+      );
+    });
+
+    it.each([
+      ['zero bytes', { sizeBytes: 0, storageRef: '/api/files/sop-x.jpg' }],
+      ['no stored file', { sizeBytes: 100, storageRef: null }],
+    ])('refuses a server capture with %s before writing', async (_label, extra) => {
+      await expect(
+        attachEvidence(db as unknown as ScopedDb, { ...base, ...extra, serverCaptured: true })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
+      expect(db.restaurantSopEvidence.createMany).not.toHaveBeenCalled();
+    });
+
+    it('does not let a capture reuse an earlier caller-asserted row', async () => {
+      db.restaurantSopEvidence.createMany.mockResolvedValue({ count: 0 });
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        id: 'ev_claimed',
+        contentHash: expectedHash,
+        createdAt: NOW,
+        serverCaptured: false,
+      });
+      await expect(
+        attachEvidence(db as unknown as ScopedDb, {
+          ...base,
+          sizeBytes: 100,
+          storageRef: '/api/files/sop-x.jpg',
+          serverCaptured: true,
+        })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
     });
   });
 
@@ -776,5 +983,53 @@ describe('submitOccurrence', () => {
       })
     ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'zero-byte metadata-only photo and signature claims',
+      [
+        claimedProof('ev_p', 'image/jpeg; evidence=photo'),
+        claimedProof('ev_s', 'image/png; evidence=signature'),
+      ],
+      false,
+    ],
+    [
+      'server-captured photo and signature proof',
+      [
+        capturedProof('ev_p', 'image/jpeg; evidence=photo'),
+        capturedProof('ev_s', 'image/png; evidence=signature'),
+      ],
+      true,
+    ],
+  ])('DEV-837: submission with %s', async (_label, evidence, accepted) => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+      windowEndsAt: WINDOW_FUTURE,
+      steps: [
+        {
+          completed: true,
+          note: null,
+          templateStep: { requiresPhoto: true, requiresSignature: true, requiresNote: false },
+          evidence,
+        },
+      ],
+    });
+    db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
+    const submit = submitOccurrence(db as unknown as ScopedDb, {
+      occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
+      now: NOW,
+    });
+    if (accepted) {
+      await expect(submit).resolves.toMatchObject({ status: 'SUBMITTED' });
+    } else {
+      await expect(submit).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    }
   });
 });

@@ -71,6 +71,88 @@ function assertOccurrenceOwner(occurrence: OccurrenceOwner, actorStaffProfileId?
   }
 }
 
+// ── Proof provenance (DEV-837) ────────────────────────────────────────────────
+
+type ProofCandidate = {
+  id: string;
+  contentHash: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageRef: string | null;
+  serverCaptured: boolean;
+};
+
+const PROOF_EVIDENCE_SELECT = {
+  id: true,
+  contentHash: true,
+  mimeType: true,
+  sizeBytes: true,
+  storageRef: true,
+  serverCaptured: true,
+} as const;
+
+function isPhotoProofMime(mimeType: string): boolean {
+  return (
+    mimeType.includes('evidence=photo') ||
+    (mimeType.startsWith('image/') && !mimeType.includes('evidence=signature'))
+  );
+}
+
+function isSignatureProofMime(mimeType: string): boolean {
+  return (
+    mimeType.includes('evidence=signature') ||
+    mimeType === 'application/vnd.devfathom.signature+json'
+  );
+}
+
+/**
+ * The photo/signature proof that counts toward a step's requirements: rows a
+ * server capture route stored and hashed itself (`serverCaptured`), plus
+ * pharmacy proof whose append-only capture receipt names this exact row,
+ * occurrence and digest. Caller-asserted metadata (a MIME label, a digest, a
+ * zero-byte size or an arbitrary storage reference) never counts.
+ */
+async function verifiedProof(
+  tx: ScopedDb,
+  occurrenceId: string,
+  rows: readonly ProofCandidate[]
+): Promise<{ photo: Set<string>; signature: Set<string> }> {
+  const stored = rows.filter(
+    (row) =>
+      row.sizeBytes > 0 &&
+      typeof row.storageRef === 'string' &&
+      row.storageRef.startsWith('/api/files/') &&
+      (isPhotoProofMime(row.mimeType) || isSignatureProofMime(row.mimeType))
+  );
+  const unflagged = stored.filter((row) => !row.serverCaptured);
+  const receipted = new Set<string>();
+  if (unflagged.length > 0) {
+    const receipts = await tx.pharmacySopEvidenceCapture.findMany({
+      where: { occurrenceId, evidenceId: { in: unflagged.map((row) => row.id) } },
+      select: { evidenceId: true, occurrenceId: true, contentHash: true },
+    });
+    for (const row of unflagged) {
+      if (
+        receipts.some(
+          (receipt) =>
+            receipt.evidenceId === row.id &&
+            receipt.occurrenceId === occurrenceId &&
+            receipt.contentHash === row.contentHash
+        )
+      ) {
+        receipted.add(row.id);
+      }
+    }
+  }
+  const verified = stored.filter((row) => row.serverCaptured || receipted.has(row.id));
+  return {
+    photo: new Set(verified.filter((row) => isPhotoProofMime(row.mimeType)).map((row) => row.id)),
+    signature: new Set(
+      verified.filter((row) => isSignatureProofMime(row.mimeType)).map((row) => row.id)
+    ),
+  };
+}
+
 // ── Start occurrence ──────────────────────────────────────────────────────────
 
 export type StartOccurrenceInput = {
@@ -180,24 +262,19 @@ export async function completeStep(
         templateStep: {
           select: { requiresPhoto: true, requiresSignature: true, requiresNote: true },
         },
-        evidence: { select: { mimeType: true } },
+        evidence: { select: PROOF_EVIDENCE_SELECT },
       },
     });
     if (!step) throw new SopExecutionError('Step not found on this occurrence.', 'STEP_NOT_FOUND');
     if (step.completed) {
       return { occurrenceStepId: step.id, completed: true, completedAt: step.completedAt! };
     }
-    const evidence = step.evidence ?? [];
-    const hasPhoto = evidence.some(
-      (row) =>
-        row.mimeType.includes('evidence=photo') ||
-        (row.mimeType.startsWith('image/') && !row.mimeType.includes('evidence=signature'))
-    );
-    const hasSignature = evidence.some(
-      (row) =>
-        row.mimeType.includes('evidence=signature') ||
-        row.mimeType === 'application/vnd.devfathom.signature+json'
-    );
+    const needsProof = step.templateStep?.requiresPhoto || step.templateStep?.requiresSignature;
+    const proof = needsProof
+      ? await verifiedProof(tx, input.occurrenceId, step.evidence ?? [])
+      : { photo: new Set<string>(), signature: new Set<string>() };
+    const hasPhoto = proof.photo.size > 0;
+    const hasSignature = proof.signature.size > 0;
     if (step.templateStep?.requiresPhoto && !hasPhoto) {
       throw new SopExecutionError(
         'Photo proof is required before completing this step.',
@@ -243,6 +320,13 @@ export type AttachEvidenceInput = {
   sizeBytes: number;
   storageRef?: string | null;
   uploaderStaffProfileId?: string | null;
+  /**
+   * DEV-837: set ONLY by a server capture route that wrote the bytes to tenant
+   * storage itself (at `storageRef`) and hashed them. Only such rows satisfy a
+   * photo/signature requirement or decide who may read the stored file. Never
+   * derive it from request input.
+   */
+  serverCaptured?: boolean;
   now?: Date;
 };
 
@@ -275,6 +359,10 @@ export async function attachEvidence(
   }
   if (input.sizeBytes < 0) {
     throw new SopExecutionError('sizeBytes must be non-negative.', 'INVALID');
+  }
+  const serverCaptured = input.serverCaptured === true;
+  if (serverCaptured && (input.sizeBytes <= 0 || !input.storageRef?.startsWith('/api/files/'))) {
+    throw new SopExecutionError('Captured proof needs stored, non-empty content.', 'INVALID');
   }
 
   const contentHash = input.contentBytes
@@ -322,15 +410,18 @@ export async function attachEvidence(
         ...identity,
         sizeBytes: input.sizeBytes,
         storageRef: input.storageRef ?? null,
+        serverCaptured,
         capturedAt: now,
       },
       skipDuplicates: true,
     });
     const evidence = await tx.restaurantSopEvidence.findFirst({
       where: identity,
-      select: { id: true, contentHash: true, createdAt: true },
+      select: { id: true, contentHash: true, createdAt: true, serverCaptured: true },
     });
-    if (!evidence) {
+    // A retry may only reuse a row that is itself a server capture: an earlier
+    // caller-asserted row with the same identity must not absorb real proof.
+    if (!evidence || (serverCaptured && evidence.serverCaptured !== true)) {
       throw new SopExecutionError('Evidence could not be attached.', 'INVALID');
     }
     return {
@@ -383,7 +474,7 @@ export async function submitOccurrence(
             templateStep: {
               select: { requiresPhoto: true, requiresSignature: true, requiresNote: true },
             },
-            evidence: { select: { mimeType: true } },
+            evidence: { select: PROOF_EVIDENCE_SELECT },
           },
         },
       },
@@ -403,18 +494,14 @@ export async function submitOccurrence(
         'PROOF_REQUIRED'
       );
     }
+    const proofRows = occ.steps
+      .filter((step) => step.templateStep.requiresPhoto || step.templateStep.requiresSignature)
+      .flatMap((step) => step.evidence ?? []);
+    const proof = await verifiedProof(tx, input.occurrenceId, proofRows);
     const unmetRequirement = occ.steps.find((step) => {
       const evidence = step.evidence ?? [];
-      const hasPhoto = evidence.some(
-        (row) =>
-          row.mimeType.includes('evidence=photo') ||
-          (row.mimeType.startsWith('image/') && !row.mimeType.includes('evidence=signature'))
-      );
-      const hasSignature = evidence.some(
-        (row) =>
-          row.mimeType.includes('evidence=signature') ||
-          row.mimeType === 'application/vnd.devfathom.signature+json'
-      );
+      const hasPhoto = evidence.some((row) => proof.photo.has(row.id));
+      const hasSignature = evidence.some((row) => proof.signature.has(row.id));
       return (
         (step.templateStep.requiresNote && !step.note?.trim()) ||
         (step.templateStep.requiresPhoto && !hasPhoto) ||

@@ -92,6 +92,9 @@ describe('counterErrorMessage', () => {
       'INVALID_RECEIPT_LEASE',
       'LEASE_REQUIRES_SETTLEMENT',
       'DAY_CLOSED',
+      // DEV-821: a till the user does not run, and a cashier not on the branch.
+      'DRAWER_NOT_YOURS',
+      'CASHIER_NOT_ASSIGNED',
     ] as const;
 
     for (const reason of settlementReasons) {

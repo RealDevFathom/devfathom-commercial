@@ -7,6 +7,7 @@ import { BusinessDateError, parseCutoffMinutes } from '@/lib/restaurant/business
 import { grantJobRole, JobRoleError, revokeJobRole } from '@/lib/restaurant/job-roles';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { isIanaTimezone } from '@/lib/timezone';
+import { formatLotExpiry } from './product-class';
 import { pharmacySopPackForTemplateName } from './sop-library';
 
 /**
@@ -1277,7 +1278,7 @@ function batchDetail(row: BatchDetailRow, timeZone: string): PharmacySopRecordDe
   return {
     kind: 'MANUFACTURING_BATCH',
     label: joinLabel(`Batch ${row.batchNumber}`, row.medicine?.productName),
-    value: `Expires ${localDate(row.expiresAt, timeZone)}`,
+    value: formatLotExpiry(row.expiresAt, (value) => `Expires ${localDate(value, timeZone)}`),
     location: null,
     recordedAt: null,
     outOfRange: null,

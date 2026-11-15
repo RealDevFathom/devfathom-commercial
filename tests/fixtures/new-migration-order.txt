@@ -1,0 +1,6 @@
+# Append-only ledger of migrations added after the legacy cutoff, oldest first.
+# Append each new migration's directory name at the END of this list. Never insert,
+# reorder, rename or remove an entry. One name per line; lines starting with # are comments.
+20261117090200_pharmacy_drawer_operating_cashier
+20261117090300_pharmacy_loyalty_console
+20261117090400_restaurant_manual_card_provider

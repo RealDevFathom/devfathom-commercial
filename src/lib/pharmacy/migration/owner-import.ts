@@ -1,10 +1,12 @@
 import 'server-only';
 
 import { createHash } from 'node:crypto';
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from '../stock-ledger';
 import { expiryInstant, normalizeExpiryBoundary } from '../stock-ledger';
 import { postOpeningStockEntry } from '../finance-postings';
+import { lockStockRowsFrom } from '../stock-lock-order';
 import { isEffective, type PackLevelNode } from '../pack-conversion';
 import { draftLine, explainVariance, postOpeningSession } from './opening-stock';
 import { IMPORT_FIELDS, type ImportField, type OwnerImportInput } from './owner-import-input';
@@ -112,7 +114,7 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
       // Freeze publication, cold-chain requirements and the whole conversion
       // hierarchy until its lot has been written. The presentation lock also
       // excludes new child packs while the multiplier is being resolved.
-      await db.$queryRaw`SELECT id FROM pharmacy_medicines WHERE "organizationId" = ${scope.organizationId} AND id = ${candidate.presentation.medicineId} FOR SHARE`;
+      await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT ${candidate.presentation.medicineId}::text AS "medicineId"`, { medicine: 'share' });
       await db.$queryRaw`SELECT id FROM pharmacy_presentations WHERE "organizationId" = ${scope.organizationId} AND id = ${candidate.presentationId} FOR UPDATE`;
       await db.$queryRaw`SELECT id FROM pharmacy_pack_levels WHERE "organizationId" = ${scope.organizationId} AND "presentationId" = ${candidate.presentationId} ORDER BY id FOR SHARE`;
       await db.$queryRaw`SELECT id FROM pharmacy_medicine_barcodes WHERE "organizationId" = ${scope.organizationId} AND code = ${packReference} FOR SHARE`;
@@ -139,7 +141,7 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     });
     let batch = medicineId && batchNumber ? await findBatch(medicineId) : null;
     if (lockReferences && batch && medicineId) {
-      await db.$queryRaw`SELECT id FROM pharmacy_manufacturing_batches WHERE "organizationId" = ${scope.organizationId} AND id = ${batch.id} FOR SHARE`;
+      await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT ${batch.id}::text AS "batchId"`, { batch: 'share' });
       batch = await findBatch(medicineId);
     }
     if (batch && (batch.state !== 'ACTIVE' || batch.expiryPrecision !== expiryPrecision ||
@@ -194,7 +196,18 @@ export async function commitOwnerImport(
   // can acquire its first movement without creating another branch reference.
   await db.$queryRaw`SELECT id FROM pharmacy_branches WHERE "organizationId" = ${scope.organizationId} AND id = ${scope.branchId} FOR UPDATE`;
   await db.$queryRaw`SELECT id FROM pharmacy_stock_locations WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} ORDER BY id FOR UPDATE`;
-  await db.$queryRaw`SELECT id FROM pharmacy_inventory_lots WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} ORDER BY id FOR UPDATE`;
+  // DEV-825: stock rows in the global order (stock-lock-order.ts). A lock-free
+  // dry run names the batches and medicines the rows resolve to, so they are
+  // locked before the lots; the locked preview below re-enters those locks.
+  const draft = await previewOwnerImport(db, scope, input, false);
+  const draftIds = (pick: (line: (typeof draft.lines)[number]) => string | null) =>
+    [...new Set(draft.lines.map(pick).filter((id): id is string => Boolean(id)))];
+  const draftBatchIds = draftIds((line) => line.manufacturingBatchId);
+  const draftMedicineIds = draftIds((line) => line.medicineId);
+  if (draftBatchIds.length) await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT unnest(${draftBatchIds}::text[]) AS "batchId"`, { batch: 'share' });
+  if (draftMedicineIds.length) await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT unnest(${draftMedicineIds}::text[]) AS "medicineId"`, { medicine: 'share' });
+  // FOR UPDATE, not NO KEY UPDATE: it must block a first movement into an existing lot.
+  await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT id AS "inventoryLotId" FROM pharmacy_inventory_lots WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}`, { lot: 'exclusive' });
   const preview = await previewOwnerImport(db, scope, input, true);
   if (!preview.canCommit) throw new OwnerImportError('Fix every blocking row and run the dry run again before committing.');
   if (preview.previewHash !== input.previewHash) throw new OwnerImportError('The source, mapping, or inventory changed. Run the dry run again and review the new diff.');

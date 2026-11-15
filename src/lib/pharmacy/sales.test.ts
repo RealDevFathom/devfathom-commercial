@@ -19,6 +19,13 @@ vi.mock('./regulatory', async () => ({
   ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
   assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
+// DEV-842: the CRM licence is resolved per test through `crmLicensed`.
+const crmLicensed = vi.hoisted(() => ({ value: true }));
+vi.mock('@/lib/entitlements', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements')),
+  resolveOrganizationEntitlements: vi.fn(async () => ({})),
+  hasModule: vi.fn((_view: unknown, key: string) => key === 'pharmacy-crm' && crmLicensed.value),
+}));
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
@@ -57,6 +64,8 @@ describe('POS sale voiding', () => {
     const reversals: Array<Record<string, unknown>> = [];
     let allocationQuery: Record<string, unknown> | undefined;
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
         // Keeps this regression runnable against the original implementation:
@@ -150,6 +159,8 @@ describe('POS sale voiding', () => {
     const events: Array<Record<string, unknown>> = [];
     const claims: Array<Record<string, unknown>> = [];
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
         updateMany: async ({
@@ -217,6 +228,8 @@ describe('POS sale voiding', () => {
     const events: Array<Record<string, unknown>> = [];
     const claims: Array<Record<string, unknown>> = [];
     const db = {
+      // DEV-825: reversals lock their balance rows first.
+      $queryRaw: async () => [],
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
         updateMany: async ({
@@ -318,7 +331,13 @@ describe('POS sale voiding', () => {
       );
       expect(tenderQueries).toEqual([
         {
-          where: { organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+          // DEV-764: points tenders are released by the void, not refunded before it.
+          where: {
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            saleId: 'sale-a',
+            type: { not: 'LOYALTY' },
+          },
           select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
       ]);
@@ -535,7 +554,11 @@ describe('DEV-27 voucher scoping at the POS', () => {
   function voucherDb(
     medicine: Record<string, unknown>,
     voucher: typeof storedVoucher | null = storedVoucher,
-    options: { issuer?: Record<string, unknown> | null; taken?: number } = {}
+    options: {
+      issuer?: Record<string, unknown> | null;
+      taken?: number;
+      branchActive?: boolean;
+    } = {}
   ) {
     const state = {
       allocations: 0,
@@ -551,6 +574,9 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      pharmacyBranch: {
+        findFirst: async () => (options.branchActive === false ? null : { id: 'branch-a' }),
+      },
       // DEV-830: the stored pack setup the server derives the line multiplier from.
       packLevel: {
         findMany: async () => [
@@ -668,6 +694,25 @@ describe('DEV-27 voucher scoping at the POS', () => {
       );
       expect(db.state.useWhere).toBeUndefined();
       expect(db.state.allocations).toBe(0);
+    }
+  });
+
+  it('DEV-842: refuses redemption once the branch is inactive or the CRM module is unlicensed', async () => {
+    const inactive = voucherDb(frontShop, storedVoucher, { branchActive: false });
+    await expect(addSaleLine(inactive as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_INVALID')
+    );
+    expect(inactive.state.useWhere).toBeUndefined();
+    crmLicensed.value = false;
+    try {
+      const unlicensed = voucherDb(frontShop);
+      await expect(addSaleLine(unlicensed as never, scope, line)).rejects.toThrow(
+        new PharmacySaleError('VOUCHER_INVALID')
+      );
+      expect(unlicensed.state.useWhere).toBeUndefined();
+      expect(unlicensed.state.allocations).toBe(0);
+    } finally {
+      crmLicensed.value = true;
     }
   });
 
@@ -814,6 +859,111 @@ describe('DEM-03 restock interest', () => {
       expect(notifications).toBe(0);
     }
   );
+
+  // DEV-845: refill-cycle and order holds are settled only by their own lifecycle.
+  it.each(['refill-cycle:cycle-1', 'order:order-1', '  Refill-Cycle:cycle-1'])(
+    'refuses a counter interest carrying the reserved campaign key %s',
+    async (campaignKey) => {
+      const findFirst = vi.fn(async () => ({ id: 'demand-a' }));
+      const create = vi.fn(async () => ({ id: 'interest-a' }));
+      const db = {
+        unfulfilledDemandEvent: { findFirst },
+        pharmacyRestockInterest: { create },
+      };
+      await expect(
+        addRestockInterest(db as never, scope, {
+          demandEventId: 'demand-a',
+          quantityUnits: 1,
+          campaignKey,
+        })
+      ).rejects.toThrow('INVALID_STATE');
+      expect(findFirst).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps an ordinary campaign key on a counter interest', async () => {
+    const create = vi.fn(async (args: { data: Record<string, unknown> }) => ({
+      id: 'interest-a',
+      ...args.data,
+    }));
+    const db = {
+      unfulfilledDemandEvent: { findFirst: async () => ({ id: 'demand-a' }) },
+      pharmacyRestockInterest: { create },
+    };
+    await expect(
+      addRestockInterest(db as never, scope, {
+        demandEventId: 'demand-a',
+        quantityUnits: 1,
+        campaignKey: 'winter-flu-2026',
+      })
+    ).resolves.toMatchObject({ campaignKey: 'winter-flu-2026' });
+  });
+
+  // DEV-845: the arrival response never carries the customer's phone.
+  it('returns each queued notification without its destination phone', async () => {
+    const phone = '03001234567';
+    const created: Array<Record<string, unknown>> = [];
+    const db = {
+      // The restock tables bind the branch for row-level security first.
+      $queryRaw: async () => [],
+      pharmacyInventoryLot: {
+        findFirst: async () => ({
+          id: 'lot-a',
+          receivedAt: new Date('2026-05-01'),
+          batch: { medicineId: 'med-a', state: 'ACTIVE', expiresAt: new Date('2027-01-01') },
+          balances: [{ stockLocationId: 'shelf-a' }],
+        }),
+      },
+      pharmacyRestockInterest: {
+        findMany: async () => [
+          {
+            id: 'interest-a',
+            status: 'OPEN',
+            // Waiting inside the back-in-stock window, as the stored row would be.
+            createdAt: new Date('2026-05-31T23:00:00.000Z'),
+            patientId: 'patient-a',
+            channel: 'WHATSAPP',
+            reserveOnArrival: false,
+            quantityUnits: 1,
+            patient: { phone },
+          },
+        ],
+        update: async () => ({}),
+      },
+      patientConsent: {
+        findFirst: async () => ({ id: 'consent-a', granted: true, revokedAt: null }),
+      },
+      pharmacyRestockNotification: {
+        // Prisma returns only the selected fields; without a select, the whole row.
+        create: async (args: { data: Record<string, unknown>; select?: Record<string, true> }) => {
+          created.push(args.data);
+          const row: Record<string, unknown> = {
+            id: 'notification-a',
+            status: 'CAPTURED',
+            ...args.data,
+          };
+          return args.select
+            ? Object.fromEntries(Object.keys(args.select).map((key) => [key, row[key]]))
+            : row;
+        },
+      },
+    };
+    const result = await captureSafeRestockArrival(db as never, scope, {
+      inventoryLotId: 'lot-a',
+      at: new Date('2026-06-01'),
+    });
+    // The sender still gets the number, on the server.
+    expect(created).toEqual([expect.objectContaining({ destination: phone })]);
+    expect(result).toEqual([
+      {
+        interestId: 'interest-a',
+        reservation: null,
+        notification: { id: 'notification-a', status: 'CAPTURED', hasContact: true },
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(phone);
+  });
 
   it('attributes the completed receipt to the originating event and interest', async () => {
     const writes: Array<Record<string, unknown>> = [];
