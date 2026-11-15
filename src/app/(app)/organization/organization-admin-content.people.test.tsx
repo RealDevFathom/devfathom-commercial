@@ -361,3 +361,9 @@ it('lets domain and SCIM controls fit narrow screens', () => {
   );
   expect(scimForm).toHaveClass('flex-col', 'sm:flex-row');
 });
+
+it('names the domain host and kind inputs for assistive technology (#1233)', () => {
+  render(<OrganizationAdminContent />);
+  expect(screen.getByRole('textbox', { name: 'Domain host' })).toHaveAttribute('name', 'host');
+  expect(screen.getByRole('textbox', { name: 'Domain kind' })).toHaveValue('APP');
+});
