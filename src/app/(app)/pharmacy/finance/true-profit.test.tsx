@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TrueProfitSection } from './ledger-reports';
+import { LedgerReportsSection, TrueProfitSection } from './ledger-reports';
+import { MarginComparisonSection } from './margin-comparison';
 
 const branch = { id: 'branch_1', name: 'Main' };
 
@@ -140,5 +141,36 @@ describe('DEV-77 true profit section', () => {
     );
     expect(view.textContent).toContain('Permission required');
     expect(view.textContent).not.toContain('Landed COGS');
+  });
+
+  it('keeps the profit grouping when the ledger or margin-comparison filters are applied', async () => {
+    const failing = vi.fn().mockRejectedValue(new Error('not under test'));
+    const ledger = render(
+      renderToStaticMarkup(
+        await LedgerReportsSection({
+          caller: {
+            perpetualValuation: failing,
+            grossMargin: failing,
+            leakageReport: failing,
+          } as never,
+          branch,
+          profitBy: 'hour',
+        })
+      )
+    );
+    expect(ledger.querySelector('form input[name="profitBy"]')?.getAttribute('value')).toBe('hour');
+
+    const comparison = render(
+      renderToStaticMarkup(
+        await MarginComparisonSection({
+          caller: { marginComparison: failing } as never,
+          branch,
+          profitBy: 'staff',
+        })
+      )
+    );
+    expect(comparison.querySelector('form input[name="profitBy"]')?.getAttribute('value')).toBe(
+      'staff'
+    );
   });
 });

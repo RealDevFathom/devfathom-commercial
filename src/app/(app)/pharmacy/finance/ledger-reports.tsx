@@ -307,6 +307,7 @@ export async function LedgerReportsSection({
   by,
   marginFrom,
   marginTo,
+  profitBy,
 }: {
   caller: Caller;
   branch: { id: string; name: string };
@@ -316,6 +317,7 @@ export async function LedgerReportsSection({
   by?: string;
   marginFrom?: string;
   marginTo?: string;
+  profitBy?: string;
 }) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
@@ -362,6 +364,7 @@ export async function LedgerReportsSection({
           <input type="hidden" name="branch" value={branch.id} />
           {marginFrom && <input type="hidden" name="marginFrom" value={marginFrom} />}
           {marginTo && <input type="hidden" name="marginTo" value={marginTo} />}
+          {profitBy && <input type="hidden" name="profitBy" value={profitBy} />}
           {[
             {
               name: 'ledgerFrom',

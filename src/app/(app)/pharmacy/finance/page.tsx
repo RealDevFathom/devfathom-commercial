@@ -312,6 +312,7 @@ export default async function PharmacyFinancePage({
           by={query.ledgerBy}
           marginFrom={query.marginFrom}
           marginTo={query.marginTo}
+          profitBy={query.profitBy}
         />
       </Suspense>
       <Suspense
@@ -356,6 +357,7 @@ export default async function PharmacyFinancePage({
           ledgerTo={query.ledgerTo}
           ledgerAt={query.ledgerAt}
           ledgerBy={query.ledgerBy}
+          profitBy={query.profitBy}
         />
       </Suspense>
       {query.notice ? (
