@@ -45,7 +45,9 @@ describe('DEV-16 hosted receipt token', () => {
     expect(tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(tokenHash).not.toContain(token);
     expect(hashHostedReceiptToken(token)).toBe(tokenHash);
-    expect(hashHostedReceiptToken(`${token.slice(0, -1)}0`)).not.toBe(tokenHash);
+    const other = `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`;
+    expect(other).not.toBe(token);
+    expect(hashHostedReceiptToken(other)).not.toBe(tokenHash);
   });
 });
 
