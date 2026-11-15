@@ -1154,7 +1154,7 @@ function GroupedTopNavigation() {
             setOpened(null);
         }}
       >
-        {sections.map((section) => {
+        {sections.map((section, index) => {
           const active = section.items.some((item) => item.href === bestMatch);
           if (section.items.length === 1) {
             const [item] = section.items;
@@ -1213,7 +1213,10 @@ function GroupedTopNavigation() {
                 id={panelId(section.label)}
                 aria-labelledby={triggerId(section.label)}
                 className={cn(
-                  'absolute start-0 top-full z-50 mt-2 min-w-60 space-y-0.5 rounded-2xl border border-border-subtle bg-popover p-1.5 text-popover-foreground shadow-md',
+                  'absolute top-full z-50 mt-2 min-w-60 space-y-0.5 rounded-2xl border border-border-subtle bg-popover p-1.5 text-popover-foreground shadow-md',
+                  // The shell clips overflow, so a menu in the bar's trailing half
+                  // opens toward the shell rather than past its edge.
+                  index < sections.length / 2 ? 'start-0' : 'end-0',
                   !open && 'hidden'
                 )}
               >

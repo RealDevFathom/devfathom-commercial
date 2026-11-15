@@ -748,6 +748,18 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
     expect(menu('Reports')).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('opens trailing menus toward the shell so the clipped shell never cuts them off', () => {
+    renderBar();
+    for (const label of ['Sell', 'Dispense', 'Stock']) {
+      expect(panel(label)).toHaveClass('start-0');
+      expect(panel(label)).not.toHaveClass('end-0');
+    }
+    for (const label of ['Reports', 'Settings', 'More']) {
+      expect(panel(label)).toHaveClass('end-0');
+      expect(panel(label)).not.toHaveClass('start-0');
+    }
+  });
+
   it('wears the active pill on the menu holding the current page', () => {
     renderBar({ pathname: '/pharmacy/inventory/expiry' });
     expect(menu('Stock')).toHaveAttribute('data-active', 'true');
