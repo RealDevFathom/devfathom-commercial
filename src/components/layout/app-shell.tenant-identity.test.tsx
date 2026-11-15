@@ -36,6 +36,7 @@ vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => ({ vertical: 'AGENCY', enabledModules: [] }),
 }));
 vi.mock('@/lib/assistant-store', () => ({ useAssistant: () => false }));
+vi.mock('@/components/theme-provider', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 
 // Stand-ins for the real chrome, which renders `brand.displayName` as the

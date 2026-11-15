@@ -22,7 +22,7 @@ QA does not fix product code.
 | Platform URL | `http://admin.localhost:3000` |
 | Browser | Playwright Chromium 151 |
 | API | Same origin, cookie sessions, plus unauthenticated `curl` |
-| Integrations | No Resend, Ably, Vercel, LiveKit, Azure storage, or WhatsApp provider. Empty states and explicit failures are in scope. Silent success is not. |
+| Integrations | No Resend, Ably, Vercel, LiveKit, S3 storage, or WhatsApp provider. Empty states and explicit failures are in scope. Silent success is not. |
 | Card and print | Mock tender and simulated print bridge only. A claim of live authorization or paper output is a defect. |
 
 Setup notes, including the failed first migrate, are in the execution report.

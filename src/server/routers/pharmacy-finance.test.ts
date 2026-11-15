@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   leakage: vi.fn(),
   unallocated: vi.fn(),
   currencies: vi.fn(),
+  trueProfit: vi.fn(),
   lotFindMany: vi.fn(),
   batchFindMany: vi.fn(),
   medicineFindMany: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   leakageReport: mocks.leakage,
   unallocatedInventoryValue: mocks.unallocated,
   ledgerCurrencies: mocks.currencies,
+  trueProfit: mocks.trueProfit,
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -356,6 +358,24 @@ describe('ledger report names and currency', () => {
     mocks.currencies.mockResolvedValue(['PKR']);
     const usd = { organization: { id: 'org_1', currency: 'USD' } as TRPCContext['organization'] };
     const result = await caller('ADMIN', usd).grossMargin({ ...input, by: 'batch' });
+    expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'posted_entry_currency' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'],
+        from: new Date(input.from),
+        to: new Date(input.to),
+      }
+    );
+  });
+
+  it('labels true profit with its posted currency', async () => {
+    mocks.trueProfit.mockResolvedValue([
+      { key: 'TABLET', revenueMinor: 900, discountMinor: 0, cogsMinor: 600, grossMarginMinor: 300 },
+    ]);
+    mocks.currencies.mockResolvedValue(['PKR']);
+    const result = await caller().trueProfit({ ...input, by: 'category' });
     expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'posted_entry_currency' });
     expect(mocks.currencies).toHaveBeenCalledWith(
       expect.anything(),

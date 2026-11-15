@@ -190,9 +190,9 @@ describe('write-free unavailable uploads', () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
   it('publishes only a boolean and safe explanation', () => {
-    vi.stubEnv('STORAGE_ADAPTER', 'azure');
-    vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', 'fake-account');
-    vi.stubEnv('AZURE_STORAGE_CONTAINER', 'fake-container');
+    vi.stubEnv('STORAGE_ADAPTER', 's3');
+    vi.stubEnv('S3_UPLOADS_BUCKET', 'fake-bucket');
+    vi.stubEnv('AWS_REGION', 'me-central-1');
     expect(getMenuImportAvailability()).toEqual({ available: true, explanation: null });
     vi.stubEnv('STORAGE_ADAPTER', 'disabled');
     expect(getMenuImportAvailability()).toEqual({

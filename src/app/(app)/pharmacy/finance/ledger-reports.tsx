@@ -23,10 +23,20 @@ type Caller = Pick<
 type Valuation = Awaited<ReturnType<Caller['perpetualValuation']>>;
 type Margin = Awaited<ReturnType<Caller['grossMargin']>>;
 type Leakage = Awaited<ReturnType<Caller['leakageReport']>>;
-type Report = Valuation | Margin | Leakage;
+type TrueProfitCaller = Pick<ReturnType<typeof pharmacyFinanceRouter.createCaller>, 'trueProfit'>;
+type TrueProfit = Awaited<ReturnType<TrueProfitCaller['trueProfit']>>;
+type Report = Valuation | Margin | Leakage | TrueProfit;
 type Group = Margin['by'];
 const day = 86_400_000;
 const groups: Group[] = ['line', 'batch', 'product', 'branch'];
+type ProfitGroup = TrueProfit['by'];
+const profitGroups: ProfitGroup[] = ['item', 'category', 'hour', 'staff'];
+const profitGroupLabels: Record<ProfitGroup, string> = {
+  item: 'Item',
+  category: 'Category',
+  hour: 'Sale hour',
+  staff: 'Staff',
+};
 const unknown = 'Not recorded';
 const groupLabels: Record<Group, string> = {
   line: 'Sale line',
@@ -355,6 +365,7 @@ export async function LedgerReportsSection({
   by,
   marginFrom,
   marginTo,
+  profitBy,
 }: {
   caller: Caller;
   branch: { id: string; name: string };
@@ -364,6 +375,7 @@ export async function LedgerReportsSection({
   by?: string;
   marginFrom?: string;
   marginTo?: string;
+  profitBy?: string;
 }) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
@@ -410,6 +422,7 @@ export async function LedgerReportsSection({
           <input type="hidden" name="branch" value={branch.id} />
           {marginFrom && <input type="hidden" name="marginFrom" value={marginFrom} />}
           {marginTo && <input type="hidden" name="marginTo" value={marginTo} />}
+          {profitBy && <input type="hidden" name="profitBy" value={profitBy} />}
           {[
             {
               name: 'ledgerFrom',
@@ -499,5 +512,174 @@ export async function LedgerReportsSection({
         </>
       )}
     </section>
+  );
+}
+
+function profitKey(row: TrueProfit['rows'][number], by: ProfitGroup) {
+  if (row.key === null) return unknown;
+  if (by === 'category')
+    return row.key.charAt(0) + row.key.slice(1).toLowerCase().replace(/_/g, ' ');
+  return row.label ? `${row.label} (${row.key})` : row.key;
+}
+
+export function TrueProfitLedger({
+  report,
+  branchName,
+}: {
+  report: TrueProfit;
+  branchName: string;
+}) {
+  const label = profitGroupLabels[report.by];
+  return (
+    <div className="min-w-0 space-y-4">
+      <Metadata report={report} branchName={branchName} />
+      {report.rows.length > 0 && (
+        <div className="grid min-w-0 gap-5 md:grid-cols-3">
+          <Stat
+            label="Net ledger revenue"
+            value={money(
+              total(report.rows.flatMap((row) => [row.revenueMinor, -row.discountMinor])),
+              report.currency
+            )}
+            valueClassName="break-words text-xl"
+            sub="Posted sales revenue less posted discounts; tax excluded."
+          />
+          <Stat
+            label="Landed COGS"
+            value={money(total(report.rows.map((row) => row.cogsMinor)), report.currency)}
+            valueClassName="break-words text-xl"
+            sub="Lot cost with bonus units, freight and non-creditable tax spread in."
+          />
+          <Stat
+            label="True profit"
+            value={money(total(report.rows.map((row) => row.grossMarginMinor)), report.currency)}
+            valueClassName="break-words text-xl"
+            sub="Net ledger revenue less landed COGS; not net profit or cash flow."
+          />
+        </div>
+      )}
+      <p className="text-sm text-text-body">
+        {report.by === 'hour' ? `Sale hours use ${report.hourTimezone} time. ` : ''}
+        Returns stay with the hour and staff member of the original sale. Totals reconcile with the
+        ledger gross margin for the same period.
+      </p>
+      <LedgerTable
+        caption={`True profit grouped by ${label.toLowerCase()}`}
+        columns={[
+          { label },
+          { label: 'Gross revenue', numeric: true },
+          { label: 'Discounts', numeric: true },
+          { label: 'Net revenue', numeric: true },
+          { label: 'Landed COGS', numeric: true },
+          { label: 'True profit', numeric: true },
+        ]}
+        rows={report.rows.map((row) => [
+          profitKey(row, report.by),
+          money(row.revenueMinor, report.currency),
+          money(row.discountMinor, report.currency),
+          money(net(row), report.currency),
+          money(row.cogsMinor, report.currency),
+          money(row.grossMarginMinor, report.currency),
+        ])}
+      />
+    </div>
+  );
+}
+
+export async function TrueProfitSection({
+  caller,
+  branch,
+  from,
+  to,
+  by,
+  preserved = {},
+}: {
+  caller: TrueProfitCaller;
+  branch: { id: string; name: string };
+  from?: string;
+  to?: string;
+  by?: string;
+  /** Other report filters on the page, carried through this form unchanged. */
+  preserved?: Record<string, string | undefined>;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const end = to ?? today;
+  const start =
+    from ??
+    new Date(new Date(`${today}T00:00:00Z`).getTime() - 30 * day).toISOString().slice(0, 10);
+  const group = by ?? 'item';
+  const fromDate = dateOnly(start),
+    toDate = dateOnly(end);
+  const periodValid =
+    !!fromDate &&
+    !!toDate &&
+    toDate.getTime() > fromDate.getTime() &&
+    toDate.getTime() - fromDate.getTime() <= 92 * day;
+  const groupValid = profitGroups.includes(group as ProfitGroup);
+  let result: PromiseSettledResult<TrueProfit> | undefined;
+  if (periodValid && groupValid) {
+    [result] = await Promise.allSettled([
+      caller.trueProfit({
+        branchId: branch.id,
+        from: fromDate.toISOString(),
+        to: toDate.toISOString(),
+        by: group as ProfitGroup,
+      }),
+    ]);
+  }
+  return (
+    <SectionCard
+      title="True profit"
+      titleLevel={2}
+      eyebrow="Landed cost · item · category · hour · staff"
+    >
+      <p className="mb-4 break-words text-sm text-text-muted">
+        Branch: {branch.name}. Uses the ledger reporting period above ({start} to {end}, UTC, end
+        exclusive). Cost is each lot&apos;s landed cost: invoice net plus non-creditable tax and
+        freight, spread over paid and bonus units.
+      </p>
+      <form
+        action="/pharmacy/finance"
+        method="get"
+        className="mb-4 grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      >
+        <input type="hidden" name="branch" value={branch.id} />
+        {Object.entries(preserved).map(([name, value]) =>
+          value ? <input key={name} type="hidden" name={name} value={value} /> : null
+        )}
+        <label className="min-w-0 text-sm text-text-body">
+          Profit grouping
+          <select
+            name="profitBy"
+            defaultValue={group}
+            aria-invalid={!groupValid || undefined}
+            aria-describedby={!groupValid ? 'profit-filter-error' : undefined}
+            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {!groupValid && <option value={group}>Invalid grouping</option>}
+            {profitGroups.map((value) => (
+              <option key={value} value={value}>
+                {profitGroupLabels[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button type="submit" variant="secondary" className="min-h-11 self-end">
+          Apply profit grouping
+        </Button>
+      </form>
+      {(!periodValid || !groupValid) && (
+        <p id="profit-filter-error" role="alert" className="text-sm text-destructive">
+          Choose a ledger period of 1–92 days and a listed profit grouping. No ledger query ran.
+          Submitted: {start} to {end}; grouping {group}.
+        </p>
+      )}
+      {result &&
+        (result.status === 'fulfilled' ? (
+          <TrueProfitLedger report={result.value} branchName={branch.name} />
+        ) : (
+          <Failure error={result.reason} />
+        ))}
+    </SectionCard>
   );
 }
