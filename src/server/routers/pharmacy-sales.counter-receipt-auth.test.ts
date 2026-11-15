@@ -712,6 +712,7 @@ describe('counter receipt authorization', () => {
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
+          managerPin: '1234',
         }),
       write: returnSaleLine,
     },
