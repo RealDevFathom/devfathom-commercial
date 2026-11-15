@@ -1,3 +1,4 @@
+import { ProgressiveLines } from '../_components/progressive-lines';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
@@ -1017,9 +1018,10 @@ export default async function PharmacyReceivingPage({
                 required
               />
             </div>
-            <div className="space-y-3">
-              {DIRECT_SLOTS.map((slot) => (
-                <div key={slot} className="space-y-3">
+            <ProgressiveLines
+              lines={DIRECT_SLOTS.map((slot) => ({
+                selected: slot === 0 && !!directPackValue(scan, workspace.medicines),
+                selector: (
                   <SelectField
                     defaultValue={
                       slot === 0 ? directPackValue(scan, workspace.medicines) : undefined
@@ -1031,6 +1033,8 @@ export default async function PharmacyReceivingPage({
                     options={packOptions(workspace.medicines)}
                     placeholder="Skip this line"
                   />
+                ),
+                fields: (
                   <CaptureFieldset
                     keyPrefix={`d${slot}`}
                     locations={locations}
@@ -1045,9 +1049,9 @@ export default async function PharmacyReceivingPage({
                     title={`Line ${slot + 1} capture`}
                     unitsPerPack={null}
                   />
-                </div>
-              ))}
-            </div>
+                ),
+              }))}
+            />
             <SelectField
               emptyHint="No other active user can sign a controlled-medicine purchase."
               hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
