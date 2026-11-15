@@ -210,3 +210,50 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 });
+
+// #435: an admin with a DENY `team:setRole` override keeps `admin:access` but
+// may not grant a role or role template through an invite.
+describe('team.inviteMember team:setRole gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: unknown) => action !== 'team:setRole'
+    );
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.roleFindFirst.mockResolvedValue({ id: 'role_gm', name: 'General Manager' });
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(1);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+  });
+
+  it.each([
+    ['an ADMIN role', { role: 'ADMIN' as const }],
+    ['an HR role', { role: 'HR' as const }],
+    ['a role template', { organizationRoleId: 'role_gm' }],
+  ])('refuses to invite with %s', async (_label, extra) => {
+    await expect(
+      caller().inviteMember({ ...invite, email: 'grant@company.com', ...extra })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      expect.objectContaining({ type: 'User' }),
+      expect.anything()
+    );
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('still invites a baseline employee with no role template', async () => {
+    await caller().inviteMember({ ...invite, email: 'plain@company.com' });
+
+    expect(mocks.can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+});

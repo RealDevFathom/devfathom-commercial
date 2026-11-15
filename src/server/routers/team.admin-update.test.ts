@@ -134,3 +134,61 @@ describe('team.adminUpdateMember response', () => {
     expect(member).not.toHaveProperty('twoFactorEnabledAt');
   });
 });
+
+// #435: `admin:access` alone must not let an admin grant or revoke roles; a
+// DENY `team:setRole` override is enforced before the member row is written.
+describe('team.adminUpdateMember team:setRole gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: unknown) => action !== 'team:setRole'
+    );
+    mocks.findUnique.mockResolvedValue({
+      name: 'Casey',
+      email: 'casey@example.test',
+      role: 'EMPLOYEE',
+      department: 'PEOPLE',
+      title: 'Recruiter',
+      phone: null,
+      bio: null,
+      skills: ['Hiring'],
+      status: 'ACTIVE',
+    });
+    mocks.count.mockResolvedValue(2);
+    mocks.update.mockResolvedValue({ id: 'member_1', name: 'Casey' });
+  });
+
+  it.each(['ADMIN', 'HR'] as const)('refuses to change the role to %s', async (role) => {
+    await expect(caller().adminUpdateMember({ id: 'member_1', role })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      { type: 'User', id: 'member_1', targetRole: role },
+      expect.anything()
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to revoke an admin role', async () => {
+    mocks.findUnique.mockResolvedValue({ name: 'Casey', role: 'ADMIN', status: 'ACTIVE' });
+
+    await expect(
+      caller().adminUpdateMember({ id: 'member_1', role: 'EMPLOYEE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('still saves a profile edit that resends the unchanged role', async () => {
+    await caller().adminUpdateMember({ id: 'member_1', role: 'EMPLOYEE', title: 'Lead' });
+
+    expect(mocks.can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+});
