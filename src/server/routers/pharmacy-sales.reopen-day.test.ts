@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// DEV-631: closing a day early must not block selling until midnight. Only the owner
-// reopens today's closed day for trading, with a reason, and the counter learns the
-// day is closed from its drawer status before a bill is built.
+// DEV-631: closing a day early must not block selling until midnight. The owner or
+// a manager reopens today's closed day for trading, with a reason and a fresh
+// re-authentication (their own staff PIN); a cashier is refused. The counter learns
+// the day is closed from its drawer status before a bill is built.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -18,7 +19,7 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
-  // Delegated staff can hold admin access too; reopening stays the owner's.
+  // The engine's coarse answer; the member's own stored rules decide below (deny wins).
   can: vi.fn(async () => true),
 }));
 vi.mock('@/lib/pharmacy/day-reopen-authorization', async (original) => ({
@@ -30,10 +31,12 @@ vi.mock('@/lib/pharmacy/day-close', async (original) => ({
   reopenPharmacyDayForTrading: vi.fn(async () => ({ id: 'reopen-1', closeId: 'close-1' })),
 }));
 
+import { can } from '@/lib/abac';
 import { reopenPharmacyDayForTrading } from '@/lib/pharmacy/day-close';
 import {
   authenticateDayReopenPin,
   DAY_REOPEN_PIN_BLOCKED,
+  DAY_REOPEN_PIN_POLICY,
 } from '@/lib/pharmacy/day-reopen-authorization';
 import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
@@ -42,8 +45,25 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
 const businessDate = new Date('2026-11-02T00:00:00.000Z');
+const ownerPin = '4321';
 
-function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
+type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+const OWNER: Rule[] = [{ capability: 'pharmacy:*', effect: 'ALLOW' }];
+const MANAGER: Rule[] = [
+  { capability: 'pharmacy:manage', effect: 'ALLOW' },
+  { capability: 'pharmacy:counter', effect: 'ALLOW' },
+];
+const CASHIER: Rule[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
+
+function fixture(
+  options: {
+    role?: 'ADMIN' | 'EMPLOYEE';
+    rules?: Rule[];
+    overrides?: Rule[];
+    assigned?: string[];
+  } = {}
+) {
+  const { role = 'ADMIN', rules = OWNER, overrides = [], assigned = [BRANCH] } = options;
   const db = {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
@@ -53,14 +73,17 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: BRANCH })),
     },
-    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ branchId: BRANCH }) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async () => assigned.map((branchId) => ({ branchId }))),
+    },
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: { permissions: [] },
-        permissionOverrides: [],
+        organizationRole: { permissions: rules },
+        permissionOverrides: overrides,
       })),
     },
     pharmacyDrawerSession: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -83,7 +106,7 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
   return { db, caller };
 }
 
-const ownerPin = '4321';
+const request = { branchId: BRANCH, businessDate, reason: 'Closed early by mistake', ownerPin };
 
 beforeEach(() => {
   vi.mocked(authenticateDayReopenPin).mockClear().mockResolvedValue({ verified: true });
@@ -94,10 +117,11 @@ beforeEach(() => {
 describe('pharmacySales.reopenDay', () => {
   it('lets the owner reopen the day with a reason and a fresh PIN, scoped and audited', async () => {
     const { caller } = fixture();
-    await expect(
-      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Closed early by mistake', ownerPin })
-    ).resolves.toEqual({ id: 'reopen-1', closeId: 'close-1' });
-    // The owner's own PIN, re-checked for this action before the reopen is written.
+    await expect(caller.reopenDay(request)).resolves.toEqual({
+      id: 'reopen-1',
+      closeId: 'close-1',
+    });
+    // The actor's own PIN, re-checked for this action before the reopen is written.
     expect(authenticateDayReopenPin).toHaveBeenCalledExactlyOnceWith({
       organizationId: 'org-1',
       actorId: 'user-1',
@@ -106,7 +130,7 @@ describe('pharmacySales.reopenDay', () => {
     expect(vi.mocked(authenticateDayReopenPin).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(reopenPharmacyDayForTrading).mock.invocationCallOrder[0]!
     );
-    // The PIN never reaches the domain write.
+    // The PIN never reaches the domain write, which records who, when and why.
     expect(reopenPharmacyDayForTrading).toHaveBeenCalledWith(
       expect.anything(),
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'user-1' },
@@ -115,7 +139,7 @@ describe('pharmacySales.reopenDay', () => {
     expect(annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        metadata: { policy: 'PHARMACY_DAY_REOPEN_OWNER_PIN', pinVerified: true },
+        metadata: { policy: DAY_REOPEN_PIN_POLICY, pinVerified: true },
       })
     );
     expect(annotateAudit).toHaveBeenCalledWith(
@@ -128,56 +152,109 @@ describe('pharmacySales.reopenDay', () => {
     );
   });
 
-  it('refuses delegated staff holding admin access before any PIN check or write', async () => {
-    const { caller } = fixture('EMPLOYEE');
-    await expect(
-      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Late sale', ownerPin })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Owner access required.' });
+  it('lets a manager assigned to the branch reopen with their own fresh PIN', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER });
+    await expect(caller.reopenDay(request)).resolves.toEqual({
+      id: 'reopen-1',
+      closeId: 'close-1',
+    });
+    expect(authenticateDayReopenPin).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'org-1',
+      actorId: 'user-1',
+      pin: ownerPin,
+    });
+    expect(reopenPharmacyDayForTrading).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-1', branchId: BRANCH, actorId: 'user-1' },
+      { businessDate, reason: 'Closed early by mistake' }
+    );
+  });
+
+  it('refuses a cashier before any PIN check or write', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: CASHIER });
+    await expect(caller.reopenDay(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(authenticateDayReopenPin).not.toHaveBeenCalled();
     expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
   });
 
-  it('refuses a wrong or locked-out owner PIN and reopens nothing', async () => {
+  it('refuses a manager whose manage grant is explicitly denied', async () => {
+    const { caller } = fixture({
+      role: 'EMPLOYEE',
+      rules: MANAGER,
+      overrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    });
+    await expect(caller.reopenDay(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(authenticateDayReopenPin).not.toHaveBeenCalled();
+    expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manager on a branch they are not assigned to', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER, assigned: ['branch-2'] });
+    await expect(caller.reopenDay(request)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(authenticateDayReopenPin).not.toHaveBeenCalled();
+    expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reopen whose fresh PIN re-authentication fails, and reopens nothing', async () => {
     vi.mocked(authenticateDayReopenPin).mockResolvedValue({ blocked: DAY_REOPEN_PIN_BLOCKED });
-    const { caller } = fixture();
-    await expect(
-      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Late sale', ownerPin: '0000' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: DAY_REOPEN_PIN_BLOCKED });
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER });
+    await expect(caller.reopenDay({ ...request, ownerPin: '0000' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: DAY_REOPEN_PIN_BLOCKED,
+    });
     expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
     expect(annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        metadata: { policy: 'PHARMACY_DAY_REOPEN_OWNER_PIN', pinVerified: false },
+        metadata: { policy: DAY_REOPEN_PIN_POLICY, pinVerified: false },
       })
     );
   });
 
   it.each([
-    ['an empty reason', { branchId: BRANCH, businessDate, reason: '   ', ownerPin }],
-    ['a missing owner PIN', { branchId: BRANCH, businessDate, reason: 'Why' }],
-    ['a malformed owner PIN', { branchId: BRANCH, businessDate, reason: 'Why', ownerPin: '12' }],
+    ['without a fresh PIN', { branchId: BRANCH, businessDate, reason: 'Why' }],
+    ['with a malformed PIN', { ...request, ownerPin: '12' }],
+    ['with an empty reason', { ...request, reason: '   ' }],
     [
-      'a business date carrying a time',
-      { branchId: BRANCH, businessDate: new Date('2026-11-02T10:00:00Z'), reason: 'Why', ownerPin },
+      'for a business date carrying a time',
+      { ...request, businessDate: new Date('2026-11-02T10:00:00Z') },
     ],
-  ])('rejects %s', async (_name, input) => {
-    const { caller } = fixture();
+  ])('refuses a reopen %s before any check or write', async (_name, input) => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER });
     await expect(caller.reopenDay(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(authenticateDayReopenPin).not.toHaveBeenCalled();
     expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
   });
 });
 
+describe('pharmacySales.dayReopenAccess', () => {
+  it('offers the reopen to a holder of pharmacy:manage and to nobody else', async () => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER });
+    await expect(caller.dayReopenAccess()).resolves.toEqual({ authorized: true });
+    expect(can).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'pharmacy:manage',
+      undefined,
+      expect.anything()
+    );
+    vi.mocked(can).mockResolvedValueOnce(false);
+    await expect(caller.dayReopenAccess()).resolves.toEqual({ authorized: false });
+  });
+});
+
 describe('pharmacySales.drawerStatus closed day', () => {
   it('reports a closed business day to the counter', async () => {
-    const { caller } = fixture('EMPLOYEE');
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: CASHIER });
     await expect(
       caller.drawerStatus({ branchId: BRANCH, deviceId: 'device-1', businessDate })
     ).resolves.toEqual({ openDrawer: null, dayClosed: true });
   });
 
-  it('reports the day open once the owner reopened its latest close', async () => {
-    const { db, caller } = fixture('EMPLOYEE');
+  it('reports the day open once its latest close was reopened', async () => {
+    const { db, caller } = fixture({ role: 'EMPLOYEE', rules: CASHIER });
     db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: { id: 'r-1' } });
     await expect(
       caller.drawerStatus({ branchId: BRANCH, deviceId: 'device-1', businessDate })
@@ -185,7 +262,7 @@ describe('pharmacySales.drawerStatus closed day', () => {
   });
 
   it('reads no close without a business date', async () => {
-    const { db, caller } = fixture('EMPLOYEE');
+    const { db, caller } = fixture({ role: 'EMPLOYEE', rules: CASHIER });
     await expect(caller.drawerStatus({ branchId: BRANCH, deviceId: 'device-1' })).resolves.toEqual(
       { openDrawer: null }
     );

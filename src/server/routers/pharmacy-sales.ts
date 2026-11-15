@@ -1103,27 +1103,26 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  // DEV-631: the owner reopens today's closed business day for trading, with a
-  // reason. Owner-only: a delegated admin or a manager who may close the day may
-  // not reopen it. The reopen row records who, when and why; the request is audited.
-  reopenDay: adminProcedure
+  // DEV-631: the owner or a manager reopens today's closed business day for trading,
+  // with a reason and a fresh re-authentication (their own staff PIN). The DEV-31
+  // manager gate: `pharmacy:manage` (deny wins) on an assigned branch, or the audited
+  // organization-administrator exception; a cashier is refused before any PIN check.
+  // The reopen row records who, when and why; the request is audited.
+  reopenDay: protectedProcedure
     .input(
       z
         .object({
           branchId,
           businessDate: closeDate,
           reason: z.string().trim().min(1).max(1000),
-          // The owner's own staff PIN, re-entered for this reopen (redacted from audit input).
+          // The actor's own staff PIN, re-entered for this reopen (redacted from audit input).
           ownerPin: z.string().regex(/^\d{4,8}$/),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (ctx.session?.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
-      await requireCloseAccess(ctx, input.branchId);
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         // Fresh re-authentication, in its own transaction so a refusal keeps its strike.
         const pin = await authenticateDayReopenPin({
           organizationId: scope.organizationId,
@@ -2548,6 +2547,13 @@ export const pharmacySalesRouter = router({
 
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
+    authorized: await actorMayRefund(ctx.db, ctx.session.user),
+  })),
+  /**
+   * DEV-631: whether Day close offers "Reopen day for trading": the owner or a
+   * manager (`pharmacy:manage`). `reopenDay` re-checks the branch and the PIN.
+   */
+  dayReopenAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
 

@@ -1973,7 +1973,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     mocks.queries.drawerStatus = drawerStatus;
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
     expect(screen.getByRole('status', { name: 'Business day closed' })).toHaveTextContent(
-      /New bills, payments and drawer changes are blocked\. The owner can reopen today for trading on Day close/
+      /New bills, payments and drawer changes are blocked\. The owner or a manager can reopen today for trading on Day close/
     );
     expect(screen.getByText('Day closed')).toBeInTheDocument();
     expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();

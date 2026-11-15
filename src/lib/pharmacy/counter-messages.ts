@@ -58,7 +58,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // `PharmacySettlementError` can raise, because these are the failures a
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
-    'This business day is closed. New payments and drawer changes are blocked. The owner can reopen today for trading on Day close.',
+    'This business day is closed. New payments and drawer changes are blocked. The owner or a manager can reopen today for trading on Day close.',
   // DEV-631: the owner's reopen-for-trading action on Day close.
   DAY_NOT_CLOSED: 'This business day is not closed, so there is nothing to reopen.',
   REOPEN_NOT_TODAY: "Only today's business day can be reopened for trading.",

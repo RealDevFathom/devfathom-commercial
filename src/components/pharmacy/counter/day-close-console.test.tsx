@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   reopenMutate: vi.fn(),
+  /** Whether the server says this actor may reopen a day (owner or manager). */
+  reopenAuthorized: true,
   /** Whether the recorded close superseded an owner's reopen for trading. */
   closeFollowsReopen: false,
   previewInput: vi.fn(),
@@ -116,6 +118,9 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
       closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      dayReopenAccess: {
+        useQuery: () => ({ data: { authorized: mocks.reopenAuthorized }, isSuccess: true }),
+      },
       reopenDay: {
         useMutation: () => ({ mutate: mocks.reopenMutate, reset: vi.fn(), isPending: false }),
       },
@@ -167,6 +172,7 @@ beforeEach(() => {
   mocks.accessOptions.mockReset();
   mocks.mutate.mockReset();
   mocks.reopenMutate.mockReset();
+  mocks.reopenAuthorized = true;
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
 });
@@ -503,12 +509,12 @@ describe('day-close console', () => {
       })
     );
   });
-  it('warns that locking stops trading and only the owner can reopen today, before and after the close', () => {
+  it('warns that locking stops trading and only the owner or a manager can reopen today, before and after the close', () => {
     const view = render(<PharmacyDayCloseConsole />);
     const warning = screen.getByRole('note', { name: 'Locking stops trading' });
     expect(warning).toHaveTextContent('Locking this day stops trading on it.');
     expect(warning).toHaveTextContent(
-      /Only the owner can reopen today.s business day for trading, with a reason; earlier days stay locked/
+      /Only the owner or a manager can reopen today.s business day for trading, with a reason and their PIN; earlier days stay locked/
     );
     // A superseding close report is a correction, not a reopen: the day stays locked.
     expect(warning).toHaveTextContent(
@@ -526,7 +532,7 @@ describe('day-close console', () => {
     };
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
-      screen.getByText(/The owner can reopen today for trading with a reason/)
+      screen.getByText(/The owner or a manager can reopen today for trading with a reason/)
     ).toHaveTextContent(/re-record this close report with a reason, but that alone never reopens the day/);
   });
   it('lets the owner reopen today for trading with a reason and their PIN (DEV-631)', () => {
@@ -549,7 +555,7 @@ describe('day-close console', () => {
     });
     // A reason alone is not enough: the owner re-enters their own PIN for this action.
     expect(submit).toBeDisabled();
-    const pin = within(form).getByLabelText('Your owner PIN');
+    const pin = within(form).getByLabelText('Your staff PIN');
     expect(pin).toHaveAttribute('type', 'password');
     fireEvent.change(pin, { target: { value: '12' } });
     expect(submit).toBeDisabled();
@@ -570,9 +576,10 @@ describe('day-close console', () => {
       })
     );
   });
-  it('offers no reopen to a closer who is not the owner (DEV-631)', () => {
+  it('offers the reopen to a manager who closes the day (DEV-631)', () => {
     mocks.role = 'EMPLOYEE';
     mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.reopenAuthorized = true;
     mocks.close = {
       id: 'c1',
       sequence: 1,
@@ -584,7 +591,25 @@ describe('day-close console', () => {
       reopen: null,
     };
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/The owner can reopen today for trading/)).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'Reopen today for trading' });
+    expect(within(form).getByLabelText('Your staff PIN')).toBeInTheDocument();
+  });
+  it('offers no reopen to a closer who is neither the owner nor a manager (DEV-631)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.reopenAuthorized = false;
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/The owner or a manager can reopen today for trading/)).toBeInTheDocument();
     expect(screen.queryByRole('form', { name: 'Reopen today for trading' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reopen day for trading' })).toBeNull();
   });

@@ -908,7 +908,7 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   // DEV-631: the counter says the day is closed before a bill is built; no drawer
   // step or scan/search is offered, so nothing is added that payment would refuse.
   await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
-    'The owner can reopen today for trading on Day close'
+    'The owner or a manager can reopen today for trading on Day close'
   );
   await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);

@@ -2,12 +2,12 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { verifyRefundPin } from './refund-authorization';
 
 /**
- * DEV-631: reopening a closed business day for trading is the owner's, and only
- * after re-entering their own staff PIN for this one action (the fresh
- * re-authentication the refund approval uses). A solo owner meets it alone.
+ * DEV-631: reopening a closed business day for trading is the owner's or a
+ * manager's, and only after re-entering their own staff PIN for this one action
+ * (the fresh re-authentication the refund approval uses). A solo owner meets it alone.
  */
-export const DAY_REOPEN_PIN_POLICY = 'PHARMACY_DAY_REOPEN_OWNER_PIN';
-export const DAY_REOPEN_PIN_BLOCKED = 'Day not reopened. Enter your owner PIN.';
+export const DAY_REOPEN_PIN_POLICY = 'PHARMACY_DAY_REOPEN_MANAGER_PIN';
+export const DAY_REOPEN_PIN_BLOCKED = 'Day not reopened. Enter your owner or manager PIN.';
 
 /**
  * The PIN check in its own tenant transaction, so a refused PIN commits its lockout

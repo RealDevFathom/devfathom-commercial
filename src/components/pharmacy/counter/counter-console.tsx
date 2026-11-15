@@ -2606,8 +2606,9 @@ function ScopedPharmacyCounterConsole({
                     Today&apos;s business day is closed.
                   </p>
                   <p className="text-text-body">
-                    New bills, payments and drawer changes are blocked. The owner can reopen today
-                    for trading on Day close, with a reason; selling resumes here once they do.
+                    New bills, payments and drawer changes are blocked. The owner or a manager can
+                    reopen today for trading on Day close, with a reason; selling resumes here once
+                    they do.
                   </p>
                   <Button
                     type="button"

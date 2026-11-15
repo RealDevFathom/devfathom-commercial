@@ -221,6 +221,11 @@ function DayCloseForm({
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
   const reopen = trpc.pharmacySales.reopenDay.useMutation();
+  // DEV-631: the owner or a manager may reopen; the server re-checks branch and PIN.
+  const reopenAccess = trpc.pharmacySales.dayReopenAccess.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+  const mayReopen = reopenAccess.data?.authorized === true;
   const [reopenReason, setReopenReason] = useState('');
   const [reopenPin, setReopenPin] = useState('');
   const [counts, setCounts] = useState<Record<string, string>>({});
@@ -360,7 +365,7 @@ function DayCloseForm({
             </p>
             <p>
               {isToday
-                ? 'The owner can reopen today for trading with a reason and their PIN; the next close then supersedes this report.'
+                ? 'The owner or a manager can reopen today for trading with a reason and their PIN; the next close then supersedes this report.'
                 : "Only today's business day can be reopened for trading. Record anything late on an open business day."}{' '}
               Someone with day-close permission can re-record this close report with a reason, but
               that alone never reopens the day.
@@ -404,7 +409,7 @@ function DayCloseForm({
               Print Z-report
             </Button>
             <p role="status">{printMessage}</p>
-            {isToday && ownerView && (
+            {isToday && mayReopen && (
               <form
                 className="grid gap-3 rounded-md border border-border-subtle p-4"
                 aria-label="Reopen today for trading"
@@ -445,7 +450,7 @@ function DayCloseForm({
                   />
                 </label>
                 <label className="grid gap-2">
-                  Your owner PIN
+                  Your staff PIN
                   <Input
                     className="min-h-11"
                     type="password"
@@ -569,8 +574,8 @@ function DayCloseForm({
               <p className="font-medium">Locking this day stops trading on it.</p>
               <p>
                 Once locked, counters cannot take new payments, refunds or drawer changes for{' '}
-                {date}. Only the owner can reopen today&apos;s business day for trading, with a
-                reason; earlier days stay locked. Someone with day-close permission can later
+                {date}. Only the owner or a manager can reopen today&apos;s business day for
+                trading, with a reason and their PIN; earlier days stay locked. Someone with day-close permission can later
                 re-record the close report with a reason, but that alone never reopens the day.
               </p>
             </div>
