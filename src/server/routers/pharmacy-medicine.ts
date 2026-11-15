@@ -306,6 +306,9 @@ function domainError(error: unknown): never {
   throw error;
 }
 
+const DUPLICATE_PACK_MESSAGE =
+  'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
+
 export const pharmacyMedicineRouter = router({
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
     priceIntelligence(ctx.db, {
@@ -766,7 +769,22 @@ export const pharmacyMedicineRouter = router({
           code: 'FORBIDDEN',
           message: 'Parent pack is outside this presentation.',
         });
-      return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
+      const duplicate = {
+        presentationId: input.presentationId,
+        parentPackLevelId: input.parentPackLevelId ?? null,
+        level: input.level,
+        unitsPerParent: input.unitsPerParent,
+        effectiveTo: null,
+      };
+      if (await ctx.db.packLevel.findFirst({ where: duplicate }))
+        throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_PACK_MESSAGE });
+      try {
+        return await ctx.db.packLevel.create({ data: { ...input, version: 1 } });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002')
+          throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_PACK_MESSAGE });
+        throw error;
+      }
     }),
 
   revisePackLevel: protectedProcedure
@@ -1152,175 +1170,173 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  publishAssertions: adminProcedure
-    .input(assertionIdsPayload)
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const assertionIds = [...new Set(input.assertionIds)];
-        const assertions = await tx.medicineProvenance.findMany({
-          where: { id: { in: assertionIds } },
+  publishAssertions: adminProcedure.input(assertionIdsPayload).mutation(async ({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const assertionIds = [...new Set(input.assertionIds)];
+      const assertions = await tx.medicineProvenance.findMany({
+        where: { id: { in: assertionIds } },
+      });
+      if (assertions.length !== assertionIds.length)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Assertion not found.' });
+      if (
+        assertions.some(
+          (assertion) =>
+            !['ACCEPTED', 'CORRECTED'].includes(assertion.status) || !assertion.reviewer
+        )
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only reviewed, accepted assertions can be published.',
         });
-        if (assertions.length !== assertionIds.length)
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Assertion not found.' });
-        if (
-          assertions.some(
-            (assertion) =>
-              !['ACCEPTED', 'CORRECTED'].includes(assertion.status) || !assertion.reviewer
-          )
-        ) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Only reviewed, accepted assertions can be published.',
-          });
-        }
-        const existingEntry = await tx.medicinePublicationEntry.findFirst({
-          where: { assertionId: { in: assertionIds }, batch: { status: 'PUBLISHED' } },
-        });
-        if (existingEntry)
-          throw new TRPCError({ code: 'CONFLICT', message: 'Assertion was already published.' });
+      }
+      const existingEntry = await tx.medicinePublicationEntry.findFirst({
+        where: { assertionId: { in: assertionIds }, batch: { status: 'PUBLISHED' } },
+      });
+      if (existingEntry)
+        throw new TRPCError({ code: 'CONFLICT', message: 'Assertion was already published.' });
 
-        const decisions = await tx.medicineReviewDecision.findMany({
-          where: {
-            action: { in: ['ACCEPT', 'CORRECT'] },
-            medicineIds: { hasSome: [...new Set(assertions.map((item) => item.medicineId))] },
-          },
-          orderBy: { createdAt: 'desc' },
+      const decisions = await tx.medicineReviewDecision.findMany({
+        where: {
+          action: { in: ['ACCEPT', 'CORRECT'] },
+          medicineIds: { hasSome: [...new Set(assertions.map((item) => item.medicineId))] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      const evidenced = new Set(
+        decisions.flatMap((decision) => {
+          const parsed = assertionIdsPayload.safeParse(decision.payload);
+          return parsed.success ? parsed.data.assertionIds : [];
+        })
+      );
+      if (assertions.some((assertion) => !evidenced.has(assertion.id))) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Accepted assertion lacks matching review evidence.',
         });
-        const evidenced = new Set(
-          decisions.flatMap((decision) => {
-            const parsed = assertionIdsPayload.safeParse(decision.payload);
-            return parsed.success ? parsed.data.assertionIds : [];
-          })
+      }
+
+      const batch = await tx.medicinePublicationBatch.create({
+        data: { status: 'DRAFT' },
+      });
+      const byMedicine = new Map<string, typeof assertions>();
+      for (const assertion of assertions)
+        byMedicine.set(assertion.medicineId, [
+          ...(byMedicine.get(assertion.medicineId) ?? []),
+          assertion,
+        ]);
+      for (const [medicineId, selected] of byMedicine) {
+        const values = new Map(
+          selected.map((assertion) => [
+            assertion.field,
+            assertedEnvelope.parse(assertion.assertedValue).value,
+          ])
         );
-        if (assertions.some((assertion) => !evidenced.has(assertion.id))) {
+        for (const field of ['productName', 'strength', 'dosageForm', 'pack'] as const) {
+          if (!values.get(field))
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Publication requires ${field}.`,
+            });
+        }
+        const parsedStrength = parseSimpleMedicineStrength(values.get('strength')!);
+        if (!parsedStrength)
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Accepted assertion lacks matching review evidence.',
+            message: 'Strength cannot be safely structured; correct it before publication.',
           });
-        }
-
-        const batch = await tx.medicinePublicationBatch.create({
-          data: { status: 'DRAFT' },
-        });
-        const byMedicine = new Map<string, typeof assertions>();
-        for (const assertion of assertions)
-          byMedicine.set(assertion.medicineId, [
-            ...(byMedicine.get(assertion.medicineId) ?? []),
-            assertion,
-          ]);
-        for (const [medicineId, selected] of byMedicine) {
-          const values = new Map(
-            selected.map((assertion) => [
-              assertion.field,
-              assertedEnvelope.parse(assertion.assertedValue).value,
-            ])
-          );
-          for (const field of ['productName', 'strength', 'dosageForm', 'pack'] as const) {
-            if (!values.get(field))
-              throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: `Publication requires ${field}.`,
-              });
-          }
-          const parsedStrength = parseSimpleMedicineStrength(values.get('strength')!);
-          if (!parsedStrength)
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Strength cannot be safely structured; correct it before publication.',
-            });
-          // The importer and receiving resolve stock through a pack size, so a
-          // published medicine must carry one with its unit count.
-          const defaultPack = parseDefaultPackSize(values.get('pack')!);
-          if (!defaultPack)
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message:
-                'Pack size cannot be safely structured; correct it to a unit count such as "10 tablets" or "3 x 10" before publication.',
-            });
-          const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
-          const ingredientName = values.get('alias') ?? values.get('productName')!;
-          const ingredient = await tx.ingredient.upsert({
-            where: {
-              organizationId_name: {
-                organizationId: medicine.organizationId,
-                name: ingredientName,
-              },
+        // The importer and receiving resolve stock through a pack size, so a
+        // published medicine must carry one with its unit count.
+        const defaultPack = parseDefaultPackSize(values.get('pack')!);
+        if (!defaultPack)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'Pack size cannot be safely structured; correct it to a unit count such as "10 tablets" or "3 x 10" before publication.',
+          });
+        const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
+        const ingredientName = values.get('alias') ?? values.get('productName')!;
+        const ingredient = await tx.ingredient.upsert({
+          where: {
+            organizationId_name: {
+              organizationId: medicine.organizationId,
+              name: ingredientName,
             },
-            create: { organizationId: medicine.organizationId, name: ingredientName },
-            update: {},
+          },
+          create: { organizationId: medicine.organizationId, name: ingredientName },
+          update: {},
+        });
+        const presentation = await tx.presentation.create({
+          data: {
+            medicineId,
+            dosageForm: values.get('dosageForm')!,
+            presentation: values.get('pack')!,
+          },
+        });
+        await tx.medicineStrengthComponent.create({
+          data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
+        });
+        const packLevel = await tx.packLevel.create({
+          data: {
+            presentationId: presentation.id,
+            versionGroupId: randomUUID(),
+            version: 1,
+            level: defaultPack.level,
+            unitsPerParent: defaultPack.unitsPerParent,
+            effectiveFrom: new Date(),
+          },
+        });
+        const barcode = values.get('barcode');
+        if (barcode)
+          await attachPackBarcode(tx, {
+            medicineId,
+            presentationId: presentation.id,
+            packLevelId: packLevel.id,
+            type: 'GTIN',
+            code: barcode,
           });
-          const presentation = await tx.presentation.create({
+        const alias = values.get('alias');
+        if (alias)
+          await tx.medicineAlias.create({
             data: {
               medicineId,
-              dosageForm: values.get('dosageForm')!,
-              presentation: values.get('pack')!,
+              type: 'GENERIC',
+              value: alias,
+              normalizedValue: normalizeMedicineText(alias),
             },
           });
-          await tx.medicineStrengthComponent.create({
-            data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
-          });
-          const packLevel = await tx.packLevel.create({
-            data: {
-              presentationId: presentation.id,
-              versionGroupId: randomUUID(),
-              version: 1,
-              level: defaultPack.level,
-              unitsPerParent: defaultPack.unitsPerParent,
-              effectiveFrom: new Date(),
-            },
-          });
-          const barcode = values.get('barcode');
-          if (barcode)
-            await attachPackBarcode(tx, {
-              medicineId,
-              presentationId: presentation.id,
-              packLevelId: packLevel.id,
-              type: 'GTIN',
-              code: barcode,
-            });
-          const alias = values.get('alias');
-          if (alias)
-            await tx.medicineAlias.create({
-              data: {
-                medicineId,
-                type: 'GENERIC',
-                value: alias,
-                normalizedValue: normalizeMedicineText(alias),
-              },
-            });
-          assertSaleable({
-            productFamily: medicine.productFamily,
-            hasPresentation: true,
-            hasStrength: true,
-            hasRegistration: Boolean(
-              values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
-            ),
-            provenanceFields: new Set(selected.map((assertion) => assertion.field)),
-          });
-          await tx.medicine.update({
-            where: { id: medicineId },
-            data: {
-              productName: values.get('productName')!,
-              brandName: values.get('brandName'),
-              manufacturer: values.get('manufacturer'),
-              drapRegistrationNumber: values.get('drapRegistrationNumber'),
-              saleable: true,
-            },
-          });
-        }
-        await tx.medicinePublicationEntry.createMany({
-          data: assertions.map((assertion) => ({
-            batchId: batch.id,
-            assertionId: assertion.id,
-            priorAssertionId: assertion.supersedesId,
-          })),
+        assertSaleable({
+          productFamily: medicine.productFamily,
+          hasPresentation: true,
+          hasStrength: true,
+          hasRegistration: Boolean(
+            values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
+          ),
+          provenanceFields: new Set(selected.map((assertion) => assertion.field)),
         });
-        return tx.medicinePublicationBatch.update({
-          where: { id: batch.id },
-          data: { status: 'PUBLISHED', publishedBy: ctx.session.user.id, publishedAt: new Date() },
+        await tx.medicine.update({
+          where: { id: medicineId },
+          data: {
+            productName: values.get('productName')!,
+            brandName: values.get('brandName'),
+            manufacturer: values.get('manufacturer'),
+            drapRegistrationNumber: values.get('drapRegistrationNumber'),
+            saleable: true,
+          },
         });
-      })
-    ),
+      }
+      await tx.medicinePublicationEntry.createMany({
+        data: assertions.map((assertion) => ({
+          batchId: batch.id,
+          assertionId: assertion.id,
+          priorAssertionId: assertion.supersedesId,
+        })),
+      });
+      return tx.medicinePublicationBatch.update({
+        where: { id: batch.id },
+        data: { status: 'PUBLISHED', publishedBy: ctx.session.user.id, publishedAt: new Date() },
+      });
+    })
+  ),
 
   supersedePublication: adminProcedure
     .input(z.object({ batchId: z.string().min(1) }).strict())

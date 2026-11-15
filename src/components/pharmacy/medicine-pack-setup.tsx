@@ -242,7 +242,7 @@ export function MedicinePackSetup() {
                 onChange={(event) => setEffectiveDate(event.target.value)}
               />
               <span className="block text-sm text-text-muted">
-                Available from this date at midnight UTC. Future packs cannot be received yet.
+                Available from this date at midnight Pakistan time. Future packs cannot be received yet.
               </span>
             </label>
           </fieldset>
