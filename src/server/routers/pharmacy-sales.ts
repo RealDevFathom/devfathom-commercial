@@ -139,6 +139,7 @@ import {
   applyPharmacyTender,
   closePharmacyDrawer,
   cutPharmacyDailyClose,
+  lockOpenPharmacyDrawer,
   openPharmacyDrawer,
   readOpenPharmacyDrawer,
   PharmacySettlementError,
@@ -1393,16 +1394,38 @@ export const pharmacySalesRouter = router({
       }
     }),
   create: protectedProcedure
-    .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          quotation: z.boolean().default(false),
+          // DEV-725: the counter device whose drawer will take this bill's cash.
+          deviceId: z.string().min(1).optional(),
+        })
+        .strict()
+        .refine((value) => value.quotation || value.deviceId !== undefined, {
+          message: 'A counter bill needs the counter device.',
+          path: ['deviceId'],
+        })
+    )
     .mutation(async ({ ctx, input }) => {
       try {
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         // createSale enforces the persisted regulatory gate in this transaction.
-        return await ctx.db.$transaction(async (tx) =>
-          createSale(txDb(tx), scope, input.quotation)
-        );
+        // DEV-725: opening the drawer is the first step of the shift. A counter
+        // bill is never started on a device with no OPEN drawer, so the cashier
+        // cannot build a bill they are then refused at payment. Checked after the
+        // regulatory gate (which keeps its own refusal and audit), before the insert.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          return createSale(db, scope, input.quotation, async () => {
+            if (input.quotation) return;
+            if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+          });
+        });
       } catch (error) {
         fail(error);
       }

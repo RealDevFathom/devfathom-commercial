@@ -229,11 +229,18 @@ async function event(
   });
 }
 
-export async function createSale(db: ScopedDb, scope: LedgerScope, quotation = false) {
+export async function createSale(
+  db: ScopedDb,
+  scope: LedgerScope,
+  quotation = false,
+  /** A caller-specific precondition, checked after the shared gate and before the insert. */
+  beforeCreate?: () => Promise<void>
+) {
   // Every creation path (counter, offline replay, customer orders) shares this gate.
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.create',
   });
+  await beforeCreate?.();
   const sale = await db.pharmacySale.create({
     data: {
       organizationId: scope.organizationId,

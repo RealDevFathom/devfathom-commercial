@@ -115,7 +115,8 @@ export type CounterTenderPanelProps = {
   ) => Promise<CounterTenderResult>;
 };
 
-function parseAmountMinor(value: string): number | null {
+/** A typed money amount (up to two decimals) in minor units, or null when it is not one. */
+export function parseAmountMinor(value: string): number | null {
   const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(value.trim());
   if (!match) return null;
   const major = Number.parseInt(match[1]!, 10);

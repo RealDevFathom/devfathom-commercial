@@ -704,7 +704,10 @@ export async function freshPharmacyFirstSale(
     ).toBeVisible();
 
     await follow(page, 'Readiness and parallel run', 'Open pharmacy counter');
+    // DEV-725: the shift starts by counting the drawer's opening cash.
+    await page.getByLabel('Opening cash', { exact: true }).fill('0');
     await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
+    await expect(page.getByLabel('Scan or search', { exact: true })).toBeVisible();
     // Barcode Enter already adds a pack. Stage by name before the explicit
     // sale-unit selection and F6 add below.
     await page.getByLabel('Scan or search', { exact: true }).fill(medicineName);

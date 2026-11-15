@@ -819,6 +819,28 @@ export async function readOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, d
   });
 }
 
+/**
+ * DEV-725: this device's OPEN drawer, re-checked under its business-day lock (the
+ * lock drawer and day close take), so a close cannot commit between this check and
+ * the caller's write in the same transaction.
+ */
+export async function lockOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, deviceId: string) {
+  const drawer = await readOpenPharmacyDrawer(db, scope, deviceId);
+  if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  await lockPharmacyDay(db, scope, drawer.businessDate);
+  const stillOpen = await db.pharmacyDrawerSession.findFirst({
+    where: {
+      id: drawer.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+    select: { id: true },
+  });
+  if (!stillOpen) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  return drawer;
+}
+
 export async function recordPharmacyCashMovement(
   db: ScopedDb,
   scope: LedgerScope,
