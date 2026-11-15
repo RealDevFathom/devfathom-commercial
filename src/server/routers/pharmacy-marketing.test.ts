@@ -17,8 +17,10 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   settings: vi.fn(),
   assist: vi.fn(),
+  reviewReply: vi.fn(),
   capture: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/review-reply-drafts', () => ({ draftReviewReply: mocks.reviewReply }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -268,39 +270,43 @@ describe('growth current authorization', () => {
     );
     expect(mocks.growthHistory).toHaveBeenCalledTimes(1);
   });
-  it.each(['branch', 'actor', 'licence', 'lifecycle', 'reports:financial', 'reports:operational'] as const)(
-    'rejects %s revocation during model latency',
-    async (kind) => {
-      mocks.settings.mockResolvedValue({ askFathomEnabled: true });
-      mocks.growthBuild.mockResolvedValue({ facts: [] });
-      mocks.growthGenerate.mockImplementation(async () => {
-        if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
-        if (kind === 'actor') mocks.actor.mockResolvedValue(null);
-        if (kind === 'licence') mocks.licensed.mockReturnValue(false);
-        if (kind === 'reports:financial' || kind === 'reports:operational')
-          mocks.permissions.mockResolvedValue({
-            organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
-            permissionOverrides: [{ capability: kind, effect: 'DENY' }],
-          });
-        if (kind === 'lifecycle')
-          mocks.organization.mockResolvedValue({
-            id: 'org-a',
-            vertical: 'PHARMACY',
-            status: 'SUSPENDED',
-          });
-        return { status: 'UNAVAILABLE' };
-      });
-      await expect(
-        caller().generateGrowth({
-          ...input,
-          from: new Date('2026-09-01'),
-          cutoff: new Date('2026-10-01'),
-        })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
-      expect(mocks.growthSave).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    'branch',
+    'actor',
+    'licence',
+    'lifecycle',
+    'reports:financial',
+    'reports:operational',
+  ] as const)('rejects %s revocation during model latency', async (kind) => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.growthBuild.mockResolvedValue({ facts: [] });
+    mocks.growthGenerate.mockImplementation(async () => {
+      if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
+      if (kind === 'actor') mocks.actor.mockResolvedValue(null);
+      if (kind === 'licence') mocks.licensed.mockReturnValue(false);
+      if (kind === 'reports:financial' || kind === 'reports:operational')
+        mocks.permissions.mockResolvedValue({
+          organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+          permissionOverrides: [{ capability: kind, effect: 'DENY' }],
+        });
+      if (kind === 'lifecycle')
+        mocks.organization.mockResolvedValue({
+          id: 'org-a',
+          vertical: 'PHARMACY',
+          status: 'SUSPENDED',
+        });
+      return { status: 'UNAVAILABLE' };
+    });
+    await expect(
+      caller().generateGrowth({
+        ...input,
+        from: new Date('2026-09-01'),
+        cutoff: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
+    expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
 });
 describe('campaign generation and approval stay owner-only (DEV-31)', () => {
   const from = new Date('2026-10-01T00:00:00.000Z');
@@ -348,5 +354,54 @@ describe('campaign generation and approval stay owner-only (DEV-31)', () => {
     expect(mocks.growthGenerate).not.toHaveBeenCalled();
     expect(mocks.growthReview).not.toHaveBeenCalled();
     expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
+});
+
+describe('Google Business Profile health and review replies (DEV-13)', () => {
+  const facts = {
+    primaryCategoryIsPharmacy: true,
+    phoneListed: true,
+    websiteOrOrderLinkListed: false,
+    descriptionPresent: true,
+    holidayHoursSet: false,
+    hoursConfirmedDaysAgo: 30,
+    photoCount: 4,
+    unansweredReviews: 2,
+  };
+  const config = { maximumHoursAgeDays: 90, minimumPhotos: 10, maximumUnansweredReviews: 0 };
+  it.each(['STAFF', 'MANAGER', 'PHARMACIST'])('denies nonowner %s', async (role) => {
+    await expect(caller(role).profileHealth({ ...input, facts, config })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller(role).reviewReply({ ...input, rating: 5, tone: 'FRIENDLY' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reviewReply).not.toHaveBeenCalled();
+  });
+  it('evaluates owner-entered facts against the configured thresholds', async () => {
+    const result = await caller().profileHealth({ ...input, facts, config });
+    expect(result).toMatchObject({ passed: 4, total: 8, config });
+  });
+  it('drafts with the current AI policy and exposes no posting procedure', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: false });
+    mocks.reviewReply.mockResolvedValue({ body: 'x', source: 'TEMPLATE', posted: false });
+    await caller().reviewReply({ ...input, rating: 2, tone: 'FORMAL', reviewerFirstName: 'Sara' });
+    expect(mocks.reviewReply).toHaveBeenCalledWith(
+      { rating: 2, tone: 'FORMAL', reviewerFirstName: 'Sara' },
+      { organizationId: 'org-a', branchId: 'branch-a', aiEnabled: false }
+    );
+    expect(Object.keys(pharmacyMarketingRouter._def.procedures)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/post|publish/i)])
+    );
+  });
+  it('rejects review text or a foreign branch before drafting', async () => {
+    await expect(
+      caller().reviewReply({ ...input, rating: 5, tone: 'FRIENDLY', text: 'private' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mocks.branch.mockResolvedValue(null);
+    await expect(
+      caller().reviewReply({ ...input, rating: 5, tone: 'FRIENDLY' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reviewReply).not.toHaveBeenCalled();
   });
 });

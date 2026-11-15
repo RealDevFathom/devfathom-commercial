@@ -48,6 +48,12 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import {
+  evaluateProfileHealth,
+  profileHealthInput,
+  reviewReplyInput,
+} from '@/lib/pharmacy/business-profile-health';
+import { draftReviewReply } from '@/lib/pharmacy/review-reply-drafts';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -328,6 +334,32 @@ export const pharmacyMarketingRouter = router({
       return draftMarketingCopy(
         { occasion: input.occasion, tone: input.tone },
         { organizationId: resolved.organizationId, branchId: resolved.branchId }
+      );
+    }),
+  /** Owner-entered profile facts only; nothing is read from or written to Google. */
+  profileHealth: protectedProcedure
+    .input(marketingScopeInput.extend(profileHealthInput.shape).strict())
+    .mutation(async ({ ctx, input }) => {
+      await scope(ctx, input.branchId);
+      return evaluateProfileHealth({ facts: input.facts, config: input.config });
+    }),
+  /** Returns an unposted draft; there is deliberately no procedure that posts a reply. */
+  reviewReply: protectedProcedure
+    .input(marketingScopeInput.extend(reviewReplyInput.shape).strict())
+    .mutation(async ({ ctx, input }) => {
+      const resolved = await scope(ctx, input.branchId);
+      const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
+      return draftReviewReply(
+        {
+          rating: input.rating,
+          tone: input.tone,
+          ...(input.reviewerFirstName ? { reviewerFirstName: input.reviewerFirstName } : {}),
+        },
+        {
+          organizationId: resolved.organizationId,
+          branchId: resolved.branchId,
+          aiEnabled: Boolean(settings?.askFathomEnabled),
+        }
       );
     }),
 });

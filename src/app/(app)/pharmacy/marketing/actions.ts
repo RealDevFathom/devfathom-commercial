@@ -202,6 +202,52 @@ export async function marketingAction(
             : 'AI assistance unavailable. Write and review your template manually.',
         };
       }
+      case 'profile-health': {
+        const flag = (key: string) => form.get(key) === 'on';
+        const hoursAge = text('hoursConfirmedDaysAgo').trim();
+        const result = await caller.profileHealth({
+          branchId,
+          facts: {
+            primaryCategoryIsPharmacy: flag('primaryCategoryIsPharmacy'),
+            phoneListed: flag('phoneListed'),
+            websiteOrOrderLinkListed: flag('websiteOrOrderLinkListed'),
+            descriptionPresent: flag('descriptionPresent'),
+            holidayHoursSet: flag('holidayHoursSet'),
+            hoursConfirmedDaysAgo: hoursAge === '' ? null : Number(hoursAge),
+            photoCount: Number(text('photoCount')),
+            unansweredReviews: Number(text('unansweredReviews')),
+          },
+          config: {
+            maximumHoursAgeDays: Number(text('maximumHoursAgeDays')),
+            minimumPhotos: Number(text('minimumPhotos')),
+            maximumUnansweredReviews: Number(text('maximumUnansweredReviews')),
+          },
+        });
+        const lines = result.items.map(
+          (item) =>
+            `${item.ok ? 'Done' : 'To do'}: ${item.label}.${item.ok ? '' : ` ${item.advice}`}`
+        );
+        return {
+          error: false,
+          message: `Profile checklist: ${result.passed} of ${result.total} done. Nothing was read from or changed on Google.\n${lines.join('\n')}`,
+        };
+      }
+      case 'review-reply': {
+        const tone = text('tone');
+        if (tone !== 'FRIENDLY' && tone !== 'FORMAL')
+          return { error: true, message: 'Choose a reply tone.' };
+        const reviewerFirstName = text('reviewerFirstName').trim();
+        const result = await caller.reviewReply({
+          branchId,
+          rating: Number(text('rating')),
+          tone,
+          ...(reviewerFirstName ? { reviewerFirstName } : {}),
+        });
+        return {
+          error: false,
+          message: `${result.source === 'AI' ? 'AI draft' : 'Template draft'} — not posted. Review, copy and post it yourself on Google:\n${result.body}`,
+        };
+      }
       default:
         return { error: true, message: 'Unknown campaign action.' };
     }
