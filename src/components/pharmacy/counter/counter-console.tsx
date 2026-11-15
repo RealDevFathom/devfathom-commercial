@@ -769,9 +769,16 @@ function ScopedPharmacyCounterConsole({
    */
   const alerts = useMemo(() => {
     const lines: CounterAlertLine[] = (cart?.lines ?? []).map((line) => {
+      // DEV-629: a non-controlled line is covered only by the prescription the server attached
+      // to it, because that is what settlement checks; a controlled line keeps its register gate.
       const prescriptionLine = patient?.prescriptions
         .flatMap((prescription) => prescription.lines.map((entry) => ({ prescription, entry })))
-        .find(({ entry }) => entry.medicineId === line.medicineId);
+        .find(({ entry }) =>
+          line.controlled
+            ? entry.medicineId === line.medicineId
+            : Boolean(line.prescriptionLineId) &&
+              entry.prescriptionLineId === line.prescriptionLineId
+        );
       return {
         ref: line.saleLineId,
         medicine: {
@@ -1210,8 +1217,31 @@ function ScopedPharmacyCounterConsole({
           openChecks();
           return;
         }
+        // DEV-629: the server refuses to take payment for an Rx/restricted line without a
+        // prescription reference, so the counter sends the selected patient's current
+        // prescription line for this medicine. Without one the line still shows its safety block.
+        const needsPrescription = !controlled && (row.restriction.rx || row.restriction.restricted);
+        const prescriptionLine = needsPrescription
+          ? patient?.prescriptions
+              .filter((prescription) => prescription.inDate)
+              .flatMap((prescription) => prescription.lines)
+              .find(
+                (line) =>
+                  line.medicineId === row.medicineId &&
+                  line.presentationId === row.presentationId &&
+                  line.remainingAuthorizedUnits >= units * option.canonicalUnitsPerSaleUnit
+              )
+          : undefined;
         const refSerial = Number(controlledAuth.refSerial);
         const added = await addLine.mutateAsync({
+          ...(patient && prescriptionLine
+            ? {
+                prescription: {
+                  prescriptionLineId: prescriptionLine.prescriptionLineId,
+                  patientId: patient.patientId,
+                },
+              }
+            : {}),
           controlledAuthorization:
             controlled && patient
               ? {

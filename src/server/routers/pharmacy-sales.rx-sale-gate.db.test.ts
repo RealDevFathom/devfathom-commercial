@@ -65,6 +65,8 @@ let pharmacySalesRouter: typeof import('./pharmacy-sales').pharmacySalesRouter;
 let disconnect: (() => Promise<void>) | null = null;
 let rx: { medicineId: string; presentationId: string; packLevelId: string };
 let patientId: string;
+/** DEV-629: the patient's current prescription line every Rx line below is dispensed against. */
+let prescriptionLineId: string;
 
 function act<T>(userId: string, run: (api: SalesCaller, db: ScopedDb) => Promise<T>) {
   return withTenantDb(
@@ -111,6 +113,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
   saleUnit: 'STRIP',
   quantity,
   canonicalUnitsPerSaleUnit: 10,
+  prescription: { prescriptionLineId, patientId },
   idempotencyKey: key(),
 });
 
@@ -355,6 +358,32 @@ beforeAll(async () => {
     };
     const patient = await tx.pharmacyPatient.create({ data: { displayName: 'Ayesha Khan' } });
     patientId = patient.id;
+    const prescriber = await tx.pharmacyPrescriber.create({
+      data: { name: 'Dr Sana Malik', registrationNumber: `PMDC-${suffix}` },
+    });
+    const prescription = await tx.prescription.create({
+      data: {
+        patientId,
+        prescriberId: prescriber.id,
+        sourceKind: 'PAPER_IMAGE',
+        sourceFileRef: `paper:${suffix}`,
+        validFrom: new Date(Date.now() - 30 * 86_400_000),
+        validUntil: new Date(Date.now() + 365 * 86_400_000),
+        authorizedRepeats: 100,
+        capturedByUserId: ids.pharmacist,
+        lines: {
+          create: {
+            lineNumber: 1,
+            medicineId: rx.medicineId,
+            presentationId: rx.presentationId,
+            authorizedCanonicalUnits: 100_000,
+            directions: 'One capsule three times a day',
+          },
+        },
+      },
+      include: { lines: true },
+    });
+    prescriptionLineId = prescription.lines[0]!.id;
     await tx.patientConsent.create({
       data: {
         patientId,
@@ -405,6 +434,24 @@ describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fi
 
   it('lets a user DENY override beat a role pharmacy:dispense grant everywhere', async () => {
     await expectRefusedEverywhere(ids.userDenied, FORBIDDEN);
+  });
+
+  it('refuses to take payment for an Rx line with no prescription (DEV-629)', async () => {
+    const unprescribed = await act(ids.pharmacist, async (api) => {
+      const sale = await api.create({ branchId: ids.branch, deviceId: counterDevice() });
+      await api.addLine({ ...rxLine(sale.id), prescription: undefined });
+      const bill = await api.counterCart({ branchId: ids.branch, saleId: sale.id });
+      return { saleId: sale.id, netMinor: bill.totals.netMinor };
+    });
+    await expect(payInCash(ids.pharmacist, unprescribed)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message:
+        'A prescription-only or restricted medicine needs a prescription a pharmacist attached to the line before it can be sold.',
+    });
+    expect(await cart(unprescribed.saleId)).toMatchObject({
+      status: 'OPEN',
+      totals: { tenderedMinor: 0 },
+    });
   });
 
   it('lets a dispense holder add the line and complete it by cash or by points', async () => {

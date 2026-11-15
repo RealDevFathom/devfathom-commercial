@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  assertRxLinesPrescribed,
+  PharmacyRxReferenceError,
   recordCompletedPrescriptionReference,
   resolvePrescriptionReference,
 } from './rx-prescription-reference';
@@ -99,5 +101,36 @@ describe('prescription reference validity in the organization timezone', () => {
       select: { timezone: true },
     });
     expect(db.prescriptionFill.create).toHaveBeenCalledTimes(current ? 1 : 0);
+  });
+});
+
+describe('assertRxLinesPrescribed (DEV-629)', () => {
+  const otc = { rx: false, restricted: false, controlled: false };
+
+  it.each([
+    ['prescription-only', { ...otc, rx: true }],
+    ['restricted', { ...otc, restricted: true }],
+  ])('refuses a %s line with no prescription reference', (_label, medicine) => {
+    expect(() =>
+      assertRxLinesPrescribed([
+        { prescriptionLineId: null, medicine: otc },
+        { prescriptionLineId: null, medicine },
+      ])
+    ).toThrowError(
+      expect.objectContaining({
+        name: 'PharmacyRxReferenceError',
+        reason: 'PRESCRIPTION_REQUIRED',
+      }) as PharmacyRxReferenceError
+    );
+  });
+
+  it('admits referenced Rx lines, OTC lines and controlled lines (which keep their register gate)', () => {
+    expect(() =>
+      assertRxLinesPrescribed([
+        { prescriptionLineId: 'rx_line', medicine: { ...otc, rx: true } },
+        { prescriptionLineId: null, medicine: otc },
+        { prescriptionLineId: null, medicine: { ...otc, rx: true, controlled: true } },
+      ])
+    ).not.toThrow();
   });
 });

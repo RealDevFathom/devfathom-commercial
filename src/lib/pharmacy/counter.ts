@@ -523,6 +523,8 @@ export type CounterCartLine = {
   activeIngredients?: Array<{ ingredientId: string; name: string }>;
   /** An emergency controlled supply was recorded for this line (open follow-up). */
   emergencySupply: boolean;
+  /** DEV-629: the prescription line a pharmacist attached to this sale line, if any. */
+  prescriptionLineId?: string | null;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
@@ -631,6 +633,7 @@ export async function readCounterCart(
         name: component.ingredient.name,
       })),
       emergencySupply: emergencyLineIds.has(line.id),
+      prescriptionLineId: line.prescriptionLineId,
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,

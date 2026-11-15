@@ -15,6 +15,7 @@ import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertRxLinesPrescribed } from './rx-prescription-reference';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
@@ -343,6 +344,8 @@ export async function applyPharmacyTender(
     scope,
     sale.lines.map((line) => line.medicine)
   );
+  // DEV-629: an Rx/restricted line with no pharmacist-attached prescription is never paid for.
+  assertRxLinesPrescribed(sale.lines);
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);

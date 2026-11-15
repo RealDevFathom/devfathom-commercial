@@ -4,6 +4,7 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import type { LedgerScope } from './stock-ledger';
 import { prescriptionIsCurrent } from './prescription-calendar';
+import { needsRxSaleGrant } from './rx-sale-gate';
 
 const REASONS = {
   PRESCRIPTION_NOT_FOUND:
@@ -11,6 +12,8 @@ const REASONS = {
   PRESCRIPTION_PATIENT_MISMATCH: 'That prescription belongs to a different patient.',
   PRESCRIPTION_NOT_IN_DATE: 'That prescription is outside its validity period.',
   PRESCRIPTION_EXHAUSTED: 'That prescription has no remaining quantity or repeats for this line.',
+  PRESCRIPTION_REQUIRED:
+    'A prescription-only or restricted medicine needs a prescription a pharmacist attached to the line before it can be sold.',
   PRESCRIPTION_NEEDS_PHARMACIST:
     'Only a pharmacist with the dispensing permission can record a prescription against a line.',
   CONTROLLED_AUTHORIZATION_NOT_APPLICABLE:
@@ -31,6 +34,23 @@ export class PharmacyRxReferenceError extends Error {
     super(REASONS[reason]);
     this.name = 'PharmacyRxReferenceError';
   }
+}
+
+/**
+ * DEV-629: the server, not the counter's browser alert, refuses to sell an Rx or restricted,
+ * non-controlled line that carries no prescription reference. A reference is only ever attached
+ * by a pharmacist through `resolvePrescriptionReference`, which checks it is real, current and
+ * not exhausted. Controlled lines keep their own register gate (prescription or witnessed
+ * emergency supply), so they are not judged here.
+ */
+export function assertRxLinesPrescribed(
+  lines: ReadonlyArray<{
+    prescriptionLineId: string | null;
+    medicine: { rx: boolean; restricted: boolean; controlled: boolean } | null | undefined;
+  }>
+): void {
+  if (lines.some((line) => needsRxSaleGrant(line.medicine) && !line.prescriptionLineId))
+    throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

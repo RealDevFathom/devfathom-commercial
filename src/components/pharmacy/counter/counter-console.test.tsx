@@ -1131,6 +1131,35 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
   });
 
+  it('DEV-629: blocks payment for an Rx line the server holds without a prescription, even when the patient has one', () => {
+    const bill = cart();
+    bill.lines[0]!.rx = true;
+    bill.lines[0]!.prescriptionLineId = null;
+    mocks.queries.counterCart!.data = bill;
+    mocks.queries.counterPatientPanel = query({
+      prescriptions: [
+        {
+          validFrom: '2020-01-01T00:00:00.000Z',
+          validUntil: '2999-12-31T00:00:00.000Z',
+          lines: [
+            {
+              prescriptionLineId: 'rx-line-a',
+              medicineId: bill.lines[0]!.medicineId,
+              verified: true,
+              remainingAuthorizedUnits: 10,
+            },
+          ],
+        },
+      ],
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.getAllByText(/This bill carries an unresolved safety block/)[0]
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('preserves unresolved prescription safety blocks', () => {
     const bill = cart();
     bill.lines[0]!.rx = true;
@@ -1156,6 +1185,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     try {
       const bill = cart();
       bill.lines[0]!.rx = true;
+      bill.lines[0]!.prescriptionLineId = 'rx-line-a';
       mocks.queries.counterCart!.data = bill;
       mocks.queries.counterBranches = query({
         branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
@@ -2517,6 +2547,62 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(mocks.rxPanelProps.mock.lastCall![0].controlled!.pin).toBe('');
     }
   );
+
+  it('DEV-629: adds a prescription-only scan without a reference when the patient has none', async () => {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, rx: true, otc: false } }],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan();
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledOnce();
+    expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('prescription');
+  });
+
+  it('DEV-629: sends the patient current prescription line with a prescription-only scan', async () => {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, rx: true, otc: false } }],
+      truncated: false,
+    });
+    const rxLine = (id: string, presentationId: string) => ({
+      prescriptionLineId: id,
+      medicineId: row.medicineId,
+      presentationId,
+      verified: true,
+      remainingAuthorizedUnits: 10,
+    });
+    mocks.queries.counterPatientPanel = query({
+      patientId: 'patient-a',
+      displayName: 'Patient',
+      address: 'Patient address',
+      dispensingConsent: true,
+      prescriptions: [
+        { inDate: false, lines: [rxLine('rx-line-expired', row.presentationId)] },
+        {
+          inDate: true,
+          lines: [
+            rxLine('rx-line-other-form', 'presentation-b'),
+            rxLine('rx-line-a', row.presentationId),
+          ],
+        },
+      ],
+      cnic: null,
+      phone: null,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    scan();
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        prescription: { prescriptionLineId: 'rx-line-a', patientId: 'patient-a' },
+        controlledAuthorization: undefined,
+      })
+    );
+  });
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {
