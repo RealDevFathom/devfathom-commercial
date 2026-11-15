@@ -12982,6 +12982,10 @@ model PharmacyGoodsReceipt {
   qualifiedPersonUserId  String?
   /// AI-03: document-level OCR proposals and their source boxes.
   ocrDraftEvidence       Json?
+  /// DEV-77: freight the supplier billed on this invoice. Like a non-creditable
+  /// tax it is part of what is owed on the invoice and of each lot's landed unit
+  /// cost, spread across the lines by their cost; never revenue.
+  freightMinor           Int                        @default(0)
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
 
@@ -13031,6 +13035,8 @@ model PharmacyGoodsReceiptLine {
   discountBps               Int                     @default(0)
   taxBps                    Int                     @default(0)
   taxCreditable             Boolean                 @default(false)
+  /// DEV-77: this line's share of the receipt freight, already inside unitCostMinor.
+  allocatedFreightMinor     Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).
   unitCostMinor             Int
