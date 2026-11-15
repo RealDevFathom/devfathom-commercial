@@ -693,11 +693,7 @@ export async function listKhataLedger(
     db.pharmacyKhataEvent.findMany({
       where: {
         ...accountWhere,
-        OR: [
-          { kind: 'CHARGE', dueAt: { lte: now } },
-          { kind: 'PAYMENT' },
-          { kind: 'DISHONOURED_CHEQUE' },
-        ],
+        OR: [{ kind: 'CHARGE' }, { kind: 'PAYMENT' }, { kind: 'DISHONOURED_CHEQUE' }],
       },
       select: {
         id: true,
@@ -741,7 +737,7 @@ export async function listKhataLedger(
     else markOverdue(event.familyAccountId, event.occurredAt);
   }
   for (const event of events) {
-    if (event.kind !== 'CHARGE' || !event.dueAt) continue;
+    if (event.kind !== 'CHARGE' || !event.dueAt || event.dueAt > now) continue;
     if (event.amountMinor <= (paid.get(event.id) ?? 0)) continue;
     markOverdue(event.familyAccountId, event.dueAt);
   }

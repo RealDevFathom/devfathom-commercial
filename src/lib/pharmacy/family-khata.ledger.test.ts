@@ -195,4 +195,65 @@ describe('DEV-730 Khata ledger list', () => {
     expect(accounts.find((a) => a.id === 'fam_x')!.oldestOverdueAt).toEqual(new Date('2026-10-01'));
     expect(accounts.find((a) => a.id === 'fam_y')!.oldestOverdueAt).toEqual(new Date('2026-11-10'));
   });
+
+  it('does not flag a bounce on a not-yet-due charge, or on its payment, as overdue', async () => {
+    const accountFind = vi.fn().mockResolvedValue(
+      ['fam_d', 'fam_p'].map((id) => ({
+        id,
+        displayName: id,
+        creditLimitMinor: 0,
+        payer: { displayName: id, phoneLast4: null },
+      }))
+    );
+    const base = { dueAt: null, occurredAt: new Date('2026-11-10'), settlesChargeId: null };
+    const future = new Date('2026-12-20');
+    const eventFind = vi.fn().mockResolvedValue([
+      {
+        ...base,
+        id: 'cd',
+        familyAccountId: 'fam_d',
+        kind: 'CHARGE',
+        amountMinor: 8_000,
+        dueAt: future,
+      },
+      {
+        ...base,
+        id: 'dd',
+        familyAccountId: 'fam_d',
+        kind: 'DISHONOURED_CHEQUE',
+        amountMinor: 8_000,
+        settlesChargeId: 'cd',
+      },
+      {
+        ...base,
+        id: 'cp',
+        familyAccountId: 'fam_p',
+        kind: 'CHARGE',
+        amountMinor: 8_000,
+        dueAt: future,
+      },
+      {
+        ...base,
+        id: 'pp',
+        familyAccountId: 'fam_p',
+        kind: 'PAYMENT',
+        amountMinor: 8_000,
+        settlesChargeId: 'cp',
+      },
+      {
+        ...base,
+        id: 'dp',
+        familyAccountId: 'fam_p',
+        kind: 'DISHONOURED_CHEQUE',
+        amountMinor: 8_000,
+        settlesChargeId: 'pp',
+      },
+    ]);
+    const db = {
+      pharmacyFamilyAccount: { findMany: accountFind },
+      pharmacyKhataEvent: { groupBy: vi.fn().mockResolvedValue([]), findMany: eventFind },
+    };
+    const { accounts } = await listKhataLedger(db as never, scope, NOW);
+    expect(accounts.map((a) => a.oldestOverdueAt)).toEqual([null, null]);
+  });
 });
