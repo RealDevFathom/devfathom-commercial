@@ -49,6 +49,23 @@ export function localDateTime(value: string, timeZone: string): Date {
   return wall(LOCAL.exec(value.trim()), timeZone) ?? new Date(value);
 }
 
+/** Whether an instant is the start of its calendar day in the workspace zone. */
+export function isLocalMidnight(value: Date, timeZone: string): boolean {
+  if (!Number.isFinite(value.getTime())) return false;
+  return localDayStart(workspaceToday(timeZone, value), timeZone).getTime() === value.getTime();
+}
+
+/**
+ * Whole calendar days between two local-midnight bounds in the workspace zone, so a range that
+ * crosses a daylight-saving change still counts as the days the owner chose. `null` when either
+ * bound is not a local midnight; callers then keep their elapsed-time rules.
+ */
+export function localCalendarDays(from: Date, cutoff: Date, timeZone: string): number | null {
+  if (!isLocalMidnight(from, timeZone) || !isLocalMidnight(cutoff, timeZone)) return null;
+  const day = (value: Date) => Date.parse(`${workspaceToday(timeZone, value)}T00:00:00Z`);
+  return Math.round((day(cutoff) - day(from)) / 86_400_000);
+}
+
 /** Calendar arithmetic on `YYYY-MM-DD` strings. */
 export function shiftDay(day: string, days: number): string {
   const [year, month, date] = day.split('-').map(Number);

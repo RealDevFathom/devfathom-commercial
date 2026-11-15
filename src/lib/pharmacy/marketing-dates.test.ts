@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest';
 import {
+  isLocalMidnight,
+  localCalendarDays,
   localDateTime,
   localDateTimeLabel,
   localDayAfter,
@@ -59,4 +61,26 @@ it('formats saved instants for local inputs and labels', () => {
   expect(localDateTimeLabel(instant, 'Asia/Karachi')).toBe('7 Oct 2026, 12:00');
   expect(timeZoneLabel('Asia/Karachi')).toBe('Pakistan time (PKT)');
   expect(timeZoneLabel('not/a-zone')).toBe('UTC');
+});
+
+it('recognises local-midnight bounds and counts calendar days', () => {
+  expect(isLocalMidnight(new Date('2026-09-30T19:00:00Z'), 'Asia/Karachi')).toBe(true);
+  expect(isLocalMidnight(new Date('2026-10-01T00:00:00Z'), 'Asia/Karachi')).toBe(false);
+  expect(
+    localCalendarDays(
+      new Date('2026-09-30T19:00:00Z'),
+      new Date('2026-10-30T19:00:00Z'),
+      'Asia/Karachi'
+    )
+  ).toBe(30);
+  expect(
+    localCalendarDays(
+      new Date('2026-03-08T05:00:00Z'),
+      new Date('2026-03-09T04:00:00Z'),
+      'America/New_York'
+    )
+  ).toBe(1);
+  expect(
+    localCalendarDays(new Date('2026-10-01T06:00:00Z'), new Date('2026-10-02T00:00:00Z'), 'UTC')
+  ).toBeNull();
 });
