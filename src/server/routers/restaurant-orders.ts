@@ -215,7 +215,8 @@ function mapDomainError(err: unknown): never {
       err.reason === 'BILL_ALREADY_CUT' ||
       err.reason === 'DAY_CLOSED' ||
       err.reason === 'LIMIT_REACHED' ||
-      err.reason === 'LIMIT_UNAVAILABLE';
+      err.reason === 'LIMIT_UNAVAILABLE' ||
+      err.reason === 'IDEMPOTENCY_CONFLICT';
     const notFound = err.reason.endsWith('_NOT_FOUND');
     const code = notFound ? 'NOT_FOUND' : conflict ? 'CONFLICT' : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });

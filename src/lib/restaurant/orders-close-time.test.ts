@@ -39,7 +39,11 @@ const order = {
 };
 
 function makeDb() {
-  let idempotency: { resultRef: string | null } | null = null;
+  let idempotency: {
+    commandType: string;
+    payloadHash: string | null;
+    resultRef: string | null;
+  } | null = null;
   const tx = {
     $queryRaw: vi.fn(async () => []),
     restaurantOrder: {
@@ -49,12 +53,18 @@ function makeDb() {
     restaurantOrderTable: { updateMany: vi.fn() },
     restaurantOrderIdempotencyKey: {
       findUnique: vi.fn(async () => idempotency),
-      create: vi.fn(async () => {
-        idempotency = { resultRef: null };
-        return idempotency;
-      }),
+      create: vi.fn(
+        async ({ data }: { data: { commandType: string; payloadHash: string | null } }) => {
+          idempotency = {
+            commandType: data.commandType,
+            payloadHash: data.payloadHash,
+            resultRef: null,
+          };
+          return idempotency;
+        }
+      ),
       update: vi.fn(async ({ data }: { data: { resultRef: string } }) => {
-        idempotency = { resultRef: data.resultRef };
+        idempotency = { ...idempotency!, resultRef: data.resultRef };
         return idempotency;
       }),
     },
