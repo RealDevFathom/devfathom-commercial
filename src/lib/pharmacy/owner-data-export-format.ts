@@ -272,6 +272,8 @@ export type OwnerDataExportMeta = {
   generatedAt: Date;
   salesFrom: Date | null;
   salesTo: Date | null;
+  /** Organization zone the picked sales dates are read in (UTC when absent). */
+  timeZone?: string;
 };
 
 /** Paisa to a rupee string with exactly two decimals, by integer arithmetic. */
@@ -334,7 +336,7 @@ export function exportReadme(meta: OwnerDataExportMeta, rows: OwnerDataExportRow
   return [
     `# DevFathom data export — ${meta.organizationName.replace(/[\r\n]+/g, ' ')}`,
     '',
-    `Generated ${meta.generatedAt.toISOString()}. Sales cover ${range}.`,
+    `Generated ${meta.generatedAt.toISOString()}. Sales cover ${range}${meta.salesFrom || meta.salesTo ? ` (dates read in ${meta.timeZone ?? 'UTC'})` : ''}.`,
     '',
     'Every file is UTF-8 CSV with a header row. Ids are stable, so files join on them.',
     'A cell that a spreadsheet would read as a formula starts with an apostrophe.',

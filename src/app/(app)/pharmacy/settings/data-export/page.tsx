@@ -57,7 +57,7 @@ export default async function PharmacyDataExportPage() {
             explaining every column. When it is ready, download it here. The link works for 24
             hours, and every request and download is recorded in the audit log.
           </p>
-          <OwnerDataExportConsole initial={initial} />
+          <OwnerDataExportConsole initial={initial} timeZone={ctx.organization?.timezone} />
         </div>
       </SectionCard>
     </main>

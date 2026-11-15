@@ -4,6 +4,7 @@ import type { PlatformJob } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateRange, workspaceTimezone } from '@/lib/timezone';
 import {
   buildOwnerDataExportZip,
   exportRowCounts,
@@ -45,13 +46,19 @@ export function parseSalesRange(input: { from?: unknown; to?: unknown }): SalesR
   return { from, to };
 }
 
-function rangeBounds(range: SalesRange) {
+/**
+ * The instants the picked dates cover on the organization's clock: the start of
+ * `from` and the start of the day after `to`, so a sale at 01:00 PKT on the
+ * picked day is in range although it is still the day before in UTC.
+ */
+function rangeBounds(range: SalesRange, timeZone: string | null | undefined) {
+  const anchor = range.from ?? range.to;
+  if (!anchor) return { from: null, toExclusive: null };
+  const bounds = workspaceDateRange(range.from ?? anchor, range.to ?? anchor, timeZone);
   return {
-    from: range.from ? new Date(`${range.from}T00:00:00.000Z`) : null,
+    from: range.from ? bounds.from : null,
     // Inclusive end date: everything before the next day starts.
-    toExclusive: range.to
-      ? new Date(new Date(`${range.to}T00:00:00.000Z`).getTime() + 86_400_000)
-      : null,
+    toExclusive: range.to ? bounds.to : null,
   };
 }
 
@@ -245,10 +252,11 @@ const sumBy = <T>(items: readonly T[], value: (item: T) => number) =>
 export async function loadOwnerDataExportRows(
   db: ScopedDb,
   organizationId: string,
-  range: SalesRange
+  range: SalesRange,
+  timeZone?: string | null
 ): Promise<OwnerDataExportRows> {
   const where = { organizationId };
-  const bounds = rangeBounds(range);
+  const bounds = rangeBounds(range, timeZone);
   const [
     branches,
     locations,
@@ -644,9 +652,9 @@ export async function runPharmacyOwnerDataExportJob(
   );
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
-    select: { displayName: true, legalName: true },
+    select: { displayName: true, legalName: true, timezone: true },
   });
-  const rows = await loadOwnerDataExportRows(db, organizationId, range);
+  const rows = await loadOwnerDataExportRows(db, organizationId, range, organization?.timezone);
   const generatedAt = now();
   const archive = buildOwnerDataExportZip(
     {
@@ -654,6 +662,7 @@ export async function runPharmacyOwnerDataExportJob(
       generatedAt,
       salesFrom: range.from ? new Date(`${range.from}T00:00:00.000Z`) : null,
       salesTo: range.to ? new Date(`${range.to}T00:00:00.000Z`) : null,
+      timeZone: workspaceTimezone(organization?.timezone),
     },
     rows
   );
