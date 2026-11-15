@@ -22,13 +22,14 @@ import {
 } from './inventory';
 import {
   previewSaleLine,
+  lotSaleUnitOptions,
   saleUnitOptions,
   type PackLevelNode,
   type SaleUnitKind,
   type SaleUnitOption,
 } from './counter-pricing';
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
-import { normalizeMedicineText } from './medicine';
+import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
 
@@ -358,9 +359,6 @@ export async function searchCounterCatalog(
   const presentationByPackLevel = new Map(
     packLevels.map((level) => [level.id, level.presentationId])
   );
-  const roundingByPackLevel = new Map(
-    mrps.map((mrp) => [mrp.packLevelId, mrp.roundingIncrementMinor])
-  );
 
   const rows: CounterSearchRow[] = [];
   for (const medicine of medicines) {
@@ -401,21 +399,37 @@ export async function searchCounterCatalog(
 
     let saleUnits: SaleUnitOption[] = [];
     if (best) {
+      const levels = packLevelsByPresentation.get(presentationId) ?? [];
       try {
         saleUnits = saleUnitOptions({
-          packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+          packLevels: levels,
           rootPackLevelId: best.lot.packLevelId,
           unitsPerPack: best.lot.unitsPerPack,
         });
       } catch {
-        // A pack hierarchy that disagrees with the received lot cannot be
-        // priced. The row still reports stock, but offers no sale unit rather
-        // than quoting a price the server would refuse.
-        saleUnits = [];
+        // A pack hierarchy that disagrees with the received lot cannot derive a
+        // strip. The lot's own frozen units per pack is what the server prices
+        // from, so the sealed pack and the loose unit stay sellable.
+        try {
+          saleUnits = lotSaleUnitOptions({
+            packLevelId: best.lot.packLevelId,
+            levelLabel: levels.find((level) => level.id === best!.lot.packLevelId)?.level ?? 'PACK',
+            unitsPerPack: best.lot.unitsPerPack,
+          });
+        } catch {
+          saleUnits = [];
+        }
       }
     }
 
-    const roundingIncrementMinor = best ? (roundingByPackLevel.get(best.lot.packLevelId) ?? 1) : 1;
+    // The same (pack level, batch) lookup the sale writer uses, so the quoted
+    // price is the charged price even when batches carry different increments.
+    const roundingIncrementMinor = best
+      ? mrpRoundingIncrementForLot(mrps, {
+          packLevelId: best.lot.packLevelId,
+          batchNumber: best.lot.batch.batchNumber,
+        })
+      : 1;
 
     const saleableUnits = best
       ? saleUnits.map((option) => {

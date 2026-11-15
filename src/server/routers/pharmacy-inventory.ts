@@ -42,7 +42,10 @@ import {
   setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
-import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
+import {
+  postInterbranchTransferLossEntry,
+  postWriteOffEntry,
+} from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -755,6 +758,13 @@ async function receiveTransferWithVariance(
         idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
       },
     });
+    // FIN-01: the missing units' value leaves transit as a loss in the same
+    // transaction, or a short-closed transfer keeps a phantom transit asset.
+    await postInterbranchTransferLossEntry(db, scope, {
+      transferLineId: step.line.id,
+      stockMovementId: movement.id,
+      at: movement.occurredAt,
+    });
     const custody = await db.pharmacyCustodyRecord.create({
       data: {
         organizationId: scope.organizationId,
@@ -1251,7 +1261,7 @@ export const pharmacyInventoryRouter = router({
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
-          disposition: z.enum(['AVAILABLE', 'QUARANTINE']).optional(),
+          disposition: z.enum(['AVAILABLE', 'QUARANTINE', 'DAMAGED']).optional(),
         })
         .strict()
     )

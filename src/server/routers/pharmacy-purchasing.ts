@@ -7,7 +7,10 @@ import {
   verifyPurchaseApprover,
 } from '@/lib/pharmacy/purchase-approval';
 import { TRPCError } from '@trpc/server';
-import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import {
+  ControlledRestorationDenied,
+  isSolePharmacist,
+} from '@/lib/pharmacy/controlled-restoration-authorization';
 import {
   issueOperatorCredential,
   CredentialLifecycleError,
@@ -1894,6 +1897,7 @@ const purchasingRouter = router({
    * Fresh independent witnesses for reversing a posted controlled receipt: any
    * active PIN-holding pharmacist other than the person reversing. Unlike
    * posting, this is not limited to the receipt's original qualified person.
+   * A sole pharmacist gets only their own profile, marked `self`.
    */
   controlledReversalWitnesses: purchasing
     .meta(PROCUREMENT)
@@ -1929,7 +1933,13 @@ const purchasingRouter = router({
         select: { id: true },
       });
       if (!receipt) return [];
-      return listControlledPinWitnesses(ctx.db, organizationId, actorId);
+      const others = await listControlledPinWitnesses(ctx.db, organizationId, actorId);
+      if (others.length > 0) return others;
+      // Solo-pharmacy rule: with no other pharmacist, the user witnesses with
+      // their own fresh PIN; the reversal itself rechecks this and audits it.
+      if (!(await isSolePharmacist(ctx.db, organizationId, actorId))) return [];
+      const self = await listControlledPinWitnesses(ctx.db, organizationId, actorId, actorId);
+      return self.map((witness) => ({ ...witness, self: true }));
     }),
 
   /**

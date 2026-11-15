@@ -399,8 +399,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         title="Upload reference rows"
         titleLevel={2}
       >
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <label className="block text-sm font-medium text-text-body">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <label className="block min-w-0 text-sm font-medium text-text-body">
             CSV or Excel workbook
             <span className="mt-1 flex min-h-11 items-center gap-3 rounded-sm border border-border-default bg-surface-raised px-3 focus-within:ring-2 focus-within:ring-ring">
               <FileSpreadsheet className="size-4 text-text-muted" aria-hidden="true" />
