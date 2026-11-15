@@ -99,6 +99,8 @@ import {
   declineSubstitute,
   findSubstituteProposals,
   PharmacySubstituteError,
+  rankSameSaltBrandsByMargin,
+  suggestHigherMarginBrandMix,
 } from '@/lib/pharmacy/substitute-finder';
 import { findUpsellSuggestions, UPSELL_MAX_TRIGGERS } from '@/lib/pharmacy/upsell-suggestions';
 import {
@@ -206,6 +208,26 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+/**
+ * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
+ * (for the purchasing view) or a manager/owner may read brand margins.
+ */
+async function marginScopeFor(
+  ctx: TRPCContext,
+  branch: string,
+  actions: readonly ('pharmacy:dispense' | 'pharmacy:procurement' | 'pharmacy:manage')[]
+): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const subject = subjectFromSession(ctx.session!.user);
+  for (const action of actions) {
+    if (await can(subject, action, undefined, { db: ctx.db, source: 'TRPC' })) return scope;
+  }
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Pharmacist or manager permission is required to view brand margins.',
+  });
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -1934,6 +1956,53 @@ export const pharmacySalesRouter = router({
         }
         throw error;
       }
+    }),
+  /** #745: pharmacist-facing same-salt/strength brand ranking by branch margin. */
+  sameSaltMarginRanking: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          limit: z.number().int().min(1).max(50).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      try {
+        return await rankSameSaltBrandsByMargin(ctx.db, scope, input);
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  /** #745: purchasing view; suggests a higher-margin brand mix within exact equivalents. */
+  higherMarginBrandMix: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          minUnitMarginGainMinor: z.number().int().nonnegative().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:procurement',
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return suggestHigherMarginBrandMix(ctx.db, scope, {
+        minUnitMarginGainMinor: input.minUnitMarginGainMinor,
+      });
     }),
   /**
    * #730: rule-based complementary-item suggestions for the bill. Read-only;
