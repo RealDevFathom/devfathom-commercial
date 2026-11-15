@@ -143,6 +143,12 @@ const PROHIBITED_OFFER_CONTENT = new RegExp(
   'i'
 );
 
+/** True when copy is non-empty and names no drug, salt or medicine category. */
+export function isNonDrugOfferCopy(body: string): boolean {
+  const text = typeof body === 'string' ? body.trim() : '';
+  return text.length > 0 && !PROHIBITED_OFFER_CONTENT.test(text);
+}
+
 /** Rejects unreviewed copy and any drug, salt or medicine-category content. */
 export function validateNonDrugOffer(offer: ReviewedNonDrugOffer): string {
   const body = typeof offer?.body === 'string' ? offer.body.trim() : '';

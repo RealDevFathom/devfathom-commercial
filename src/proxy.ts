@@ -24,6 +24,8 @@ const publicPaths = [
   '/api/auth',
   '/brand',
   '/wallet',
+  // DEV-15: customer PWA; its own portal session, never a staff session.
+  '/my-pharmacy',
 ];
 
 /**

@@ -123,6 +123,8 @@ describe('public paths', () => {
       '/brand/preview',
       '/wallet',
       '/wallet/join/token-1',
+      '/my-pharmacy',
+      '/my-pharmacy/join/token-1',
     ]) {
       const response = await proxy(tenantRequest(path));
       expect(response.headers.get('location'), path).toBeNull();
@@ -143,6 +145,7 @@ describe('public paths', () => {
       '/branding',
       '/walletx',
       '/wallets/join',
+      '/my-pharmacyx',
     ]) {
       const response = await proxy(tenantRequest(path));
       expect(response.status, path).toBe(307);

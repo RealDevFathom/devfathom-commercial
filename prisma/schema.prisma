@@ -193,6 +193,9 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  customerPortalLinks    PharmacyCustomerPortalLink[]
+  customerPortalSessions PharmacyCustomerPortalSession[]
+  customerPortalRequests PharmacyCustomerPortalRequest[]
   whatsappMessageLogs    PharmacyMessageLog[]
   aiUsages               AIUsage[]
   receiptLayout          Json?
@@ -1241,6 +1244,7 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -1277,6 +1281,9 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  portalLinks      PharmacyCustomerPortalLink[]
+  portalSessions   PharmacyCustomerPortalSession[]
+  portalRequests   PharmacyCustomerPortalRequest[]
   whatsappMessages PharmacyMessageLog[]
   id               String               @id @default(cuid())
   organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1321,6 +1328,7 @@ enum PharmacyKhataLimitDecisionKind {
 /// CRM-L02 retail payer grouping. Clinical records remain attached to each
 /// member's PharmacyPatient and are never copied onto this account.
 model PharmacyFamilyAccount {
+  portalPaymentRequests PharmacyCustomerPortalRequest[]
   id               String   @id @default(cuid())
   organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId         String
@@ -2024,6 +2032,88 @@ model PharmacyCustomerOrderEvent {
   @@unique([organizationId, id])
   @@index([organizationId, branchId, orderId, occurredAt])
   @@map("pharmacy_customer_order_events")
+}
+
+/// DEV-15 (#762): customer PWA sign-in link. Names exactly one customer; the
+/// one-time code goes to that customer's stored phone.
+model PharmacyCustomerPortalLink {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  customerId        String
+  tokenHash         String    @unique(map: "pharmacy_portal_links_token_key")
+  createdByUserId   String
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  otpHash           String?
+  otpExpiresAt      DateTime?
+  otpFailedAttempts Int       @default(0)
+  createdAt         DateTime  @default(now())
+
+  branch    PharmacyBranch                  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_branch_fkey")
+  customer  PharmacyCustomer                @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_customer_fkey")
+  createdBy User                            @relation("PharmacyPortalLinkCreator", fields: [organizationId, createdByUserId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_links_creator_fkey")
+  sessions  PharmacyCustomerPortalSession[]
+
+  @@unique([organizationId, id], map: "pharmacy_portal_links_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_portal_links_org_branch_id_key")
+  @@index([organizationId, customerId], map: "pharmacy_portal_links_org_customer_idx")
+  @@map("pharmacy_customer_portal_links")
+}
+
+/// DEV-15 (#762): a signed-in customer PWA session, scoped to one customer.
+model PharmacyCustomerPortalSession {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  customerId     String
+  linkId         String
+  tokenHash      String    @unique(map: "pharmacy_portal_sessions_token_key")
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  branch   PharmacyBranch             @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_branch_fkey")
+  customer PharmacyCustomer           @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_customer_fkey")
+  link     PharmacyCustomerPortalLink @relation(fields: [organizationId, branchId, linkId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_sessions_link_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_portal_sessions_org_id_key")
+  @@index([organizationId, customerId], map: "pharmacy_portal_sessions_org_customer_idx")
+  @@map("pharmacy_customer_portal_sessions")
+}
+
+/// DEV-15 (#762): a customer request from the PWA. kind is REFILL, RX_ORDER or
+/// KHATA_PAYMENT; status is PENDING, VERIFIED, REJECTED or CANCELLED.
+model PharmacyCustomerPortalRequest {
+  id                    String    @id @default(cuid())
+  organizationId        String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  customerId            String
+  kind                  String
+  status                String    @default("PENDING")
+  note                  String?
+  prescriptionFileRef   String?
+  refillSaleId          String?
+  familyAccountId       String?
+  amountMinor           Int?
+  payerReference        String?
+  decidedByUserId       String?
+  decidedAt             DateTime?
+  decisionNote          String?
+  khataReceiptReference String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+
+  branch        PharmacyBranch         @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_branch_fkey")
+  customer      PharmacyCustomer       @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_customer_fkey")
+  refillSale    PharmacySale?          @relation(fields: [organizationId, branchId, refillSaleId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_requests_sale_fkey")
+  familyAccount PharmacyFamilyAccount? @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_portal_requests_family_fkey")
+  decidedBy     User?                  @relation("PharmacyPortalRequestDecider", fields: [organizationId, decidedByUserId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_portal_requests_decider_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_portal_requests_org_id_key")
+  @@index([organizationId, customerId, createdAt], map: "pharmacy_portal_requests_org_customer_idx")
+  @@index([organizationId, branchId, status, createdAt], map: "pharmacy_portal_requests_org_branch_status_idx")
+  @@map("pharmacy_customer_portal_requests")
 }
 
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
@@ -2992,6 +3082,8 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
+  pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
   id                 String     @id @default(cuid())
   organizationId     String     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   organizationRoleId String?
