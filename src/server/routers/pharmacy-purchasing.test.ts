@@ -2467,6 +2467,7 @@ const sensitiveReads = {
   debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'medicine' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
   '%s sensitive read security',
@@ -2565,6 +2566,7 @@ const branchActions = {
   debitNotePositions: sensitiveReads.debitNotePositions,
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
   supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
+  reorderDrafts: sensitiveReads.reorderDrafts,
 };
 describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
   '%s branch security',
@@ -2782,6 +2784,7 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {
   it('inventories every query so a new read cannot silently omit the authorization matrix', () => {
