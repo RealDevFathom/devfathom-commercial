@@ -18,6 +18,7 @@ export class FamilyKhataError extends Error {
       | 'INVALID_AMOUNT'
       | 'PAYMENT_EXCEEDS_BALANCE'
       | 'OWNER_ACTION_REQUIRED'
+      | 'OVERRIDE_REASON_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
       | 'PATIENT_NOT_FOUND'
@@ -233,6 +234,9 @@ export async function applyKhataLimitDecision(
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
+    // DEV-223: the owner or manager's reason for overriding the suggested limit.
+    // Required whenever a limit is overridden; recorded on the audited decision.
+    overrideReason?: string;
   }
 ) {
   const authorizedAt = new Date();
@@ -246,6 +250,9 @@ export async function applyKhataLimitDecision(
     authorizedAt.getTime() - reauthenticatedAt > 5 * 60_000
   )
     throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const overrideReason = input.overrideReason?.trim().slice(0, 500) || undefined;
+  if (input.overrideLimitMinor !== undefined && !overrideReason)
+    throw new FamilyKhataError('OVERRIDE_REASON_REQUIRED');
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -276,6 +283,7 @@ export async function applyKhataLimitDecision(
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
+        ...(overrideReason ? { overrideReason } : {}),
       },
       ownerActorId: scope.actorId,
     },
@@ -371,7 +379,13 @@ export async function readSaleKhataStatement(
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
+  input: {
+    saleId: string;
+    familyAccountId: string;
+    amountMinor: number;
+    ownerOverride?: boolean;
+    overrideReason?: string;
+  },
   owner: { authorized: boolean; passwordAuthenticatedAt?: number }
 ) {
   await db.$queryRaw(
@@ -427,6 +441,7 @@ export async function authorizeKhataCharge(
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
+      overrideReason: input.overrideReason,
     });
   }
   return account;

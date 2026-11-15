@@ -319,6 +319,7 @@ it('round-trips Khata recovery without storing authentication credentials', () =
     type: 'KHATA',
     familyAccountId: 'family-a',
     ownerOverride: true,
+    overrideReason: 'Regular customer',
   };
   delete attempt.input.cashReceivedMinor;
   attempt.draft.cashReceived = '';
@@ -327,6 +328,14 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   clearTenderAttempt(attempt);
   expect(() =>
     persistTenderAttempt({ ...attempt, input: { ...attempt.input, password: 'private' } } as never)
+  ).toThrow();
+  expect(window.localStorage.length).toBe(0);
+});
+
+it('DEV-223: refuses a stored override reason on a non-Khata tender', () => {
+  const attempt = original();
+  expect(() =>
+    persistTenderAttempt({ ...attempt, input: { ...attempt.input, overrideReason: 'x' } })
   ).toThrow();
   expect(window.localStorage.length).toBe(0);
 });

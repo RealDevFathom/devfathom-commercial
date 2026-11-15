@@ -109,6 +109,7 @@ export type CounterTenderPanelProps = {
       cashReceivedMinor?: number;
       familyAccountId?: string;
       ownerOverride?: boolean;
+      overrideReason?: string;
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
@@ -175,6 +176,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [khataLoading, setKhataLoading] = useState(false);
     const [khataError, setKhataError] = useState('');
     const [ownerOverride, setOwnerOverride] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
@@ -341,7 +343,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
-          (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
+          (!overLimit ||
+            (ownerOverride &&
+              Boolean(overrideReason.trim()) &&
+              Boolean(password) &&
+              Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -368,7 +374,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             type,
             amountMinor,
             ...(isKhata
-              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
+              ? {
+                  familyAccountId: accountId,
+                  ownerOverride: overLimit && ownerOverride,
+                  ...(overLimit && ownerOverride
+                    ? { overrideReason: overrideReason.trim() }
+                    : {}),
+                }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
             ...(manual && capture?.success
@@ -392,6 +404,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setPayerName('');
           setReferenceSkipped(false);
           setApprovalCode('');
+          setOverrideReason('');
           if (isKhata && loadKhataAccounts) {
             try {
               setAccounts(await loadKhataAccounts());
@@ -895,8 +908,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner must re-enter their password
-                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  This charge exceeds the family credit limit. An owner or manager must give a
+                  reason and re-enter their password to raise the limit to{' '}
+                  {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
                   <input
@@ -905,10 +919,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setOwnerOverride(event.target.checked)}
                   />
-                  Owner: authorize limit increase
+                  Owner or manager: authorize limit increase
                 </Label>
                 {ownerOverride ? (
                   <>
+                    <Label htmlFor="khata-override-reason">Reason for limit increase</Label>
+                    <Input
+                      id="khata-override-reason"
+                      value={overrideReason}
+                      maxLength={500}
+                      required
+                      disabled={!editable}
+                      onChange={(event) => setOverrideReason(event.target.value)}
+                      className="h-11 rounded-sm"
+                    />
                     <Label htmlFor="khata-password">Owner password (current account)</Label>
                     <Input
                       id="khata-password"

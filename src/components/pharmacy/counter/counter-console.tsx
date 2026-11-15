@@ -1557,6 +1557,7 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        overrideReason?: string;
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
@@ -1610,7 +1611,13 @@ function ScopedPharmacyCounterConsole({
                   paidMinor > 0 ? `:after:${paidMinor}` : ''
                 }`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            ? {
+                familyAccountId: input.familyAccountId,
+                ownerOverride: input.ownerOverride,
+                ...(input.overrideReason !== undefined
+                  ? { overrideReason: input.overrideReason }
+                  : {}),
+              }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),

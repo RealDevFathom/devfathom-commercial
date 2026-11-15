@@ -628,15 +628,30 @@ describe('family Khata tender', () => {
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'test-only-password' },
+    });
+    // DEV-223: the override needs an auditable reason before payment is offered.
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: '   ' },
+    });
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: '  Regular customer, owner approved  ' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
     expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '');
     expect(props.onTender).toHaveBeenCalledWith(
-      { type: 'KHATA', amountMinor: 25000, familyAccountId: 'family-a', ownerOverride: true },
+      {
+        type: 'KHATA',
+        amountMinor: 25000,
+        familyAccountId: 'family-a',
+        ownerOverride: true,
+        overrideReason: 'Regular customer, owner approved',
+      },
       { amount: '', cashReceived: '' }
     );
   });
@@ -647,7 +662,10 @@ describe('family Khata tender', () => {
     });
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Regular customer' },
+    });
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'wrong' },
     });
