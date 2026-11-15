@@ -470,6 +470,12 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      // DEV-830: the stored pack setup the server derives the line multiplier from.
+      packLevel: {
+        findMany: async () => [
+          { id: 'pack-level-a', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
+        ],
+      },
       user: {
         findFirst: async () => issuerRow,
         findUnique: async () =>

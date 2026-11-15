@@ -1366,9 +1366,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          linkCustomerToSale(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => linkCustomerToSale(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -1390,7 +1390,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           // DEV-630: a points tender settles the sale, so it books on today too.
@@ -3058,13 +3059,29 @@ export const pharmacySalesRouter = router({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
 
-  /** The branches this counter may open a bill against, with the money format. */
+  /**
+   * The branches this counter may open a bill against, with the money format.
+   * DEV-830 (F04): the caller's active assignments, as the counter's gate admits them;
+   * a session ADMIN of this organization keeps every active branch.
+   */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const user = ctx.session.user;
+    const orgAdmin = user.role === 'ADMIN' && user.organizationId === organizationId;
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
+        where: {
+          organizationId,
+          active: true,
+          ...(orgAdmin
+            ? {}
+            : {
+                branchAssignments: {
+                  some: { organizationId, userId: user.id, active: true },
+                },
+              }),
+        },
         select: { id: true, code: true, name: true, city: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
