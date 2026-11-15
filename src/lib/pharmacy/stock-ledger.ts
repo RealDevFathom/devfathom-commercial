@@ -814,6 +814,61 @@ export type TransferInput = {
 };
 
 /**
+ * Location kinds that hold saleable shelf stock. Sale selection does not read a
+ * location's kind, so a plain move must never land AVAILABLE units in a
+ * quarantine cage, a returns bay or a transit bay: those take stock through the
+ * quarantine, supplier-return and inter-branch flows, which carry their own
+ * status change and approvals.
+ */
+const SALEABLE_TRANSFER_DESTINATIONS: ReadonlySet<string> = new Set([
+  'STORE',
+  'RACK_BIN',
+  'FRIDGE',
+  'SAFE',
+]);
+
+type TransferLegs = {
+  out: Awaited<ReturnType<ScopedDb['pharmacyStockMovement']['create']>>;
+  received: Awaited<ReturnType<ScopedDb['pharmacyStockMovement']['create']>>;
+};
+
+/**
+ * The legs an earlier call with the same idempotency prefix already posted, or
+ * null when the prefix is unused. A prefix reused for a different move is a
+ * conflict, never a silent replay of something else.
+ */
+async function postedTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: TransferInput
+): Promise<TransferLegs | null> {
+  const outKey = `${input.idempotencyKeyPrefix}:out`;
+  const inKey = `${input.idempotencyKeyPrefix}:in`;
+  const legs = await db.pharmacyStockMovement.findMany({
+    where: { organizationId: scope.organizationId, idempotencyKey: { in: [outKey, inKey] } },
+  });
+  if (legs.length === 0) return null;
+
+  const out = legs.find((leg) => leg.idempotencyKey === outKey);
+  const received = legs.find((leg) => leg.idempotencyKey === inKey);
+  const sameMove =
+    out !== undefined &&
+    received !== undefined &&
+    out.branchId === scope.branchId &&
+    received.branchId === scope.branchId &&
+    out.kind === 'TRANSFER_OUT' &&
+    received.kind === 'TRANSFER_IN' &&
+    out.inventoryLotId === input.inventoryLotId &&
+    received.inventoryLotId === input.inventoryLotId &&
+    out.stockLocationId === input.fromStockLocationId &&
+    received.stockLocationId === input.toStockLocationId &&
+    out.quantityUnits === -input.units &&
+    received.quantityUnits === input.units;
+  if (!sameMove) throw new PharmacyInventoryError('IDEMPOTENCY_CONFLICT');
+  return { out, received };
+}
+
+/**
  * INV-03 on the transfer path: the hard blocks that stop a sale stop a transfer.
  *
  * DEV-608: a same-branch location move has no dispatch, carrier or receipt
@@ -824,7 +879,16 @@ export type TransferInput = {
  * lock and the single commit still mean the same units are never AVAILABLE in
  * two places at once.
  */
-export async function transferStock(db: ScopedDb, scope: LedgerScope, input: TransferInput) {
+export async function transferStock(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: TransferInput
+): Promise<TransferLegs> {
+  // DEV-608: a retry of a move that already committed answers with what it
+  // posted instead of failing on the idempotency key or moving the units twice.
+  const replay = await postedTransfer(db, scope, input);
+  if (replay) return replay;
+
   // DEV-660: read and lock the source balance only within the acting branch, so a
   // sibling branch's lot or location resolves to nothing rather than answering
   // (and locking) as blocked stock.
@@ -840,6 +904,11 @@ export async function transferStock(db: ScopedDb, scope: LedgerScope, input: Tra
 
   const source = rows[0];
   if (!source) throw new PharmacyInventoryError('NOT_FOUND');
+
+  // A concurrent call with the same prefix holds this lock until it commits;
+  // once it has, this statement sees its legs and replays them.
+  const racedReplay = await postedTransfer(db, scope, input);
+  if (racedReplay) return racedReplay;
 
   const blockedBy = blockReasonFor(toCandidate(source), {
     organizationId: scope.organizationId,
@@ -865,9 +934,12 @@ export async function transferStock(db: ScopedDb, scope: LedgerScope, input: Tra
       branchId: scope.branchId,
       active: true,
     },
-    select: { id: true, coldChain: true },
+    select: { id: true, kind: true, coldChain: true },
   });
   if (!destination) throw new PharmacyInventoryError('NOT_FOUND');
+  if (!SALEABLE_TRANSFER_DESTINATIONS.has(destination.kind)) {
+    throw new PharmacyInventoryError('UNSALEABLE_DESTINATION');
+  }
 
   // INV-05 on the transfer path: the units arrive AVAILABLE, so cold-chain stock
   // may only move into a validated cold-chain zone. Refuse it here with the

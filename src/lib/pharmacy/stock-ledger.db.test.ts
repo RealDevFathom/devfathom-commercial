@@ -26,6 +26,9 @@
  *      trigger and then reads back must do the read from a new one.
  */
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import { Client } from 'pg';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -227,6 +230,19 @@ async function stockLot(
     }
   );
   return { batch, lot };
+}
+
+/** A second saleable shelf in the fixture's branch, for a plain location move. */
+async function shelfIn(db: ScopedDb, fixture: Scenario, label: string) {
+  return db.pharmacyStockLocation.create({
+    data: {
+      organizationId: fixture.organizationId,
+      branchId: fixture.branchId,
+      code: `SHELF-${tag(label)}`,
+      name: 'Back shelf',
+      kind: 'RACK_BIN',
+    },
+  });
 }
 
 /** A live regulatory hold, optionally sharing its position with manual stock. */
@@ -2555,29 +2571,29 @@ describeIfDatabase('PH-INV hard blocks — INV-03', () => {
 
   it('lands transferred units AVAILABLE at the destination, never available twice (DEV-608)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-ok');
-    const projection = await inOrg(ORG_A, async (db) => {
+    const { shelf, projection } = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, fixture, {
         expiresAt: LATER,
         units: 40,
         label: 'transfer-ok',
       });
+      const shelf = await shelfIn(db, fixture, 'transfer-ok');
       await deps.ledger.transferStock(db, scopeOf(fixture), {
         inventoryLotId: lot.id,
         fromStockLocationId: fixture.locationId,
-        toStockLocationId: fixture.quarantineLocationId,
+        toStockLocationId: shelf.id,
         units: 10,
         at: NOW,
         idempotencyKeyPrefix: tag('transfer-ok'),
       });
-      return deps.ledger.onHand(db, fixture, fixture.medicineId, NOW);
+      return { shelf, projection: await deps.ledger.onHand(db, fixture, fixture.medicineId, NOW) };
     });
 
     const origin = projection.find(
       (row) => row.disposition === 'AVAILABLE' && row.stockLocationId === fixture.locationId
     )!;
     const destination = projection.find(
-      (row) =>
-        row.disposition === 'AVAILABLE' && row.stockLocationId === fixture.quarantineLocationId
+      (row) => row.disposition === 'AVAILABLE' && row.stockLocationId === shelf.id
     )!;
     expect(origin.onHandUnits).toBe(30);
     expect(destination.onHandUnits).toBe(10);
@@ -2588,6 +2604,88 @@ describeIfDatabase('PH-INV hard blocks — INV-03', () => {
       false
     );
     expect(projection.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
+  });
+
+  it('refuses to move stock into the quarantine cage and changes nothing (DEV-608)', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-quarantine');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-quarantine',
+      });
+      return lot.id;
+    });
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.ledger.transferStock(db, scopeOf(fixture), {
+          inventoryLotId: lotId,
+          fromStockLocationId: fixture.locationId,
+          toStockLocationId: fixture.quarantineLocationId,
+          units: 10,
+          at: NOW,
+          idempotencyKeyPrefix: tag('transfer-quarantine'),
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'UNSALEABLE_DESTINATION' });
+
+    const after = await inOrg(ORG_A, async (db) => ({
+      projection: await deps.ledger.onHand(db, fixture, fixture.medicineId, NOW),
+      transfers: await db.pharmacyStockMovement.count({
+        where: { inventoryLotId: lotId, kind: { in: ['TRANSFER_OUT', 'TRANSFER_IN'] } },
+      }),
+    }));
+    expect(after.transfers).toBe(0);
+    expect(
+      after.projection.map((row) => [row.stockLocationId, row.disposition, row.onHandUnits])
+    ).toEqual([[fixture.locationId, 'AVAILABLE', 40]]);
+  });
+
+  it('answers a retry with the same prefix with the first result, moving the units once (DEV-608)', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-retry');
+    const { lotId, shelfId } = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-retry',
+      });
+      const shelf = await shelfIn(db, fixture, 'transfer-retry');
+      return { lotId: lot.id, shelfId: shelf.id };
+    });
+    const request = {
+      inventoryLotId: lotId,
+      fromStockLocationId: fixture.locationId,
+      toStockLocationId: shelfId,
+      units: 10,
+      at: NOW,
+      idempotencyKeyPrefix: tag('transfer-retry'),
+    };
+
+    const first = await inOrg(ORG_A, (db) =>
+      deps.ledger.transferStock(db, scopeOf(fixture), request)
+    );
+    const retry = await inOrg(ORG_A, (db) =>
+      deps.ledger.transferStock(db, scopeOf(fixture), request)
+    );
+    expect(retry.out.id).toBe(first.out.id);
+    expect(retry.received.id).toBe(first.received.id);
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.ledger.transferStock(db, scopeOf(fixture), { ...request, units: 5 })
+      )
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+
+    const projection = await inOrg(ORG_A, (db) =>
+      deps.ledger.onHand(db, fixture, fixture.medicineId, NOW)
+    );
+    const units = (locationId: string) =>
+      projection.find(
+        (row) => row.disposition === 'AVAILABLE' && row.stockLocationId === locationId
+      )?.onHandUnits;
+    expect(units(fixture.locationId)).toBe(30);
+    expect(units(shelfId)).toBe(10);
   });
 });
 
@@ -3158,5 +3256,171 @@ describeIfDatabase('PH-INV recall authority across manual and DRAP workflows', (
         )
     );
     expect(await recallStates(fixture)).toEqual(['RECALLED', 'RECALLED']);
+  });
+});
+
+// ── DEV-608 — the hand-run repair for moves stranded before the fix ─────────
+
+const REPAIR_DIR = 'docs/operations/dev-608-stranded-transfer-repair';
+
+/** A script's statements without its own transaction, so the case can roll them back. */
+function repairScript(name: 'dry-run.sql' | 'repair.sql') {
+  return readFileSync(`${REPAIR_DIR}/${name}`, 'utf8')
+    .replace(/^BEGIN( READ ONLY)?;$/m, '')
+    .replace(/^(COMMIT|ROLLBACK);$/m, '');
+}
+
+/** The pair the pre-fix transferStock posted: out of the store, IN_TRANSIT at `toLocationId`. */
+async function strandLikeBeforeTheFix(
+  db: ScopedDb,
+  fixture: Scenario,
+  lotId: string,
+  toLocationId: string,
+  label: string
+) {
+  const prefix = tag(label);
+  const common = {
+    organizationId: fixture.organizationId,
+    branchId: fixture.branchId,
+    inventoryLotId: lotId,
+    actorId: ACTOR,
+    occurredAt: NOW,
+  };
+  await db.pharmacyStockMovement.create({
+    data: {
+      ...common,
+      stockLocationId: fixture.locationId,
+      kind: 'TRANSFER_OUT',
+      disposition: 'AVAILABLE',
+      quantityUnits: -10,
+      sealedPackDelta: -1,
+      looseUnitDelta: 0,
+      idempotencyKey: `${prefix}:out`,
+    },
+  });
+  await db.pharmacyStockMovement.create({
+    data: {
+      ...common,
+      stockLocationId: toLocationId,
+      kind: 'TRANSFER_IN',
+      disposition: 'IN_TRANSIT',
+      quantityUnits: 10,
+      sealedPackDelta: 1,
+      looseUnitDelta: 0,
+      idempotencyKey: `${prefix}:in`,
+    },
+  });
+}
+
+describeIfDatabase('DEV-608 — stranded same-branch transfer repair (docs/operations)', () => {
+  it('returns stranded units to their origin, holds back what it cannot cover, and is idempotent', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'stranded-repair');
+    const cold = await scenario(ORG_A, BRANCH_A, 'stranded-cold');
+    const lots = await inOrg(ORG_A, async (db) => {
+      const shelf = await shelfIn(db, fixture, 'stranded-repair');
+      const coldShelf = await shelfIn(db, cold, 'stranded-cold');
+      const ok = await stockLot(db, fixture, { expiresAt: LATER, units: 40, label: 'stranded-ok' });
+      const short = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'stranded-short',
+      });
+      const coldLot = await stockLot(db, cold, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'stranded-cold',
+      });
+      await strandLikeBeforeTheFix(db, fixture, ok.lot.id, shelf.id, 'stranded-ok');
+      await strandLikeBeforeTheFix(db, fixture, short.lot.id, shelf.id, 'stranded-short');
+      await strandLikeBeforeTheFix(db, cold, coldLot.lot.id, coldShelf.id, 'stranded-cold');
+      // Some of the short lot's stranded units were since written down where they sat.
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: fixture.organizationId,
+          branchId: fixture.branchId,
+          inventoryLotId: short.lot.id,
+          stockLocationId: shelf.id,
+          kind: 'ADJUSTMENT',
+          disposition: 'IN_TRANSIT',
+          quantityUnits: -10,
+          sealedPackDelta: -1,
+          looseUnitDelta: 0,
+          actorId: ACTOR,
+          idempotencyKey: tag('stranded-short-count'),
+        },
+      });
+      // The cold lot's medicine now needs cold chain; its ambient origin is no place for it.
+      await db.medicine.update({ where: { id: cold.medicineId }, data: { coldChain: true } });
+      return { ok: ok.lot.id, short: short.lot.id, cold: coldLot.lot.id, shelf: shelf.id };
+    });
+    const ours = [lots.ok, lots.short, lots.cold];
+
+    const client = new Client({ connectionString: TEST_DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      const dryRun = (await client.query(repairScript('dry-run.sql'))) as unknown as Array<{
+        fields: Array<{ name: string }>;
+        rows: Array<Record<string, unknown>>;
+      }>;
+      const detail = dryRun.find((result) =>
+        result.fields?.some((field) => field.name === 'willRepair')
+      )!;
+      const verdict = Object.fromEntries(
+        detail.rows
+          .filter((row) => ours.includes(row.inventoryLotId as string))
+          .map((row) => [row.inventoryLotId, row.heldBack ?? 'REPAIR'])
+      );
+      expect(verdict).toEqual({
+        [lots.ok]: 'REPAIR',
+        [lots.short]: 'IN_TRANSIT_BALANCE_SHORT',
+        [lots.cold]: 'ORIGIN_NOT_COLD_CHAIN',
+      });
+
+      await client.query(repairScript('repair.sql'));
+
+      const balances = await client.query<{
+        inventoryLotId: string;
+        stockLocationId: string;
+        disposition: string;
+        onHandUnits: number;
+      }>(
+        `SELECT "inventoryLotId", "stockLocationId", "disposition"::text AS "disposition", "onHandUnits"
+           FROM "pharmacy_stock_balances" WHERE "inventoryLotId" = ANY($1)`,
+        [ours]
+      );
+      const held = (lotId: string, locationId: string, disposition: string) =>
+        balances.rows.find(
+          (row) =>
+            row.inventoryLotId === lotId &&
+            row.stockLocationId === locationId &&
+            row.disposition === disposition
+        )?.onHandUnits;
+      // Repaired: back AVAILABLE where it started, nothing left in transit.
+      expect(held(lots.ok, fixture.locationId, 'AVAILABLE')).toBe(40);
+      expect(held(lots.ok, lots.shelf, 'IN_TRANSIT')).toBe(0);
+      // Held back: untouched, for a person to resolve.
+      expect(held(lots.short, fixture.locationId, 'AVAILABLE')).toBe(30);
+      expect(held(lots.cold, cold.locationId, 'AVAILABLE')).toBe(30);
+
+      const reversals = await client.query<{ reversesMovementId: string; kind: string }>(
+        `SELECT "reversesMovementId", "kind"::text AS "kind" FROM "pharmacy_stock_movements"
+          WHERE "inventoryLotId" = ANY($1) AND "actorId" = 'system:dev-608-repair'`,
+        [ours]
+      );
+      expect(reversals.rows).toHaveLength(2);
+      expect(reversals.rows.every((row) => row.kind === 'ADJUSTMENT')).toBe(true);
+
+      // A second run finds nothing left to repair and posts nothing.
+      await client.query('DROP TABLE dev608_repair');
+      const rerun = (await client.query(repairScript('repair.sql'))) as unknown as Array<{
+        rows: Array<Record<string, unknown>>;
+      }>;
+      const summary = rerun.find((result) => result.rows?.[0]?.pairsRepaired !== undefined)!;
+      expect(Number(summary.rows[0]!.pairsRepaired)).toBe(0);
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
   });
 });
