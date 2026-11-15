@@ -263,14 +263,14 @@ describe('vertical-aware invitation copy', () => {
   it('shows pharmacy copy and the pharmacy role catalog to a pharmacy owner', () => {
     state.vertical = 'PHARMACY';
     state.roles.data = [
-      { id: 'role_owner', key: 'owner-operator', name: 'Owner / Operator' },
+      { id: 'role_manager', key: 'manager', name: 'Manager' },
       { id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' },
     ];
     const { container } = render(<AddMemberModal onClose={vi.fn()} />);
     const roleSelect = screen.getByLabelText('Role');
     expect(roleSelect).toHaveAttribute('id', 'invite-role-template');
     expect(screen.queryByLabelText('Pharmacy staff role')).toBeNull();
-    expect(screen.getByRole('option', { name: 'Owner / Operator' })).toHaveValue('role_owner');
+    expect(screen.getByRole('option', { name: 'Manager' })).toHaveValue('role_manager');
     expect(screen.getByRole('option', { name: 'Pharmacist' })).toHaveValue('role_pharmacist');
     expect(screen.getByRole('option', { name: 'No pharmacy role' })).toHaveValue('');
     expect(screen.getByPlaceholderText('Pharmacist')).toBeInTheDocument();
@@ -315,9 +315,8 @@ describe('vertical-aware invitation copy', () => {
 
     it.each([
       ['Organization administrator', 'role_admin', 'ADMIN'],
-      ['Owner', 'role_owner', 'ADMIN'],
-      ['Owner / Operator', 'role_operator', 'ADMIN'],
-      ['Manager', 'role_manager', 'HR'],
+      // SEC-I (DEV-827): Manager grants its template only, never HR.
+      ['Manager', 'role_manager', 'EMPLOYEE'],
       ['Pharmacist', 'role_pharmacist', 'EMPLOYEE'],
       ['Cashier', 'role_cashier', 'EMPLOYEE'],
       ['No pharmacy role', '', 'EMPLOYEE'],
@@ -358,24 +357,30 @@ describe('vertical-aware invitation copy', () => {
       );
     });
 
-    it('explains how each owner-type role differs and shows the access level', () => {
+    // SEC-I (DEV-827): no base role grants exactly what Owner or Owner / Operator says.
+    it('does not offer Owner or Owner / Operator by invite', () => {
+      render(<AddMemberModal onClose={vi.fn()} />);
+      expect(screen.queryByRole('option', { name: 'Owner' })).toBeNull();
+      expect(screen.queryByRole('option', { name: 'Owner / Operator' })).toBeNull();
+      expect(
+        screen.getByRole('option', { name: 'Organization administrator' })
+      ).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Manager' })).toBeInTheDocument();
+    });
+
+    it('shows the access level each role grants', () => {
       render(<AddMemberModal onClose={vi.fn()} />);
       const picker = screen.getByLabelText('Role');
       const help = document.getElementById('invite-role-template-help')!;
       expect(picker).toHaveAttribute('aria-describedby', 'invite-role-template-help');
       expect(help).toHaveTextContent('Access level: Staff.');
-      const seen = new Set<string>();
-      for (const id of ['role_admin', 'role_owner', 'role_operator']) {
-        fireEvent.change(picker, { target: { value: id } });
-        expect(help).toHaveTextContent('Access level: Admin.');
-        expect(help.textContent).not.toContain(inviteCopyForVertical('PHARMACY').staffRoleHelp);
-        seen.add(help.textContent ?? '');
-      }
-      expect(seen.size).toBe(3);
-      fireEvent.change(picker, { target: { value: 'role_operator' } });
-      expect(help).toHaveTextContent(/dispensing/);
+      fireEvent.change(picker, { target: { value: 'role_admin' } });
+      expect(help).toHaveTextContent('Access level: Admin.');
+      expect(help).toHaveTextContent(/billing and team/);
+      expect(help.textContent).not.toContain(inviteCopyForVertical('PHARMACY').staffRoleHelp);
       fireEvent.change(picker, { target: { value: 'role_manager' } });
-      expect(help).toHaveTextContent('Access level: Manager.');
+      expect(help).toHaveTextContent('Access level: Staff.');
+      expect(help).not.toHaveTextContent('Access level: Manager.');
     });
   });
 

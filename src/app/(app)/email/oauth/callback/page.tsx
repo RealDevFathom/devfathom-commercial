@@ -51,9 +51,14 @@ function CallbackInner() {
       finish(false, errParam || 'Consent was cancelled.');
       return;
     }
+    if (!state) {
+      finish(false, 'This connection link is invalid. Start the connection again from Email.');
+      return;
+    }
 
+    // The server only accepts a state this signed-in session started (F11).
     connectCallback.mutate(
-      { provider, code },
+      { provider, code, state },
       {
         onSuccess: () => finish(true),
         onError: (e) => finish(false, e.message),

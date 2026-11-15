@@ -32,6 +32,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
+import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -163,12 +164,14 @@ export class PharmacySaleError extends Error {
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'VOUCHER_CATEGORY_REFUSED'
       | 'VOUCHER_INVALID'
+      | 'VOUCHER_PIN_REQUIRED'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'NOT_BILL_OWNER'
   ) {
     super(reason);
   }
@@ -280,6 +283,11 @@ type AddSaleLineInput = {
   discountMinor?: number;
   /** DEV-27: a stored voucher to redeem; it sets the discount and its approval. */
   voucherId?: string;
+  /**
+   * DEV-819: set only by the counter after the redeeming cashier re-entered their own PIN.
+   * A voucher line without it is refused.
+   */
+  voucherCashierPinVerified?: true;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -315,6 +323,11 @@ export async function addReservedSaleLine(
 /**
  * DEV-27: loads the stored voucher for a line and enforces its allowlist. The
  * caller cannot set the amount, kind or approver of a voucher discount.
+ *
+ * DEV-819: the cashier must have re-entered their PIN; the voucher must be live (not
+ * revoked, not expired, uses left); the issuer must still hold owner rights and the recorded
+ * approval must still stand. One use is taken here, inside the sale transaction, with a
+ * compare-and-set on the use count so concurrent redemptions cannot exceed the limit.
  */
 async function voucherForRedemption(
   db: ScopedDb,
@@ -335,22 +348,37 @@ async function voucherForRedemption(
     input.approvalPolicy !== undefined
   )
     throw new PharmacySaleError('VOUCHER_INVALID');
+  if (input.voucherCashierPinVerified !== true) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+  const now = new Date();
   const voucher = await db.pharmacyVoucher.findFirst({
     where: {
       id: input.voucherId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       active: true,
+      revokedAt: null,
+      validUntil: { gt: now },
     },
     select: {
       id: true,
       discountMinor: true,
       eligibleCategories: true,
       issuedByUserId: true,
+      approvedByUserId: true,
+      approvalPolicy: true,
       validUntil: true,
+      maxUses: true,
+      usedCount: true,
+      revokedAt: true,
     },
   });
-  if (!voucher || (voucher.validUntil && voucher.validUntil.getTime() <= Date.now()))
+  if (
+    !voucher ||
+    voucher.revokedAt !== null ||
+    !voucher.validUntil ||
+    voucher.validUntil.getTime() <= now.getTime() ||
+    voucher.usedCount >= voucher.maxUses
+  )
     throw new PharmacySaleError('VOUCHER_INVALID');
   try {
     assertVoucherEligibleLine(medicine, voucher.eligibleCategories);
@@ -358,7 +386,26 @@ async function voucherForRedemption(
     if (error instanceof VoucherScopeError) throw new PharmacySaleError('VOUCHER_CATEGORY_REFUSED');
     throw error;
   }
-  return voucher;
+  let approverUserId: string;
+  try {
+    approverUserId = await assertVoucherIssuerRights(db, scope.organizationId, voucher);
+  } catch (error) {
+    if (error instanceof VoucherIssuerRevoked) throw new PharmacySaleError('VOUCHER_INVALID');
+    throw error;
+  }
+  const taken = await db.pharmacyVoucher.updateMany({
+    where: {
+      id: voucher.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      revokedAt: null,
+      usedCount: voucher.usedCount,
+    },
+    data: { usedCount: { increment: 1 } },
+  });
+  if (taken.count !== 1) throw new PharmacySaleError('VOUCHER_INVALID');
+  return { ...voucher, approverUserId };
 }
 
 async function addSaleLineWithAllocation(
@@ -496,7 +543,7 @@ async function addSaleLineWithAllocation(
       ? ('PROMOTION' as const)
       : input.discountKind;
   const approvedByUserId = voucher
-    ? voucher.issuedByUserId
+    ? voucher.approverUserId
     : (promotion?.promotion.createdByUserId ?? input.approvedByUserId);
   const approvalPolicy = voucher
     ? `voucher:${voucher.id}`
@@ -574,15 +621,40 @@ async function addSaleLineWithAllocation(
   return { line, allocation };
 }
 
+/**
+ * DEV-821: who is changing a bill's status, decided by the caller. Required on every
+ * call, so no caller can void without stating it. A counter user may void only a
+ * bill they created unless they are a manager or owner. A failed delivery that the
+ * delivery path has already authorized voids its own order sale.
+ */
+export type SaleTransitionAuthority =
+  | { kind: 'COUNTER'; actorIsManager: boolean }
+  | { kind: 'FAILED_DELIVERY_RETURN' };
+
+function mayVoidSale(
+  authority: SaleTransitionAuthority | undefined,
+  sale: { createdByUserId: string },
+  scope: LedgerScope
+) {
+  if (authority?.kind === 'FAILED_DELIVERY_RETURN') return true;
+  if (authority?.kind !== 'COUNTER') return false;
+  return authority.actorIsManager || sale.createdByUserId === scope.actorId;
+}
+
 export async function changeSaleStatus(
   db: ScopedDb,
   scope: LedgerScope,
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
+  authority: SaleTransitionAuthority,
   reason?: string,
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-821: fails closed. A void releases the bill's stock, so a missing or
+  // insufficient authority is refused before the bill is claimed.
+  if (action === 'void' && !mayVoidSale(authority, sale, scope))
+    throw new PharmacySaleError('NOT_BILL_OWNER');
   // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
   // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
@@ -633,6 +705,22 @@ export async function changeSaleStatus(
       0
     );
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
+    // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
+    // claimed above, so this runs once per void.
+    const voucherUses = new Map<string, number>();
+    for (const line of sale.lines)
+      if (line.voucherId)
+        voucherUses.set(line.voucherId, (voucherUses.get(line.voucherId) ?? 0) + 1);
+    for (const [voucherId, uses] of voucherUses)
+      await db.pharmacyVoucher.updateMany({
+        where: {
+          id: voucherId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          usedCount: { gte: uses },
+        },
+        data: { usedCount: { decrement: uses } },
+      });
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,

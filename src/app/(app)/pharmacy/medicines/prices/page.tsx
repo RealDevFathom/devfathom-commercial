@@ -6,13 +6,13 @@ export const metadata: Metadata = { title: 'Medicine price intelligence' };
 
 export default function MedicinePricesPage() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy / medicines"
         heading="Price intelligence"
         description="Review DRAP notices against organization pack prices. All amounts are PKR; batch printed MRP remains historical evidence."
       />
       <PriceNotices />
-    </main>
+    </div>
   );
 }

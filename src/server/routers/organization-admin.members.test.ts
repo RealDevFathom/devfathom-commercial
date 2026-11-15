@@ -35,6 +35,7 @@ vi.mock('@/lib/abac', async () => {
   return { ...actual, can: vi.fn(async () => true) };
 });
 
+import { can } from '@/lib/abac';
 import type { TRPCContext } from '../trpc';
 import { organizationAdminRouter } from './organization-admin';
 
@@ -378,5 +379,79 @@ describe('organization member last-admin guard', () => {
 
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect(activeAdmins).toBe(1);
+  });
+});
+
+/** DEV-828: an access change must not hand the operator the member's authentication secrets. */
+describe('organization member update response (DEV-828)', () => {
+  const SECRET_FIELDS = [
+    'password',
+    'twoFactorSecret',
+    'twoFactorEnabledAt',
+    'recoveryCodes',
+    'tokenVersion',
+    'mustChangePassword',
+  ];
+  const ownerRow = {
+    id: 'owner_b',
+    name: 'Workspace Owner',
+    email: 'owner@example.test',
+    role: 'EMPLOYEE',
+    status: 'ACTIVE',
+    title: 'Cashier',
+    department: 'COUNTER',
+    organizationRoleId: null,
+    password: '$2a$12$abcdefghijklmnopqrstuuJ0Ow0bS1TzE3s1Ga3H9F6K1Y0a1b2c3',
+    twoFactorSecret: 'JBSWY3DPEHPK3PXP',
+    twoFactorEnabledAt: new Date('2026-11-01T00:00:00Z'),
+    recoveryCodes: [{ id: 'rc_1', codeHash: 'recovery-code-hash-0001' }],
+    tokenVersion: 7,
+    mustChangePassword: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(can).mockResolvedValue(true);
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'owner_b',
+      email: 'owner@example.test',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+    });
+    // The mock ignores `select`, so this is what leaks if the router passes the row through.
+    mocks.userUpdate.mockResolvedValue(ownerRow);
+  });
+
+  it('returns only id and email for an MFA-enabled member', async () => {
+    const result = await caller().updateMember({ ...updateInput, id: 'owner_b' });
+
+    expect(result).toEqual({ id: 'owner_b', email: 'owner@example.test' });
+    const serialized = JSON.stringify(result);
+    for (const field of SECRET_FIELDS) expect(serialized).not.toContain(`"${field}"`);
+    expect(serialized).not.toContain(ownerRow.twoFactorSecret);
+    expect(serialized).not.toContain(ownerRow.password);
+    expect(serialized).not.toContain(ownerRow.recoveryCodes[0]!.codeHash);
+  });
+
+  it('selects only the response fields from the database', async () => {
+    await caller().updateMember({ ...updateInput, id: 'owner_b' });
+
+    expect(mocks.userUpdate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        where: { id: 'owner_b' },
+        select: { id: true, email: true },
+      })
+    );
+  });
+
+  it('refuses a caller without admin access and changes nothing', async () => {
+    vi.mocked(can).mockResolvedValue(false);
+
+    await expect(caller().updateMember({ ...updateInput, id: 'owner_b' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 });

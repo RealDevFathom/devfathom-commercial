@@ -30,7 +30,8 @@ export const deliveryCommandInput = z
     deviceId: z.string().min(1).max(128).optional(),
     businessDate: z.date().optional(),
     quarantineLocationId: z.string().min(1).max(128).optional(),
-    // DEV-647: a physical return that refunds cash needs the manager's or owner's own PIN.
+    // DEV-647 / DEV-786: a physical return that refunds cash or returns a completed sale needs
+    // the manager's or owner's own PIN.
     managerPin: z
       .string()
       .regex(/^\d{4,8}$/)
@@ -132,7 +133,10 @@ export async function recordDeliveryCommand(
   db: ScopedDb,
   scope: LedgerScope,
   input: z.infer<typeof deliveryCommandInput>,
-  /** DEV-647: refunds need a manager or owner. Without an authorizer, no refund runs. */
+  /**
+   * DEV-647 / DEV-786: refunds and returns of a completed sale need a manager or owner.
+   * Without an authorizer, neither runs.
+   */
   options: { authorizeRefund?: () => Promise<void> } = {}
 ) {
   deliveryCommandInput.parse(input);
@@ -236,9 +240,19 @@ export async function recordDeliveryCommand(
       }
       if (sale.status === 'COMPLETED') {
         if (!input.quarantineLocationId) throw new PharmacyDeliveryError('QUARANTINE_REQUIRED');
-        for (const line of sale.lines) {
-          const units =
-            line.canonicalUnits - line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0);
+        const unreturned = sale.lines.map((line) => ({
+          line,
+          units:
+            line.canonicalUnits - line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0),
+        }));
+        // DEV-786: returning a completed sale reverses it like a refund, so it needs the same
+        // manager-or-owner PIN before any stock or refund liability moves.
+        if (unreturned.some(({ units }) => units)) {
+          if (!options.authorizeRefund)
+            throw new PharmacyDeliveryError('REFUND_AUTHORIZATION_REQUIRED');
+          await options.authorizeRefund();
+        }
+        for (const { line, units } of unreturned) {
           if (units)
             await returnSaleLine(db, scope, {
               saleLineId: line.id,
@@ -251,7 +265,14 @@ export async function recordDeliveryCommand(
             });
         }
       } else if (sale.status === 'OPEN') {
-        await changeSaleStatus(db, scope, sale.id, 'void', 'Failed delivery physically returned');
+        await changeSaleStatus(
+          db,
+          scope,
+          sale.id,
+          'void',
+          { kind: 'FAILED_DELIVERY_RETURN' },
+          'Failed delivery physically returned'
+        );
         for (const line of sale.lines)
           for (const allocation of line.allocations) {
             const movement = await db.pharmacyStockMovement.findFirst({

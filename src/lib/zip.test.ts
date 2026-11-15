@@ -1,7 +1,10 @@
 // @vitest-environment node
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { crc32 } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
-import { buildZip } from './zip';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildZip, ZipFileWriter, ZipSizeLimitError } from './zip';
 
 /** Read a STORE archive back through its central directory, checking every CRC. */
 function readZip(archive: Buffer): Map<string, Buffer> {
@@ -55,5 +58,60 @@ describe('buildZip', () => {
         { name: 'a.csv', data: '' },
       ])
     ).toThrow(/Duplicate/);
+  });
+});
+
+describe('ZipFileWriter', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'zip-writer-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function* chunks(...parts: string[]) {
+    for (const part of parts) yield part;
+  }
+
+  it('streams entries chunk by chunk into the same bytes buildZip writes', async () => {
+    const path = join(dir, 'a.zip');
+    const writer = await ZipFileWriter.create(path);
+    expect(await writer.addEntry('customers.csv', chunks('"code"\r\n', '"c1"\r\n', ''))).toBe(14);
+    await writer.addEntry('empty.csv', []);
+    await writer.addEntry('README.md', [Buffer.from('# Export — خان\n')]);
+    const size = await writer.close();
+    const archive = await readFile(path);
+    expect(archive.length).toBe(size);
+    expect(
+      archive.equals(
+        buildZip([
+          { name: 'customers.csv', data: '"code"\r\n"c1"\r\n' },
+          { name: 'empty.csv', data: '' },
+          { name: 'README.md', data: '# Export — خان\n' },
+        ])
+      )
+    ).toBe(true);
+    expect(readZip(archive).get('customers.csv')!.toString('utf8')).toBe('"code"\r\n"c1"\r\n');
+  });
+
+  it('stops with ZipSizeLimitError once the archive would pass its cap', async () => {
+    const writer = await ZipFileWriter.create(join(dir, 'b.zip'), { maxBytes: 200 });
+    await writer.addEntry('small.csv', chunks('x'.repeat(50)));
+    await expect(
+      writer.addEntry('big.csv', chunks('y'.repeat(60), 'z'.repeat(60)))
+    ).rejects.toThrow(ZipSizeLimitError);
+    expect(writer.bytesWritten).toBeLessThanOrEqual(200);
+    await writer.abort();
+  });
+
+  it('never overwrites an existing file and refuses unsafe names', async () => {
+    const path = join(dir, 'c.zip');
+    const writer = await ZipFileWriter.create(path);
+    await expect(ZipFileWriter.create(path)).rejects.toThrow();
+    await expect(writer.addEntry('../evil.csv', [])).rejects.toThrow(/Unsafe/);
+    await writer.addEntry('a.csv', []);
+    await expect(writer.addEntry('a.csv', [])).rejects.toThrow(/Duplicate/);
+    await writer.abort();
   });
 });

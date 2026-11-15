@@ -80,6 +80,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import { isEffective, packConversions } from '@/lib/pharmacy/pack-conversion';
 import {
   isNonDrugRetail,
   resolveReceiptBatchIdentity,
@@ -1525,6 +1526,23 @@ const purchasingRouter = router({
           let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
             null;
           if (input.purchaseOrderId) {
+            // An organization-wide order raised from a branch requisition is
+            // still that branch's demand: receiving against it needs reach
+            // there too, as every other order-scoped procedure does (#979).
+            // Checked before the row lock (#991), so a buyer cannot lock
+            // another branch's order or learn its status from the refusal.
+            // An order's branch and requisition never change after creation.
+            const target = await db.pharmacyPurchaseOrder.findFirst({
+              where: { id: input.purchaseOrderId, organizationId: scope.organizationId },
+              select: { branchId: true, requisitionId: true },
+            });
+            if (target) {
+              await assertOrderBranches(
+                ctx,
+                { branchId: target.branchId, requisitionId: target.requisitionId },
+                db
+              );
+            }
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
             const order = await lockReceivablePurchaseOrder(db, scope, {
@@ -1536,14 +1554,6 @@ const purchasingRouter = router({
               freightMinor: order.freightMinor,
               otherChargesMinor: order.otherChargesMinor,
             };
-            // An organization-wide order raised from a branch requisition is
-            // still that branch's demand: receiving against it needs reach
-            // there too, as every other order-scoped procedure does (#979).
-            await assertOrderBranches(
-              ctx,
-              { branchId: order.branchId, requisitionId: order.requisitionId },
-              db
-            );
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
           // received from, checked here and again when the receipt posts. With
@@ -1634,8 +1644,17 @@ const purchasingRouter = router({
               retailPriceMinor: item.retailPriceMinor,
             });
             if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
-            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // DEV-201: the pack must be one of this medicine's own pack levels, so a
+            // line cannot pair medicine A with medicine B's pack.
+            const pack = await db.packLevel.findFirst({
+              where: {
+                id: line.packLevelId,
+                organizationId: scope.organizationId,
+                presentation: { organizationId: scope.organizationId, medicineId: line.medicineId },
+              },
+              select: { id: true, presentationId: true },
+            });
+            if (!pack) throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
             // tenant — would make the three-way match compare the goods against
             // something they were never ordered on.
@@ -1653,6 +1672,33 @@ const purchasingRouter = router({
               ) {
                 throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
               }
+            }
+            // DEV-201: units per pack come from the configured pack hierarchy, never
+            // from the client. A typed multiplier would let one received pack post
+            // any number of units into the lot and the stock ledger.
+            // A version superseded since the order was raised keeps the conversion it
+            // carried while it was in force.
+            const levels = await db.packLevel.findMany({
+              where: { organizationId: scope.organizationId, presentationId: pack.presentationId },
+              select: {
+                id: true,
+                level: true,
+                unitsPerParent: true,
+                parentPackLevelId: true,
+                effectiveFrom: true,
+                effectiveTo: true,
+              },
+            });
+            const selected = levels.find((level) => level.id === pack.id);
+            const now = new Date();
+            const conversion = selected
+              ? packConversions(
+                  levels,
+                  isEffective(selected, now) ? now : selected.effectiveFrom
+                ).find((row) => row.packLevelId === pack.id)
+              : undefined;
+            if (conversion?.canonicalUnitsPerPack !== line.canonicalUnitsPerPack) {
+              throw new PharmacyReceivingError('PACK_CONVERSION_MISMATCH');
             }
 
             const quantities = receiptLineQuantities({

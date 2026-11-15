@@ -12,14 +12,24 @@
  */
 import { tool } from 'ai';
 import { z } from 'zod';
-import { hash } from 'bcryptjs';
 import { Prisma } from '@/generated/prisma/client';
-import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
+import {
+  assistantVertical,
+  matchScore,
+  type AssistantHelpers,
+  type ToolSet,
+} from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
 import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
-import { passwordMeetsPolicy } from '@/lib/password-policy';
+import { inviteRoleRefusal } from '@/lib/vertical-catalog';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import {
+  adminPasswordResetData,
+  PASSWORD_RESET_TTL_MS,
+  unusablePasswordHash,
+} from '@/lib/auth/admin-password-reset';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -813,11 +823,20 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const organizationRole = organizationRoleId
           ? await h.db.organizationRole.findFirst({
               where: { id: organizationRoleId, organizationId: ctx.organizationId },
-              select: { id: true, name: true },
+              select: { id: true, name: true, key: true },
             })
           : null;
         if (organizationRoleId && !organizationRole) {
           return { error: 'Invalid role template.' };
+        }
+        // SEC-I (DEV-827): grant exactly what the chosen role's label says, as the
+        // team invite form and router do. A baseline invite grants nothing to check.
+        if (finalRole !== 'EMPLOYEE' || organizationRole) {
+          const vertical =
+            assistantVertical(ctx.vertical) ??
+            (await resolveOrganizationEntitlements(ctx.organizationId, h.db))?.vertical;
+          const roleRefusal = inviteRoleRefusal(vertical, finalRole, organizationRole?.key ?? null);
+          if (roleRefusal) return { error: roleRefusal };
         }
 
         const existing = await h.db.user.findFirst({
@@ -922,7 +941,16 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           role: titleCase(finalRole),
           department: titleCase(department),
           emailed,
-          inviteUrl,
+          // DEV-838 (F20): the accept link is a bearer credential. It goes only to
+          // the invitee's inbox; it is never returned into model context. If the
+          // email failed, the admin resends from the Team page, which shows the
+          // link to the authorized user outside the assistant.
+          ...(emailed
+            ? {}
+            : {
+                nextStep:
+                  'The invitation email could not be sent. Resend the invite from the Team page.',
+              }),
         };
       },
     });
@@ -1041,41 +1069,79 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       },
     });
 
-    // Reset another member's password (mirrors team.adminResetPassword).
+    // Reset another member's password (DEV-838: F19, F21). The model never
+    // handles a password: the tool takes only WHO to reset. Approval applies the
+    // shared administrative reset policy (every existing session revoked, a
+    // rotation forced on the next sign-in) and emails the member a private,
+    // single-use reset link so only they choose the replacement. Neither the
+    // link nor its token is ever returned into model context.
     tools.resetMemberPassword = tool({
       description:
-        'Set a new password for another team member (admin password reset). Use for "reset <name>\'s password", "set a new password for <name>". The password is stored hashed and never echoed back. ADMIN only.',
+        'Reset another team member\'s password (admin password reset). Signs them out of every existing session, retires their current password, and emails them a private, single-use link to choose a new password themselves — you never choose, see or send a password. Use for "reset <name>\'s password", "<name> is locked out", "<name>\'s account may be compromised". ADMIN only.',
       inputSchema: z.object({
         name: z.string().describe('The member whose password to reset, e.g. "Aisha Khan"'),
-        // AI-01: a bare min(8) string only — the policy regexes serialize to
-        // `allOf`/`pattern`, which Groq's strict validator 400s (taking the whole
-        // request, and every approval-continuation, down). Enforce the full policy
-        // inside execute via passwordMeetsPolicy() instead. Mirrors inviteMember.
-        newPassword: z
-          .string()
-          .min(8)
-          .describe('At least 8 chars with an uppercase letter, a lowercase letter, and a number'),
       }),
       needsApproval: true,
-      execute: async ({ name, newPassword }) => {
+      execute: async ({ name }) => {
         if (!h.isAdmin) return { error: 'Only admins can reset passwords.' };
-        if (!passwordMeetsPolicy(newPassword)) {
-          return {
-            error:
-              'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.',
-          };
-        }
         const r = await h.resolvePerson(name, { includeInactive: true });
         if (r.kind === 'notfound') return { error: `No team member matches "${name}".` };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which one — ${r.candidates.join(', ')}?` };
 
-        const hashed = await hash(newPassword, 12);
-        const user = await h.db.user.update({
+        const target = await h.db.user.findUnique({
           where: { id: r.value.id },
-          data: { password: hashed },
-          select: { id: true, name: true },
+          select: { id: true, name: true, email: true, status: true },
         });
+        if (!target) return { error: 'That team member was not found.' };
+        if (target.status === 'INVITED') {
+          return {
+            error: `${target.name} has not accepted their invitation yet — resend the invite instead.`,
+          };
+        }
+        if (!ACTIVE_STATUSES.has(target.status)) {
+          return { error: `${target.name} is not an active member, so they cannot sign in.` };
+        }
+
+        const { token, tokenHash } = generateInviteToken();
+        // Retire the old (possibly compromised) password: an unknown random hash
+        // means nobody can sign in with it, or use it to self-rotate, until the
+        // member completes the private reset. Hashed before the transaction so
+        // bcrypt does not pin a pooled connection.
+        const retiredPasswordHash = await unusablePasswordHash();
+        const user = await h.db.$transaction(async (tx) => {
+          await tx.passwordResetToken.create({
+            data: {
+              userId: target.id,
+              tokenHash,
+              expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+            },
+          });
+          return tx.user.update({
+            where: { id: target.id },
+            data: adminPasswordResetData(retiredPasswordHash),
+            select: { id: true, name: true, email: true },
+          });
+        });
+
+        let emailed = true;
+        const mail = templates.passwordReset({
+          name: user.name,
+          resetUrl: `${appUrl()}/reset-password/${token}`,
+          expiresLabel: 'in 1 hour',
+        });
+        try {
+          await sendEmail({
+            to: { email: user.email, name: user.name },
+            subject: mail.subject,
+            html: mail.html,
+            text: mail.text,
+          });
+        } catch (err) {
+          console.error('[assistant] password reset email failed for user', user.id, err);
+          emailed = false;
+        }
+
         h.audit({
           category: 'TEAM',
           operation: 'UPDATE',
@@ -1084,11 +1150,16 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           targetType: 'User',
           targetId: user.id,
           targetLabel: user.name,
-          metadata: { passwordReset: true },
+          metadata: { passwordReset: true, sessionsRevoked: true, resetLinkEmailed: emailed },
         });
         return {
           name: user.name,
           success: true,
+          sessionsRevoked: true,
+          emailed,
+          message: emailed
+            ? `${user.name} was signed out everywhere, their old password no longer works, and they were emailed a private link to choose a new one.`
+            : `${user.name} was signed out everywhere and their old password no longer works, but the reset email could not be sent. Ask them to use "Forgot password" on the sign-in page.`,
           scopeNote: r.interpreted ? `Interpreted "${name}" as ${user.name}.` : undefined,
         };
       },

@@ -22,7 +22,11 @@ function fixture(camera: { id: string } | null) {
     },
     pharmacyDailyClose: {
       // No prior close for the day; the evidence subject lookup finds the new one.
-      findFirst: vi.fn(async ({ where }) => (where.id === 'close-1' ? { id: 'close-1' } : null)),
+      findFirst: vi.fn(async ({ where }) =>
+        where.id === 'close-1'
+          ? { id: 'close-1', branchId: 'branch-1', cashVarianceMinor: 0, supersedesCloseId: null }
+          : null
+      ),
       create: vi.fn(async ({ data }) => ({ id: 'close-1', ...data })),
     },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
