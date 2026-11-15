@@ -31,6 +31,13 @@ describe('DEV-96 retention window migration contract', () => {
     expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days, default_days);');
   });
 
+  it('takes the longest tenant retention class, so a later shorter row never shortens it', () => {
+    expect(migration).toMatch(
+      /SELECT max\(rc\."retentionDays"\) INTO tenant_days\s+FROM "pharmacy_retention_classes" rc\s+WHERE rc\."organizationId" = p_organization_id\s+AND rc\."recordClass" = p_record_class;/
+    );
+    expect(migration).not.toContain('ORDER BY rc."effectiveFrom" DESC');
+  });
+
   it('refuses deletes inside the window on every pharmacy record class', () => {
     for (const table of [
       'pharmacy_prescriptions',

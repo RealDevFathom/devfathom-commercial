@@ -4,8 +4,8 @@ BEGIN;
 --
 -- 1. pharmacy_retention_days() resolves the retention period of one record class
 --    from the branch's CURRENT jurisdiction rule set ("recordRetentionByClass",
---    and "prescriptionRetentionDays" for prescriptions) and the tenant's latest
---    effective pharmacy_retention_classes row. The longer period wins: a tenant
+--    and "prescriptionRetentionDays" for prescriptions) and the tenant's LONGEST
+--    pharmacy_retention_classes row (a later, shorter row never shortens it). The longer period wins: a tenant
 --    may extend a statutory period, never shorten it.
 --    Built-in defaults are a floor for the pharmacy-only classes, so a branch
 --    with no confirmed statutory value still has a period: PRESCRIPTION,
@@ -66,13 +66,12 @@ DECLARE
     WHEN 'FISCAL' THEN 3653
   END;
 BEGIN
-  SELECT rc."retentionDays" INTO tenant_days
+  -- The longest row of the class, never the latest: a later, shorter row can
+  -- never shorten a period an earlier row set.
+  SELECT max(rc."retentionDays") INTO tenant_days
     FROM "pharmacy_retention_classes" rc
    WHERE rc."organizationId" = p_organization_id
-     AND rc."recordClass" = p_record_class
-     AND rc."effectiveFrom" <= at_utc
-   ORDER BY rc."effectiveFrom" DESC, rc."id" DESC
-   LIMIT 1;
+     AND rc."recordClass" = p_record_class;
 
   -- A branchless record (prescription, audit row) takes the longest period of
   -- any branch the organization currently operates.

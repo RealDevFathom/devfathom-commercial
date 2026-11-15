@@ -131,7 +131,11 @@ describe('composed platform worker boundaries', () => {
   it('runs the retention purge as its own job with the long timeout', async () => {
     queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
     await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
-    expect(purgeScans()).toHaveLength(4);
+    // One scan per purgeable class: register, prescription, fiscal. Never audit_logs.
+    expect(purgeScans()).toHaveLength(3);
+    expect(purgeScans().some(([sql]) => String(sql?.text ?? '').includes('"audit_logs" r'))).toBe(
+      false
+    );
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
   });
 

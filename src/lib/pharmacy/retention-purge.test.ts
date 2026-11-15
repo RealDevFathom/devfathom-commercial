@@ -51,8 +51,8 @@ describe('DEV-96 retention purge', () => {
       `COALESCE(r."completedAt", r."createdAt") <= timezone('UTC', now()) - make_interval(days => s.days)`
     );
     expect(sql).toContain('AND r."branchId" = s."branchId"');
-    const audit = text(expiredRecordsSql('AUDIT', null, 50) as unknown as Sql);
-    expect(audit).toContain(`o."vertical" = 'PHARMACY'`);
+    const prescriptions = text(expiredRecordsSql('PRESCRIPTION', null, 50) as unknown as Sql);
+    expect(prescriptions).toContain(`o."vertical" = 'PHARMACY'`);
   });
 
   it('deletes each expired record in its own savepoint, naming it for the database guards', async () => {
@@ -60,7 +60,7 @@ describe('DEV-96 retention purge', () => {
       pharmacy_prescriptions: [{ id: 'rx-1', organizationId: 'org-a' }],
     });
     const result = await purgeExpiredPharmacyRecords(db);
-    expect(result.purged).toEqual({ AUDIT: 0, CONTROLLED_REGISTER: 0, PRESCRIPTION: 1, FISCAL: 0 });
+    expect(result.purged).toEqual({ CONTROLLED_REGISTER: 0, PRESCRIPTION: 1, FISCAL: 0 });
     expect(result.retained).toEqual([]);
     expect(configured).toEqual(['org-a:PRESCRIPTION:rx-1', '']);
     const statements = executed.map(([statement]) => statement.replace(/\s+/g, ' ').trim());
@@ -83,16 +83,16 @@ describe('DEV-96 retention purge', () => {
 
   it('rolls a refused record back to its savepoint, reports it and keeps purging', async () => {
     const { db, executed } = fakeDb({
-      audit_logs: [
+      pharmacy_controlled_register_entries: [
         { id: 'held', organizationId: 'org-a' },
         { id: 'expired', organizationId: 'org-a' },
       ],
     });
     const result = await purgeExpiredPharmacyRecords(db);
-    expect(result.purged.AUDIT).toBe(1);
+    expect(result.purged.CONTROLLED_REGISTER).toBe(1);
     expect(result.retained).toEqual([
       {
-        recordClass: 'AUDIT',
+        recordClass: 'CONTROLLED_REGISTER',
         organizationId: 'org-a',
         id: 'held',
         reason: 'deletion refused: record is protected by legal hold case-1',
@@ -101,7 +101,7 @@ describe('DEV-96 retention purge', () => {
     const statements = executed.map(([statement]) => statement);
     expect(statements.slice(0, 4)).toEqual([
       'SAVEPOINT pharmacy_retention_purge',
-      'DELETE FROM "audit_logs" WHERE "organizationId" = $1 AND "id" = $2',
+      'DELETE FROM "pharmacy_controlled_register_entries" WHERE "organizationId" = $1 AND "id" = $2',
       'ROLLBACK TO SAVEPOINT pharmacy_retention_purge',
       'RELEASE SAVEPOINT pharmacy_retention_purge',
     ]);
@@ -109,7 +109,7 @@ describe('DEV-96 retention purge', () => {
 
   it('writes an audit row for each purged record and none for a refused one', async () => {
     const { db, executed } = fakeDb({
-      audit_logs: [
+      pharmacy_controlled_register_entries: [
         { id: 'held', organizationId: 'org-a' },
         { id: 'expired', organizationId: 'org-a' },
       ],
@@ -122,20 +122,40 @@ describe('DEV-96 retention purge', () => {
         recordClass,
         recordId,
       ])
-    ).toEqual([['org-a', 'AUDIT', 'expired']]);
+    ).toEqual([['org-a', 'CONTROLLED_REGISTER', 'expired']]);
     expect(PURGE_AUDIT_SQL).toContain("'SYSTEM', 'Retention purge', 'SYSTEM', 'PHARMACY'");
     expect(PURGE_AUDIT_SQL).toContain("'DELETE', 'pharmacy.retention.purge'");
   });
 
-  it('bounds each class separately so an audit backlog cannot starve later classes', async () => {
+  it('bounds each class separately so a backlog cannot starve later classes', async () => {
     const { db } = fakeDb({
-      audit_logs: [
+      pharmacy_controlled_register_entries: [
         { id: 'a', organizationId: 'org-a' },
         { id: 'b', organizationId: 'org-a' },
       ],
       pharmacy_sales: [{ id: 's', organizationId: 'org-a' }],
     });
     const result = await purgeExpiredPharmacyRecords(db, { maxPurgesPerClass: 1 });
-    expect(result.purged).toEqual({ AUDIT: 1, CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 1 });
+    expect(result.purged).toEqual({ CONTROLLED_REGISTER: 1, PRESCRIPTION: 0, FISCAL: 1 });
+  });
+
+  it('never scans or deletes audit_logs, so purge audit rows survive every run', async () => {
+    // Even if every audit row looked expired (e.g. a 1-day AUDIT retention
+    // class), the purge must not select or delete any of them.
+    const { db, executed } = fakeDb({
+      audit_logs: [{ id: 'purge-trace', organizationId: 'org-a' }],
+      pharmacy_sales: [{ id: 's', organizationId: 'org-a' }],
+    });
+    const result = await purgeExpiredPharmacyRecords(db);
+    expect(Object.keys(result.purged)).toEqual(['CONTROLLED_REGISTER', 'PRESCRIPTION', 'FISCAL']);
+    const scans = db.$queryRaw.mock.calls.map(([query]) => text(query as Sql));
+    expect(scans.some((sql) => sql.includes('"audit_logs"'))).toBe(false);
+    expect(executed.some(([statement]) => /^\s*DELETE FROM "audit_logs"/.test(statement))).toBe(
+      false
+    );
+    // The only audit_logs statement is the purge trace for the fiscal record.
+    expect(executed.filter(([statement]) => statement.includes('"audit_logs"'))).toEqual([
+      [PURGE_AUDIT_SQL, expect.any(String), 'org-a', 'FISCAL', 's', expect.any(String)],
+    ]);
   });
 });

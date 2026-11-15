@@ -5,6 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { PharmacyRecordClass } from './retention';
 
+/**
+ * The classes the purge may delete. AUDIT is deliberately absent: audit logs
+ * are immutable for the whole life of a tenant, and only the platform's
+ * tenant-deletion purge removes them. An AUDIT retention class or rule-set
+ * value never drives deletion.
+ */
+export type PurgeableRecordClass = Exclude<PharmacyRecordClass, 'AUDIT'>;
+
 /** The slice of a platform-scoped transaction the retention purge uses. */
 export type RetentionPurgeDb = {
   $queryRaw: (query: Prisma.Sql) => Promise<unknown>;
@@ -24,13 +32,7 @@ type RecordSource = {
  * DEV-96 — where each record class lives. The order of {@link PURGE_ORDER}
  * matters: register entries reference prescriptions, so they go first.
  */
-const SOURCES: Record<PharmacyRecordClass, RecordSource> = {
-  AUDIT: {
-    table: 'audit_logs',
-    anchor: 'r."createdAt"',
-    branchBound: false,
-    deletes: ['DELETE FROM "audit_logs" WHERE "organizationId" = $1 AND "id" = $2'],
-  },
+const SOURCES: Record<PurgeableRecordClass, RecordSource> = {
   CONTROLLED_REGISTER: {
     table: 'pharmacy_controlled_register_entries',
     anchor: 'r."createdAt"',
@@ -59,8 +61,7 @@ const SOURCES: Record<PharmacyRecordClass, RecordSource> = {
   },
 };
 
-export const PURGE_ORDER: readonly PharmacyRecordClass[] = [
-  'AUDIT',
+export const PURGE_ORDER: readonly PurgeableRecordClass[] = [
   'CONTROLLED_REGISTER',
   'PRESCRIPTION',
   'FISCAL',
@@ -90,7 +91,7 @@ export const PURGE_AUDIT_SQL = `INSERT INTO "audit_logs"
  * a candidate.
  */
 export function expiredRecordsSql(
-  recordClass: PharmacyRecordClass,
+  recordClass: PurgeableRecordClass,
   after: { anchor: Date; id: string } | null,
   limit: number
 ): Prisma.Sql {
@@ -123,9 +124,9 @@ export function expiredRecordsSql(
 }
 
 export type RetentionPurgeResult = {
-  purged: Record<PharmacyRecordClass, number>;
+  purged: Record<PurgeableRecordClass, number>;
   retained: Array<{
-    recordClass: PharmacyRecordClass;
+    recordClass: PurgeableRecordClass;
     organizationId: string;
     id: string;
     reason: string;
@@ -147,12 +148,12 @@ export async function purgeExpiredPharmacyRecords(
   db: RetentionPurgeDb,
   options: { maxPurgesPerClass?: number; maxScanned?: number } = {}
 ): Promise<RetentionPurgeResult> {
-  // Each class has its own budget, so a steady audit backlog never starves the
-  // register, prescription or fiscal classes.
+  // Each class has its own budget, so a backlog in one class never starves the
+  // others.
   const maxPurges = options.maxPurgesPerClass ?? 50;
   const maxScanned = options.maxScanned ?? 1_000;
   const result: RetentionPurgeResult = {
-    purged: { AUDIT: 0, CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 0 },
+    purged: { CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 0 },
     retained: [],
   };
   for (const recordClass of PURGE_ORDER) {
