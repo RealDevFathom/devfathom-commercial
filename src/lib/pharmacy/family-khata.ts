@@ -693,7 +693,7 @@ export async function listKhataLedger(
     db.pharmacyKhataEvent.findMany({
       where: {
         ...accountWhere,
-        OR: [{ kind: 'CHARGE', dueAt: { lte: now } }, { kind: 'PAYMENT' }],
+        OR: [{ kind: 'CHARGE' }, { kind: 'PAYMENT' }, { kind: 'DISHONOURED_CHEQUE' }],
       },
       select: {
         id: true,
@@ -701,6 +701,7 @@ export async function listKhataLedger(
         kind: true,
         amountMinor: true,
         dueAt: true,
+        occurredAt: true,
         settlesChargeId: true,
       },
     }),
@@ -713,16 +714,32 @@ export async function listKhataLedger(
         (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0)
     );
   const lastPayment = new Map(payments.map((row) => [row.familyAccountId, row._max.occurredAt]));
-  const paid = new Map<string, number>();
+  // A dishonoured cheque re-opens what it bounced: linked to a payment it re-opens that
+  // payment's charge, linked to a charge it re-opens that charge; otherwise it is owed now.
+  const paymentCharge = new Map<string, string | null>();
   for (const event of events)
+    if (event.kind === 'PAYMENT') paymentCharge.set(event.id, event.settlesChargeId);
+  const chargeIds = new Set(events.filter((e) => e.kind === 'CHARGE').map((e) => e.id));
+  const paid = new Map<string, number>();
+  const overdue = new Map<string, Date>();
+  const markOverdue = (accountId: string, at: Date) => {
+    const current = overdue.get(accountId);
+    if (!current || at < current) overdue.set(accountId, at);
+  };
+  for (const event of events) {
     if (event.kind === 'PAYMENT' && event.settlesChargeId)
       paid.set(event.settlesChargeId, (paid.get(event.settlesChargeId) ?? 0) + event.amountMinor);
-  const overdue = new Map<string, Date>();
+    if (event.kind !== 'DISHONOURED_CHEQUE') continue;
+    const chargeId =
+      (event.settlesChargeId && paymentCharge.get(event.settlesChargeId)) || event.settlesChargeId;
+    if (chargeId && chargeIds.has(chargeId))
+      paid.set(chargeId, (paid.get(chargeId) ?? 0) - event.amountMinor);
+    else markOverdue(event.familyAccountId, event.occurredAt);
+  }
   for (const event of events) {
-    if (event.kind !== 'CHARGE' || !event.dueAt) continue;
+    if (event.kind !== 'CHARGE' || !event.dueAt || event.dueAt > now) continue;
     if (event.amountMinor <= (paid.get(event.id) ?? 0)) continue;
-    const current = overdue.get(event.familyAccountId);
-    if (!current || event.dueAt < current) overdue.set(event.familyAccountId, event.dueAt);
+    markOverdue(event.familyAccountId, event.dueAt);
   }
   return {
     truncated: accounts.length > KHATA_LEDGER_LIST_LIMIT,
