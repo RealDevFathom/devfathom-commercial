@@ -414,7 +414,7 @@ describe('DEV-819 voucher uses on a voided bill', () => {
       pharmacyTender: { findMany: async () => [] },
     };
 
-    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Wrong bill');
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', manager, 'Wrong bill');
 
     expect(released).toEqual([
       {

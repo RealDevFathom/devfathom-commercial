@@ -36,10 +36,10 @@ export default async function PharmacySupplierPriceListsPage() {
   ]);
   const soloOwner = !otherApprover;
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       <SupplierPriceListsConsole canApprove={canApprove} actorId={user.id} soloOwner={soloOwner} />
-    </main>
+    </div>
   );
 }
