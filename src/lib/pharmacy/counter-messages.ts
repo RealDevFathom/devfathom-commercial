@@ -80,7 +80,6 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
  */
 const RAW_REASON_CODE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 
-/** Shown when a reason is unmapped, so no code can reach the counter. */
 /**
  * #1338: shown on the Cash tender button while this counter's drawer is closed.
  * Payment-specific, so it may say the other tenders still work.
@@ -88,6 +87,7 @@ const RAW_REASON_CODE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 export const COUNTER_CASH_DRAWER_CLOSED_MESSAGE =
   'Open the cash drawer to take cash. Other tenders do not need the drawer.';
 
+/** Shown when a reason is unmapped, so no code can reach the counter. */
 export const COUNTER_UNKNOWN_ERROR_MESSAGE =
   'That action could not be completed at the counter. Refresh and try again, or ask a supervisor.';
 
