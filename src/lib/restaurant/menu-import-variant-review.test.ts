@@ -37,7 +37,7 @@ vi.mock('@/lib/restaurant/price-lists', () => ({
 }));
 
 import { Prisma } from '@/generated/prisma/client';
-import { commitMenuImport, reviewMenuImportLine } from './menu-import';
+import { commitMenuImport, reviewMenuImportLine, summarizeMenuImport } from './menu-import';
 
 const EXTRACTED_SIZES = [
   { name: 'Small 9"', price: { amount: '1200.00', currency: null, raw: 'Rs. 1,200' } },
@@ -305,5 +305,45 @@ describe('committing sizes', () => {
     await commitMenuImport(commitDb([]), { importId: 'imp_1', committedById: 'user_1' });
     expect(mocks.createVariant).not.toHaveBeenCalled();
     expect(mocks.addPriceListEntry).toHaveBeenCalledOnce();
+  });
+});
+
+describe('review summary', () => {
+  it('is not ready while an accepted line has unconfirmed extracted sizes', async () => {
+    const findMany = vi.fn(async () => [
+      { extractedVariants: EXTRACTED_SIZES },
+      { extractedVariants: [] },
+    ]);
+    const db = {
+      restaurantMenuImportLine: {
+        groupBy: vi.fn(async () => [{ reviewStatus: 'ACCEPTED', _count: { _all: 2 } }]),
+        count: vi.fn(async () => 0),
+        findMany,
+      },
+    } as unknown as ScopedDb;
+
+    const summary = await summarizeMenuImport(db, 'imp_1');
+
+    expect(summary).toMatchObject({ PENDING: 0, sizesUnconfirmed: 1, readyToCommit: false });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ importId: 'imp_1', reviewStatus: 'ACCEPTED' }),
+      })
+    );
+  });
+
+  it('is ready once every accepted size is confirmed', async () => {
+    const db = {
+      restaurantMenuImportLine: {
+        groupBy: vi.fn(async () => [{ reviewStatus: 'ACCEPTED', _count: { _all: 1 } }]),
+        count: vi.fn(async () => 0),
+        findMany: vi.fn(async () => []),
+      },
+    } as unknown as ScopedDb;
+
+    await expect(summarizeMenuImport(db, 'imp_1')).resolves.toMatchObject({
+      sizesUnconfirmed: 0,
+      readyToCommit: true,
+    });
   });
 });

@@ -916,11 +916,23 @@ export async function summarizeMenuImport(db: ScopedDb, importId: string) {
     where: { importId, flags: { hasSome: ['SUSPECTED_INJECTION', 'LOW_CONFIDENCE'] } },
   });
 
+  // Accepted lines whose extracted sizes nobody confirmed (accepted before size
+  // review existed). Commit refuses them, so the import is not ready either.
+  const unconfirmedCandidates = await db.restaurantMenuImportLine.findMany({
+    where: { importId, reviewStatus: 'ACCEPTED', reviewedVariants: { equals: Prisma.DbNull } },
+    select: { extractedVariants: true },
+  });
+  const sizesUnconfirmed = unconfirmedCandidates.filter(
+    (line) => resolveVariants(line.extractedVariants).length > 0
+  ).length;
+
   return {
     ...counts,
     total: counts.PENDING + counts.ACCEPTED + counts.REJECTED + counts.MERGED,
     flagged,
-    readyToCommit: counts.PENDING === 0 && counts.ACCEPTED + counts.MERGED > 0,
+    sizesUnconfirmed,
+    readyToCommit:
+      counts.PENDING === 0 && sizesUnconfirmed === 0 && counts.ACCEPTED + counts.MERGED > 0,
     lowConfidenceThreshold: LOW_CONFIDENCE_THRESHOLD,
   };
 }

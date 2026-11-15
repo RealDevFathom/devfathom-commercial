@@ -162,6 +162,7 @@ function summary(overrides: Partial<ImportSummary> = {}): ImportSummary {
     MERGED: 0,
     total: 3,
     flagged: 2,
+    sizesUnconfirmed: 0,
     readyToCommit: false,
     lowConfidenceThreshold: 0.6,
     ...overrides,
@@ -337,6 +338,123 @@ describe('Restaurant menu-import console', () => {
           ],
         })
       );
+    });
+
+    it('does not report an unchanged size confirmation as a correction', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: sizes,
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [
+                    { name: 'Small 9"', price: { amount: '1200.00', currency: null, raw: null } },
+                    { name: 'Large 15"', price: { amount: '2600.00', currency: null, raw: null } },
+                  ],
+                }),
+                line({
+                  id: 'line_9',
+                  extractedProductName: 'Naan',
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getAllByText('No correction')).toHaveLength(2);
+      expect(screen.queryByRole('list', { name: 'Confirmed sizes' })).not.toBeInTheDocument();
+    });
+
+    it('shows when the reviewer removed every extracted size', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: sizes,
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getByText('All sizes removed')).toBeInTheDocument();
+    });
+
+    it('keeps the printed text on a size whose name the reviewer corrected', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: [
+                    {
+                      name: 'Lagre',
+                      price: { amount: '2600.00', currency: null, raw: 'Rs. 2,600' },
+                    },
+                  ],
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [
+                    { name: 'Large', price: { amount: '2600.00', currency: null, raw: null } },
+                  ],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Fajita Pizza' }));
+      expect(screen.getByText('Printed: Lagre Rs. 2,600')).toBeInTheDocument();
+    });
+
+    it('explains why an import with unconfirmed sizes is not ready', () => {
+      mocks.summary.mockReturnValue({
+        data: summary({ PENDING: 0, ACCEPTED: 1, sizesUnconfirmed: 1, readyToCommit: false }),
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(
+        screen.getByText(/1 accepted line\(s\) have sizes nobody confirmed/)
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Import reviewed menu' })).toBeDisabled();
     });
 
     it('lets the reviewer correct or remove a size before accepting', () => {

@@ -122,6 +122,18 @@ function sizesFrom(value: unknown): SizeRow[] {
   });
 }
 
+/** Same names and amounts in the same order; currency and printed text are not compared. */
+function sameSizes(left: SizeRow[], right: SizeRow[]): boolean {
+  const amount = (value: string | null) => (value === null ? null : Number(value));
+  return (
+    left.length === right.length &&
+    left.every(
+      (size, index) =>
+        size.name === right[index]!.name && amount(size.amount) === amount(right[index]!.amount)
+    )
+  );
+}
+
 function sizeLabel(size: SizeRow, fallbackCurrency: string | null): string {
   const price = size.amount
     ? `${size.amount} ${size.currency ?? fallbackCurrency ?? ''}`.trim()
@@ -273,15 +285,21 @@ function editorFor(line: ImportLine): LineEditor {
 
 function variantDraftsFor(line: ImportLine): VariantDraft[] {
   const extracted = sizesFrom(line.extractedVariants);
-  const printedFor = (name: string) => {
-    const match = extracted.find((size) => size.name === name);
+  // Mirrors the server: a confirmed size is linked to its printed size by name,
+  // or by an unchanged figure after the reviewer corrected the name.
+  const sameAmount = (left: string | null, right: string | null) =>
+    left !== null && right !== null && Number(left) === Number(right);
+  const printedFor = (size: SizeRow) => {
+    const match =
+      extracted.find((printed) => printed.name === size.name) ??
+      extracted.find((printed) => sameAmount(printed.amount, size.amount));
     return match ? `Printed: ${match.name} ${match.raw ?? match.amount ?? ''}`.trim() : null;
   };
   const source = line.reviewedVariants !== null ? sizesFrom(line.reviewedVariants) : extracted;
   return source.map((size) => ({
     name: size.name,
     priceAmount: size.amount ?? '',
-    printed: printedFor(size.name),
+    printed: printedFor(size),
   }));
 }
 
@@ -824,12 +842,16 @@ export function RestaurantMenuImportConsole({
                                 line.reviewedVariants !== null
                                   ? sizesFrom(line.reviewedVariants)
                                   : null;
+                              // Confirming the sizes exactly as extracted is not a correction.
+                              const sizesChanged =
+                                confirmedSizes !== null &&
+                                !sameSizes(confirmedSizes, extractedSizes);
                               const corrected =
                                 line.reviewedProductName ??
                                 line.reviewedCategoryName ??
                                 line.reviewedPriceAmount ??
                                 line.reviewNote ??
-                                confirmedSizes;
+                                (sizesChanged || null);
                               // Three identically-labelled buttons per row are
                               // ambiguous to a screen reader, so each decision
                               // names its line. The name is extracted text and
@@ -896,7 +918,14 @@ export function RestaurantMenuImportConsole({
                                             {line.reviewNote}
                                           </span>
                                         ) : null}
-                                        {confirmedSizes && confirmedSizes.length > 0 ? (
+                                        {sizesChanged && confirmedSizes?.length === 0 ? (
+                                          <span className="mt-0.5 block text-xs text-text-muted">
+                                            All sizes removed
+                                          </span>
+                                        ) : null}
+                                        {sizesChanged &&
+                                        confirmedSizes &&
+                                        confirmedSizes.length > 0 ? (
                                           <ul
                                             aria-label="Confirmed sizes"
                                             className="mt-1 space-y-0.5 text-xs tabular-nums text-text-muted"
@@ -1014,7 +1043,9 @@ export function RestaurantMenuImportConsole({
                 {readyToCommit
                   ? 'Every line has a decision. This import is ready.'
                   : summary
-                    ? `${summary.PENDING} line(s) still need a decision, and at least one line must be accepted or merged, before this menu can be imported.`
+                    ? summary.PENDING === 0 && summary.sizesUnconfirmed > 0
+                      ? `${summary.sizesUnconfirmed} accepted line(s) have sizes nobody confirmed. Accept them again after checking each size price.`
+                      : `${summary.PENDING} line(s) still need a decision, and at least one line must be accepted or merged, before this menu can be imported.`
                     : 'Reading review progress…'}
               </div>
 
