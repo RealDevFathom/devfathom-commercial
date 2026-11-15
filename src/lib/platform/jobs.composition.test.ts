@@ -269,6 +269,15 @@ describe('composed platform worker boundaries', () => {
     expect(m.retention).toHaveBeenCalledExactlyOnceWith(db, item);
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
   });
+  it('builds the owner data export in one repeatable-read snapshot', async () => {
+    queue(job('PHARMACY_OWNER_DATA_EXPORT_V1', { payload: { from: null, to: null } }));
+    await processPlatformJobs(1);
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 120_000,
+      isolationLevel: 'RepeatableRead',
+    });
+  });
+
   it.each([1, 3])('retains retry/exhaustion accounting at attempt %s', async (attempts) => {
     queue(job('PHARMACY_CAMERA_SNAPSHOT_V1', { attempts }));
     m.snapshot.mockRejectedValue(new Error('snapshot unavailable'));
