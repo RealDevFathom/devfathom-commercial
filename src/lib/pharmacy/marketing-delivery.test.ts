@@ -56,7 +56,14 @@ let failPersist: boolean;
 let transaction: MarketingTransaction;
 let db: ScopedDb;
 let index: number;
+let accountEvents: Array<{
+  field: string;
+  event: string;
+  severity: string;
+  restrictedUntil: Date | null;
+}>;
 beforeEach(() => {
+  accountEvents = [];
   attempts = [];
   events = [];
   optedOut = false;
@@ -65,6 +72,10 @@ beforeEach(() => {
   const capture = { id: 'capture-a', customerId: 'customer-a', campaignId: 'campaign-a' };
   db = {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'p', patientId: 'p' }]),
+    pharmacyWhatsAppAccountEvent: {
+      findFirst: async ({ where }: { where: { field: string } }) =>
+        accountEvents.find((row) => row.field === where.field) ?? null,
+    },
     pharmacyCampaignCapture: {
       findMany: async () => [capture],
       findFirst: async () => capture,
@@ -161,6 +172,21 @@ it('persists one attempt under double dispatch and replay', async () => {
   expect(attempts).toHaveLength(1);
   expect(events.map((e) => e.state)).toEqual(['PROVIDER_ACCEPTED', 'DELIVERED']);
   expect(history).toMatchObject({ mode: 'SANDBOX', accepted: 1, delivered: 1 });
+});
+it('auto-pauses dispatch while a WhatsApp account block is active, before any attempt', async () => {
+  accountEvents = [
+    {
+      field: 'account_update',
+      event: 'ACCOUNT_RESTRICTION',
+      severity: 'BLOCK',
+      restrictedUntil: new Date(now.getTime() + 86_400_000),
+    },
+  ];
+  await expect(dispatchSandboxCampaign(transaction, input, now)).rejects.toThrow(
+    'Marketing sends are paused'
+  );
+  expect(attempts).toHaveLength(0);
+  expect(events).toHaveLength(0);
 });
 it('only a confirmed rejection allows a new request-key retry', async () => {
   await dispatchSandboxCampaign(transaction, { ...input, outcome: 'REJECTED' }, now);

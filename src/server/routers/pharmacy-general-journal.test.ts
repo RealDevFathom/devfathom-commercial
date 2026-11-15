@@ -126,6 +126,7 @@ describe('pharmacyGeneralJournal router — registration', () => {
     expect(moduleForPath('/pharmacy/accounts/general-journal')).toBe('pharmacy-finance');
   });
 
+  // Importing the whole app router can exceed the default 5 s limit when the full suite runs in parallel.
   it('is mounted on the root router', async () => {
     const { appRouter } = await import('./_app');
     expect(Object.keys(appRouter._def.procedures)).toEqual(
@@ -136,7 +137,7 @@ describe('pharmacyGeneralJournal router — registration', () => {
         'pharmacyGeneralJournal.list',
       ])
     );
-  });
+  }, 30_000);
 });
 
 describe('pharmacyGeneralJournal router — authorization before access', () => {

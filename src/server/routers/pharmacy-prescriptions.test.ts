@@ -522,12 +522,7 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
       action === 'pharmacy:counter'
         ? ['pharmacy:counter', 'pharmacy:counter']
-        : [
-            'pharmacy:counter',
-            'pharmacy:dispense',
-            'pharmacy:counter',
-            'pharmacy:dispense',
-          ]
+        : ['pharmacy:counter', 'pharmacy:dispense', 'pharmacy:counter', 'pharmacy:dispense']
     );
   });
 
@@ -1132,6 +1127,53 @@ describe('PH-A3 prescription OCR prefill', () => {
       message: 'The prescription could not be read. Enter the details by hand.',
     });
     expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+
+  it('DEV-63: drafts an unconfirmed cart with salt/strength matches from the OCR fixture', async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const amox = { ingredientId: 'ing-amox', ingredient: { name: 'Amoxicillin' } };
+    mocks.medicines.mockResolvedValue([
+      {
+        id: 'medicine-rx',
+        productName: 'Fathomcillin E2E',
+        brandName: null,
+        strengths: [{ ...amox, value: { toString: () => '250' }, unit: 'mg' }],
+        presentations: [{ id: 'pres-rx', presentation: 'Capsule' }],
+      },
+      {
+        id: 'medicine-generic',
+        productName: 'Generic Amox',
+        brandName: null,
+        strengths: [{ ...amox, value: { toString: () => '500' }, unit: 'mg' }],
+        presentations: [],
+      },
+    ]);
+    const receipt = await upload();
+    const cart = await caller().draftCartFromSource({
+      sourceFileRef: receipt.url,
+      minConfidence: 0.7,
+    });
+    expect(cart).toMatchObject({
+      status: 'DRAFT',
+      requiresPharmacistConfirmation: true,
+      lines: [
+        {
+          confirmed: false,
+          lowConfidence: false,
+          suggestedMedicineId: 'medicine-rx',
+          suggestedPresentationId: 'pres-rx',
+          candidates: [
+            { medicineId: 'medicine-rx', matchKind: 'SALT_AND_STRENGTH' },
+            { medicineId: 'medicine-generic', matchKind: 'SALT_ONLY' },
+          ],
+        },
+      ],
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().draftCartFromSource({ sourceFileRef: receipt.url, minConfidence: 0.7 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
 

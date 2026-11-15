@@ -18,13 +18,15 @@ import {
   parseSimpleMedicineStrength,
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
+import { PharmacyProductClassError, validateRetailFields } from '@/lib/pharmacy/product-class';
 import {
   configureManualReferenceConnector,
   proposedBoolean,
+  REFERENCE_CONNECTORS,
   runManualReferenceConnector,
 } from '@/lib/pharmacy/reference-connector-automation';
 import {
-  MANUAL_FILE_RIGHTS,
+  DRAP_REGISTRY_CONNECTOR_ID,
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
@@ -169,7 +171,7 @@ const connectorProposalPayload = z
     values: z.partialRecord(referenceField, z.string().trim().min(1).max(1_000)),
     source: z
       .object({
-        connectorId: z.literal('manual-file'),
+        connectorId: z.enum(['manual-file', DRAP_REGISTRY_CONNECTOR_ID]),
         label: z.string().trim().min(1).max(200),
         fileName: z.string().trim().min(1).max(500),
         batchId: z.string().trim().min(1).max(200),
@@ -288,6 +290,9 @@ async function attachPackBarcode(
 }
 
 function domainError(error: unknown): never {
+  if (error instanceof PharmacyProductClassError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  }
   if (error instanceof PharmacyMedicineError) {
     throw new TRPCError({
       code:
@@ -400,7 +405,7 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          connectorId: z.literal('manual-file'),
+          connectorId: z.enum(['manual-file', DRAP_REGISTRY_CONNECTOR_ID]),
           batchId: z.string().trim().min(1).max(200),
           fileName: z.string().trim().min(1).max(500),
           triggerKind: z.enum(['MANUAL', 'SCHEDULED_CALL']).default('MANUAL'),
@@ -431,6 +436,7 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const descriptor = REFERENCE_CONNECTORS[input.connectorId];
       if (input.rows.some((row) => row.batchId !== input.batchId)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -452,10 +458,10 @@ export const pharmacyMedicineRouter = router({
               (assertion) =>
                 assertion.batchId !== input.batchId ||
                 assertion.rowSourceKey !== row.rowSourceKey ||
-                assertion.sourceType !== 'IMPORT' ||
+                assertion.sourceType !== descriptor.sourceType ||
                 row.values[assertion.field] !== assertion.value ||
                 assertion.source !== input.fileName ||
-                JSON.stringify(assertion.rights) !== JSON.stringify(MANUAL_FILE_RIGHTS)
+                JSON.stringify(assertion.rights) !== JSON.stringify(descriptor.rights)
             )
           );
         })
@@ -465,11 +471,30 @@ export const pharmacyMedicineRouter = router({
           message: 'Manual provenance must match its batch, source row, and mapped value.',
         });
       }
+      // Rx, restricted and controlled flags from the official registry must be explicit
+      // true/false values; a row that could not be read is blocked, never guessed.
+      if (
+        descriptor.official &&
+        input.rows.some(
+          (row) =>
+            !row.blockingIssues.includes('INVALID_SCHEDULE_CLASSIFICATION') &&
+            (['rx', 'restricted', 'controlled'] as const).some(
+              (field) =>
+                row.values[field] !== undefined && !['true', 'false'].includes(row.values[field]!)
+            )
+        )
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'DRAP schedule flags must be true or false.',
+        });
+      }
 
       return ctx.db.$transaction((tx) =>
         runManualReferenceConnector(tx, {
           organizationId: ctx.entitlements.organizationId,
           actorId: ctx.session.user.id,
+          connectorKey: input.connectorId,
           triggerKind: input.triggerKind,
           batchId: input.batchId,
           fileName: input.fileName,
@@ -520,6 +545,7 @@ export const pharmacyMedicineRouter = router({
 
         const payload = connectorProposalPayload.parse(proposal.payload);
         const values = payload.values;
+        const source = REFERENCE_CONNECTORS[payload.source.connectorId];
         let medicine = proposal.targetMedicineId
           ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
           : null;
@@ -551,6 +577,8 @@ export const pharmacyMedicineRouter = router({
             where: { id: medicine.id },
             data: {
               productName: values.productName,
+              brandName: values.brandName,
+              manufacturer: values.manufacturer,
               drapRegistrationNumber: values.drapRegistrationNumber,
               rx: proposedBoolean(values.rx),
               restricted: proposedBoolean(values.restricted),
@@ -566,8 +594,8 @@ export const pharmacyMedicineRouter = router({
               data: {
                 medicineId: medicine.id,
                 field,
-                source: `manual-file:${proposal.inputDigest}:${proposal.rowSourceKey}`,
-                sourceType: 'IMPORT',
+                source: `${source.key}:${proposal.inputDigest}:${proposal.rowSourceKey}`,
+                sourceType: source.sourceType,
                 retrievedAt: decidedAt,
                 reviewer: ctx.session.user.id,
                 status: 'ACCEPTED',
@@ -577,7 +605,7 @@ export const pharmacyMedicineRouter = router({
                   sourceLabel: payload.source.fileName,
                   batchId: payload.source.batchId,
                   rowSourceKey: payload.source.rowSourceKey,
-                  rights: jsonConnectorRights(MANUAL_FILE_RIGHTS),
+                  rights: jsonConnectorRights(source.rights),
                   blockingIssues: [],
                 },
               },
@@ -677,21 +705,57 @@ export const pharmacyMedicineRouter = router({
           provenance: z.array(provenance).max(20).default([]),
           // Never saleable on creation: publication follows a recorded review.
           saleable: z.literal(false).default(false),
+          // #718: NON_DRUG_RETAIL (FRONT_SHOP) only — shop-set price, EAN-13 and category.
+          retailPriceMinor: z.number().int().positive().safe().optional(),
+          retailCategory: z.string().max(200).optional(),
+          ean13: z.string().trim().max(13).optional(),
         })
         .strict()
+        .refine((value) => !value.ean13 || Boolean(value.presentation), {
+          message: 'An EAN-13 is printed on a presentation; add the presentation first.',
+          path: ['ean13'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const retail = validateRetailFields({
+          productFamily: input.productFamily,
+          retailPriceMinor: input.retailPriceMinor,
+          retailCategory: input.retailCategory,
+          ean13: input.ean13,
+        });
         for (const component of input.strengths) {
           if (!(await ctx.db.ingredient.findFirst({ where: { id: component.ingredientId } }))) {
             throw new PharmacyMedicineError('CROSS_TENANT_REFERENCE');
           }
         }
-        const { presentation, strengths, provenance: assertions, ...medicine } = input;
+        const { presentation, strengths, provenance: assertions, ...rest } = input;
+        // The validated retail values below replace the raw ones; the EAN-13 lives on a barcode.
+        const medicine = { ...rest };
+        delete medicine.retailPriceMinor;
+        delete medicine.retailCategory;
+        delete medicine.ean13;
         return await ctx.db.medicine.create({
           data: {
             ...medicine,
-            presentations: presentation ? { create: presentation } : undefined,
+            retailPriceMinor: retail.retailPriceMinor,
+            retailCategory: retail.retailCategory,
+            presentations: presentation
+              ? {
+                  create: {
+                    ...presentation,
+                    barcodes: retail.ean13
+                      ? {
+                          create: {
+                            type: 'GTIN',
+                            code: retail.ean13,
+                            normalizedCode: normalizeMedicineText(retail.ean13),
+                          },
+                        }
+                      : undefined,
+                  },
+                }
+              : undefined,
             strengths: { create: strengths },
             provenance: {
               create: assertions.map((item) => ({
@@ -701,6 +765,45 @@ export const pharmacyMedicineRouter = router({
             },
           },
           include: { strengths: true, presentations: true, provenance: true },
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * #718: shop-set retail price and category for a NON_DRUG_RETAIL (FRONT_SHOP) item. A medicine
+   * keeps its DRAP printed MRP and is refused; `null` clears a field.
+   */
+  setRetailDetails: adminProcedure
+    .input(
+      z
+        .object({
+          medicineId: z.string().min(1),
+          retailPriceMinor: z.number().int().positive().safe().nullable(),
+          retailCategory: z.string().max(200).nullable(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const item = await ctx.db.medicine.findFirst({
+          where: { id: input.medicineId },
+          select: { id: true, productFamily: true },
+        });
+        if (!item) throw new PharmacyMedicineError('NOT_FOUND');
+        const retail = validateRetailFields({
+          productFamily: item.productFamily,
+          retailPriceMinor: input.retailPriceMinor,
+          retailCategory: input.retailCategory,
+        });
+        return await ctx.db.medicine.update({
+          where: { id: item.id },
+          data: {
+            retailPriceMinor: retail.retailPriceMinor,
+            retailCategory: retail.retailCategory,
+          },
+          select: { id: true, productFamily: true, retailPriceMinor: true, retailCategory: true },
         });
       } catch (error) {
         domainError(error);
