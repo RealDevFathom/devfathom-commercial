@@ -469,4 +469,19 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('ignores Enter while a reply is pending: one request and one user bubble', async () => {
+    pendingFetch();
+    render(panel());
+    const input = screen.getByLabelText('Your question');
+    fireEvent.change(input, { target: { value: 'Find my notes' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(await screen.findByText('Working on your request…')).toBeVisible();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getAllByText('Find my notes').filter((el) => el.tagName === 'P' && el.closest('.bg-primary'))
+    ).toHaveLength(1);
+  });
 });
