@@ -380,7 +380,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                   })
                 }
                 disabled={updateProject.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
               >
                 {updateProject.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -610,7 +610,7 @@ function BoardsTab({
         </p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <Plus className="h-3.5 w-3.5" />
           New Board
@@ -692,7 +692,7 @@ function BoardsTab({
                   });
               }}
               disabled={!boardName.trim() || createBoard.isPending}
-              className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
             >
               {createBoard.isPending ? (
                 <>
@@ -785,7 +785,7 @@ function BoardsTab({
                           <button
                             onClick={() => saveBoardName(board.id)}
                             disabled={!editBoardName.trim() || updateBoard.isPending}
-                            className="rounded-md bg-primary px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40"
+                            className="rounded-md bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40"
                           >
                             Save
                           </button>
@@ -973,7 +973,7 @@ function MilestonesTab({
         </p>
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <Plus className="h-3.5 w-3.5" /> Add Milestone
         </button>
@@ -1039,7 +1039,7 @@ function MilestonesTab({
                     });
                 }}
                 disabled={!msName.trim() || !msDue || createMilestone.isPending}
-                className="flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+                className="flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
               >
                 {createMilestone.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{' '}
                 Add
@@ -1131,7 +1131,7 @@ function MilestonesTab({
                           }
                         }}
                         disabled={!editName.trim() || !editDue}
-                        className="rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+                        className="rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
                       >
                         Save
                       </button>
@@ -1302,7 +1302,7 @@ function FilesTab({
         </p>
         <label
           className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] focus-within:outline-none focus-within:ring-2 focus-within:ring-ring/60',
+            'flex cursor-pointer items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] focus-within:outline-none focus-within:ring-2 focus-within:ring-ring/60',
             uploading && 'pointer-events-none opacity-60'
           )}
         >
@@ -1505,7 +1505,7 @@ function ProjectTeamTab({
         {canManage && (
           <button
             onClick={() => setShowAdd((v) => !v)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <UserPlus className="h-3.5 w-3.5" />
             Add Member

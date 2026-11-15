@@ -58,12 +58,31 @@ function contrastColor(hex: string): string {
   return (red * 299 + green * 587 + blue * 114) / 1000 > 145 ? '#111110' : '#FFFCF6';
 }
 
+/**
+ * DEV-51 — a tenant colour used to be copied into its own `*-hover` token, so
+ * primary and accent buttons showed no change on hover in either theme. The
+ * hover shade is the brand colour mixed toward its contrast-safe foreground:
+ * dark brands lighten, light brands darken, and the label stays readable.
+ */
+export function brandHoverColor(hex: string): string {
+  const value = hex.replace('#', '');
+  const toward = contrastColor(hex).replace('#', '');
+  const mixed = [0, 2, 4].map((offset) => {
+    const from = Number.parseInt(value.slice(offset, offset + 2), 16);
+    const to = Number.parseInt(toward.slice(offset, offset + 2), 16);
+    return Math.round(from + (to - from) * 0.18)
+      .toString(16)
+      .padStart(2, '0');
+  });
+  return `#${mixed.join('').toUpperCase()}`;
+}
+
 export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {
   return {
     ...(brand.primaryColor
       ? {
           '--primary': brand.primaryColor,
-          '--primary-hover': brand.primaryColor,
+          '--primary-hover': brandHoverColor(brand.primaryColor),
           '--primary-foreground': contrastColor(brand.primaryColor),
           '--sidebar': brand.primaryColor,
           '--sidebar-foreground': contrastColor(brand.primaryColor),
@@ -75,7 +94,7 @@ export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {
       ? {
           '--sidebar-primary': brand.accentColor,
           '--accent-brand': brand.accentColor,
-          '--accent-brand-hover': brand.accentColor,
+          '--accent-brand-hover': brandHoverColor(brand.accentColor),
           '--ring': brand.accentColor,
         }
       : {}),

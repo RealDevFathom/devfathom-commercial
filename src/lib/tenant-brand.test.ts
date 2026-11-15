@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertWorkspaceIdentity,
+  brandHoverColor,
   isTenantIdentityMismatch,
   tenantBrandTokens,
   type TenantBrand,
@@ -36,12 +37,31 @@ describe('tenantBrandTokens', () => {
   it('overrides primary and accent token families together', () => {
     expect(tenantBrandTokens(brand('#FF684F', '#246B5A'))).toMatchObject({
       '--primary': '#FF684F',
-      '--primary-hover': '#FF684F',
+      '--primary-hover': '#D45844',
       '--primary-foreground': '#111110',
       '--accent-brand': '#246B5A',
-      '--accent-brand-hover': '#246B5A',
+      '--accent-brand-hover': '#4B8576',
       '--ring': '#246B5A',
     });
+  });
+});
+
+describe('tenant brand hover tokens (DEV-51)', () => {
+  it.each([
+    ['#FF684F', '#246B5A'],
+    ['#0C2E2C', '#F7F1E5'],
+    ['#FFFFFF', '#000000'],
+  ])('gives %s / %s a hover shade that differs from the resting colour', (primary, accent) => {
+    const tokens = tenantBrandTokens(brand(primary, accent));
+    expect(tokens['--primary-hover']).toMatch(/^#[0-9A-F]{6}$/);
+    expect(tokens['--accent-brand-hover']).toMatch(/^#[0-9A-F]{6}$/);
+    expect(tokens['--primary-hover']!.toUpperCase()).not.toBe(primary.toUpperCase());
+    expect(tokens['--accent-brand-hover']!.toUpperCase()).not.toBe(accent.toUpperCase());
+  });
+
+  it('lightens dark brands and darkens light brands so the label stays readable', () => {
+    expect(brandHoverColor('#0C2E2C')).toBe('#385350');
+    expect(brandHoverColor('#FFFFFF')).toBe('#D4D4D4');
   });
 });
 

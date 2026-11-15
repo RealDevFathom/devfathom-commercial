@@ -795,7 +795,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                                               className={cn(
                                                 'absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-all',
                                                 isSelected
-                                                  ? 'border-primary bg-primary text-white opacity-100'
+                                                  ? 'border-primary bg-primary text-primary-foreground opacity-100'
                                                   : 'border-border bg-card text-transparent opacity-0 group-hover/card:opacity-100',
                                                 selectionMode && 'opacity-100'
                                               )}
@@ -878,7 +878,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                               createColumn.mutate({ boardId, name: newColumnName.trim() });
                           }}
                           disabled={!newColumnName.trim() || createColumn.isPending}
-                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+                          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
                         >
                           {createColumn.isPending ? 'Adding...' : 'Add Column'}
                         </button>
@@ -1252,7 +1252,7 @@ function AddTaskForm({
         <button
           onClick={submit}
           disabled={!title.trim()}
-          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
         >
           Add
         </button>
@@ -1363,7 +1363,7 @@ function ColumnWipEditor({
           <button
             onClick={submit}
             disabled={isSaving || (trimmed !== '' && !valid)}
-            className="rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {isSaving ? 'Saving…' : 'Save'}
           </button>
@@ -1565,7 +1565,7 @@ function ColumnOwners({
             <button
               onClick={handleSave}
               disabled={!isDirty || isSaving}
-              className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
             >
               {isSaving ? 'Saving…' : 'Save'}
             </button>

@@ -505,7 +505,7 @@ export function AddMemberModal({
                   </button>
                   <button
                     onClick={onClose}
-                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
                   >
                     Done
                   </button>
@@ -747,7 +747,7 @@ export function AddMemberModal({
                     !departmentReady ||
                     inviteMember.isPending
                   }
-                  className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+                  className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
                 >
                   {inviteMember.isPending ? (
                     <>

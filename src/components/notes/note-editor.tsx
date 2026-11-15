@@ -406,7 +406,7 @@ function EditorToolbar({
           <button
             type="button"
             onClick={insertLink}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C]"
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
           >
             Add
           </button>

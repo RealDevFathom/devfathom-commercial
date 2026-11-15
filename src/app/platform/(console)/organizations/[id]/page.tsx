@@ -2179,7 +2179,7 @@ export default async function OrganizationDetailPage({
           </section>
 
           {organization.status === 'TERMINATED' ? (
-            <section className="border border-destructive bg-red-100 p-5">
+            <section className="border border-destructive bg-destructive/10 p-5">
               <h2 className="text-sm font-semibold text-destructive">Destructive lifecycle</h2>
               <p className="mt-2 text-xs leading-5 text-text-body">
                 Scheduling purge starts the retention window and queues data destruction.
