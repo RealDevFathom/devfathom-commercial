@@ -73,7 +73,7 @@ const modelPriceUsd = exactUsd(6);
 const modelName = z.string().trim().min(1).max(200);
 /** A model id is one token: no spaces, tabs or newlines anywhere in it. */
 const modelId = modelName.regex(/^\S+$/, 'A model id cannot contain whitespace.');
-/** Azure is not a routed provider, so it is rejected here like any unknown name. */
+/** Only routed providers are accepted; any other name is rejected. */
 const provider = z.enum(ROUTED_AI_PROVIDERS);
 const tier = z.enum(AI_TIERS);
 const providerOrder = z

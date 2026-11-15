@@ -38,7 +38,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * The probe must answer inside the orchestrator's own probe timeout rather than
- * hang until it. Azure Container Apps gives the readiness probe 5 s; answering
+ * hang until it. A 5 s readiness probe timeout is typical; answering
  * 503 at 2 s makes a stalled database a reported failure instead of a probe
  * timeout, which is the difference between a diagnosable reason code and none.
  */

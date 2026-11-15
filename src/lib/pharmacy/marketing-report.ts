@@ -97,6 +97,36 @@ export async function readPharmacyMarketingReport(
   input: MarketingReportFilters
 ) {
   const period = validateMarketingReportFilters(input);
+  const report = await readPharmacyMarketingReportWindow(
+    db,
+    organizationId,
+    input.branchIds,
+    period
+  );
+  return { ...report, period: { from: input.from, to: input.to, timezone: 'UTC' as const } };
+}
+
+/**
+ * The same report over an exact half-open window, for callers that already validated a
+ * completed one-to-ninety-day period in the workspace zone (growth insights). The guard below
+ * is a backstop, not the caller's period rule.
+ */
+export async function readPharmacyMarketingReportWindow(
+  db: ScopedDb,
+  organizationId: string,
+  branchIds: string[],
+  period: { gte: Date; lt: Date }
+) {
+  const span = period.lt.getTime() - period.gte.getTime();
+  if (
+    !branchIds.length ||
+    branchIds.length > 100 ||
+    !Number.isFinite(span) ||
+    span <= 0 ||
+    span > 90 * DAY + 2 * 3_600_000
+  )
+    throw new Error('Use a bounded window of at most 90 days and 1–100 authorized branches.');
+  const input = { branchIds };
   const scope = { organizationId, branchId: { in: input.branchIds } };
   const [captures, exclusions, consentOptOuts, unassignedConsentOptOuts, attribution, receipts] =
     await Promise.all([
@@ -181,7 +211,7 @@ export async function readPharmacyMarketingReport(
       : [];
   });
   return {
-    period: { from: input.from, to: input.to, timezone: 'UTC' as const },
+    period: { gte: period.gte.toISOString(), lt: period.lt.toISOString() },
     definitions: MARKETING_REPORT_DEFINITIONS,
     deliveryEvidenceAvailable: true as const,
     cutoff: period.lt.toISOString(),

@@ -42,3 +42,34 @@ describe('Studio themed surfaces', () => {
     expect(studioGlobals.match(/--selection-foreground:/g)).toHaveLength(2);
   });
 });
+
+describe('Dark-mode control contrast (DEV-601)', () => {
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const ratio = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+
+  it('keeps dark input borders at 3:1 against card and raised surfaces', () => {
+    const dark = studioGlobals.match(/\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
+    const input = dark.match(/--input:\s*(#[0-9a-f]{6})/i)?.[1];
+    expect(input).toBeDefined();
+    expect(ratio(input!, '#242422')).toBeGreaterThanOrEqual(3);
+    expect(ratio(input!, '#2c2c29')).toBeGreaterThanOrEqual(3);
+  });
+
+  it('gives disabled buttons and inputs a legible dark style', () => {
+    const button = readFileSync(join(__dirname, '../components/ui/button.tsx'), 'utf8');
+    const input = readFileSync(join(__dirname, '../components/ui/input.tsx'), 'utf8');
+    expect(button).toContain('dark:disabled:opacity-100');
+    expect(button).toContain('dark:disabled:text-text-muted');
+    expect(input).toContain('dark:disabled:text-text-muted');
+    expect(input).toContain('dark:disabled:opacity-100');
+  });
+});

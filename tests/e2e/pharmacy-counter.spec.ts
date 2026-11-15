@@ -73,7 +73,10 @@ async function openCounter(page: Page, email?: string) {
   // The module is licensed by the seed, so the shell must render the counter
   // itself rather than the honest not-enabled panel.
   await expect(page.getByRole('heading', { name: 'This module is not enabled' })).toHaveCount(0);
-  await expect(page.getByLabel('Scan or search')).toBeFocused();
+  // DEV-725: a fresh context is a new counter device with no drawer, so the shift
+  // starts at the opening-cash step; scan/search follows once the drawer is open.
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeFocused();
+  await expect(page.getByLabel('Scan or search')).toHaveCount(0);
 }
 
 test('pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes', async ({
@@ -100,11 +103,15 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
  * raw `DRAWER_NOT_OPEN` symbol must never reach the counter.
  */
 async function openDrawer(page: Page) {
+  // DEV-725: opening the drawer is the shift's first step and records the counted cash.
+  await page.getByLabel('Opening cash', { exact: true }).fill('0');
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
   ).toBeVisible();
   await expect(page.getByText(/DRAWER_NOT_OPEN/)).toHaveCount(0);
+  // POS-01: focus then rests in the scan field for the whole bill.
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
 }
 
 async function search(page: Page, term: string) {
@@ -303,6 +310,7 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
 }) => {
   const rx = PHARMACY_E2E.medicines.rx;
   await openCounter(page);
+  await openDrawer(page);
 
   await search(page, 'Fathomcillin');
   await stageFirstResult(page, rx.name);
@@ -354,6 +362,7 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   page,
 }) => {
   await openCounter(page);
+  await openDrawer(page);
 
   const legend = page.getByRole('heading', { name: 'Workflow map' });
   await expect(legend).toBeVisible();
@@ -557,6 +566,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await signIn(page);
     await page.goto('/pharmacy/counter');
     await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+    await openDrawer(page);
     const makeBill = async () => {
       const scan = page.getByLabel('Scan or search');
       await scan.focus();
@@ -893,18 +903,15 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
+  await page.getByLabel('Opening cash', { exact: true }).fill('0');
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('alert').filter({ hasText: /This business day is closed/ })
   ).toBeVisible();
-  await search(page, otc.brandName);
-  await stageFirstResult(page, otc.name);
-  await page.keyboard.press('F4');
-  await setQuantity(page, 1);
-  await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
-  await expect(page.getByText(/This business day is closed/).first()).toBeVisible();
+  // DEV-725: with the day closed no drawer opens, so no bill can be started that
+  // payment would then refuse: the opening step stays and scan/search is not offered.
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
 });
 
 test('this spec drives the counter without a pointer', async () => {
