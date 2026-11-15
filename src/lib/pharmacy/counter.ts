@@ -378,8 +378,8 @@ export async function searchCounterCatalog(
 
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
+    const allocatableUnitsPerPack = new Set<number>();
     let best: { lot: LotRow; locationId: string } | null = null;
-    const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
       for (const balance of balancesByLot.get(lot.id) ?? []) {
@@ -391,7 +391,7 @@ export async function searchCounterCatalog(
           continue;
         }
         onHandUnits += balance.onHandUnits;
-        sellableLots.set(lot.id, lot);
+        allocatableUnitsPerPack.add(lot.unitsPerPack);
         const better =
           best === null ||
           lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
@@ -421,9 +421,7 @@ export async function searchCounterCatalog(
         lotPackLevelId: best.lot.packLevelId,
         lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
         lotUnitsPerPack: best.lot.unitsPerPack,
-        otherLotUnitsPerPack: [...sellableLots.values()]
-          .filter((lot) => lot.id !== best!.lot.id)
-          .map((lot) => lot.unitsPerPack),
+        allocatableUnitsPerPack: [...allocatableUnitsPerPack],
         dosageForm: presentation.dosageForm,
         at,
       }));
@@ -757,5 +755,8 @@ export async function readCounterReceipt(
     lines,
     tenders,
     totals: counterReceiptTotals({ lines, tenders }),
+  };
+}
+unterReceiptTotals({ lines, tenders }),
   };
 }

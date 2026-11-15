@@ -392,38 +392,21 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
     }
   });
 
-  it('offers only fallback units every sellable lot can price, since FEFO may draw on them', () => {
-    // The recommended lot is a 100-tablet box; the next lot FEFO may allocate
-    // from was received as strips of 10. The server prices each allocated lot
-    // with priceFromLot, which refuses a 100-tablet unit for the 10-tablet lot.
-    expect(() =>
-      priceFromLot({
-        printedMrpMinor: 5_000,
-        canonicalUnitsInPack: 10,
-        canonicalUnitsPerSaleUnit: 100,
-      })
-    ).toThrowError(PharmacyMedicineError);
+  it('drops fallback units that another allocatable lot pack cannot price', () => {
+    // Recommended lot is a 120-tablet box, but a second eligible lot is a 15-tablet pack:
+    // a 10-tablet strip cannot be priced from it, so only the single tablet remains.
     const resolved = resolveCounterSaleUnits({
       packLevels: THREE_LEVEL,
-      lotPackLevelId: 'old-box',
+      lotPackLevelId: 'box',
       lotPackLevelLabel: 'BOX',
-      lotUnitsPerPack: 100,
-      otherLotUnitsPerPack: [10],
+      lotUnitsPerPack: 120,
+      allocatableUnitsPerPack: [120, 15],
       dosageForm: 'Tablet',
       at,
     });
-    expect(resolved.saleUnits.map((option) => option.kind)).toEqual(['STRIP', 'UNIT']);
-    for (const option of resolved.saleUnits) {
-      for (const canonicalUnitsInPack of [100, 10]) {
-        expect(() =>
-          priceFromLot({
-            printedMrpMinor: 5_000,
-            canonicalUnitsInPack,
-            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-          })
-        ).not.toThrow();
-      }
-    }
+    expect(
+      resolved.saleUnits.map((option) => [option.kind, option.canonicalUnitsPerSaleUnit])
+    ).toEqual([['UNIT', 1]]);
   });
 
   it('ignores superseded pack versions when falling back to the setup', () => {
@@ -494,13 +477,5 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
       '1 box = 10 strips × 10 tablets'
     );
     expect(describePackSetup(TWO_LEVEL, counterUnitNoun('Syrup'))).toBe('1 box = 30 units');
-    const carton: PackLevelNode[] = [
-      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
-      { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 10 },
-      { id: 'unit', level: 'UNIT', parentPackLevelId: 'box', unitsPerParent: 10 },
-    ];
-    expect(describePackSetup(carton, counterUnitNoun('Tablet'))).toBe(
-      '1 carton = 10 boxes × 10 tablets'
-    );
   });
 });

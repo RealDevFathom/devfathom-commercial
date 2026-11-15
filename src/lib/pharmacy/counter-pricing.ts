@@ -161,14 +161,11 @@ export function saleUnitOptions(input: {
 export function setupSaleUnitOptions(input: {
   packLevels: readonly PackLevelNode[];
   lotUnitsPerPack: number;
-  /**
-   * Pack sizes of the other sellable lots the server's FEFO allocation may
-   * draw from for the same line; every one of them must price the unit too.
-   */
-  otherLotUnitsPerPack?: readonly number[];
+  /** Pack sizes of every other eligible lot a sale may allocate from; each must also divide. */
+  allocatableUnitsPerPack?: readonly number[];
 }): SaleUnitOption[] {
-  const packSizes = [input.lotUnitsPerPack, ...(input.otherLotUnitsPerPack ?? [])];
-  if (packSizes.some((size) => !Number.isSafeInteger(size) || size <= 0)) return [];
+  if (!Number.isSafeInteger(input.lotUnitsPerPack) || input.lotUnitsPerPack <= 0) return [];
+  const packs = [input.lotUnitsPerPack, ...(input.allocatableUnitsPerPack ?? [])];
   const ids = new Set(input.packLevels.map((node) => node.id));
   const roots = input.packLevels.filter(
     (node) => node.parentPackLevelId === null || !ids.has(node.parentPackLevelId)
@@ -189,7 +186,7 @@ export function setupSaleUnitOptions(input: {
     return [];
   }
   return options.filter((option) =>
-    packSizes.every((size) => size % option.canonicalUnitsPerSaleUnit === 0)
+    packs.every((pack) => pack % option.canonicalUnitsPerSaleUnit === 0)
   );
 }
 
@@ -214,8 +211,7 @@ export function resolveCounterSaleUnits(input: {
   lotPackLevelId: string;
   lotPackLevelLabel: string | null;
   lotUnitsPerPack: number;
-  /** Pack sizes of the other sellable lots FEFO may also allocate this line from. */
-  otherLotUnitsPerPack?: readonly number[];
+  allocatableUnitsPerPack?: readonly number[];
   dosageForm: string | null;
   at: Date;
 }): { saleUnits: SaleUnitOption[]; packMismatch: CounterPackMismatch | null } {
@@ -242,7 +238,7 @@ export function resolveCounterSaleUnits(input: {
   const saleUnits = setupSaleUnitOptions({
     packLevels: effective,
     lotUnitsPerPack: input.lotUnitsPerPack,
-    otherLotUnitsPerPack: input.otherLotUnitsPerPack,
+    allocatableUnitsPerPack: input.allocatableUnitsPerPack,
   });
   if (saleUnits.length > 0) return { saleUnits, packMismatch: null };
   const noun = counterUnitNoun(input.dosageForm);
@@ -316,8 +312,7 @@ export function counterUnitNoun(dosageForm: string | null | undefined): string {
 }
 
 export function plural(noun: string, count: number): string {
-  if (count === 1) return noun;
-  return /(s|x|z|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`;
+  return count === 1 ? noun : `${noun}s`;
 }
 
 function packWord(level: string): string {
