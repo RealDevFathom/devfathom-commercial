@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -65,18 +66,10 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   // DEV-127: a non-administrator opens the console only when the server's own
   // day-close guard (`pharmacy:close` through the ABAC engine) admits them. The
   // procedures re-check it on every call; this only avoids a dead-end screen.
-  const access = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: memberSession,
-    // As the rail does: a transient failure is retried; only a refusal is final.
-    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
-    staleTime: 30_000,
-  });
-  // A cached answer for another signed-in identity cannot open the console.
-  const closeGranted = Boolean(
-    memberSession &&
-    access.data?.userId === user?.id &&
-    access.data?.capabilities.includes('pharmacy:close')
-  );
+  // DEV-240: the same member- and tenant-bound read as the rail, so an answer
+  // cached for another identity cannot open the console.
+  const { query: access, capabilities } = usePharmacyNavigationAccess(memberSession);
+  const closeGranted = memberSession && capabilities.includes('pharmacy:close');
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||

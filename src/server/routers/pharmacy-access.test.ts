@@ -120,3 +120,32 @@ describe('#979 pharmacy rail capability read', () => {
     );
   });
 });
+
+describe('DEV-240 member- and tenant-bound rail read', () => {
+  it('answers a key naming the signed-in member and tenant', async () => {
+    const result = await caller().navigation({ userId: 'cashier', organizationId: 'org_a' });
+    expect(result).toMatchObject({ userId: 'cashier', organizationId: 'org_a' });
+  });
+
+  it.each([
+    { userId: 'another-user', organizationId: 'org_a' },
+    { userId: 'cashier', organizationId: 'another-org' },
+  ])('refuses a key for anyone else %j before checking access', async (input) => {
+    await expect(caller().navigation(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.counterAccess).not.toHaveBeenCalled();
+    expect(mocks.closeAccess).not.toHaveBeenCalled();
+  });
+
+  it('reports the inventory and manager grants that open Inventory', async () => {
+    expect((await caller().navigation()).capabilities).not.toContain('pharmacy:inventory');
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) =>
+        action === 'pharmacy:inventory' || action === 'pharmacy:manage'
+    );
+    expect((await caller().navigation()).capabilities).toEqual([
+      'pharmacy:inventory',
+      'pharmacy:manage',
+    ]);
+  });
+});
