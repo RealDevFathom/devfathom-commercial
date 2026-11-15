@@ -671,6 +671,44 @@ describe('settlementAccess decides who sees the counter payment controls (DEV-97
     await expect(f.caller().settlementAccess()).resolves.toMatchObject({ authorized: false });
   });
 
+  it.each([
+    { type: 'CASH' as const, amountMinor: 100, cashReceivedMinor: 100 },
+    {
+      type: 'CARD' as const,
+      amountMinor: 100,
+      providerRef: '4242',
+      approvalCode: 'A1B2C3',
+    },
+  ])(
+    'refuses $type tender to a default pharmacist before any payment is written',
+    async (tender) => {
+      const f = fixture(roleRules('pharmacist'), { assigned: ['branch-a'] });
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          idempotencyKey: `dev-97-${tender.type}`,
+          ...tender,
+        })
+      ).rejects.toMatchObject(NO_PERMISSION);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps the payment controls for the opt-in Pharmacist and cashier role (DEV-622)', async () => {
+    const f = fixture(roleRules('pharmacist-cashier'), { assigned: ['branch-a'] });
+    await expect(f.caller().settlementAccess()).resolves.toEqual({
+      authorized: true,
+      userId: 'user-a',
+      organizationId: 'org-a',
+    });
+    await expect(cashTender(f.caller())).resolves.toMatchObject({ tenderId: 'tender-1' });
+    expect(applyPharmacyTender).toHaveBeenCalledOnce();
+  });
+
   it('still refuses a drawer to a default pharmacist on the server', async () => {
     const f = fixture(roleRules('pharmacist'), { assigned: ['branch-a'] });
     await expect(

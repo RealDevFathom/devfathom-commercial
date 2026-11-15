@@ -25,6 +25,7 @@ import {
   assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -190,6 +191,18 @@ describe('pharmacySales.create drawer gate follows the settlement grant (DEV-97)
   it('keeps the drawer gate for a pharmacist who also takes payment', async () => {
     // A pharmacist an owner granted pharmacy:counter opens the drawer first, like a cashier.
     const f = fixture(null, [...PHARMACIST, ...COUNTER]);
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the drawer step for the opt-in Pharmacist and cashier role (DEV-622)', async () => {
+    const role = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === 'pharmacist-cashier')!;
+    const f = fixture(
+      null,
+      role.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }))
+    );
     await expect(
       f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
