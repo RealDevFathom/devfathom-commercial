@@ -292,14 +292,27 @@ describe('DEV-728 distributor expiry claim draft', () => {
     return {
       id,
       unitCostMinor,
+      supplierName: 'Distributor',
       batch: { batchNumber: `B-${id}`, expiresAt: soon(), state: 'ACTIVE', medicine: {} },
     };
   }
   function prepare({
     open = new Set<string>(),
     reserved = {} as Record<string, number>,
-  }: { open?: Set<string>; reserved?: Record<string, number> } = {}) {
+    receivedFrom = { supplierId: 'supplier_1', supplier: { active: true } } as {
+      supplierId: string;
+      supplier: { active: boolean };
+    } | null,
+  }: {
+    open?: Set<string>;
+    reserved?: Record<string, number>;
+    receivedFrom?: { supplierId: string; supplier: { active: boolean } } | null;
+  } = {}) {
     grant([allow('pharmacy:inventory')]);
+    const receiptLine = {
+      findFirst: vi.fn().mockResolvedValue(receivedFrom ? { goodsReceipt: receivedFrom } : null),
+    };
+    Object.assign(db, { pharmacyGoodsReceiptLine: receiptLine });
     db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_1', name: 'Distributor' });
     db.pharmacyInventoryLot.findFirst.mockImplementation(
       async ({ where }: { where: { id: string } }) =>
@@ -472,6 +485,57 @@ describe('DEV-728 distributor expiry claim draft', () => {
     await expect(
       claim(Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 1 }, (_, i) => `lot_${i}`))
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('checks each lot against the supplier on its posted goods receipt', async () => {
+    prepare();
+
+    await expect(claim(['lot_1'])).resolves.toMatchObject({ created: true });
+    expect(
+      (db as unknown as { pharmacyGoodsReceiptLine: { findFirst: ReturnType<typeof vi.fn> } })
+        .pharmacyGoodsReceiptLine.findFirst
+    ).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        goodsReceipt: { status: 'POSTED' },
+      },
+      select: {
+        goodsReceipt: { select: { supplierId: true, supplier: { select: { active: true } } } },
+      },
+    });
+  });
+
+  it('refuses a lot received from a different supplier', async () => {
+    prepare({ receivedFrom: { supplierId: 'supplier_2', supplier: { active: true } } });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A lot on this claim did not come from that supplier.',
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the supplier name on the lot without an active receipt supplier', async () => {
+    prepare({ receivedFrom: null });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      supplierName: '  distributor ',
+    });
+    await expect(claim(['lot_1'])).resolves.toMatchObject({ created: true });
+
+    db = makeDb();
+    prepare({ receivedFrom: { supplierId: 'supplier_2', supplier: { active: false } } });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      supplierName: 'Another distributor',
+    });
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A lot on this claim did not come from that supplier.',
+    });
     expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
   });
 

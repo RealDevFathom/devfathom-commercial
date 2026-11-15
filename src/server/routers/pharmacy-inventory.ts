@@ -492,6 +492,10 @@ async function availableAt(
   return balance?.onHandUnits ?? 0;
 }
 
+/** Supplier names match the way the expiry board groups them: trimmed, case-insensitive. */
+const sameSupplierName = (left: string, right: string) =>
+  left.trim().toLowerCase() === right.trim().toLowerCase();
+
 const expiryPosition = {
   branchId,
   inventoryLotId: z.string().min(1).max(128),
@@ -2216,6 +2220,7 @@ export const pharmacyInventoryRouter = router({
    * near-expiry position it can still take. Each position is checked exactly as
    * `draftExpiryReturn` checks one: branch-locked lot, inside the action horizon,
    * no open return already on the lot, and only units not reserved for a claim.
+   * Every lot must also have come from that distributor, or the claim is refused.
    * Expired lots are skipped too: a line's return window ends at the lot's expiry,
    * and submitting refuses the whole return if any line's window has closed.
    * Positions that fail those checks are skipped, never forced onto the claim.
@@ -2277,6 +2282,31 @@ export const pharmacyInventoryRouter = router({
           for (const position of positions) {
             const lot = await lockExpiringLot(tx, scope, position.inventoryLotId);
             assertOnBoard(lot.batch.expiresAt, at);
+            // The lot must have come from this distributor, matched the way the
+            // board groups it: the supplier on its posted goods receipt while that
+            // supplier is active, otherwise the supplier name recorded on the lot.
+            const receipt = await tx.pharmacyGoodsReceiptLine.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: position.inventoryLotId,
+                goodsReceipt: { status: 'POSTED' },
+              },
+              select: {
+                goodsReceipt: {
+                  select: { supplierId: true, supplier: { select: { active: true } } },
+                },
+              },
+            });
+            const fromSupplier = receipt?.goodsReceipt.supplier.active
+              ? receipt.goodsReceipt.supplierId === supplier.id
+              : sameSupplierName(lot.supplierName, supplier.name);
+            if (!fromSupplier) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'A lot on this claim did not come from that supplier.',
+              });
+            }
             if (lot.batch.expiresAt.getTime() <= at.getTime()) {
               windowClosed += 1;
               continue;
