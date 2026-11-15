@@ -38,6 +38,7 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/accounts/cash-flow': 'Classified cash-flow projection',
   '/pharmacy/accounts/cheque-maturity': 'Recorded cheque maturity',
   '/pharmacy/accounts/fiscal-exceptions': 'Fiscal exception evidence',
+  '/pharmacy/accounts/general-journal': 'General journal vouchers',
   '/pharmacy/accounts/journal-entry-lookup': 'Journal entry lookup',
   '/pharmacy/accounts/journal-evidence-export': 'Journal evidence export',
   '/pharmacy/accounts/profit-loss': 'Profit and loss',

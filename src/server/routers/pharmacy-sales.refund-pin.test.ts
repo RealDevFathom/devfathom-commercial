@@ -176,7 +176,8 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-        settlement
+        settlement,
+        { requireCurrentBusinessDate: true }
       );
       // The credential is the signed-in user's own PIN.
       expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(

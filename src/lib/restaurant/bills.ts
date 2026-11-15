@@ -75,6 +75,7 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'NOT_COMPED'
   | 'COMP_EXCEEDS_BILL'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
@@ -1105,6 +1106,163 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  });
+}
+
+// ── reverseCompLine (correct a retained comp without re-cutting) ──────────────
+
+/** Reverse a comp on an OPEN bill, including one with partial tenders. Tax is
+ * quoted live until settlement; accepted tenders and released loyalty points are
+ * never rewritten. The order's immutable policy restores service even when the
+ * last comp cleared the bill's service-charge sentinel. */
+export async function reverseCompLine(
+  db: ScopedDb,
+  input: CompLineInput
+): Promise<{ billId: string; billLineId: string; replayed: boolean }> {
+  return runInTransaction(db, async (tx) => {
+    // Match tender/re-cut's order → bill lock order before taking the money-day
+    // lock. Otherwise a re-cut holding the day lock could wait on this bill while
+    // reversal waits on that same day lock.
+    await tx.$queryRaw`SELECT o.id FROM restaurant_orders o JOIN restaurant_bills b ON b."orderId" = o.id WHERE b.id = ${input.billId} AND b."branchId" = ${input.branchId} FOR UPDATE OF o`;
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      include: {
+        order: { select: { serviceChargePolicyVersion: { select: { id: true, rate: true } } } },
+        lines: { orderBy: { id: 'asc' } },
+      },
+    });
+    if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+
+    const reason = requireReason(input.reason);
+    const resultRef = JSON.stringify({
+      billId: bill.id,
+      billLineId: input.billLineId,
+      reason,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      staffProfileId: input.actor.staffProfileId,
+    });
+    const key = {
+      deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey },
+    };
+    const existing = await tx.restaurantMoneyIdempotencyKey.findUnique({
+      where: key,
+      select: { commandType: true, resultRef: true },
+    });
+    if (existing) {
+      if (existing.commandType !== 'bill.uncomp' || existing.resultRef !== resultRef) {
+        throw new BillCommandError(
+          'This idempotency key belongs to a different money command.',
+          'IDEMPOTENCY_CONFLICT'
+        );
+      }
+      return { billId: bill.id, billLineId: input.billLineId, replayed: true };
+    }
+    if (bill.status !== 'OPEN') {
+      throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
+    }
+    const line = bill.lines.find((candidate) => candidate.id === input.billLineId);
+    if (!line)
+      throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
+    if (line.compAmount.isZero()) {
+      throw new BillCommandError('The line is not comped.', 'NOT_COMPED');
+    }
+    await assertMoneyDayOpen(tx, bill.branchId, bill.businessDate);
+
+    const policy = bill.order.serviceChargePolicyVersion;
+    const payableLines = bill.lines.filter(
+      (candidate) => candidate.id === line.id || candidate.compAmount.isZero()
+    );
+    const serviceChargeBasis = policy
+      ? sum(payableLines.map((candidate) => candidate.lineSubtotal))
+      : bill.serviceChargeBasis;
+    // cutBills assigns CUIDs sequentially in allocation order. Reconstruct the
+    // original split allocation from immutable line subtotals (a settled sibling's
+    // bill subtotal may already be net of inclusive tax). A reversal must not add
+    // a rounding cent that this bill never received at cut time.
+    const originalBills =
+      policy && bill.splitKind !== 'NONE'
+        ? await tx.restaurantBill.findMany({
+            where: { orderId: bill.orderId, branchId: input.branchId, status: { not: 'VOID' } },
+            orderBy: { id: 'asc' },
+            select: { id: true, lines: { select: { lineSubtotal: true } } },
+          })
+        : [bill];
+    const originalBases = originalBills.map((original) =>
+      sum(original.lines.map((candidate) => candidate.lineSubtotal))
+    );
+    const originalCharges =
+      policy && compare(sum(originalBases), ZERO) > 0
+        ? allocate(
+            roundMoney(multiply(sum(originalBases), policy.rate)),
+            originalBases.map((basis) => basis.mul(100).toNumber())
+          )
+        : originalBills.map(() => ZERO);
+    const originalCharge =
+      originalCharges[originalBills.findIndex((original) => original.id === bill.id)] ?? ZERO;
+    const serviceChargeTotal = policy
+      ? Prisma.Decimal.min(originalCharge, roundMoney(multiply(serviceChargeBasis, policy.rate)))
+      : bill.serviceChargeTotal;
+    const serviceCharges =
+      policy && !serviceChargeBasis.isZero()
+        ? allocate(
+            serviceChargeTotal,
+            payableLines.map((candidate) => candidate.lineSubtotal.mul(100).toNumber())
+          )
+        : payableLines.map((candidate) => candidate.serviceChargeAmount);
+
+    // Keep the original comp reason/approval on the line. Both approvals remain
+    // durable; the reversal records the exact principal and service delta and links
+    // back to the original approval instead of replacing its evidence.
+    await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason: `Comp reversal; original approval ${line.compCoAuthorizationId ?? 'legacy'}; principal ${line.compAmount.toFixed(2)}; service delta ${sub(serviceChargeTotal, bill.serviceChargeTotal).toFixed(2)}: ${reason}`,
+      targetType: 'RestaurantBillLine',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+    await tx.restaurantMoneyIdempotencyKey.create({
+      data: {
+        deviceId: input.actor.deviceId,
+        key: input.actor.idempotencyKey,
+        commandType: 'bill.uncomp',
+        resultRef,
+      },
+    });
+    for (const [index, candidate] of payableLines.entries()) {
+      const serviceChargeAmount = serviceCharges[index]!;
+      await tx.restaurantBillLine.update({
+        where: { id: candidate.id },
+        data: {
+          ...(candidate.id === line.id ? { compAmount: ZERO } : {}),
+          serviceChargeAmount,
+          lineTotal: add(candidate.lineSubtotal, serviceChargeAmount),
+        },
+      });
+    }
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        compTotal: sub(bill.compTotal, line.compAmount),
+        grandTotal: add(
+          add(bill.grandTotal, line.compAmount),
+          sub(serviceChargeTotal, bill.serviceChargeTotal)
+        ),
+        serviceChargeTotal,
+        serviceChargeBasis,
+        ...(policy && !serviceChargeBasis.isZero()
+          ? {
+              serviceChargePolicyVersionId: policy.id,
+              serviceChargeRate: policy.rate,
+              serviceChargeTaxTreatment: 'NON_TAXABLE',
+            }
+          : {}),
+      },
+    });
+    return { billId: bill.id, billLineId: line.id, replayed: false };
   });
 }
 

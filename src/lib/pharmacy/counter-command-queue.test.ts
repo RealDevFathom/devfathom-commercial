@@ -50,6 +50,7 @@ it('composes on HTTP LAN and signs the final route-valid body across retry', asy
               recallVersion: 0,
               licenceVersion: 1,
               ruleVersion: 1,
+              recalledBatchIds: [],
             },
             signingKeyId: 'key-1',
           },
