@@ -1,4 +1,6 @@
 import { ProgressiveLines } from '../_components/progressive-lines';
+import { BranchPicker, resolveBranch } from '../_components/branch-scope';
+import { LostDemandAdvicePanel, type LostDemandPanelState } from './lost-demand-advice';
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
@@ -498,6 +500,23 @@ export default async function PharmacyOrdersPage({
       ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
       : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
   const description = checksOff ? DESCRIPTION_CHECKS_OFF : DESCRIPTION;
+  // DEV-80: lost-demand advice is per branch; never adopt a branch the operator did not pick.
+  const requestedBranch = param(query, 'branch');
+  const branchScope = resolveBranch(workspace.branches, requestedBranch);
+  let lostDemand: LostDemandPanelState = { kind: 'unselected' };
+  if (branchScope.kind === 'resolved') {
+    try {
+      const read = await caller.lostDemandAdvice({ branchId: branchScope.branch.id });
+      lostDemand = {
+        kind: 'ready',
+        branchId: branchScope.branch.id,
+        branchName: branchScope.branch.name,
+        advice: read.advice,
+      };
+    } catch {
+      lostDemand = { kind: 'unavailable' };
+    }
+  }
 
   return (
     <PurchasingOutcomeScope>
@@ -523,6 +542,13 @@ export default async function PharmacyOrdersPage({
           sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
       </div>
+
+      <BranchPicker
+        branches={workspace.branches}
+        route={ROUTE}
+        selected={branchScope.kind === 'resolved' ? branchScope.branch.id : undefined}
+      />
+      <LostDemandAdvicePanel state={lostDemand} />
 
       {/* ─── PUR-02 requisitions ──────────────────────────────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">

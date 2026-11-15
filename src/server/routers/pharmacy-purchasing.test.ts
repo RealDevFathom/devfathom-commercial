@@ -3010,6 +3010,8 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  lostDemandAdvice: () => caller().lostDemandAdvice({ branchId: 'branch_a' }),
+  lostDemandTriggerSettings: () => caller().lostDemandTriggerSettings({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {
   it('inventories every query so a new read cannot silently omit the authorization matrix', () => {
