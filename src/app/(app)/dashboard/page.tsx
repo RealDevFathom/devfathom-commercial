@@ -84,6 +84,12 @@ export default async function DashboardPage({
     ? pharmacistLanding(pharmacyCapabilities, ssr?.entitlements.enabledModules)
     : null;
   if (signInLanding && pharmacist?.home) redirect(pharmacist.home);
+  // DEV-602: a member who is neither a report holder nor a pharmacist (the
+  // cashier template) gets a pharmacy home, not the owner title and layout
+  // editor. Unknown access (a failed read) keeps the server-gated command centre.
+  const reportAccess = pharmacyCapabilities
+    ? pharmacyCapabilities.includes('reports:operational')
+    : undefined;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -127,7 +133,7 @@ export default async function DashboardPage({
       ) : pharmacy && pharmacist ? (
         <PharmacistHome tools={pharmacist.tools} />
       ) : pharmacy ? (
-        <PharmacyDashboardContent role={ssr.session?.user?.role} />
+        <PharmacyDashboardContent role={ssr.session?.user?.role} reportAccess={reportAccess} />
       ) : restaurant ? (
         <RestaurantDashboardContent
           enabledModules={ssr.entitlements.enabledModules}

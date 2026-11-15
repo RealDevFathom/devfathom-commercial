@@ -170,7 +170,8 @@ describe('PHARMACY first-run capability gate', () => {
     expect(mocks.loadSetupChecklist).toHaveBeenCalledTimes(loads ? 1 : 0);
     if (loads) expect(mocks.loadSetupChecklist).toHaveBeenCalledWith(mocks.db, 'tenant', vertical);
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
-    expect(page.props.children.props).toEqual({ role });
+    // DEV-602: `can` answers every capability with `allowed`, reports:operational included.
+    expect(page.props.children.props).toEqual({ role, reportAccess: allowed });
   });
 
   it('does not query setup evidence without a session', async () => {
@@ -260,6 +261,50 @@ describe('PHARMACY pharmacist landing (DEV-95)', () => {
     expect(error).toHaveBeenCalledWith('[dashboard] pharmacy access read unavailable', {
       error: 'TypeError',
     });
+    error.mockRestore();
+  });
+});
+
+describe('PHARMACY report access for the dashboard (DEV-602)', () => {
+  function pharmacySession(capabilities: string[]) {
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
+      capabilities.includes(action)
+    );
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: 'u', role: 'EMPLOYEE', status: 'ACTIVE' } },
+      organization: { id: 'tenant' },
+      entitlements: {
+        vertical: 'PHARMACY',
+        enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-reports'],
+      },
+    });
+  }
+
+  it('tells the pharmacy dashboard a cashier holds no report access', async () => {
+    pharmacySession(['pharmacy:counter', 'pharmacy:orders']);
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBe(false);
+  });
+
+  it('tells the pharmacy dashboard an owner holds report access', async () => {
+    pharmacySession(['reports:operational', 'pharmacy:counter']);
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBe(true);
+  });
+
+  it('leaves report access unknown when the access read fails', async () => {
+    pharmacySession([]);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) => {
+      if (action === 'admin:access') return false;
+      throw new TypeError('unavailable');
+    });
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props.reportAccess).toBeUndefined();
     error.mockRestore();
   });
 });

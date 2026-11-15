@@ -206,4 +206,31 @@ describe('PharmacyDashboardContent states', () => {
       screen.queryByRole('link', { name: 'Review license and modules' })
     ).not.toBeInTheDocument();
   });
+  it('gives a cashier a pharmacy home with no owner title, editor or report read (DEV-602)', () => {
+    render(<PharmacyDashboardContent role="EMPLOYEE" reportAccess={false} />);
+    expect(mounted.hooks).toEqual([]);
+    expect(screen.queryByText('Owner command centre')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Pharmacy home' })).toBeVisible();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Owner reports are outside your access' })
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Branches could not be loaded.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the command centre and its editor for a member with report access', () => {
+    render(<PharmacyDashboardContent role="ADMIN" reportAccess />);
+    expect(mounted.hooks).toEqual(expect.arrayContaining(REPORT_HOOKS));
+    expect(screen.getByRole('heading', { level: 1, name: 'Owner command centre' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Edit dashboard' })).toBeVisible();
+  });
+
+  it('offers no layout editor once the report reads are refused (DEV-602)', () => {
+    state.branches = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.preferences = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    state.command = query(undefined);
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save dashboard' })).not.toBeInTheDocument();
+  });
 });
