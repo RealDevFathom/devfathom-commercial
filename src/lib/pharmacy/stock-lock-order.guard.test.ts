@@ -120,3 +120,101 @@ describe('stock locks go through the shared lock-order helper', () => {
     expect(stockLockOffenders([{ path: 'lib/pharmacy/example.ts', text }])).toEqual([]);
   });
 });
+
+/**
+ * DEV-825 — second guard, for the locks the first one cannot see. A stock
+ * movement write locks its balance implicitly through the projection trigger,
+ * so every function that writes one must take its balance locks through the
+ * shared helper before its first write — or be listed below with the reason it
+ * needs none. A new writer that is in neither list fails until it is decided.
+ */
+/** Wrappers that take helper locks before anything else; each is checked below. */
+const LOCKING_WRAPPERS = ['lockSaleCandidates', 'loadCandidates', 'manualQuarantineBalance'];
+const LOCK_HELPER_CALL = new RegExp(
+  `\\b(lockStockBalances|lockStockRowsFrom|${LOCKING_WRAPPERS.join('|')})\\(`
+);
+const MOVEMENT_WRITE = /pharmacyStockMovement\.(create|createMany|upsert)\(/g;
+
+/** Writers that lock through the helper before their first write. */
+const LOCKING_WRITERS = new Set([
+  'approveCount',
+  'breakPack',
+  'dispatchPurchaseReturn',
+  'dispatchTransfer',
+  'quarantinePart',
+  'receiveTransferLine',
+  'receiveTransferWithVariance',
+  'releaseQuarantinedPart',
+  'returnSaleLine',
+  'reverseMovements',
+  'reverseRecallQuarantine',
+  'transferStock',
+  'writeOff',
+]);
+
+/** Writers that take no lock of their own, and why that is safe. */
+const EXEMPT_WRITERS: Record<string, string> = {
+  postReceipt:
+    'writes only the balances of a lot it creates in the same transaction (goods-in receiveLot)',
+  postOpeningSession: 'writes only the balances of opening lots it creates in the same transaction',
+  postSaleMovements:
+    'its callers (allocateForSale, allocateReservedForSale, the emergency shortfall) lock every candidate balance first',
+};
+
+function movementWriters(sources: Array<{ path: string; text: string }>) {
+  const writers = new Map<string, { path: string; locksFirst: boolean }>();
+  for (const { path, text } of sources) {
+    for (const write of text.matchAll(MOVEMENT_WRITE)) {
+      const before = text.slice(0, write.index);
+      const declarations = [...before.matchAll(/(?:async\s+)?function\s+(\w+)\s*[<(]/g)];
+      const declaration = declarations.at(-1);
+      const name = declaration?.[1] ?? `${path}:<top level>`;
+      const body = before.slice(declaration?.index ?? 0);
+      const locksFirst = LOCK_HELPER_CALL.test(body);
+      const seen = writers.get(name);
+      // A function locks first only if it does so before every write in it.
+      writers.set(name, { path, locksFirst: (seen?.locksFirst ?? true) && locksFirst });
+    }
+  }
+  return writers;
+}
+
+describe('every stock-movement writer locks through the shared helper first', () => {
+  const writers = movementWriters(files);
+
+  it('knows every function that writes a stock movement', () => {
+    const unknown = [...writers.keys()].filter(
+      (name) => !LOCKING_WRITERS.has(name) && !(name in EXEMPT_WRITERS)
+    );
+    expect(unknown).toEqual([]);
+  });
+
+  it('has no stale entries', () => {
+    const listed = [...LOCKING_WRITERS, ...Object.keys(EXEMPT_WRITERS)];
+    expect(listed.filter((name) => !writers.has(name))).toEqual([]);
+  });
+
+  it.each([...LOCKING_WRITERS])('%s calls the lock helper before its first write', (name) => {
+    expect(writers.get(name)).toMatchObject({ locksFirst: true });
+  });
+
+  it.each(LOCKING_WRAPPERS)('wrapper %s calls the lock helper', (name) => {
+    const source = files.find(({ text }) => new RegExp(`function\\s+${name}\\s*\\(`).test(text))!;
+    const start = source.text.search(new RegExp(`function\\s+${name}\\s*\\(`));
+    const body = source.text.slice(start, source.text.indexOf('\n}\n', start));
+    expect(body).toMatch(/\b(lockStockBalances|lockStockRowsFrom|lockSaleCandidates)\(/);
+  });
+
+  it('flags a writer that writes before it locks', () => {
+    const late = movementWriters([
+      {
+        path: 'lib/pharmacy/example.ts',
+        text: `async function late(db) {
+          await db.pharmacyStockMovement.create({ data: {} });
+          await lockStockBalances(db, scope, keys);
+        }`,
+      },
+    ]);
+    expect(late.get('late')).toMatchObject({ locksFirst: false });
+  });
+});

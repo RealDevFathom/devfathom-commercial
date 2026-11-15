@@ -148,6 +148,8 @@ describe('inter-branch transfers journal dispatch and receipt', () => {
   it('brings what arrived out of transit at the destination', async () => {
     const destination = { ...scope, branchId: 'branch_dest' };
     const db = {
+      // DEV-825: the source's IN_TRANSIT balance is locked before it is written.
+      $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacyInterbranchTransfer: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'transfer_1',

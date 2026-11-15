@@ -570,15 +570,22 @@ export async function writeOff(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  // DEV-825: lock the one balance this write-off removes from through the shared
+  // DEV-825: lock the balance this write-off removes from through the shared
   // helper (after the witness credential, a document-class lock), then read it.
-  await lockStockBalances(db, scope, [
-    {
+  // A QUARANTINE write-off reads the manual-quarantine reserve, which also locks
+  // the AVAILABLE bucket, so both are taken here, AVAILABLE first.
+  await lockStockBalances(
+    db,
+    scope,
+    (input.disposition === 'QUARANTINE'
+      ? (['AVAILABLE', 'QUARANTINE'] as const)
+      : ([input.disposition ?? 'AVAILABLE'] as const)
+    ).map((disposition) => ({
       inventoryLotId: input.inventoryLotId,
       stockLocationId: input.stockLocationId,
-      disposition: input.disposition ?? 'AVAILABLE',
-    },
-  ]);
+      disposition,
+    }))
+  );
   const a = await removalArrangement(
     db,
     scope,
@@ -711,6 +718,17 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  // DEV-825: both balances this release writes, through the shared helper in key
+  // order (AVAILABLE before QUARANTINE), before reading or writing either.
+  await lockStockBalances(
+    db,
+    scope,
+    (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition,
+    }))
+  );
   const a = await removalArrangement(
     db,
     scope,
@@ -932,6 +950,19 @@ export async function receiveTransferLine(
     where: { id: line.sourceLotId },
     include: { batch: true },
   });
+  // DEV-825: the one existing balance this writes (the source's IN_TRANSIT
+  // bucket), through the shared helper; the destination lot is created here.
+  await lockStockBalances(
+    db,
+    { organizationId: scope.organizationId, branchId: transfer.fromBranchId },
+    [
+      {
+        inventoryLotId: source.id,
+        stockLocationId: line.sourceStockLocationId,
+        disposition: 'IN_TRANSIT',
+      },
+    ]
+  );
   const a = arrangementFor(input.receivedUnits, source.unitsPerPack);
   await db.pharmacyStockMovement.create({
     data: {

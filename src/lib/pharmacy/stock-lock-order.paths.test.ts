@@ -276,7 +276,10 @@ describe('count approval and quarantine release take stock locks in the global o
       reason: 'Inspected',
       idempotencyKeyPrefix: 'release',
     });
-    expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
+    // One sorted lock of both buckets; the reserve read below only re-enters it.
+    const keys = trace.balanceKeys();
+    expect(keys.slice(0, 2)).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
+    for (const key of keys.slice(2)) expect(keys.slice(0, 2)).toContain(key);
     expectLockedBeforeWrites(trace);
   });
 });
@@ -323,6 +326,37 @@ describe('write-off takes stock locks in the global order', () => {
       expectLockedBeforeWrites(trace);
     }
   );
+});
+
+describe('write-off from a quarantine hold takes stock locks in the global order', () => {
+  it('locks AVAILABLE before QUARANTINE, then only re-enters them', async () => {
+    const trace = recorder();
+    const db = {
+      $queryRaw: trace.$queryRaw,
+      user: { findFirst: vi.fn(async () => ({ id: 'witness' })) },
+      pharmacyInventoryLot: { findFirst: vi.fn(async () => ({ id: 'lot-a', unitsPerPack: 1 })) },
+      pharmacyStockBalance: {
+        findFirst: vi.fn(async () => ({ onHandUnits: 5, sealedPacks: 0, looseUnits: 5 })),
+      },
+      pharmacyRecallQuarantineAction: { findMany: vi.fn(async () => []) },
+      pharmacyStockMovement: { create: movementCreate(trace) },
+      pharmacyCustodyRecord: { create: vi.fn(async () => ({ id: 'custody' })) },
+    };
+    await writeOff(db as never, scope, {
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf',
+      units: 1,
+      witnessId: 'witness',
+      reason: 'Expired in quarantine',
+      evidenceRef: 'PHOTO-2',
+      idempotencyKey: 'write-off-quarantine',
+      disposition: 'QUARANTINE',
+    });
+    const keys = trace.balanceKeys();
+    expect(keys.slice(0, 2)).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
+    for (const key of keys.slice(2)) expect(keys.slice(0, 2)).toContain(key);
+    expectLockedBeforeWrites(trace);
+  });
 });
 
 describe('supplier claims and returns take stock locks in the global order', () => {

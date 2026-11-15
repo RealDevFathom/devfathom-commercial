@@ -807,6 +807,14 @@ export async function breakPack(db: ScopedDb, scope: LedgerScope, input: BreakPa
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
 
+  // DEV-825: lock the one balance this writes through the shared helper, then read it.
+  await lockStockBalances(db, scope, [
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+  ]);
   const balance = await db.pharmacyStockBalance.findFirst({
     where: {
       organizationId: scope.organizationId,
