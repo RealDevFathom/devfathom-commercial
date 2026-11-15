@@ -20,6 +20,22 @@ import {
 } from '@/lib/pharmacy/customer-delivery';
 import { MAX_DELIVERY_DISTANCE_METERS } from '@/lib/pharmacy/delivery-radius-profitability';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import { PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import {
+  approveRefillCycle,
+  cancelRefillSubscription,
+  createRefillSubscription,
+  listDueRefillSubscriptionIds,
+  listRefillSubscriptions,
+  openRefillCycle,
+  RefillCycleApprovalDenied,
+  RefillSubscriptionError,
+  releaseRefillCycle,
+  setRefillSubscriptionPaused,
+  startRefillCycleCheckout,
+  verifyRefillCyclePharmacistPin,
+} from '@/lib/pharmacy/refill-subscriptions';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import {
   actorMayRefund,
   authenticateRefundPin,
@@ -60,6 +76,21 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyDeliveryError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  if (error instanceof PharmacyRxSaleDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof RefillCycleApprovalDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof RefillSubscriptionError) {
+    const code =
+      error.reason === 'SUBSCRIPTION_NOT_FOUND' ||
+      error.reason === 'CYCLE_NOT_FOUND' ||
+      error.reason === 'CUSTOMER_NOT_FOUND'
+        ? 'NOT_FOUND'
+        : error.reason === 'PHARMACIST_APPROVAL_REQUIRED'
+          ? 'FORBIDDEN'
+          : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: error.reason });
+  }
   if (error instanceof PharmacyCustomerOrderError) {
     const code =
       error.reason === 'ORDER_NOT_FOUND' || error.reason === 'CUSTOMER_NOT_FOUND'
@@ -71,6 +102,9 @@ function fail(error: unknown): never {
   }
   throw error;
 }
+
+const subscriptionId = z.string().min(1).max(128);
+const cycleId = z.string().min(1).max(128);
 
 const orderLine = z
   .object({
@@ -260,6 +294,167 @@ export const pharmacyOrderingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           completeCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), input.orderId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  // DEV-73: chronic refill program and monthly pack subscriptions.
+  subscriptions: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) =>
+        listRefillSubscriptions(txDb(tx), await scopeFor(ctx, input.branchId))
+      )
+    ),
+
+  createSubscription: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          packLevelId: z.string().min(1),
+          packsPerCycle: z.number().int().min(1).max(100),
+          cycleDays: z.number().int().min(1).max(180).optional(),
+          reminderLeadDays: z.number().int().min(0).max(30).optional(),
+          fulfillment: z.enum(['COLLECT', 'DELIVER']),
+          paymentMode: z.enum(['PREPAY', 'KHATA']),
+          firstDueAt: z.coerce.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          createRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  setSubscriptionStatus: staffProcedure
+    .input(
+      z.object({ branchId, subscriptionId, action: z.enum(['pause', 'resume', 'cancel']) }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const scope = await scopeFor(ctx, input.branchId);
+          return input.action === 'cancel'
+            ? cancelRefillSubscription(txDb(tx), scope, input.subscriptionId)
+            : setRefillSubscriptionPaused(
+                txDb(tx),
+                scope,
+                input.subscriptionId,
+                input.action === 'pause'
+              );
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  openSubscriptionCycle: staffProcedure
+    .input(z.object({ branchId, subscriptionId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          openRefillCycle(txDb(tx), await scopeFor(ctx, input.branchId), input.subscriptionId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  openDueSubscriptionCycles: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const due = await ctx.db.$transaction(async (tx) =>
+        listDueRefillSubscriptionIds(txDb(tx), scope)
+      );
+      const opened: string[] = [];
+      const skipped: { subscriptionId: string; reason: string }[] = [];
+      // One transaction per subscriber: a stock-out never undoes another's hold.
+      for (const id of due) {
+        try {
+          const cycle = await ctx.db.$transaction(async (tx) =>
+            openRefillCycle(txDb(tx), scope, id)
+          );
+          opened.push(cycle.id);
+        } catch (error) {
+          if (!(error instanceof RefillSubscriptionError)) fail(error);
+          skipped.push({ subscriptionId: id, reason: error.reason });
+        }
+      }
+      return { opened, skipped };
+    }),
+
+  approveSubscriptionCycle: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          cycleId,
+          pharmacistPin: z
+            .object({
+              staffProfileId: z.string().min(1).max(128),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        // The PIN check commits in its own transaction so a wrong PIN keeps its
+        // lockout strike even though the approval is refused.
+        const approval = await withTenantDb(
+          scope.organizationId,
+          (credentialDb) =>
+            verifyRefillCyclePharmacistPin(credentialDb, scope, input.pharmacistPin),
+          { userId: scope.actorId, skipDrain: true }
+        );
+        annotateAudit(ctx, {
+          metadata: {
+            policy: 'PHARMACIST_PIN_REAUTH',
+            approverId: approval?.approvedByUserId ?? null,
+            pinVerified: Boolean(approval),
+          },
+        });
+        if (!approval) throw new RefillCycleApprovalDenied();
+        return await ctx.db.$transaction(async (tx) =>
+          approveRefillCycle(txDb(tx), scope, input.cycleId, approval)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  releaseSubscriptionCycle: staffProcedure
+    .input(z.object({ branchId, cycleId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          releaseRefillCycle(txDb(tx), await scopeFor(ctx, input.branchId), input.cycleId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  startSubscriptionCycleCheckout: staffProcedure
+    .input(z.object({ branchId, cycleId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          startRefillCycleCheckout(txDb(tx), await scopeFor(ctx, input.branchId), input.cycleId)
         );
       } catch (error) {
         fail(error);

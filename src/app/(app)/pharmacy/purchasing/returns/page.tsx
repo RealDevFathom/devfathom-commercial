@@ -419,8 +419,14 @@ export default async function PharmacyReturnsPage({
       <SectionCard eyebrow="Returns" title="Return windows" titleLevel={2}>
         {closingSoon.length === 0 ? (
           <EmptyState
-            title="No return window is closing"
-            detail="Every open return and claim at this branch still has more than a week of its supplier window left. A window that closes before dispatch cannot be credited, so this board leads with the deadline rather than the document."
+            title={
+              returns.length === 0 ? 'No returns or claims to check' : 'No return window is closing'
+            }
+            detail={
+              returns.length === 0
+                ? 'There is no open return or claim at this branch, so no supplier window is being tracked. This is not an all-clear; raise a return or claim and its deadline will appear here.'
+                : 'Every open return and claim at this branch still has more than a week of its supplier window left. A window that closes before dispatch cannot be credited, so this board leads with the deadline rather than the document.'
+            }
           />
         ) : (
           <ul className="space-y-2">

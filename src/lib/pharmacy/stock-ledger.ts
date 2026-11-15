@@ -534,6 +534,11 @@ export async function allocateForSale(
 export type ReservedSaleAllocation = {
   allocations: readonly Allocation[];
   expiresAt: Date;
+  /**
+   * DEV-73: a refill-subscription cycle a pharmacist approved with a fresh PIN may hand
+   * over its reserved prescription-only stock. Restricted and controlled stock never.
+   */
+  pharmacistApprovedRx?: boolean;
 };
 
 export async function allocateReservedForSale(
@@ -571,7 +576,9 @@ export async function allocateReservedForSale(
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId} AND lot."branchId" = ${scope.branchId}
       AND batch."medicineId" = ${input.medicineId} AND lot."packLevelId" = ${packLevelId}
-      AND medicine.saleable AND medicine.otc AND NOT medicine.rx
+      AND medicine.saleable
+      AND ((medicine.otc AND NOT medicine.rx)
+        OR (${reservation.pharmacistApprovedRx === true} AND medicine.rx))
       AND NOT medicine.restricted AND NOT medicine.controlled
       AND balance.disposition = 'AVAILABLE'
       AND (${Prisma.join(

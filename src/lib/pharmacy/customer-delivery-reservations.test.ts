@@ -45,3 +45,34 @@ it('ordinary restock recovery cannot consume order reservations against another 
   ).rejects.toThrow('INVALID_STATE');
   expect(consume).not.toHaveBeenCalled();
 });
+it('ordinary restock opt-out and recovery cannot settle a refill-subscription hold (DEV-73)', async () => {
+  const settle = vi.fn();
+  const interest = {
+    id: 'interest-r',
+    status: 'OPEN',
+    orderLineId: null,
+    campaignKey: 'refill-cycle:cycle-a',
+    demandEventId: 'demand-r',
+    demandEvent: { requestedMedicineId: 'medicine-a' },
+  };
+  const db = {
+    pharmacyRestockInterest: { findFirst: vi.fn().mockResolvedValue(interest), update: vi.fn() },
+    pharmacyRestockNotification: { updateMany: vi.fn() },
+    pharmacySaleLine: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'line-b',
+        medicineId: 'medicine-a',
+        sale: { status: 'COMPLETED', receiptNumber: 1 },
+      }),
+    },
+    unfulfilledDemandEvent: { update: vi.fn() },
+    pharmacyRestockReservation: { updateMany: settle },
+  };
+  await expect(optOutRestockInterest(db as never, scope, 'interest-r')).rejects.toThrow(
+    'INVALID_STATE'
+  );
+  await expect(
+    recoverRestockInterest(db as never, scope, { interestId: 'interest-r', saleLineId: 'line-b' })
+  ).rejects.toThrow('INVALID_STATE');
+  expect(settle).not.toHaveBeenCalled();
+});
