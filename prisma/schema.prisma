@@ -3646,7 +3646,9 @@ model Payment {
   paidAt         DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // DEV-166: the INCOME ledger entry this payment posted, so revenue reports see it.
+  transaction Transaction?
 
   @@index([invoiceId])
   @@index([organizationId])
@@ -3664,12 +3666,16 @@ model Transaction {
   projectId      String?
   clientId       String?
   receiptUrl     String?
+  // DEV-166: set on the INCOME entry an invoice payment posts; removing the
+  // payment removes its revenue entry with it.
+  paymentId      String?          @unique
   date           DateTime
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   client  Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([date])
