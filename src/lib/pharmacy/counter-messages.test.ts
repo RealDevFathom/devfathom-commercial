@@ -140,13 +140,8 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
       expect(counterErrorTone(new Error(reason)), reason).toBe('info');
   });
 
-  it('keeps danger for controlled-drug, unsafe-stock and money-reconciliation refusals', () => {
-    for (const reason of [
-      'COAUTH_REQUIRED',
-      'CONSENT_REQUIRED',
-      'SALE_BATCH_RECALLED',
-      'IDEMPOTENCY_CONFLICT',
-    ])
+  it('keeps danger for controlled-drug blocks and a payment in doubt', () => {
+    for (const reason of ['COAUTH_REQUIRED', 'CONSENT_REQUIRED', 'IDEMPOTENCY_CONFLICT'])
       expect(counterErrorTone(new Error(reason)), reason).toBe('danger');
   });
 
@@ -159,5 +154,8 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
   it('shows a correctable mapped refusal as a warning', () => {
     expect(counterErrorTone(new Error('OVER_TENDER'))).toBe('warning');
     expect(counterErrorTone(new Error('INVALID_MANUAL_CAPTURE'))).toBe('warning');
+    // The payment is still refused on the server; the batch needs replacing.
+    expect(counterErrorTone(new Error('SALE_BATCH_RECALLED'))).toBe('warning');
+    expect(counterErrorTone(new Error('REFUND_EXCEEDS_TENDER'))).toBe('warning');
   });
 });

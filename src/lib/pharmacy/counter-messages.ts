@@ -83,8 +83,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
 /**
  * DEV-712: how loudly a refusal is shown. Routine state — a bill that already
  * moved on, a drawer still closed, a short search — is a neutral `info` notice.
- * `danger` is kept for what the operator must not miss: controlled-drug and
- * unsafe-stock blocks, and a payment whose outcome or amount is in doubt.
+ * `danger` is kept for what the operator must not miss: controlled-drug blocks
+ * and a payment whose outcome is in doubt.
  * Any other mapped reason is a `warning` the operator can correct. A failure
  * this module does not know stays `danger`: it may be a safety refusal raised
  * as prose (a controlled-medicine denial), which must not be quietened.
@@ -107,17 +107,11 @@ const COUNTER_INFO_REASONS = new Set([
 ]);
 
 const COUNTER_DANGER_REASONS = new Set([
-  // Controlled-drug and unsafe-stock blocks.
+  // Controlled-drug blocks.
   'COAUTH_REQUIRED',
   'CONSENT_REQUIRED',
-  'BLOCKED_STOCK',
-  'SALE_BATCH_RECALLED',
-  'SALE_BATCH_QUARANTINED',
-  'SALE_BATCH_EXPIRED',
-  'SALE_BATCH_BLOCKED',
-  // Money whose outcome or amount does not reconcile.
+  // A payment recorded with different details: its outcome is in doubt.
   'IDEMPOTENCY_CONFLICT',
-  'REFUND_EXCEEDS_TENDER',
 ]);
 
 export function counterErrorTone(error: unknown): CounterNoticeTone {

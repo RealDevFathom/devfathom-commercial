@@ -1227,16 +1227,13 @@ function ScopedPharmacyCounterConsole({
         } catch (error) {
           // DEV-712: the server says this bill already moved on — paid on another
           // screen, or this copy was stale. Re-read it and, once it is confirmed
-          // closed, carry the scan onto a new bill. A controlled line is never
-          // re-sent: its authorization belonged to the old bill's patient.
+          // paid or voided, carry the scan onto a new bill. A held bill keeps its
+          // ID so it can still be resumed. A controlled line is never re-sent:
+          // its authorization belonged to the old bill's patient.
           if (!counterBillMovedOn(error) || freshBill || controlled || attemptRef.current)
             throw error;
           const read = await cartQuery.refetch();
-          if (
-            !read.isSuccess ||
-            (read.data?.saleId === activeSaleId && read.data.status === 'OPEN')
-          )
-            throw error;
+          if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
           if (!scanIsCurrent()) return;
           clearBill();
           startedNextBill = true;
@@ -1583,7 +1580,10 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
         }
       }
-      if (outcome.status === 'accepted') paymentAttempt.current = null;
+      // Only a refused (rolled-back) try may reuse its ID. Once a write may have
+      // landed, the saved attempt keeps its key for recovery and the next
+      // payment — even after "Check payment outcome" confirms this one — is new.
+      if (outcome.status !== 'rejected') paymentAttempt.current = null;
       // An acknowledged write stays accepted even if the follow-up read fails.
       // Unknown writes are never replayed or inferred from aggregate balances.
       if (outcome.status === 'accepted') await refreshTenderBill('accepted');

@@ -2358,6 +2358,49 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
+  it('keeps a bill held on another screen instead of replacing it', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, {
+        data: cart({ status: 'HELD' }),
+        isSuccess: true,
+      });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(
+      'That bill is already paid or closed. Start the next bill to keep selling.'
+    );
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the next payment a new key after Check payment outcome confirms the last one', async () => {
+    mocks.mutations.tender!.mockRejectedValueOnce(new Error('Connection lost'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment outcome is unknown/);
+    mocks.outcomeQuery.mockResolvedValue({
+      status: 'ACCEPTED',
+      replayUnsafe: true,
+      result: accepted(),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText('Payment recorded.');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    enterPayment();
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(2));
+    const [first, second] = mocks.mutations.tender!.mock.calls.map(([input]) => input);
+    expect(second.idempotencyKey).toMatch(/^counter-tender:sale-a:CASH:12550:[0-9a-f-]{36}$/);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
   it('never abandons a bill whose payment outcome is still unknown', async () => {
     mocks.queries.counterCart!.data = settled();
     persistTenderAttempt(savedAttempt());
