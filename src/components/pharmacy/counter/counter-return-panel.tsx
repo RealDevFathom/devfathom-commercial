@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { formatSoldQuantity, soldUnitNoun } from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 
 const attemptSchema = z.discriminatedUnion('kind', [
@@ -586,7 +587,7 @@ export function ReturnForm({
                     value={row.id}
                     disabled={row.returnedUnits === row.canonicalUnits}
                   >
-                    {row.name} · {row.quantity} {row.saleUnit === 'PACK' ? 'BOX' : row.saleUnit} ·{' '}
+                    {row.name} · {formatSoldQuantity(row)} ·{' '}
                     {row.canonicalUnits - row.returnedUnits} units returnable
                   </option>
                 ))}
@@ -605,7 +606,11 @@ export function ReturnForm({
                 <option value="">Lot cannot be verified — quarantine</option>
                 {line?.lots.map((lot) => (
                   <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                    {lot.batchNumber} · {lot.lotId} · {lot.returnableUnits} units remaining
+                    Batch {lot.batchNumber}
+                    {lot.expiresAt
+                      ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
+                      : ''}{' '}
+                    · {lot.returnableUnits} units remaining
                     {lot.restockAllowed ? '' : ' · quarantine only'}
                   </option>
                 ))}
@@ -632,7 +637,7 @@ export function ReturnForm({
               />
               {line && (
                 <p className="text-sm text-text-muted">
-                  One sold {line.saleUnit === 'PACK' ? 'box' : line.saleUnit.toLowerCase()} contains{' '}
+                  One sold {soldUnitNoun(line.saleUnit, line.levelLabel)} contains{' '}
                   {line.canonicalUnitsPerSaleUnit} base units.
                 </p>
               )}

@@ -122,3 +122,101 @@ describe('an earn basis that needs accounting review', () => {
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-746 versioned earn reversal', () => {
+  const twoPercent = {
+    id: 'program-1',
+    version: 1,
+    earnMode: 'PERCENT_OF_SPEND',
+    earnPoints: 200,
+    perSpendMinor: 1_000_000,
+  };
+  function versioned(tender: { type: string; amountMinor: number }) {
+    const db = fixture();
+    db.pharmacyRefund.findFirst.mockResolvedValue({
+      id: 'refund-a',
+      saleId: 'sale-a',
+      originalTenderId: 'tender-a',
+      sale: { customerId: 'customer-a' },
+      originalTender: { ...tender, saleId: 'sale-a', branchId: scope.branchId },
+    });
+    return Object.assign(db, {
+      pharmacyLoyaltyProgramVersion: { findFirst: vi.fn().mockResolvedValue(twoPercent) },
+      pharmacyLoyaltyPointsEntry: {
+        ...db.pharmacyLoyaltyPointsEntry,
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    });
+  }
+
+  it('reprices a sale earn with its own version and ignores khata refunds', async () => {
+    const db = versioned({ type: 'CASH', amountMinor: 100_000 });
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({
+      points: 20,
+      netPaidMinor: 100_000,
+      programVersionId: 'program-1',
+    } as never);
+    db.pharmacyRefund.aggregate.mockResolvedValue({ _sum: { amountMinor: 50_000 } });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ kind: 'EARN_REVERSAL', points: -10, netPaidMinor: 50_000 });
+    expect(db.pharmacyRefund.aggregate).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: 'sale-a',
+        originalTender: { type: { notIn: ['LOYALTY', 'CREDIT'] } },
+      },
+      _sum: { amountMinor: true },
+    });
+  });
+
+  it('takes back khata-collection points only for money no longer owed, once', async () => {
+    const db = versioned({ type: 'CREDIT', amountMinor: 50_000 });
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue(null as never);
+    db.pharmacyLoyaltyPointsEntry.findMany.mockResolvedValue([
+      {
+        points: 6,
+        netPaidMinor: 30_000,
+        earnStartMinor: 0,
+        programVersionId: 'program-1',
+        programVersion: twoPercent,
+      },
+    ]);
+    // PKR 500 credit, PKR 300 collected (6 points), PKR 400 refunded: PKR 100 still earns.
+    db.pharmacyRefund.aggregate.mockResolvedValue({ _sum: { amountMinor: 40_000 } });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({
+      kind: 'EARN_REVERSAL',
+      points: -4,
+      netPaidMinor: 10_000,
+      tenderId: 'tender-a',
+      refundId: 'refund-a',
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenderId: 'tender-a', kind: 'KHATA_EARN' }),
+      })
+    );
+    // A later refund of the rest takes back only what is left.
+    db.pharmacyRefund.aggregate.mockResolvedValue({ _sum: { amountMinor: 50_000 } });
+    db.pharmacyLoyaltyPointsEntry.aggregate.mockResolvedValue({ _sum: { points: -4 } });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ points: -2, netPaidMinor: 0 });
+  });
+
+  it('keeps the original reversal for a sale that earned its credit before versioning', async () => {
+    const db = versioned({ type: 'CREDIT', amountMinor: 950 });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ points: -5, netPaidMinor: 475 });
+    expect(db.pharmacyLoyaltyPointsEntry.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyRefund.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ originalTender: { type: { not: 'LOYALTY' } } }),
+      })
+    );
+  });
+});

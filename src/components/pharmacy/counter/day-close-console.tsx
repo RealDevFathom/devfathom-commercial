@@ -43,6 +43,19 @@ export function cashMinor(value: string): number | null {
   return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
 }
 
+/**
+ * DEV-623: unpaid bills keep their stock off the shelf. The close does not void
+ * them; it says how many are left so they are resumed or voided on the counter.
+ */
+export function openBillsWarning(bills: { open: number; held: number }): string {
+  const parts = [
+    bills.open ? `${bills.open} open` : '',
+    bills.held ? `${bills.held} held` : '',
+  ].filter(Boolean);
+  const total = bills.open + bills.held;
+  return `${parts.join(' and ')} ${total === 1 ? 'bill is' : 'bills are'} still unpaid and holding stock. Resume or void ${total === 1 ? 'it' : 'them'} from Open bills on the counter.`;
+}
+
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 // Optional deep link (e.g. Ask Fathom's cash-close drill-through): the branch and
@@ -407,6 +420,11 @@ function DayCloseForm({
               });
             }}
           >
+            {data.openBills && data.openBills.open + data.openBills.held > 0 ? (
+              <p className="text-sm text-warning" role="alert">
+                {openBillsWarning(data.openBills)}
+              </p>
+            ) : null}
             {!data.drawers.length && (
               <p>No drawers were opened for this date. You can record and lock an empty day.</p>
             )}

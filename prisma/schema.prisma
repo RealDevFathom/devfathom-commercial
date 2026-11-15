@@ -657,6 +657,7 @@ model Medicine {
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
   controlledRegisterEntries    PharmacyControlledRegisterEntry[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
+  drapPriceAlerts              PharmacyDrapPriceAlert[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
   promotions                   PharmacyPromotion[]
@@ -1169,6 +1170,12 @@ enum PharmacyLoyaltyEntryKind {
   EARN
   REDEEM
   REFUND
+  KHATA_EARN
+}
+
+enum PharmacyLoyaltyEarnMode {
+  PERCENT_OF_SPEND
+  POINTS_PER_SPEND_STEP
 }
 
 enum PharmacyDrawerSessionStatus {
@@ -1436,6 +1443,26 @@ model PharmacyKhataLimitDecision {
   @@map("pharmacy_khata_limit_decisions")
 }
 
+/// DEV-746: owner-set earning rule. Append-only and dated: a new rate is a new version, so
+/// points already earned keep the rule they were priced with. Redemption value is fixed in code.
+model PharmacyLoyaltyProgramVersion {
+  id             String                  @id @default(cuid())
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  version        Int
+  earnMode       PharmacyLoyaltyEarnMode
+  earnPoints     Int
+  perSpendMinor  Int
+  effectiveFrom  DateTime                @default(now())
+  actorId        String
+  createdAt      DateTime                @default(now())
+
+  entries PharmacyLoyaltyPointsEntry[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, version])
+  @@map("pharmacy_loyalty_program_versions")
+}
+
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
 /// sale and idempotency constraints make settlement replay safe.
 model PharmacyLoyaltyPointsEntry {
@@ -1450,10 +1477,15 @@ model PharmacyLoyaltyPointsEntry {
   points          Int
   requestedPoints Int?
   netPaidMinor    Int?
+  /// DEV-746: the earn rule this entry was priced with; null on entries from before versioning.
+  programVersionId String?
+  /// KHATA_EARN only: money already collected against the same khata charge before this entry.
+  earnStartMinor   Int?
   actorId         String
   idempotencyKey  String
   occurredAt      DateTime                 @default(now())
 
+  programVersion PharmacyLoyaltyProgramVersion? @relation(fields: [organizationId, programVersionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_points_entries_program_version_fkey")
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   sale     PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   tender   PharmacyTender?  @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
@@ -2372,6 +2404,9 @@ model PharmacyInventoryCount {
   varianceThreshold Int
   createdById       String
   approvedById      String?
+  /// DEV-682: why the approved variance happened, recorded by the person who
+  /// confirmed it. Required whenever any line's counted units differ from book.
+  varianceReason    String?
   createdAt         DateTime                     @default(now())
   approvedAt        DateTime?
   lines             PharmacyInventoryCountLine[]
@@ -2480,6 +2515,7 @@ model PharmacyDrapIngest {
   createdAt         DateTime                         @default(now())
   recallNotice      PharmacyRecallNotice?            @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
   priceChanges      PharmacyPriceChangeProposal[]
+  priceAlerts       PharmacyDrapPriceAlert[]
   quarantineActions PharmacyRecallQuarantineAction[]
 
   @@unique([organizationId, id])
@@ -2508,6 +2544,27 @@ model PharmacyPriceChangeProposal {
   @@unique([organizationId, id])
   @@unique([organizationId, ingestId, medicineId])
   @@map("pharmacy_price_change_proposals")
+}
+
+/// DEV-693: a DRAP price notice that matches a catalogue medicine is information only.
+/// It never changes a price or drafts one; the owner reads it and dismisses it.
+model PharmacyDrapPriceAlert {
+  id                 String             @id @default(cuid())
+  organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingestId           String
+  medicineId         String
+  notifiedPriceMinor Int
+  effectiveDate      DateTime
+  dismissedById      String?
+  dismissedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  ingest             PharmacyDrapIngest @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
+  medicine           Medicine           @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, ingestId])
+  @@index([organizationId, medicineId, dismissedAt])
+  @@map("pharmacy_drap_price_alerts")
 }
 
 model PharmacyRecallQuarantineAction {

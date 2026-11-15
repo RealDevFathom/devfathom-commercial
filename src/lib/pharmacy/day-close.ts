@@ -22,7 +22,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     select: { name: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
-  const [close, drawers, sales, refunds, organization, tenders] = await Promise.all([
+  const [close, drawers, sales, refunds, organization, tenders, unpaid] = await Promise.all([
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
@@ -44,6 +44,16 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     db.pharmacyTender.findMany({
       where,
       select: { id: true, type: true, amountMinor: true, confirmedById: true },
+    }),
+    // DEV-623: unpaid bills hold their stock whatever their date, so the close
+    // warns about every OPEN or HELD bill left in the branch.
+    db.pharmacySale.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: { in: ['OPEN', 'HELD'] },
+      },
+      select: { status: true },
     }),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
@@ -89,6 +99,10 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     ),
     close,
     timezone: workspaceTimezone(organization?.timezone),
+    openBills: {
+      open: unpaid.filter((sale) => sale.status === 'OPEN').length,
+      held: unpaid.filter((sale) => sale.status === 'HELD').length,
+    },
   };
 }
 
