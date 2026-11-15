@@ -110,6 +110,8 @@ import {
   declineSubstitute,
   findSubstituteProposals,
   PharmacySubstituteError,
+  rankSameSaltBrandsByMargin,
+  suggestHigherMarginBrandMix,
 } from '@/lib/pharmacy/substitute-finder';
 import { findUpsellSuggestions, UPSELL_MAX_TRIGGERS } from '@/lib/pharmacy/upsell-suggestions';
 import {
@@ -223,6 +225,50 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+/**
+ * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
+ * (for the purchasing view) or a manager/owner may read brand margins.
+ */
+async function marginScopeFor(
+  ctx: TRPCContext,
+  branch: string,
+  actions: readonly ('pharmacy:dispense' | 'pharmacy:procurement' | 'pharmacy:manage')[]
+): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  let permitted = false;
+  for (const action of actions) {
+    if (await can(subject, action, undefined, { db: ctx.db, source: 'TRPC' })) {
+      permitted = true;
+      break;
+    }
+  }
+  if (!permitted) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacist or manager permission is required to view brand margins.',
+    });
+  }
+  // Branch stock, cost and margin stay inside the caller's active branch assignment.
+  // Only a session ADMIN of this organization may read any of its active branches.
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignment.some((row) => row.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
@@ -2077,6 +2123,53 @@ export const pharmacySalesRouter = router({
         }
         throw error;
       }
+    }),
+  /** #745: pharmacist-facing same-salt/strength brand ranking by branch margin. */
+  sameSaltMarginRanking: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          limit: z.number().int().min(1).max(50).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      try {
+        return await rankSameSaltBrandsByMargin(ctx.db, scope, input);
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  /** #745: purchasing view; suggests a higher-margin brand mix within exact equivalents. */
+  higherMarginBrandMix: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          minUnitMarginGainMinor: z.number().int().nonnegative().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:procurement',
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return suggestHigherMarginBrandMix(ctx.db, scope, {
+        minUnitMarginGainMinor: input.minUnitMarginGainMinor,
+      });
     }),
   /**
    * #730: rule-based complementary-item suggestions for the bill. Read-only;
