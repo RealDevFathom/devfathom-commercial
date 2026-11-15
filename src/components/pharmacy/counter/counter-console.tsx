@@ -92,7 +92,9 @@ import {
 } from '@/lib/pharmacy/counter-keymap';
 import {
   COUNTER_ERROR_MESSAGES,
+  counterBillMovedOn,
   counterErrorMessage,
+  counterErrorTone,
   counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
@@ -123,7 +125,7 @@ import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
-  tone: 'success' | 'warning' | 'danger' | 'neutral';
+  tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
   inventoryBranchId?: string;
 };
@@ -210,6 +212,44 @@ function hasValidBill(
     cart.totals.tenderedMinor >= 0 &&
     cart.totals.tenderedMinor <= cart.totals.netMinor
   );
+}
+
+/**
+ * DEV-712: a bill the server will never add another line or payment to. A scan
+ * against it opens the next bill instead of failing with INVALID_STATE.
+ */
+function billClosed(cart: CounterCart | null | undefined, saleId: string | null): boolean {
+  return Boolean(
+    saleId && cart?.saleId === saleId && (cart.status === 'COMPLETED' || cart.status === 'VOID')
+  );
+}
+
+const EMPTY_CONTROLLED_AUTH = {
+  prescriptionLineId: '',
+  staffProfileId: '',
+  pin: '',
+  rxSerialWritten: false,
+  emergency: false,
+  prescriberName: '',
+  prescriberRegNo: '',
+  refSerial: '',
+};
+
+type ControlledAuthField = keyof typeof EMPTY_CONTROLLED_AUTH;
+
+/**
+ * DEV-712: keep only the authorization fields the operator edited after the
+ * bill closed — including one re-entered with the same value. Every other
+ * field (the closed bill's prescriber, Rx serial, emergency flag or
+ * pharmacist) is reset, so it never follows a new patient.
+ */
+function freshControlledAuth(
+  current: typeof EMPTY_CONTROLLED_AUTH,
+  edited: ReadonlySet<ControlledAuthField>
+): typeof EMPTY_CONTROLLED_AUTH {
+  const fresh = { ...EMPTY_CONTROLLED_AUTH };
+  for (const key of edited) Object.assign(fresh, { [key]: current[key] });
+  return fresh;
 }
 
 function tenderAcknowledgement(value: unknown): value is {
@@ -449,16 +489,7 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
-  const [controlledAuth, setControlledAuth] = useState({
-    prescriptionLineId: '',
-    staffProfileId: '',
-    pin: '',
-    rxSerialWritten: false,
-    emergency: false,
-    prescriberName: '',
-    prescriberRegNo: '',
-    refSerial: '',
-  });
+  const [controlledAuth, setControlledAuth] = useState(EMPTY_CONTROLLED_AUTH);
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
@@ -501,6 +532,13 @@ function ScopedPharmacyCounterConsole({
     receipt: CounterReceipt;
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
+  // The patient on the bill when it was first seen paid or voided, and the
+  // authorization fields the operator has edited since then (DEV-712).
+  const closedBillPatient = useRef<{
+    saleId: string;
+    patientId: string | null;
+    editedAuth: Set<ControlledAuthField>;
+  } | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -659,7 +697,7 @@ function ScopedPharmacyCounterConsole({
       void utils.pharmacySales.counterKeymap.invalidate();
       setNotice({ tone: 'success', message: 'Keymap saved for this operator.' });
     },
-    onError: (error) => setNotice({ tone: 'danger', message: messageFrom(error) }),
+    onError: (error) => setNotice({ tone: counterErrorTone(error), message: messageFrom(error) }),
   });
 
   const trimmedQuery = query.trim();
@@ -932,6 +970,11 @@ function ScopedPharmacyCounterConsole({
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
+  const currentBillClosed = billClosed(cart, saleId);
+  useEffect(() => {
+    if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
+      closedBillPatient.current = { saleId, patientId, editedAuth: new Set() };
+  }, [currentBillClosed, patientId, saleId]);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
   const paidMinor = currentBill ? cart.totals.tenderedMinor : 0;
   const unknownTender = tenderOutcome?.status === 'unknown';
@@ -1163,26 +1206,22 @@ function ScopedPharmacyCounterConsole({
     setPaymentOpen(true);
   }, []);
 
-  const startNextBill = useCallback(() => {
-    if (busy || attemptRef.current) return;
+  // Leave the settled bill and everything tied to its patient behind.
+  const clearBill = useCallback(() => {
     setActiveSale(null);
-    setActiveRow(null);
     setPatientId(null);
     setPatientQuery('');
     setSubmittedPatientQuery('');
     setPatientAddressDraft(null);
-    setControlledAuth({
-      prescriptionLineId: '',
-      staffProfileId: '',
-      pin: '',
-      rxSerialWritten: false,
-      emergency: false,
-      prescriberName: '',
-      prescriberRegNo: '',
-      refSerial: '',
-    });
+    setControlledAuth(EMPTY_CONTROLLED_AUTH);
+  }, [setActiveSale]);
+
+  const startNextBill = useCallback(() => {
+    if (busy || attemptRef.current) return;
+    clearBill();
+    setActiveRow(null);
     focusSearch();
-  }, [busy, focusSearch, setActiveSale]);
+  }, [busy, clearBill, focusSearch]);
 
   const openChecks = useCallback(() => setChecksOpen(true), []);
 
@@ -1234,7 +1273,7 @@ function ScopedPharmacyCounterConsole({
         };
       } catch (error) {
         if (revision !== scannerRevision.current) return;
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       } finally {
         setPending(null);
       }
@@ -1249,8 +1288,7 @@ function ScopedPharmacyCounterConsole({
     setLotOverride(null);
   }, []);
 
-  const ensureSale = useCallback(async () => {
-    if (saleId) return saleId;
+  const openSale = useCallback(async () => {
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
       .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
@@ -1262,7 +1300,9 @@ function ScopedPharmacyCounterConsole({
       });
     setActiveSale(created.id);
     return created.id;
-  }, [branchId, createSale, saleId, setActiveSale, utils]);
+  }, [branchId, createSale, setActiveSale, utils]);
+
+  const ensureSale = useCallback(async () => saleId ?? (await openSale()), [openSale, saleId]);
 
   const addToCart = useCallback(
     async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
@@ -1302,26 +1342,47 @@ function ScopedPharmacyCounterConsole({
       }
       setPending('addToCart');
       setNotice(null);
+      // DEV-712: once a bill is paid (or voided) the next scan starts a new bill.
+      // A pending, unresolved payment attempt keeps its bill until it is resolved.
+      // The closed bill's patient and authorization are cleared; a patient the
+      // operator picked for the next customer after the bill closed is kept,
+      // with only the authorization fields entered since then.
+      let billPatient = patient;
+      let billAuth = controlledAuth;
+      const replaceClosedBill =
+        Boolean(saleId) && !attemptRef.current && billClosed(cartQuery.data, saleId);
+      if (replaceClosedBill) {
+        const closed = closedBillPatient.current;
+        if (closed?.saleId === saleId && closed.patientId !== patientId) {
+          billAuth = freshControlledAuth(controlledAuth, closed.editedAuth);
+          setActiveSale(null);
+          setControlledAuth(billAuth);
+        } else {
+          clearBill();
+          billPatient = null;
+          billAuth = EMPTY_CONTROLLED_AUTH;
+        }
+      }
       try {
         // No line is added while the drawer is closed, to a new bill or an open one.
         if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
-        const activeSaleId = await ensureSale();
+        let activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
+        const freshBill = replaceClosedBill || activeSaleId !== saleId;
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
         const controlled = row.restriction.controlled;
+        const patient = billPatient;
         const addressOk = patientAddress.trim().length >= 3;
-        const prescriptionOk =
-          controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
-        const emergencyOk =
-          !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+        const prescriptionOk = billAuth.emergency || Boolean(billAuth.prescriptionLineId);
+        const emergencyOk = !billAuth.emergency || billAuth.prescriberName.trim().length > 0;
         if (
           controlled &&
           (!patient ||
             !addressOk ||
             !prescriptionOk ||
             !emergencyOk ||
-            !controlledAuth.staffProfileId ||
-            !/^\d{4,8}$/.test(controlledAuth.pin) ||
+            !billAuth.staffProfileId ||
+            !/^\d{4,8}$/.test(billAuth.pin) ||
             !navigator.onLine)
         ) {
           setNotice({
@@ -1332,44 +1393,66 @@ function ScopedPharmacyCounterConsole({
           openChecks();
           return;
         }
-        const refSerial = Number(controlledAuth.refSerial);
-        const added = await addLine.mutateAsync({
-          controlledAuthorization:
-            controlled && patient
+        const refSerial = Number(billAuth.refSerial);
+        const postLine = (lineSaleId: string) =>
+          addLine.mutateAsync({
+            controlledAuthorization:
+              controlled && patient
+                ? {
+                    patientId: patient.patientId,
+                    patientAddress: patientAddress.trim(),
+                    staffProfileId: billAuth.staffProfileId,
+                    pin: billAuth.pin,
+                    rxSerialWritten: billAuth.rxSerialWritten,
+                    emergency: billAuth.emergency,
+                    prescriptionLineId: billAuth.prescriptionLineId || undefined,
+                    prescriberName: billAuth.prescriberName.trim() || undefined,
+                    prescriberRegNo: billAuth.prescriberRegNo.trim() || undefined,
+                    refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                  }
+                : undefined,
+            branchId,
+            saleId: lineSaleId,
+            medicineId: row.medicineId,
+            presentationId: row.presentationId,
+            packLevelId: option.packLevelId,
+            saleUnit: option.kind,
+            quantity: units,
+            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            // A stable key per (sale, medicine, unit, quantity) so a double-press of
+            // the add chord cannot post the same line twice.
+            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+            ...(overrideLotId && batchOverride
               ? {
-                  patientId: patient.patientId,
-                  patientAddress: patientAddress.trim(),
-                  staffProfileId: controlledAuth.staffProfileId,
-                  pin: controlledAuth.pin,
-                  rxSerialWritten: controlledAuth.rxSerialWritten,
-                  emergency: controlledAuth.emergency,
-                  prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
-                  prescriberName: controlledAuth.prescriberName.trim() || undefined,
-                  prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
-                  refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                  // #520: the server resolves who approved the override; the counter never names one.
+                  override: {
+                    inventoryLotId: overrideLotId,
+                    reason: batchOverride.reason.trim(),
+                  },
                 }
-              : undefined,
-          branchId,
-          saleId: activeSaleId,
-          medicineId: row.medicineId,
-          presentationId: row.presentationId,
-          packLevelId: option.packLevelId,
-          saleUnit: option.kind,
-          quantity: units,
-          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-          // A stable key per (sale, medicine, unit, quantity) so a double-press of
-          // the add chord cannot post the same line twice.
-          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
-          ...(overrideLotId && batchOverride
-            ? {
-                // #520: the server resolves who approved the override; the counter never names one.
-                override: {
-                  inventoryLotId: overrideLotId,
-                  reason: batchOverride.reason.trim(),
-                },
-              }
-            : {}),
-        });
+              : {}),
+          });
+        let startedNextBill = replaceClosedBill;
+        let added: Awaited<ReturnType<typeof postLine>>;
+        try {
+          added = await postLine(activeSaleId);
+        } catch (error) {
+          // DEV-712: the server says this bill already moved on — paid on another
+          // screen, or this copy was stale. Re-read it and, once it is confirmed
+          // paid or voided, carry the scan onto a new bill. A held bill keeps its
+          // ID so it can still be resumed. A controlled line is never re-sent:
+          // its authorization belonged to the old bill's patient.
+          if (!counterBillMovedOn(error) || freshBill || controlled || attemptRef.current)
+            throw error;
+          const read = await cartQuery.refetch();
+          if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
+          if (!scanIsCurrent()) return;
+          clearBill();
+          startedNextBill = true;
+          activeSaleId = await openSale();
+          if (!scanIsCurrent()) return;
+          added = await postLine(activeSaleId);
+        }
         if ('blocked' in added) {
           setNotice({ tone: 'warning', message: added.blocked });
           return;
@@ -1381,14 +1464,14 @@ function ScopedPharmacyCounterConsole({
         setLotOverride(null);
         setNotice({
           tone: 'success',
-          message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
         setQuery('');
         focusSearch();
       } catch (error) {
         const message = messageFrom(error);
         setNotice({
-          tone: 'danger',
+          tone: counterErrorTone(error),
           message,
           ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
             ? { inventoryBranchId: branchId }
@@ -1402,6 +1485,8 @@ function ScopedPharmacyCounterConsole({
     [
       activeRow,
       addLine,
+      cartQuery,
+      clearBill,
       controlledAuth,
       patient,
       patientAddress,
@@ -1411,11 +1496,15 @@ function ScopedPharmacyCounterConsole({
       focusSearch,
       lotOverride,
       openChecks,
+      openSale,
+      patientId,
       preview,
       quantity,
       quantityText,
       refreshCart,
+      saleId,
       selectedOption,
+      setActiveSale,
       utils,
     ]
   );
@@ -1470,7 +1559,7 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         if (revision === scannerRevision.current)
-          setNotice({ tone: 'danger', message: messageFrom(error) });
+          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       } finally {
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
@@ -1506,7 +1595,7 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'success', message: `Bill ${action === 'void' ? 'voided' : action}.` });
         focusSearch();
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       } finally {
         setPending(null);
       }
@@ -1933,7 +2022,7 @@ function ScopedPharmacyCounterConsole({
       if (demand?.id) setLostSaleCapture({ branchId, demandId: demand.id, requested });
       focusSearch();
     } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
+      setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
     } finally {
       setPending(null);
     }
@@ -1990,7 +2079,7 @@ function ScopedPharmacyCounterConsole({
       });
       setNotice({ tone: 'success', message: 'Demand closed: substitute declined.' });
     } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
+      setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
     } finally {
       setPending(null);
     }
@@ -2081,7 +2170,7 @@ function ScopedPharmacyCounterConsole({
           failed: true,
         });
         void flushPrintAudits();
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
         return false;
       }
       let allocation: { copyNumber: number; reprint: boolean };
@@ -2100,7 +2189,7 @@ function ScopedPharmacyCounterConsole({
         );
       } catch (error) {
         reservation.cancel();
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
         return false;
       }
       // Recording faults do not undo a dialog that has already opened.
@@ -2575,7 +2664,7 @@ function ScopedPharmacyCounterConsole({
               <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
               {notice ? (
                 <div
-                  role={notice.tone === 'success' ? 'status' : 'alert'}
+                  role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
                   aria-live="polite"
                   className={`flex items-center gap-3 rounded-lg border p-3 ${
                     notice.tone === 'danger'
@@ -3198,6 +3287,7 @@ function ScopedPharmacyCounterConsole({
                       setPatientAddressDraft(typeof value === 'string' ? value : '');
                       return;
                     }
+                    closedBillPatient.current?.editedAuth.add(field);
                     setControlledAuth((current) => {
                       if (field === 'emergency' || field === 'rxSerialWritten') {
                         return { ...current, [field]: value === true };

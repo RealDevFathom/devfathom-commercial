@@ -6,13 +6,16 @@ import {
   COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE,
   COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
   COUNTER_UNKNOWN_ERROR_MESSAGE,
+  counterBillMovedOn,
   counterErrorMessage,
+  counterErrorTone,
   counterPaymentErrorMessage,
   RX_SALE_COMPLETING_ROLE_NAMES,
 } from './counter-messages';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS } from '@/lib/vertical-catalog';
 import { PharmacyLoyaltyError } from './customer-loyalty';
+import { PharmacySaleError } from './sales';
 import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
 
@@ -84,7 +87,11 @@ describe('counterErrorMessage', () => {
       'MOCK_PROVIDER_IN_RELEASE',
       'OPEN_DRAWER',
       'REOPEN_REASON_REQUIRED',
+      // DEV-712: these three fell through to "Refresh and try again".
       'INVALID_MANUAL_CAPTURE',
+      'INVALID_RECEIPT_LEASE',
+      'LEASE_REQUIRES_SETTLEMENT',
+      'DAY_CLOSED',
     ] as const;
 
     for (const reason of settlementReasons) {
@@ -181,5 +188,62 @@ describe('DEV-622: the counter names who can finish the bill', () => {
     );
     // Outside payment, the generic refusal is not rewritten as a payment message.
     expect(counterErrorMessage(trpcFailure(NO_PERMISSION, 'FORBIDDEN'))).toBe(NO_PERMISSION);
+  });
+});
+
+/**
+ * DEV-712: after payment the counter told the cashier the bill "has already
+ * moved on. Refresh the counter and try again" in a red banner — for a routine
+ * state the counter now resolves itself.
+ */
+describe('counter notices after a bill moves on (DEV-712)', () => {
+  it('never sends the operator to refresh for a settled bill', () => {
+    for (const reason of ['INVALID_STATE', 'SALE_NOT_OPEN'] as const) {
+      const message = counterErrorMessage(new Error(reason));
+      expect(message).not.toMatch(/refresh/i);
+      expect(message).toMatch(/next bill/);
+      // A held bill can be resumed, so the sentence must not claim it was paid.
+      expect(message).toMatch(/on hold/);
+      expect(message).toMatch(/Resume/);
+    }
+  });
+
+  it('recognises only the refusals that mean the bill is no longer open', () => {
+    expect(counterBillMovedOn(new PharmacySaleError('INVALID_STATE'))).toBe(true);
+    expect(counterBillMovedOn(new PharmacySettlementError('SALE_NOT_OPEN'))).toBe(true);
+    expect(counterBillMovedOn(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(false);
+    expect(counterBillMovedOn(new Error('That bill is closed.'))).toBe(false);
+    expect(counterBillMovedOn('INVALID_STATE')).toBe(false);
+  });
+
+  it('shows routine state as information, not danger', () => {
+    for (const reason of ['INVALID_STATE', 'SALE_NOT_OPEN', 'DRAWER_NOT_OPEN', 'NOT_FOUND'])
+      expect(counterErrorTone(new Error(reason)), reason).toBe('info');
+  });
+
+  it('keeps danger for controlled-drug blocks and a payment in doubt', () => {
+    for (const reason of ['COAUTH_REQUIRED', 'CONSENT_REQUIRED', 'IDEMPOTENCY_CONFLICT'])
+      expect(counterErrorTone(new Error(reason)), reason).toBe('danger');
+  });
+
+  it('keeps an unknown or prose refusal as danger, so a safety denial is never quietened', () => {
+    expect(counterErrorTone(new Error('SOME_FUTURE_REASON'))).toBe('danger');
+    expect(counterErrorTone(new Error('Controlled medicine needs a pharmacist.'))).toBe('danger');
+    expect(counterErrorTone(null)).toBe('danger');
+  });
+
+  it('names both remedies for a refused manual transfer', () => {
+    const message = counterErrorMessage(new PharmacySettlementError('INVALID_MANUAL_CAPTURE'));
+    expect(message).toMatch(/payment reference/);
+    // The same code covers a branch with no merchant details for the tender.
+    expect(message).toMatch(/enabled at this branch/);
+  });
+
+  it('shows a correctable mapped refusal as a warning', () => {
+    expect(counterErrorTone(new Error('OVER_TENDER'))).toBe('warning');
+    expect(counterErrorTone(new Error('INVALID_MANUAL_CAPTURE'))).toBe('warning');
+    // The payment is still refused on the server; the batch needs replacing.
+    expect(counterErrorTone(new Error('SALE_BATCH_RECALLED'))).toBe('warning');
+    expect(counterErrorTone(new Error('REFUND_EXCEEDS_TENDER'))).toBe('warning');
   });
 });
