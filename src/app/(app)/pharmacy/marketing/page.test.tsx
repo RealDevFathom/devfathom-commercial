@@ -179,11 +179,11 @@ it('shows explicit unavailable model status without inventing recommendations', 
     screen.getByText("AI suggestions aren't set up yet. Contact support.")
   ).toBeInTheDocument();
   expect(screen.queryByText(/CONFIGURATION/)).not.toBeInTheDocument();
-  expect(screen.getByText('e1: 25')).toBeInTheDocument();
-  expect(screen.getByText(/Coverage: partial; cohort: 12/)).toHaveTextContent(
+  expect(screen.getByText('Receipts for known customers: 25')).toBeInTheDocument();
+  expect(screen.getByText(/incomplete data · group size: 12/)).toHaveTextContent(
     'anonymous receipts excluded'
   );
-  expect(screen.getByText(/Comparison:/)).toHaveTextContent('2026-08-02');
+  expect(screen.getByText(/Comparison:/)).toHaveTextContent('2 Aug – 1 Sept 2026');
   expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save draft' })).toBeInTheDocument();
 });
