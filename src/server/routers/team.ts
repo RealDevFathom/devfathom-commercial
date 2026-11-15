@@ -1019,17 +1019,13 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const target = await ctx.db.user.findUnique({
-        where: { id: input.id },
-        select: { role: true },
-      });
-      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
-      const denial = passwordResetDenial({
+      const denial = await passwordResetDenial(ctx.db, {
         actorId: ctx.session.user.id,
-        actorRole: ctx.session.user.role,
         targetId: input.id,
-        targetRole: target.role,
       });
+      if (denial === 'Member not found.') {
+        throw new TRPCError({ code: 'NOT_FOUND', message: denial });
+      }
       if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
       const hashed = await hash(input.newPassword, 12);
       // AUTH-01: an admin reset must also revoke the member's existing sessions.

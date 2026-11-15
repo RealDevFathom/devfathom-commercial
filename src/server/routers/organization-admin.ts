@@ -728,14 +728,12 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({
         where: { id: input.id, organizationId: id },
-        select: { id: true, email: true, role: true },
+        select: { id: true, email: true },
       });
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
-      const denial = passwordResetDenial({
+      const denial = await passwordResetDenial(ctx.db, {
         actorId: ctx.session.user.id,
-        actorRole: ctx.session.user.role,
         targetId: user.id,
-        targetRole: user.role,
       });
       if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
       await ctx.db.user.update({

@@ -208,6 +208,37 @@ describe('team.adminResetPassword hierarchy guard', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['another admin', { role: 'ADMIN', organizationRole: null }],
+    [
+      'the owner',
+      { role: 'ADMIN', organizationRole: { key: 'owner', isSystem: true, permissions: [] } },
+    ],
+  ])('refuses to reset %s', async (_label, target) => {
+    mocks.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      status: 'ACTIVE',
+      permissionOverrides: [],
+      ...(where.id === 'admin_1' ? { role: 'ADMIN', organizationRole: null } : target),
+    }));
+    await expect(
+      caller().adminResetPassword({ id: 'other_1', newPassword: 'Correct-Horse-9-Battery' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin reset an employee', async () => {
+    mocks.update.mockResolvedValue({ name: 'Casey' });
+    mocks.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      status: 'ACTIVE',
+      permissionOverrides: [],
+      organizationRole: null,
+      role: where.id === 'admin_1' ? 'ADMIN' : 'EMPLOYEE',
+    }));
+    await expect(
+      caller().adminResetPassword({ id: 'member_1', newPassword: 'Correct-Horse-9-Battery' })
+    ).resolves.toEqual({ success: true });
+  });
+
   it('refuses an unknown member', async () => {
     mocks.findUnique.mockResolvedValue(null);
     await expect(
