@@ -19,7 +19,7 @@ const INVENTORY = 'pharmacy:inventory';
 // BEGIN/COMMIT are stripped; the set_config inside it still applies to the
 // enclosing transaction exactly as it does to the migration's own.
 const migrationSql = readFileSync(
-  'prisma/migrations/20261115140000_pharmacy_manager_inventory/migration.sql',
+  'prisma/migrations/20261116130400_pharmacy_manager_inventory/migration.sql',
   'utf8'
 );
 const migration = migrationSql.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
