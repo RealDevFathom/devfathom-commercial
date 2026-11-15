@@ -30,7 +30,11 @@ type TrueProfit = Awaited<ReturnType<TrueProfitCaller['trueProfit']>>;
 type Report = Valuation | Margin | Leakage | TrueProfit;
 type Group = Margin['by'];
 const day = 86_400_000;
-const groups: Group[] = ['line', 'batch', 'product', 'branch'];
+const groups: Group[] = ['line', 'batch', 'product', 'branch', 'productClass'];
+const classLabels: Record<string, string> = {
+  MEDICINE: 'Medicine',
+  NON_DRUG_RETAIL: 'Non-drug retail',
+};
 type ProfitGroup = TrueProfit['by'];
 const profitGroups: ProfitGroup[] = ['item', 'category', 'hour', 'staff'];
 const profitGroupLabels: Record<ProfitGroup, string> = {
@@ -45,6 +49,7 @@ const groupLabels: Record<Group, string> = {
   batch: 'Batch',
   product: 'Medicine',
   branch: 'Branch',
+  productClass: 'Medicine vs non-drug',
 };
 
 /** Name for a ledger dimension id; raw ids are never the primary label. */
@@ -229,6 +234,8 @@ function marginKeyLabel(report: Margin, key: string | null) {
     return key ? named(labels.batches, key) : 'Refunds not yet matched to a batch';
   if (report.by === 'product') return named(labels.medicines, key);
   if (report.by === 'branch') return named(labels.branches, key);
+  // #718: medicine vs non-drug retail margin.
+  if (report.by === 'productClass') return key ? (classLabels[key] ?? key) : unknown;
   return key ? `Sale line ref ${key}` : unknown;
 }
 

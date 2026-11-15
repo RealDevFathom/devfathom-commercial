@@ -116,7 +116,7 @@ function ActionAttempt({
             const target = new URL(destination, window.location.origin);
             if (
               target.origin !== window.location.origin ||
-              !/^\/pharmacy\/purchasing\/(suppliers|orders|receiving|returns)$/.test(
+              !/^\/pharmacy\/purchasing\/(suppliers|orders|reorder|receiving|returns)$/.test(
                 target.pathname
               )
             ) {
