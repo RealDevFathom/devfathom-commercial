@@ -621,6 +621,32 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect((mocks.receiptProps.mock.lastCall![0] as { format: string }).format).toBe('THERMAL');
   });
 
+  it('tells the counter when no earn rate is set, and not once one is (DEV-746)', () => {
+    const snapshot = (earnRateSet: boolean) =>
+      query({
+        customer: { id: 'customer-a', displayName: 'Retail name', creditLimitMinor: 0 },
+        pointsBalance: 35,
+        earnRateSet,
+        creditBalanceMinor: 0,
+        availableCreditMinor: 0,
+        pointsHistory: [],
+        pointsCount: 0,
+        pointsPage: 1,
+        history: [],
+      });
+    const notice = 'Points are not being earned: set an earn rate in Loyalty settings';
+    mocks.queries.customerSnapshot = snapshot(false);
+    const { unmount } = renderPayment(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: '35 loyalty points', hidden: true }));
+    expect(screen.getByText(notice)).toBeInTheDocument();
+    expect(screen.getByText('35 points · Khata', { exact: false })).toBeInTheDocument();
+    unmount();
+    mocks.queries.customerSnapshot = snapshot(true);
+    renderPayment(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: '35 loyalty points', hidden: true }));
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  });
+
   it('does not settle an idle counter', () => {
     renderPayment(<PharmacyCounterConsole />);
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();

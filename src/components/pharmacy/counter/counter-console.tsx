@@ -3371,6 +3371,12 @@ function ScopedPharmacyCounterConsole({
                 <p className="text-text-muted">
                   Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                 </p>
+                {customerQuery.data.earnRateSet === false ? (
+                  // DEV-746: no owner-set earn rate means nothing new is earned; say so.
+                  <p role="status" className="mt-2 font-medium text-warning">
+                    Points are not being earned: set an earn rate in Loyalty settings
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Label htmlFor="counter-redeem-points" className="sr-only">
