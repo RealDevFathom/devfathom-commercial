@@ -225,7 +225,7 @@ describe('Ask Fathom request and result states', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Ask Fathom isn't set up yet, contact support."
     );
-    expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
@@ -264,13 +264,14 @@ describe('Ask Fathom request and result states', () => {
     );
     render(panel());
     enter();
-    expect(await screen.findByRole('alert')).toHaveTextContent('currently unavailable');
-    expect(screen.getByRole('alert')).toHaveTextContent('No cached answer was used');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Ask Fathom can't answer right now");
+    expect(screen.getByRole('alert')).toHaveTextContent('if it keeps happening, contact support');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/action results/i);
     expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
     expect(screen.getByRole('textbox')).toBeEnabled();
     expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
     expect(screen.queryByText(/synthetic provider diagnostic/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review and retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(screen.getByLabelText('Your question')).toHaveFocus();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -286,7 +287,7 @@ describe('Ask Fathom request and result states', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
       expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
       expect(screen.getByLabelText('Your question')).toBeDisabled();
-      expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     }
   );
   it('shows an explicit empty response and retains its question', async () => {

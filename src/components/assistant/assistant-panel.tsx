@@ -315,7 +315,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                   ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
                   : requestError === 'configuration'
                     ? "Ask Fathom isn't set up yet, contact support."
-                    : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
+                    : "Ask Fathom can't answer right now. Your question is saved. Try again in a few minutes; if it keeps happening, contact support."}
               </p>
               {requestError === 'provider' && (
                 <Button
@@ -327,7 +327,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                     inputRef.current?.focus();
                   }}
                 >
-                  Review and retry
+                  Try again
                 </Button>
               )}
             </div>
