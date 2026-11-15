@@ -262,6 +262,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
       <SheetContent
         side="right"
         showCloseButton={false}
+        initialFocus={() => {
+          const input = inputRef.current;
+          return input && !input.disabled ? input : true;
+        }}
         className="gap-0 p-0 motion-reduce:transition-none motion-reduce:transform-none"
         style={{ width: '100%', maxWidth: 460 }}
       >

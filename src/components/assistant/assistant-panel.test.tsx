@@ -214,6 +214,14 @@ describe('Ask Fathom context and suggestions', () => {
   });
 });
 
+describe('Ask Fathom initial focus', () => {
+  it('focuses the question box, not the close button, when the panel opens', async () => {
+    render(panel());
+    await waitFor(() => expect(screen.getByLabelText('Your question')).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Close assistant' })).not.toHaveFocus();
+  });
+});
+
 describe('Ask Fathom request and result states', () => {
   it('shows setup guidance without retry or provider diagnostics and preserves the question', async () => {
     fetchMock.mockResolvedValueOnce(
