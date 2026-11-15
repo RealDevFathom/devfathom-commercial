@@ -252,7 +252,7 @@ export type ReceiptLineCostInput = {
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
   /**
-   * This line's share of receipt-level freight and similar landed charges.
+   * This line's share of the freight the supplier billed on the invoice.
    * Money only: it is spread over the same received + bonus units.
    */
   allocatedChargeMinor?: number;
@@ -333,11 +333,13 @@ export type ReceiptLandedCost = {
 };
 
 /**
- * DEV-77: the landed cost per lot for a whole receipt. Receipt freight is
- * spread across the lines by each line's own cost (largest remainder, so the
- * parts sum to the freight exactly), then every line's money — invoice net,
- * non-creditable tax and freight share — is divided over its received AND
- * bonus units. A receipt with no freight costs exactly as it always did.
+ * DEV-77: the landed cost per lot for a whole receipt. Freight billed on the
+ * supplier invoice is treated like a non-creditable tax: owed on the invoice
+ * and part of stock cost. It is spread across the lines by each line's own
+ * cost (largest remainder, so the parts sum to the freight exactly), then
+ * every line's money — invoice net, non-creditable tax and freight share — is
+ * divided over its received AND bonus units. A receipt with no freight costs
+ * exactly as it always did.
  */
 export function receiptLandedCosts(input: {
   lines: readonly ReceiptLineCostInput[];

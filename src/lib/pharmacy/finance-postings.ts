@@ -490,37 +490,8 @@ export async function postWriteOffEntry(
 }
 
 /**
- * DEV-77: how much of a returned lot's landed cost the supplier owes back.
- *
- * A lot's unit cost carries its share of the delivery freight. The supplier
- * credits the goods, not the carriage, so the per-unit freight share of the
- * returned units is split out and expensed instead of being claimed. With no
- * freight the whole cost is claimable, exactly as before.
- */
-export function supplierClaimSplit(input: {
-  unitCostMinor: number;
-  units: number;
-  /** The receipt line's freight share, and the units it was spread over. */
-  allocatedFreightMinor: number;
-  arrivedUnits: number;
-}): { claimableMinor: number; freightMinor: number } {
-  const { unitCostMinor, units, allocatedFreightMinor, arrivedUnits } = input;
-  const totalMinor = unitCostMinor * units;
-  if (allocatedFreightMinor <= 0 || arrivedUnits <= 0) {
-    return { claimableMinor: totalMinor, freightMinor: 0 };
-  }
-  const freightPerUnit = Math.min(
-    unitCostMinor,
-    Math.floor((allocatedFreightMinor + Math.floor(arrivedUnits / 2)) / arrivedUnits)
-  );
-  const freightMinor = freightPerUnit * units;
-  return { claimableMinor: totalMinor - freightMinor, freightMinor };
-}
-
-/**
  * FIN-01 (claim/credit): reserving units for a supplier claim moves their value
- * out of inventory and into what the supplier owes back. The freight share of
- * the returned units is not recoverable from the supplier and is expensed.
+ * out of inventory and into what the supplier owes back.
  */
 export async function postSupplierClaimEntry(
   db: ScopedDb,
@@ -537,23 +508,7 @@ export async function postSupplierClaimEntry(
   const lot = lots.get(claim.inventoryLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const receiptLine = await db.pharmacyGoodsReceiptLine.findFirst({
-    where: { organizationId: scope.organizationId, inventoryLotId: claim.inventoryLotId },
-    select: {
-      allocatedFreightMinor: true,
-      receivedCanonicalUnits: true,
-      bonusCanonicalUnits: true,
-    },
-  });
   const amountMinor = lot.unitCostMinor * claim.reservedUnits;
-  const { claimableMinor, freightMinor } = supplierClaimSplit({
-    unitCostMinor: lot.unitCostMinor,
-    units: claim.reservedUnits,
-    allocatedFreightMinor: receiptLine?.allocatedFreightMinor ?? 0,
-    arrivedUnits: receiptLine
-      ? receiptLine.receivedCanonicalUnits + receiptLine.bonusCanonicalUnits
-      : 0,
-  });
   const dimensions = {
     branchId: claim.branchId,
     productId: lot.medicineId,
@@ -576,14 +531,7 @@ export async function postSupplierClaimEntry(
           ...dimensions,
           accountCode: 'SUPPLIER_CLAIM_RECEIVABLE',
           side: 'DEBIT',
-          amountMinor: claimableMinor,
-        },
-        {
-          ...dimensions,
-          accountCode: 'OPERATING_EXPENSE',
-          side: 'DEBIT',
-          amountMinor: freightMinor,
-          memo: 'Freight on returned goods',
+          amountMinor,
         },
         { ...dimensions, accountCode: 'INVENTORY', side: 'CREDIT', amountMinor },
       ]),

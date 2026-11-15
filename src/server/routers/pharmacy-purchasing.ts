@@ -1398,7 +1398,7 @@ const purchasingRouter = router({
             .optional(),
           note: z.string().trim().max(2000).optional(),
           qualifiedPersonUserId: z.string().trim().min(1).optional(),
-          /** DEV-77: freight billed on this delivery, spread into lot landed cost. */
+          /** DEV-77: freight the supplier billed on this invoice, spread into lot landed cost. */
           freightMinor: z.number().int().nonnegative().max(999_999_999).default(0),
           lines: z
             .array(

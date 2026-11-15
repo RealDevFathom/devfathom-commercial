@@ -1,4 +1,5 @@
--- DEV-77: receipt freight is part of the landed cost of every lot it delivered.
+-- DEV-77: freight the supplier billed on the invoice is part of the landed cost
+-- of every lot it delivered, exactly as a non-creditable tax already is.
 -- The receipt keeps the billed freight and each line keeps its exact share, so a
 -- lot's unit cost can always be explained as (net + non-creditable tax + freight
 -- share) / (received + bonus units). Existing rows default to no freight, which

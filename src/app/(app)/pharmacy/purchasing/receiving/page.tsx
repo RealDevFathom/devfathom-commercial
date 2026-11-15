@@ -781,10 +781,10 @@ export default async function PharmacyReceivingPage({
                   />
                   <TextField
                     inputMode="decimal"
-                    label="Freight on this delivery (PKR)"
+                    label="Freight on this supplier invoice (PKR)"
                     name="freight"
                     notice={notice}
-                    hint="Spread across the lines by cost and into each lot's landed unit cost."
+                    hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
                   />
                 </div>
 
@@ -999,10 +999,10 @@ export default async function PharmacyReceivingPage({
               />
               <TextField
                 inputMode="decimal"
-                label="Freight on this delivery (PKR)"
+                label="Freight on this supplier invoice (PKR)"
                 name="directFreight"
                 notice={notice}
-                hint="Spread across the lines by cost and into each lot's landed unit cost."
+                hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
               />
               <TextAreaField
                 className="sm:col-span-2"
