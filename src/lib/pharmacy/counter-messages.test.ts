@@ -23,8 +23,15 @@ import { PharmacySettlementError } from './settlement';
 describe('counterErrorMessage', () => {
   it('maps the drawer reason that leaked to the counter', () => {
     expect(counterErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(
-      'Open the cash drawer for this counter before taking a payment.'
+      'The cash drawer for this counter is not open. Open it before taking or paying out cash.'
     );
+  });
+
+  /** #1338: refunds and drawer close raise it too, so it must not speak only of payments. */
+  it('keeps the shared drawer reason true for cash refunds and drawer close', () => {
+    const message = counterErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'));
+    expect(message).toMatch(/paying out cash/);
+    expect(message).not.toMatch(/other tenders/i);
   });
 
   /** #453: linking a customer requires loyalty consent, not dispensing consent. */
