@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
 import { pharmacyPrescriptionsRouter } from '@/server/routers/pharmacy-prescriptions';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
-import { EXTRA_LOT_SLOTS } from '@/lib/pharmacy/pack-photo-receiving';
 import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
 
 // DEV-145: every array, string and record key a pharmacy router accepts must have
@@ -170,12 +169,11 @@ describe('pharmacy router input bounds', () => {
     lines: Array.from({ length: count }, (_, index) => serializedPack(index)),
   });
 
-  it('receives a large serialized invoice in one receipt, up to every lot of a full order', () => {
+  it('receives a large serialized invoice in one receipt, up to the hard invoice ceiling', () => {
     const input = inputOf(pharmacyPurchasingRouter, 'createGoodsReceipt');
-    const fullOrderLots = REORDER_MAX_DRAFT_LINES * (1 + EXTRA_LOT_SLOTS.length);
     expect(input.safeParse(receipt(1_000)).success).toBe(true);
-    expect(input.safeParse(receipt(fullOrderLots)).success).toBe(true);
-    expect(input.safeParse(receipt(fullOrderLots + 1)).success).toBe(false);
+    expect(input.safeParse(receipt(20_000)).success).toBe(true);
+    expect(input.safeParse(receipt(20_001)).success).toBe(false);
   });
 
   it('rejects an oversized record ID', () => {

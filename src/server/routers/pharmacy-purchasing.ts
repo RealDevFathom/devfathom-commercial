@@ -118,7 +118,6 @@ import {
   REORDER_DEFAULT_WINDOW_DAYS,
   REORDER_MAX_DRAFT_LINES,
 } from '@/lib/pharmacy/reorder-drafts';
-import { EXTRA_LOT_SLOTS } from '@/lib/pharmacy/pack-photo-receiving';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { denyByDefaultProcedure, router } from '../trpc';
@@ -151,9 +150,12 @@ const MAX_DOCUMENT_LINES = 100;
 // An order may be confirmed straight from a reorder draft, which holds up to one line
 // per planned medicine.
 const MAX_PURCHASE_ORDER_LINES = REORDER_MAX_DRAFT_LINES;
-// A receipt is filed once per supplier invoice and may split every ordered line into
-// lots (one per batch, expiry or serialized pack slot) on the receiving form.
-const MAX_RECEIPT_LINES = MAX_PURCHASE_ORDER_LINES * (1 + EXTRA_LOT_SLOTS.length);
+// A receipt is filed once per supplier invoice. The receiving form splits each ordered
+// line into lots, and a serialized pack is always a line of its own, so an ordered line
+// may need as many receipt lines as it ordered packs: createGoodsReceipt bounds those
+// serialized lines by the line's ordered and bonus packs. This is the hard ceiling for
+// one invoice, above every lot of a full order on the receiving form.
+const MAX_RECEIPT_LINES = 20_000;
 // A central receipt is allocated in one call, each line split across destination branches.
 const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
@@ -1638,6 +1640,7 @@ const purchasingRouter = router({
           const orderCostTermsByLine: Array<{ rebateBps: number; allocatedChargeMinor: number }> =
             [];
           const seenSerials = new Set<string>();
+          const serializedLinesByOrderLine = new Map<string, number>();
           for (const [index, line] of input.lines.entries()) {
             const item = await db.medicine.findFirst({
               where: { id: line.medicineId, saleable: true },
@@ -1758,6 +1761,14 @@ const purchasingRouter = router({
             // packs; a serial never does, so it cannot be cloned onto a count.
             if (identity.serialKey && line.receivedPacks + line.bonusPacks !== 1) {
               throw new PharmacyReceivingError('SERIALIZED_PACK_QUANTITY');
+            }
+            // DEV-145: one line per serialized pack, so an ordered line takes at most as
+            // many serialized lines as it ordered packs, bonus included.
+            if (identity.serialKey && orderLine) {
+              const serialized = (serializedLinesByOrderLine.get(orderLine.id) ?? 0) + 1;
+              serializedLinesByOrderLine.set(orderLine.id, serialized);
+              if (serialized > orderLine.orderedPacks + orderLine.bonusPacks)
+                throw new PharmacyReceivingError('SERIALIZED_PACKS_EXCEED_ORDER');
             }
             // Fail at draft time, not post time, when a shelf is not this branch's.
             for (const locationId of [line.stockLocationId, line.quarantineLocationId]) {

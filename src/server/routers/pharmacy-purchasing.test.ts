@@ -2321,6 +2321,36 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  // DEV-145: a serialized invoice files one line per pack, so an ordered line may
+  // need as many receipt lines as it ordered packs, and no more.
+  it('receives an ordered line of N serialized packs as N lines and refuses N+1', async () => {
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 40,
+        bonusPacks: 2,
+      },
+    ]);
+    const serialized = (count: number) => ({
+      ...RECEIPT,
+      lines: Array.from({ length: count }, (_, index) => ({
+        ...SERIAL_LINE,
+        gtin: '08961234567894',
+        serialNumber: `SN${String(index).padStart(6, '0')}`,
+      })),
+    });
+    await expect(caller().createGoodsReceipt(serialized(42))).resolves.toBeDefined();
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create).toHaveLength(42);
+    db.pharmacyGoodsReceipt.create.mockClear();
+    await expect(caller().createGoodsReceipt(serialized(43))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'SERIALIZED_PACKS_EXCEED_ORDER',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('drafts a mixed-lot delivery as separate lines against one order line', async () => {
     await caller().createGoodsReceipt({
       ...RECEIPT,
