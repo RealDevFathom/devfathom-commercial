@@ -167,66 +167,73 @@ async function matchMedicineIds(
         select: { presentation: { select: { medicineId: true } } },
       })
     : null;
-  if (barcode) remember(barcode.presentation.medicineId, 'BARCODE');
-
-  if (normalized) {
-    const aliases = await db.medicineAlias.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        normalizedValue: { startsWith: normalized },
-        medicine: { saleable: true },
-      },
-      select: { medicineId: true },
-      orderBy: { normalizedValue: 'asc' },
-      take: limit,
-    });
-    for (const alias of aliases) remember(alias.medicineId, 'ALIAS');
+  if (barcode) {
+    // DEV-575: a scanned code that resolves exactly is the answer. Skipping the
+    // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
+    // the scanner path add it without a pick list.
+    remember(barcode.presentation.medicineId, 'BARCODE');
+    return matches;
   }
 
-  const byName = await db.medicine.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      saleable: true,
-      OR: [
-        { productName: { contains: trimmed, mode: 'insensitive' } },
-        { brandName: { contains: trimmed, mode: 'insensitive' } },
-        { manufacturer: { contains: trimmed, mode: 'insensitive' } },
-        { drapRegistrationNumber: { contains: trimmed, mode: 'insensitive' } },
-      ],
-    },
-    select: { id: true },
-    orderBy: { productName: 'asc' },
-    take: limit,
-  });
+  // The fuzzy lookups are independent, so they run together; matches are still
+  // remembered in alias, name, ingredient, presentation order.
+  const [aliases, byName, byIngredient, byPresentation] = await Promise.all([
+    normalized
+      ? db.medicineAlias.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            normalizedValue: { startsWith: normalized },
+            medicine: { saleable: true },
+          },
+          select: { medicineId: true },
+          orderBy: { normalizedValue: 'asc' },
+          take: limit,
+        })
+      : Promise.resolve([] as { medicineId: string }[]),
+    db.medicine.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        OR: [
+          { productName: { contains: trimmed, mode: 'insensitive' } },
+          { brandName: { contains: trimmed, mode: 'insensitive' } },
+          { manufacturer: { contains: trimmed, mode: 'insensitive' } },
+          { drapRegistrationNumber: { contains: trimmed, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+      orderBy: { productName: 'asc' },
+      take: limit,
+    }),
+    db.medicineStrengthComponent.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        medicine: { saleable: true },
+        OR: [
+          { ingredient: { name: { contains: trimmed, mode: 'insensitive' } } },
+          { unit: { contains: trimmed, mode: 'insensitive' } },
+        ],
+      },
+      select: { medicineId: true },
+      take: limit,
+    }),
+    db.presentation.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        medicine: { saleable: true },
+        OR: [
+          { presentation: { contains: trimmed, mode: 'insensitive' } },
+          { dosageForm: { contains: trimmed, mode: 'insensitive' } },
+          { route: { contains: trimmed, mode: 'insensitive' } },
+        ],
+      },
+      select: { medicineId: true },
+      take: limit,
+    }),
+  ]);
+  for (const alias of aliases) remember(alias.medicineId, 'ALIAS');
   for (const medicine of byName) remember(medicine.id, 'NAME');
-
-  const byIngredient = await db.medicineStrengthComponent.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      medicine: { saleable: true },
-      OR: [
-        { ingredient: { name: { contains: trimmed, mode: 'insensitive' } } },
-        { unit: { contains: trimmed, mode: 'insensitive' } },
-      ],
-    },
-    select: { medicineId: true },
-    take: limit,
-  });
   for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT');
-
-  const byPresentation = await db.presentation.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      medicine: { saleable: true },
-      OR: [
-        { presentation: { contains: trimmed, mode: 'insensitive' } },
-        { dosageForm: { contains: trimmed, mode: 'insensitive' } },
-        { route: { contains: trimmed, mode: 'insensitive' } },
-      ],
-    },
-    select: { medicineId: true },
-    take: limit,
-  });
   for (const presentation of byPresentation) remember(presentation.medicineId, 'PRESENTATION');
 
   return matches;

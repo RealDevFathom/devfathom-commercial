@@ -249,6 +249,17 @@ function tenderRejected(error: unknown): boolean {
   );
 }
 
+/** DEV-575: typed search fires this long after the last keystroke. */
+export const COUNTER_SEARCH_DEBOUNCE_MS = 150;
+
+/**
+ * A barcode (six or more digits) or a GS1 payload: input a scanner sends as one
+ * burst ending in Enter. It is resolved on Enter, never searched per keystroke.
+ */
+export function looksLikeScannedCode(text: string): boolean {
+  return /^\d{6,}$/.test(text) || text.startsWith(']d2') || text.startsWith('(01)');
+}
+
 const UNKNOWN_TENDER_MESSAGE =
   'Payment outcome is unknown. The original attempt is saved in this browser. Check payment outcome before taking more money. Refreshing the bill will not retry the payment.';
 
@@ -556,7 +567,9 @@ function ScopedPharmacyCounterConsole({
   });
 
   const trimmedQuery = query.trim();
-  const scannerQuery = trimmedQuery.startsWith(']d2') || trimmedQuery.startsWith('(01)');
+  // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
+  // being typed never fires a search per digit; Enter submits it.
+  const scannerQuery = looksLikeScannedCode(trimmedQuery);
   const searchCurrent =
     branchAuthorized &&
     trimmedQuery.length >= 2 &&
@@ -567,13 +580,18 @@ function ScopedPharmacyCounterConsole({
     if (!branchAuthorized || trimmedQuery.length < 2 || scannerQuery || searchCurrent) return;
     const timer = window.setTimeout(() => {
       setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
-    }, 300);
+    }, COUNTER_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [branchAuthorized, branchId, scannerQuery, searchCurrent, trimmedQuery]);
 
   const searchQuery = trpc.pharmacySales.counterSearch.useQuery(
     { branchId, query: submittedQuery },
-    { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
+    {
+      enabled: searchCurrent && submittedQuery.length >= 2,
+      staleTime: 10_000,
+      // A superseded search is cancelled rather than left to finish on the server.
+      trpc: { abortOnUnmount: true },
+    }
   );
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
@@ -2474,11 +2492,7 @@ function ScopedPharmacyCounterConsole({
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
-                          const barcode =
-                            /^\d{6,}$/.test(trimmed) ||
-                            trimmed.startsWith(']d2') ||
-                            trimmed.startsWith('(01)');
-                          if (barcode) {
+                          if (looksLikeScannedCode(trimmed)) {
                             void addBarcode(trimmed);
                             return;
                           }
