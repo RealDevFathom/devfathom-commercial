@@ -99,7 +99,7 @@ import {
   counterErrorTone,
   counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
-import { PaymentSandboxPanel } from './payment-sandbox-panel';
+import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
   counterUnitNoun,
@@ -1071,6 +1071,33 @@ function ScopedPharmacyCounterConsole({
     rememberActiveBill(activeBillScope, saleId);
   }, [activeBillKey, activeBillScope, recoveryReady, saleId, setActiveSale, utils]);
 
+  // DEV-41: both Pay buttons say why they are disabled, in cashier words.
+  const payDisabledReason =
+    unknownTender || attempt !== null
+      ? 'Check the payment outcome before taking more money.'
+      : storageError
+        ? 'Browser recovery is unavailable. Review payment status before continuing.'
+        : tenderReadRequired
+          ? 'Refresh this bill to verify payment before taking more money.'
+          : blocked
+            ? 'Resolve the safety block in the prescription panel before taking payment.'
+            : billState === 'idle'
+              ? 'Add an item to start a sale before taking payment.'
+              : billState === 'loading'
+                ? 'Checking the bill. Please wait before taking payment.'
+                : billState === 'error' || billState === 'stale'
+                  ? 'Refresh the bill to check the balance before taking payment.'
+                  : billState === 'settled'
+                    ? 'This bill is already paid. Start a new sale.'
+                    : billState === 'unavailable'
+                      ? cart?.status === 'HELD'
+                        ? 'Resume this bill before taking payment.'
+                        : currentBill && lineCount === 0
+                          ? 'Add an item to this bill before taking payment.'
+                          : 'Refresh the bill or start a new sale before taking payment.'
+                      : busy
+                        ? 'Wait for the current counter action to finish before taking payment.'
+                        : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -2640,6 +2667,9 @@ function ScopedPharmacyCounterConsole({
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          <CounterSignOut
+            hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
+          />
           {presentedReceipt && (
             <Button
               variant="outline"
@@ -3239,6 +3269,7 @@ function ScopedPharmacyCounterConsole({
               <Button
                 className="h-14 w-full justify-between"
                 disabled={billState !== 'ready' || blocked || busy}
+                aria-describedby="counter-pay-reason"
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -3248,16 +3279,11 @@ function ScopedPharmacyCounterConsole({
                 </kbd>
               </Button>
             )}
-            <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
-              {blocked
-                ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
-                : unknownTender
-                  ? 'Payment locked until its outcome is checked. Review payment status before taking more money.'
-                  : storageError
-                    ? 'Browser recovery is unavailable. Review payment status before continuing.'
-                    : tenderReadRequired
-                      ? 'Refresh this bill to verify payment before taking more money.'
-                      : 'Cash, card, bank transfer, wallet or khata.'}
+            <p
+              id="counter-pay-reason"
+              className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}
+            >
+              {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
             </p>
             {billState !== 'ready' && billState !== 'settled' && saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
@@ -3304,8 +3330,8 @@ function ScopedPharmacyCounterConsole({
         className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
       >
         <div className="min-w-0 flex-1">
-          <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+          <p id="counter-phone-pay-reason" className="text-xs text-text-muted">
+            {payDisabledReason ?? 'Balance due'}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
@@ -3323,6 +3349,7 @@ function ScopedPharmacyCounterConsole({
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
           disabled={billState !== 'ready' || blocked || busy}
+          aria-describedby="counter-phone-pay-reason"
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
@@ -3356,17 +3383,6 @@ function ScopedPharmacyCounterConsole({
             Opens the print window after each payment on this computer.
           </p>
         </div>
-        {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
-          <PaymentSandboxPanel
-            key={`${branchId}:${saleId}`}
-            branchId={branchId}
-            saleId={saleId}
-            deviceId={counterDeviceId()}
-            businessDate={todayBusinessDate()}
-            disabled={busy || blocked}
-            onRecorded={refreshCart}
-          />
-        ) : null}
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
@@ -3515,7 +3531,6 @@ function ScopedPharmacyCounterConsole({
       >
         <SectionCard
           compact
-          eyebrow="CRM-L01"
           title="Customer loyalty and khata"
           actions={
             <Button
