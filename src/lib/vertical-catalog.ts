@@ -49,11 +49,19 @@ export interface InviteCopy {
    * the resulting base role.
    */
   roleTemplateBaseRoles?: Readonly<Record<string, BaseRole>>;
+  /**
+   * SEC-I (DEV-827): role templates the single picker does not offer, because no base
+   * role grants exactly what their label says. The server refuses them on invite too.
+   */
+  inviteHiddenRoleTemplateKeys?: readonly string[];
   /** One-line explanations shown under the picker for roles that look alike. */
   roleTemplateDescriptions?: Readonly<Record<string, string>>;
 }
 
 const PHONE_PLACEHOLDER = '+92 300 1234567';
+/** DEV-622: shared by the role template and the staff role picker. */
+const PHARMACIST_CASHIER_DESCRIPTION =
+  'Dispenses prescriptions and takes payment, for a one-person shop or a pharmacist who also runs the till.';
 const WORKSPACE_BASE_ROLES: Record<BaseRole, string> = {
   EMPLOYEE: 'Employee',
   HR: 'HR',
@@ -295,21 +303,22 @@ const INVITE_COPY_BY_VERTICAL: Record<OrganizationVertical, InviteCopy> = {
     titlePlaceholder: 'Pharmacist',
     phonePlaceholder: PHONE_PLACEHOLDER,
     baseRoleLabels: { EMPLOYEE: 'Staff', HR: 'Manager', ADMIN: 'Admin' },
-    // `admin` is the bootstrap Organization administrator role. Owner / Operator pairs
-    // with ADMIN for the guards that require a literal ADMIN (see its template).
+    // SEC-I (DEV-827): an invite grants exactly the chosen role, never more. `admin` is
+    // the bootstrap Organization administrator role, whose label is the ADMIN base
+    // role. Every other role, Manager included, invites at Staff (EMPLOYEE) with only
+    // its template's grants; Manager no longer adds HR.
     roleTemplateBaseRoles: {
       admin: 'ADMIN',
-      owner: 'ADMIN',
-      'owner-operator': 'ADMIN',
-      manager: 'HR',
     },
-    // The three owner-type roles grant different access, so each says how.
+    // Owner and Owner / Operator mean owner access, which pharmacy guards tie to a
+    // literal ADMIN; ADMIN also grants every workspace setting, billing and team, which
+    // neither label says. No base role matches either label, so invites do not offer
+    // them; assign them in Organization settings instead.
+    inviteHiddenRoleTemplateKeys: ['owner', 'owner-operator'],
     roleTemplateDescriptions: {
       admin:
         'Every module and setting in the workspace, including billing and team; no dispensing.',
-      owner: 'All pharmacy work and reports across every branch; no dispensing.',
-      'owner-operator':
-        'Works the counter too: daily pharmacy operations and purchasing, plus dispensing.',
+      'pharmacist-cashier': PHARMACIST_CASHIER_DESCRIPTION,
     },
   },
   HOSPITALITY: {
@@ -342,10 +351,43 @@ export function inviteCopyForVertical(
     ...(copy.roleTemplateBaseRoles
       ? { roleTemplateBaseRoles: { ...copy.roleTemplateBaseRoles } }
       : {}),
+    ...(copy.inviteHiddenRoleTemplateKeys
+      ? { inviteHiddenRoleTemplateKeys: [...copy.inviteHiddenRoleTemplateKeys] }
+      : {}),
     ...(copy.roleTemplateDescriptions
       ? { roleTemplateDescriptions: { ...copy.roleTemplateDescriptions } }
       : {}),
   };
+}
+
+/** SEC-I (DEV-827): why an invite's base role and role template do not agree. */
+export const INVITE_ROLE_NOT_OFFERED =
+  'This role cannot be granted by invite. Invite the member, then assign it in Organization settings.';
+export const INVITE_ROLE_MISMATCH = 'The access level does not match the chosen role.';
+
+/**
+ * SEC-I (DEV-827): server check that an invite grants exactly what the chosen role's
+ * label says. In a vertical whose invite form shows one role picker, the base role is
+ * fixed by the role template (`roleTemplateBaseRoles`, else EMPLOYEE; "no role" is
+ * EMPLOYEE) and a hidden template is refused. Returns the refusal message, or null when
+ * the pair agrees or the vertical keeps a separate base-role switch.
+ */
+export function inviteRoleRefusal(
+  vertical: OrganizationVertical | null | undefined,
+  baseRole: BaseRole,
+  roleTemplateKey: string | null
+): string | null {
+  const copy = INVITE_COPY_BY_VERTICAL[vertical ?? AGENCY];
+  if (!copy?.roleTemplateBaseRoles) return null;
+  if (roleTemplateKey !== null && copy.inviteHiddenRoleTemplateKeys?.includes(roleTemplateKey)) {
+    return INVITE_ROLE_NOT_OFFERED;
+  }
+  const expected =
+    roleTemplateKey !== null &&
+    Object.prototype.hasOwnProperty.call(copy.roleTemplateBaseRoles, roleTemplateKey)
+      ? copy.roleTemplateBaseRoles[roleTemplateKey]
+      : 'EMPLOYEE';
+  return baseRole === expected ? null : INVITE_ROLE_MISMATCH;
 }
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = [
@@ -840,6 +882,8 @@ export type RoleTemplate = {
    * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
+  /** One plain sentence shown under the staff role picker when this role is chosen. */
+  description?: string;
 };
 
 export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -965,6 +1009,25 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     capabilities: ['pharmacy:counter', 'pharmacy:orders'],
   },
   {
+    // DEV-622 (#1241, owner decision 15 Nov): many pharmacies are run by one person.
+    // The default Pharmacist takes no payments (DEV-97) and the default Cashier may not
+    // sell prescription lines, so this opt-in role holds both sets of grants: verify and
+    // dispense prescriptions, take payment, open the drawer and use khata. The owner
+    // assigns it; nobody receives it automatically. Every grant is exact, so the
+    // Rx sale gate, refund (pharmacy:manage + PIN) and second-person controls are unchanged.
+    key: 'pharmacist-cashier',
+    name: 'Pharmacist and cashier',
+    isSystem: true,
+    capabilities: [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:close',
+      'pharmacy:counter',
+      'pharmacy:orders',
+    ],
+    description: PHARMACIST_CASHIER_DESCRIPTION,
+  },
+  {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
@@ -1004,6 +1067,15 @@ export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly stri
   procurement: ['sop:complete'],
   inventory: ['sop:complete'],
 };
+
+/**
+ * Pharmacy role templates the owner assigns by choice. They are created with the others
+ * but are never an activation prerequisite (OWNER_AND_ROLE_TEMPLATES gate).
+ */
+export const PHARMACY_OPT_IN_ROLE_KEYS: ReadonlySet<string> = new Set([
+  'owner-operator',
+  'pharmacist-cashier',
+]);
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = PHARMACY_BASE_ROLE_TEMPLATES.map(
   (role) => ({

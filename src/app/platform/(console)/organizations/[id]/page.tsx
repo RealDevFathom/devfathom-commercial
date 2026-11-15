@@ -14,6 +14,7 @@ import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
+import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import {
   ALL_VERTICALS,
   VERTICALS,
@@ -178,6 +179,7 @@ export default async function OrganizationDetailPage({
   });
   if (!data.organization) notFound();
   const organization = data.organization;
+  const dedicatedProvisioningConfigured = isDedicatedProvisioningConfigured();
   const vertical: OrganizationVertical = organization.vertical;
   const verticalDefinition = VERTICALS[vertical];
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
@@ -742,9 +744,19 @@ export default async function OrganizationDetailPage({
                   type: 'select',
                   required: true,
                   defaultValue: organization.deploymentMode,
+                  // Mirrors the server guard on organization.update: switching to
+                  // Dedicated needs Vercel provisioning; an org already on
+                  // Dedicated keeps the option so its current value stays valid.
+                  help:
+                    dedicatedProvisioningConfigured || organization.deploymentMode === 'DEDICATED'
+                      ? undefined
+                      : 'Dedicated enterprise is unavailable until Vercel provisioning is configured for this environment.',
                   options: [
                     { label: 'Shared platform', value: 'SHARED' },
-                    { label: 'Dedicated enterprise', value: 'DEDICATED' },
+                    ...(dedicatedProvisioningConfigured ||
+                    organization.deploymentMode === 'DEDICATED'
+                      ? [{ label: 'Dedicated enterprise', value: 'DEDICATED' }]
+                      : []),
                   ],
                 },
                 {

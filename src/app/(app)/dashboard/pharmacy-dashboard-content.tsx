@@ -136,7 +136,7 @@ function WidgetState({
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
-          sub={value == null ? 'Not available in this release' : sourceLine(contract?.source)}
+          sub={value == null ? 'No data recorded yet' : sourceLine(contract?.source)}
         />
       ))}
     </div>
@@ -213,14 +213,54 @@ function AiAdviceCard({
   );
 }
 
-export function PharmacyDashboardContent({ role }: { role: string | null | undefined }) {
+export function PharmacyDashboardContent({
+  role,
+  reportAccess,
+}: {
+  role: string | null | undefined;
+  /**
+   * Whether the member holds `reports:operational`, read server-side by the page. `false` (a
+   * cashier) renders a pharmacy home with no owner title, no layout editor and no report reads;
+   * `undefined` (access unknown) keeps the command centre, whose reads stay server-gated.
+   */
+  reportAccess?: boolean;
+}) {
   // Every command-centre read is a Pharmacy Reports procedure, and each one refuses a workspace
   // without that module (FORBIDDEN). Ask them nothing there, as the counter does for its module.
   const { enabledModules } = useEntitlements();
+  if (reportAccess === false) return <PharmacyMemberHome />;
   return isModuleGranted('pharmacy-reports', enabledModules) ? (
     <OwnerCommandCentre role={role} />
   ) : (
     <ReportsNotInPackage role={role} />
+  );
+}
+
+/**
+ * DEV-602: the pharmacy home for a member without report access (the cashier template). It names
+ * no owner surface, offers no layout editor and asks Pharmacy Reports nothing, so no read is
+ * refused with a 403 and no save can fail silently.
+ */
+function PharmacyMemberHome() {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Pharmacy workspace"
+        heading="Pharmacy home"
+        description="Your pharmacy tools are in the menu. Owner reports stay with members who hold report access."
+      />
+      <SectionCard
+        eyebrow="Pharmacy Reports"
+        title="Owner reports are outside your access"
+        titleLevel={2}
+        actions={<StatusPill status="Restricted" tone="neutral" />}
+      >
+        <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
+          Operational reports access is required for the command centre. No report figures are
+          requested or shown, and every pharmacy tool in your menu works as usual.
+        </p>
+      </SectionCard>
+    </div>
   );
 }
 
@@ -281,6 +321,12 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   // DEV-95: a refused branch read is an access boundary, not an outage. Say so
   // plainly and offer no Retry that can only be refused again.
   const branchesDenied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(branches.error?.data?.code ?? '');
+  // DEV-602: a member whose report reads are refused cannot save a layout either, so offer no
+  // editor that can only end in a refused save.
+  const preferencesDenied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(
+    preferences.error?.data?.code ?? ''
+  );
+  const canEdit = !branchesDenied && !preferencesDenied;
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -306,7 +352,9 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     setDraft(next);
   };
   const save = async () => {
-    const saved = await update.mutateAsync(draftRef.current);
+    // A refused or failed save stays in edit mode; `update.error` renders the alert below.
+    const saved = await update.mutateAsync(draftRef.current).catch(() => null);
+    if (!saved) return;
     utils.pharmacyReports.getPreferences.setData(undefined, saved);
     setEditing(false);
   };
@@ -318,10 +366,12 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         heading="Owner command centre"
         description="Live operational signals with visible source, freshness and permission boundaries."
         actions={
-          <Button variant="outline" onClick={begin}>
-            <Pencil aria-hidden />
-            Edit dashboard
-          </Button>
+          canEdit ? (
+            <Button variant="outline" onClick={begin}>
+              <Pencil aria-hidden />
+              Edit dashboard
+            </Button>
+          ) : null
         }
       />
       <SectionCard
@@ -366,7 +416,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           growth={role === 'ADMIN' && isModuleGranted('pharmacy-crm', enabledModules)}
         />
       ) : null}
-      {editing ? (
+      {editing && canEdit ? (
         <SectionCard
           eyebrow="Edit mode"
           title="Widget layout"

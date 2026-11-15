@@ -17,6 +17,11 @@ import {
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
 import {
+  OwnerDataExportTooLargeError,
+  purgeExpiredOwnerDataExports,
+  runPharmacyOwnerDataExportJob,
+} from '@/lib/pharmacy/owner-data-export';
+import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
@@ -841,6 +846,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         // DEV-96: the result (per-class counts, refused record ids and reasons;
         // never record contents) is stored on the job row.
         PHARMACY_RECORD_RETENTION_V1: (database) => purgeExpiredPharmacyRecords(database),
+        PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
       return handlers[job.type](db, job, payload);
     },
@@ -849,9 +855,15 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
         job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
-        job.type === 'PHARMACY_RECORD_RETENTION_V1'
+        job.type === 'PHARMACY_RECORD_RETENTION_V1' ||
+        job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
           ? 120_000
           : 30_000,
+      // The owner export reads each table in pages, and some tables twice (sales
+      // then sale lines). One snapshot keeps every file consistent with the rest.
+      ...(job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
+        ? { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+        : {}),
     }
   );
 }
@@ -877,7 +889,11 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  const retry = !(error instanceof PermanentJobError) && job.attempts < job.maxAttempts;
+  // An export over its size cap stays over it: retrying only repeats the work.
+  const retry =
+    !(error instanceof PermanentJobError) &&
+    !(error instanceof OwnerDataExportTooLargeError) &&
+    job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({
       where: { id: job.id },
@@ -973,6 +989,7 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
+  await withPlatformDb((db) => purgeExpiredOwnerDataExports(db));
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

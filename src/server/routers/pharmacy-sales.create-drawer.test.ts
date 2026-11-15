@@ -25,12 +25,16 @@ import {
   assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 
-function fixture(openDrawer: { id: string; businessDate: Date } | null) {
+type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+const COUNTER: Rule[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
+
+function fixture(openDrawer: { id: string; businessDate: Date } | null, permissions = COUNTER) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     // DEV-607: create takes the counter gate (member, pharmacy:counter, branch assignment).
@@ -38,9 +42,7 @@ function fixture(openDrawer: { id: string; businessDate: Date } | null) {
       findUnique: vi.fn().mockResolvedValue({
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: {
-          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
-        },
+        organizationRole: { permissions },
         permissionOverrides: [],
       }),
     },
@@ -167,6 +169,51 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
       f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'ORGANIZATION_NOT_ACTIVE' });
     expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+  });
+});
+
+// DEV-97: only someone who takes payment opens a drawer. A pharmacist (dispense,
+// no `pharmacy:counter`) builds the bill and counter staff take the payment, so
+// the DEV-725 drawer gate applies to the operators who can settle it.
+describe('pharmacySales.create drawer gate follows the settlement grant (DEV-97)', () => {
+  const PHARMACIST: Rule[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+
+  it('lets a pharmacist without pharmacy:counter start a bill on a device with no OPEN drawer', async () => {
+    const f = fixture(null, PHARMACIST);
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
+    expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacySale.create).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the drawer gate for a pharmacist who also takes payment', async () => {
+    // A pharmacist an owner granted pharmacy:counter opens the drawer first, like a cashier.
+    const f = fixture(null, [...PHARMACIST, ...COUNTER]);
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the drawer step for the opt-in Pharmacist and cashier role (DEV-622)', async () => {
+    const role = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === 'pharmacist-cashier')!;
+    const f = fixture(
+      null,
+      role.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }))
+    );
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+  });
+
+  it('still requires the counter device for a pharmacist bill', async () => {
+    const f = fixture(null, PHARMACIST);
+    await expect(f.caller.create({ branchId: 'branch-1', quotation: false })).rejects.toMatchObject(
+      { code: 'BAD_REQUEST' }
+    );
     expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
   });
 });

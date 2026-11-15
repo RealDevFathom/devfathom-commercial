@@ -94,7 +94,8 @@ describe('DEV-746 earning rate card', () => {
     expect(screen.getByText(/Version 2, in effect since 2026-11-10/)).toBeInTheDocument();
     const history = screen.getByRole('region', { name: 'Earning rate history' });
     expect(history).toHaveTextContent('1.5% of spend');
-    expect(history).toHaveTextContent('2026-11-01 08:00');
+    expect(history).toHaveTextContent('1 Nov 2026, 8:00 AM UTC');
+    expect(history).not.toHaveTextContent('2026-11-01 08:00');
   });
   it('asks for the custom amount only when a custom option is chosen', async () => {
     await show();

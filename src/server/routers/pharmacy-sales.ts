@@ -1,6 +1,8 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
+import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
+import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
 import {
   authorizeCounterApproval,
   confirmCounterApproval,
@@ -13,6 +15,7 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -31,6 +34,11 @@ import {
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  readKhataReminderSettings,
+  saveKhataReminderSettings,
+} from '@/lib/pharmacy/khata-reminder-branch-settings';
+import { khataReminderSettingsSchema } from '@/lib/pharmacy/khata-reminder-settings';
+import {
   executeSandboxPayment,
   sandboxPaymentInput,
   PharmacyPaymentSandboxError,
@@ -47,6 +55,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -257,6 +266,18 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
+ * DEV-817: a demand-event response never carries the customer's notify-when-back
+ * phone. The counter only learns whether a contact is on file; the notification
+ * sender reads the number on the server.
+ */
+function redactDemandContact<T extends { notifyPhone?: string | null }>(
+  row: T
+): Omit<T, 'notifyPhone'> & { hasNotifyContact: boolean } {
+  const { notifyPhone, ...rest } = row;
+  return { ...rest, hasNotifyContact: Boolean(notifyPhone) };
+}
+
+/**
  * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
  * (for the purchasing view) or a manager/owner may read brand margins.
  */
@@ -330,9 +351,11 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
 > & {
   discountApproval?: CounterApprovalPin;
+  /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
+  voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
 };
 
@@ -366,6 +389,18 @@ async function approvedLineInput(
     idempotencyKey: input.idempotencyKey,
   };
   const { override } = input;
+  // DEV-819: a voucher is redeemed only after the signed-in cashier re-enters their own PIN,
+  // verified in its own transaction so a wrong PIN's lockout strike is kept.
+  if (input.voucherId) {
+    const verified = await authenticateVoucherCashierPin({
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      pin: input.voucherPin,
+    });
+    annotateAudit(ctx, { metadata: { voucherId: input.voucherId, voucherPinVerified: verified } });
+    if (!verified) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+    lineInput.voucherCashierPinVerified = true;
+  }
   if ((input.discountMinor ?? 0) > 0) {
     const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
     approvals.push({ kind: 'DISCOUNT', approval });
@@ -442,6 +477,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
   return { ...tender, type: tender.type === 'KHATA' ? ('CREDIT' as const) : tender.type };
 }
 
+const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string> = {
+  NOT_CONFIGURED: 'WhatsApp receipts are not set up for this pharmacy.',
+  LINK_HOST_NOT_CONFIGURED: 'Receipt links are not set up for this workspace.',
+  NOT_SETTLED: 'Only a settled receipt can be sent.',
+  NO_CUSTOMER: 'Link a customer to this sale before sending a WhatsApp receipt.',
+  NO_CONSENT: 'This customer has not opted in to WhatsApp messages.',
+  NO_PHONE: 'This customer has no valid WhatsApp number on file.',
+  NOT_NEUTRAL: 'The receipt message would name a medicine, so it was not sent.',
+};
+
 function fail(error: unknown): never {
   if (error instanceof LostSalesError)
     throw new TRPCError({
@@ -457,6 +502,9 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  // DEV-629: an Rx line whose pharmacist review is not signed is a bill the counter must correct.
+  if (error instanceof PharmacyDispensingError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
     throw new TRPCError({
       code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
@@ -950,6 +998,31 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
+  // DEV-76: the owner sets each branch's khata reminder cadence and balance floor.
+  khataReminderSettings: adminProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) =>
+      readKhataReminderSettings(ctx.db, await branchScopeOrForbidden(ctx, input.branchId))
+    ),
+  saveKhataReminderSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: khataReminderSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, khataReminderSettings: input.settings },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -1629,6 +1702,14 @@ export const pharmacySalesRouter = router({
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-97: only someone who takes payment opens a drawer. A pharmacist without
+        // `pharmacy:counter` builds the bill and hands it to counter staff, whose
+        // tender keeps its own capability and drawer checks.
+        const takesPayment =
+          !input.quotation &&
+          (await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+            db: ctx.db,
+          }));
         // createSale enforces the persisted regulatory gate in this transaction.
         // DEV-725: opening the drawer is the first step of the shift. A counter
         // bill is never started on a device with no OPEN drawer, so the cashier
@@ -1637,7 +1718,7 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
-            if (input.quotation) return;
+            if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
             await lockOpenPharmacyDrawer(db, scope, input.deviceId);
           });
@@ -1695,6 +1776,11 @@ export const pharmacySalesRouter = router({
           // DEV-27: a voucher is redeemed by its stored id; the server sets the amount and
           // enforces the voucher's eligible categories. A client cannot label a voucher.
           voucherId: z.string().trim().min(1).max(128).optional(),
+          // DEV-819: the redeeming cashier's own staff PIN, required with a voucher.
+          voucherPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           discountApproval: counterApprovalPin.optional(),
           override: z
@@ -1783,6 +1869,15 @@ export const pharmacySalesRouter = router({
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
+            });
+            // DEV-629: queue the RX-03 pharmacist review; payment waits for its SIGN decision.
+            await db.pharmacyPharmacistReviewItem.create({
+              data: {
+                organizationId: scope.organizationId,
+                prescriptionLineId: reference.prescriptionLineId,
+                saleLineId: result.line.id,
+                requestedByUserId: scope.actorId,
+              },
             });
             annotateAudit(ctx, {
               metadata: {
@@ -2302,12 +2397,20 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...demand } = input;
-        return await captureDemand(ctx.db, await scopeFor(ctx, branch), demand);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return redactDemandContact(await captureDemand(ctx.db, scope, demand));
       } catch (error) {
         fail(error);
       }
     }),
-  /** DEV-81: one tap on a counter outcome chip. Optional; never gates tender. */
+  /**
+   * DEV-81: one tap on a counter outcome chip. Optional; never gates tender.
+   * DEV-817: the counter's gate (canonical `pharmacy:counter`, the deny-wins
+   * counter family and an active branch assignment) runs before the event is
+   * read, so a member without counter access cannot relabel an outcome or touch
+   * the customer's notify-when-back phone. The phone is never echoed back.
+   */
   setDemandOutcome: protectedProcedure
     .input(
       z
@@ -2325,17 +2428,23 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...outcome } = input;
-        return await setDemandOutcome(ctx.db, await scopeFor(ctx, branch), outcome);
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return redactDemandContact(await setDemandOutcome(ctx.db, scope, outcome));
       } catch (error) {
         fail(error);
       }
     }),
-  /** DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates. */
+  /**
+   * DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates.
+   * DEV-817: it rewrites the branch's lost-sales estimates, so it takes the same
+   * manager or owner gate (and active branch assignment) as `lostSalesSummary`.
+   */
   settleLostSales: protectedProcedure
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await settleLostSales(ctx.db, await scopeFor(ctx, input.branchId));
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        return await settleLostSales(ctx.db, scope);
       } catch (error) {
         fail(error);
       }
@@ -2576,13 +2685,14 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => {
           const event = await captureDemand(txDb(tx), scope, {
             ...input,
             reason: 'SUBSTITUTE_DECLINED',
           });
-          return declineSubstitute(txDb(tx), scope, event.id);
+          return redactDemandContact(await declineSubstitute(txDb(tx), scope, event.id));
         });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
@@ -2645,11 +2755,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await recoverDemandWithAlternate(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.demandId,
-          input.saleLineId
+        // DEV-817: the counter's gate, before the demand row is read.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return redactDemandContact(
+          await recoverDemandWithAlternate(ctx.db, scope, input.demandId, input.saleLineId)
         );
       } catch (error) {
         fail(error);
@@ -2657,8 +2766,14 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
+    // DEV-817: a branch report with estimated value and margin; manager or owner only.
     .query(async ({ ctx, input }) =>
-      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
+      demandAggregate(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.from,
+        input.to
+      )
     ),
   addRestockInterest: protectedProcedure
     .input(
@@ -2676,8 +2791,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          addRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2687,8 +2804,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          captureSafeRestockArrival(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2698,8 +2817,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, interestId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          optOutRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input.interestId)
+          optOutRestockInterest(txDb(tx), scope, input.interestId)
         );
       } catch (error) {
         fail(error);
@@ -2711,8 +2832,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          recoverRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recoverRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2722,11 +2845,28 @@ export const pharmacySalesRouter = router({
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
     )
+    // DEV-817: a branch report over demand events; manager or owner only.
     .query(async ({ ctx, input }) =>
-      restockRecoveryReport(ctx.db, await scopeFor(ctx, input.branchId), input.campaignKey)
+      restockRecoveryReport(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.campaignKey
+      )
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
+
+  /**
+   * DEV-97: whether the counter offers the drawer and payment controls. Presentation
+   * only: openDrawer and tender keep their own `pharmacy:counter` checks.
+   */
+  settlementAccess: protectedProcedure.query(async ({ ctx }) => ({
+    userId: ctx.session.user.id,
+    organizationId: ctx.session.user.organizationId,
+    authorized: await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+    }),
+  })),
 
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
@@ -3026,6 +3166,43 @@ export const pharmacySalesRouter = router({
             message: 'This bill is not settled, so it has no receipt to print.',
           });
         }
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-16: send the settled receipt to the customer's WhatsApp, only on the
+   * customer's request at the counter. The template carries the branch,
+   * receipt number, total, method and a tokenized hosted link — never an item.
+   */
+  counterReceiptWhatsApp: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).max(128),
+          customerRequested: z.literal(true),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        return await sendWhatsAppReceiptLink({
+          db: ctx.db,
+          scope,
+          saleId: input.saleId,
+          actorUserId: ctx.session.user.id,
+        });
+      } catch (error) {
+        if (error instanceof HostedReceiptError)
+          throw new TRPCError({
+            code:
+              error.reason === 'NOT_CONFIGURED' || error.reason === 'LINK_HOST_NOT_CONFIGURED'
+                ? 'PRECONDITION_FAILED'
+                : 'BAD_REQUEST',
+            message: HOSTED_RECEIPT_ERROR_MESSAGES[error.reason],
+          });
         fail(error);
       }
     }),

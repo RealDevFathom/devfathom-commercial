@@ -83,6 +83,7 @@ import {
   tenantContext,
   units,
   dateField,
+  optionalDateField,
   today,
   type Notice,
   type SearchQuery,
@@ -105,6 +106,11 @@ const DESCRIPTION =
  * as many as a distributor invoice needs, so a typical bill fits on one receipt.
  */
 const DIRECT_SLOTS = Array.from({ length: 20 }, (_, slot) => slot);
+
+const DEBIT_NOTE_REASON_LABEL: Record<'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE', string> = {
+  BILLED_SHORTAGE: 'Billed, not delivered',
+  PRICE_OVERCHARGE: 'Above the order price',
+};
 
 /**
  * PUR-02 receiving, PUR-04 match exceptions and PUR-05 direct purchase.
@@ -186,10 +192,12 @@ export default async function PharmacyReceivingPage({
 
   let receipts: GoodsReceiptDetail[];
   let exceptions: ReceivingExceptionRow[];
+  let debitNoteDrafts: Awaited<ReturnType<typeof caller.receiptDebitNotes>>;
   try {
-    [receipts, exceptions] = await Promise.all([
+    [receipts, exceptions, debitNoteDrafts] = await Promise.all([
       caller.goodsReceipts({ branchId }),
       caller.receivingExceptionQueue({ branchId, status: exceptionStatus }),
+      caller.receiptDebitNotes({ branchId, status: 'DRAFT' }),
     ]);
   } catch {
     return (
@@ -475,13 +483,17 @@ export default async function PharmacyReceivingPage({
       }
       revalidatePath(ROUTE);
       const raised = result.exceptions?.length ?? 0;
+      const draftNote = result.debitNoteDraft
+        ? ` A draft debit note for ${money(result.debitNoteDraft.totalMinor)} is waiting for confirmation.`
+        : '';
       next = destination(
         ROUTE,
         {
           message:
-            raised === 0
+            (raised === 0
               ? 'Receipt posted. The accepted units are in stock and saleable.'
-              : `Receipt posted with ${raised} match exception${raised === 1 ? '' : 's'}. They stay open until somebody resolves them.`,
+              : `Receipt posted with ${raised} match exception${raised === 1 ? '' : 's'}. They stay open until somebody resolves them.`) +
+            draftNote,
           kind: 'success',
         },
         { branch, receipt: goodsReceiptId }
@@ -569,6 +581,50 @@ export default async function PharmacyReceivingPage({
     return next;
   }
 
+  async function decideDebitNote(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const decision = field(form, 'decision') === 'DISCARDED' ? 'DISCARDED' : 'CONFIRMED';
+    const outcome = purchasingOutcome();
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const note = optionalField(form, 'decisionNote');
+      if (decision === 'DISCARDED' && !note) {
+        throw Object.assign(
+          new PurchasingValidationError('Say why the draft is discarded before discarding it.'),
+          { field: 'decisionNote' }
+        );
+      }
+      await outcome.write(actionCaller.decideReceiptDebitNote)({
+        branchId: branch,
+        debitNoteId: field(form, 'debitNoteId'),
+        decision,
+        note,
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message:
+            decision === 'CONFIRMED'
+              ? 'Debit note confirmed with your name. Its amount is unchanged.'
+              : 'Draft debit note discarded with your reason. Nothing will be claimed.',
+          kind: 'success',
+        },
+        { branch }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...outcome.failure(error, 'Could not record the decision.'), kind: 'error' },
+        { branch }
+      );
+    }
+    return next;
+  }
+
   const openExceptionCount = exceptionStatus === 'OPEN' ? exceptions.length : null;
   const inputTaxReport = reconcileInputTaxBills(receipts);
 
@@ -608,7 +664,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── PUR-04 review queue ────────────────────────────────────────────── */}
       <SectionCard
-        eyebrow="PUR-04"
+        eyebrow="Invoice matching"
         title={`Match exceptions — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
         titleLevel={2}
         actions={
@@ -696,6 +752,104 @@ export default async function PharmacyReceivingPage({
         )}
       </SectionCard>
 
+      {/* ── DEV-691 draft debit notes from the three-way match ──────────────── */}
+      <SectionCard
+        eyebrow="Three-way match"
+        title={`Draft debit notes (${debitNoteDrafts.length})`}
+        titleLevel={2}
+      >
+        {debitNoteDrafts.length === 0 ? (
+          <EmptyState
+            title="No draft debit notes at this branch"
+            detail="When a posted receipt has packs billed but not delivered, or a price above the order, a draft debit note is proposed here. A wrong batch or expiry is raised as a match exception above. Nothing is claimed until somebody confirms it."
+          />
+        ) : (
+          <ul className="space-y-3">
+            {debitNoteDrafts.map((draft) => (
+              <li
+                className="rounded-[var(--radius-sm)] border border-border-subtle p-4"
+                key={draft.id}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-text-strong">
+                    {draft.goodsReceipt.reference} · {draft.supplier.name} · bill{' '}
+                    {draft.goodsReceipt.supplierInvoiceRef}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-medium tabular-nums text-text-strong">
+                      {money(draft.totalMinor)}
+                    </span>
+                    <StatusPill status="Draft" tone="warning" />
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-text-muted">
+                  Raised {dateTime(draft.raisedAt)} from the match. Amounts come from the recorded
+                  bill and order figures and cannot be edited.
+                </p>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[32rem] text-sm">
+                    <thead>
+                      <tr className="border-b border-border-subtle text-left font-mono text-[11px] uppercase tracking-wide text-text-muted">
+                        <th className="py-2 pr-3 font-medium">Item</th>
+                        <th className="py-2 pr-3 font-medium">Reason</th>
+                        <th className="py-2 pr-3 text-right font-medium">Packs</th>
+                        <th className="py-2 text-right font-medium">Claim</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {draft.lines.map((line) => (
+                        <tr className="border-b border-border-subtle last:border-0" key={line.id}>
+                          <td className="py-2 pr-3 text-text-body">
+                            {line.receivingException.goodsReceiptLine.medicine.productName} · batch{' '}
+                            {line.receivingException.goodsReceiptLine.batchNumber}
+                            <span className="block text-xs text-text-muted">{line.detail}</span>
+                          </td>
+                          <td className="py-2 pr-3 text-text-body">
+                            {DEBIT_NOTE_REASON_LABEL[line.reason]}
+                          </td>
+                          <td className="py-2 pr-3 text-right tabular-nums text-text-body">
+                            {line.packs}
+                          </td>
+                          <td className="py-2 text-right tabular-nums text-text-strong">
+                            {money(line.amountMinor)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <PurchasingActionForm
+                  operation={{
+                    resource: `receipt-debit-note:${draft.id}`,
+                    action: 'decide',
+                  }}
+                  action={decideDebitNote}
+                  className="mt-3 flex flex-wrap items-end gap-3"
+                >
+                  <input name="branchId" type="hidden" value={branchId} />
+                  <input name="debitNoteId" type="hidden" value={draft.id} />
+                  <TextField
+                    className="min-w-64 flex-1"
+                    label="Note"
+                    name="decisionNote"
+                    notice={notice}
+                    hint="Recorded with your name. Required to discard."
+                  />
+                  {draft.goodsReceipt.status === 'POSTED' ? (
+                    <SubmitButton name="decision" value="CONFIRMED">
+                      Confirm debit note
+                    </SubmitButton>
+                  ) : null}
+                  <SubmitButton name="decision" value="DISCARDED" variant="destructive">
+                    Discard
+                  </SubmitButton>
+                </PurchasingActionForm>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
       <SectionCard eyebrow="Input-tax hygiene" title="Purchase bill reconciliation" titleLevel={2}>
         <div className="grid gap-3 sm:grid-cols-3">
           <Stat label="Bills needing tax identity" value={inputTaxReport.flaggedBillCount} />
@@ -739,7 +893,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
-      <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
           <EmptyState
             title="No order is out with a supplier"
@@ -983,7 +1137,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-05 direct purchase ─────────────────────────────────────────── */}
-      <SectionCard eyebrow="PUR-05" title="Direct purchase — no purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Direct purchase — no purchase order" titleLevel={2}>
         <p className="text-sm text-text-muted">
           A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the
           same as receiving against an order — the only difference is that a bypass reason and a
@@ -1031,7 +1185,7 @@ export default async function PharmacyReceivingPage({
                 emptyHint={
                   checksOff
                     ? 'No supplier yet. Add one in the supplier register first.'
-                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                    : 'No supplier is ready to order from. Authorize one and file a verified licence first.'
                 }
                 label="Supplier"
                 name="supplierId"
@@ -1170,7 +1324,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── receipts, side by side with the selected one ───────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-02/04" title={`Receipts (${receipts.length})`} titleLevel={2}>
+        <SectionCard eyebrow="Goods in" title={`Receipts (${receipts.length})`} titleLevel={2}>
           {receipts.length === 0 ? (
             <EmptyState
               title="Nothing has been received at this branch"
@@ -1433,6 +1587,28 @@ function CaptureFieldset({
           hint={suggestedPriceMinor != null ? 'Pre-filled from the order.' : undefined}
         />
         <TextField
+          inputMode="numeric"
+          label="Packs on the bill"
+          min={0}
+          name={`billedPacks:${keyPrefix}`}
+          notice={notice}
+          type="number"
+          hint="Paid packs the distributor charges for. Blank if the bill was not checked."
+        />
+        <TextField
+          label="Batch on the bill"
+          name={`billedBatch:${keyPrefix}`}
+          notice={notice}
+          hint="Only if the bill prints one."
+        />
+        <TextField
+          label="Expiry on the bill"
+          name={`billedExpiry:${keyPrefix}`}
+          notice={notice}
+          type="date"
+          hint="Compared by month with the printed expiry."
+        />
+        <TextField
           inputMode="decimal"
           label="Discount %"
           name={`discount:${keyPrefix}`}
@@ -1525,7 +1701,7 @@ function ReceiptDetail({
 }) {
   return (
     <SectionCard
-      eyebrow="PUR-02/04/05"
+      eyebrow="Goods receipt"
       title={receipt.reference}
       titleLevel={2}
       actions={<StatusPill status={receipt.status} />}
@@ -1825,6 +2001,12 @@ function readCaptureFields(form: FormData, key: string) {
     taxBps: percentToBps(form, `tax:${key}`, 'Tax'),
     taxCreditable: field(form, `taxCreditable:${key}`) === 'yes',
     stockLocationId: field(form, `stockLocation:${key}`),
+    // DEV-691: the distributor bill's own line, for the three-way match.
+    billedPacks: field(form, `billedPacks:${key}`)
+      ? integerField(form, `billedPacks:${key}`, 'Packs on the bill')
+      : undefined,
+    billedBatchNumber: optionalField(form, `billedBatch:${key}`),
+    billedPrintedExpiry: optionalDateField(form, `billedExpiry:${key}`, 'Expiry on the bill'),
   };
 }
 

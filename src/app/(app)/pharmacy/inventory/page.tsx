@@ -528,9 +528,9 @@ export default async function PharmacyInventoryPage({
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy operations · INV-01—09 / PUR-07"
+        eyebrow="Pharmacy operations"
         heading="Inventory"
-        description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
+        description="Lots sold earliest-expiry first, controlled stock movements, chain operations, and the ranked work queue."
         actions={
           <>
             <Link
@@ -588,19 +588,22 @@ export default async function PharmacyInventoryPage({
         <Stat label="Open stock actions" value={signals.length} sub="Ranked by due time" />
       </section>
 
-      <SectionCard title="Lots and FEFO board" eyebrow="INV-01—04">
+      <SectionCard title="Lots by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+            No available lots yet. Set up a medicine and its pack, then import your opening count or receive a supplier delivery.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
+              </Link>
+              <Link href="/pharmacy/inventory/import" className={buttonVariants({ variant: 'outline' })}>
+                Import opening stock
               </Link>
               <Link
                 href="/pharmacy/purchasing/receiving"
                 className={buttonVariants({ variant: 'outline' })}
               >
-                Receive opening stock
+                Receive supplier delivery
               </Link>
               <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
                 Pharmacy setup
@@ -608,94 +611,93 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div
-            role="region"
-            aria-label="Pharmacy inventory batches"
-            tabIndex={0}
-            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          <Table
+            containerProps={{
+              role: 'region',
+              'aria-label': 'Pharmacy inventory batches',
+              tabIndex: 0,
+              className:
+                'overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+            }}
           >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>FEFO</TableHead>
-                  <TableHead>Medicine / batch</TableHead>
-                  <TableHead>Expiry</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Disposition</TableHead>
-                  <TableHead className="text-right">Physical arrangement</TableHead>
-                  <TableHead className="text-right">Pack action</TableHead>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Sell order</TableHead>
+                <TableHead>Medicine / batch</TableHead>
+                <TableHead>Expiry</TableHead>
+                <TableHead>Location</TableHead>
+                <TableHead>Disposition</TableHead>
+                <TableHead className="text-right">Physical arrangement</TableHead>
+                <TableHead className="text-right">Pack action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {available.map(({ lot, balance }, index) => (
+                <TableRow key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}>
+                  <TableCell className="font-mono">#{index + 1}</TableCell>
+                  <TableCell>
+                    <span className="font-medium text-text-strong">
+                      {lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      Batch {lot.batch.batchNumber} · {lot.supplierName}
+                    </span>
+                  </TableCell>
+                  <TableCell>{when(lot.batch.expiresAt)}</TableCell>
+                  <TableCell>{balance.location.name}</TableCell>
+                  <TableCell>
+                    <StatusPill
+                      status={label(balance.disposition)}
+                      tone={tone(balance.disposition)}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {lotStockBreakdown({
+                      onHandUnits: balance.onHandUnits,
+                      rootPackLevelId: lot.packLevelId,
+                      unitsPerPack: lot.unitsPerPack,
+                      packLevels: lot.packLevel?.presentation.packLevels,
+                      dosageForm: lot.packLevel?.presentation.dosageForm,
+                    })}{' '}
+                    · {balance.sealedPacks} sealed + {balance.looseUnits} loose
+                  </TableCell>
+                  <TableCell className="whitespace-normal align-top text-right">
+                    <BreakPackForm
+                      branchId={branch.id}
+                      inventoryLotId={lot.id}
+                      stockLocationId={balance.stockLocationId}
+                      medicineName={lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
+                      batchNumber={lot.batch.batchNumber}
+                      locationName={balance.location.name}
+                      sealedPacks={balance.sealedPacks}
+                      looseUnits={balance.looseUnits}
+                      unitsPerPack={lot.unitsPerPack}
+                      onHandUnits={balance.onHandUnits}
+                      expiresAt={lot.batch.expiresAt.toISOString()}
+                      observedAt={observedAt}
+                      unavailableReason={
+                        breakPackPermission ??
+                        (lot.batch.state !== 'ACTIVE'
+                          ? `Batch is ${label(lot.batch.state).toLowerCase()}.`
+                          : !lot.receivedAt
+                            ? 'Stock has not been received.'
+                            : !balance.location.active
+                              ? 'Stock location is inactive.'
+                              : balance.disposition !== 'AVAILABLE'
+                                ? 'Stock is not available.'
+                                : null)
+                      }
+                    />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {available.map(({ lot, balance }, index) => (
-                  <TableRow key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}>
-                    <TableCell className="font-mono">#{index + 1}</TableCell>
-                    <TableCell>
-                      <span className="font-medium text-text-strong">
-                        {lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
-                      </span>
-                      <span className="block text-xs text-text-muted">
-                        Batch {lot.batch.batchNumber} · {lot.supplierName}
-                      </span>
-                    </TableCell>
-                    <TableCell>{when(lot.batch.expiresAt)}</TableCell>
-                    <TableCell>{balance.location.name}</TableCell>
-                    <TableCell>
-                      <StatusPill
-                        status={label(balance.disposition)}
-                        tone={tone(balance.disposition)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {lotStockBreakdown({
-                        onHandUnits: balance.onHandUnits,
-                        rootPackLevelId: lot.packLevelId,
-                        unitsPerPack: lot.unitsPerPack,
-                        packLevels: lot.packLevel?.presentation.packLevels,
-                        dosageForm: lot.packLevel?.presentation.dosageForm,
-                      })}{' '}
-                      · {balance.sealedPacks} sealed + {balance.looseUnits} loose
-                    </TableCell>
-                    <TableCell className="whitespace-normal align-top text-right">
-                      <BreakPackForm
-                        branchId={branch.id}
-                        inventoryLotId={lot.id}
-                        stockLocationId={balance.stockLocationId}
-                        medicineName={
-                          lot.batch.medicine.brandName ?? lot.batch.medicine.productName
-                        }
-                        batchNumber={lot.batch.batchNumber}
-                        locationName={balance.location.name}
-                        sealedPacks={balance.sealedPacks}
-                        looseUnits={balance.looseUnits}
-                        unitsPerPack={lot.unitsPerPack}
-                        onHandUnits={balance.onHandUnits}
-                        expiresAt={lot.batch.expiresAt.toISOString()}
-                        observedAt={observedAt}
-                        unavailableReason={
-                          breakPackPermission ??
-                          (lot.batch.state !== 'ACTIVE'
-                            ? `Batch is ${label(lot.batch.state).toLowerCase()}.`
-                            : !lot.receivedAt
-                              ? 'Stock has not been received.'
-                              : !balance.location.active
-                                ? 'Stock location is inactive.'
-                                : balance.disposition !== 'AVAILABLE'
-                                  ? 'Stock is not available.'
-                                  : null)
-                        }
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Locations" eyebrow="INV-05">
+        <SectionCard title="Locations" eyebrow="Storage">
           {outOfRangeLogs.length > 0 ? (
             <div
               className="mb-4 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-3 text-sm text-destructive-foreground"
@@ -838,7 +840,7 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
+        <SectionCard title="Physical count" eyebrow="Stock count · frozen snapshot">
           {available.length && locations.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
@@ -957,7 +959,7 @@ export default async function PharmacyInventoryPage({
       </div>
 
       {canControlInventory ? (
-        <SectionCard title="Daily cycle count" eyebrow="DEV-682 · fast movers and high value">
+        <SectionCard title="Daily cycle count" eyebrow="Daily count · fast movers and high value">
           {cycleCount.length ? (
             <form action={perform} className="space-y-4">
               <input name="action" type="hidden" value="create-cycle-count" />
@@ -1053,7 +1055,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       ) : null}
 
-      <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
+      <SectionCard title="Adjustments and write-off custody" eyebrow="Stock corrections">
         {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
@@ -1147,7 +1149,7 @@ export default async function PharmacyInventoryPage({
 
       <SectionCard
         title="Inter-branch transfers"
-        eyebrow="INV-07 · allocate → approve → dispatch → receive"
+        eyebrow="Branch transfers · allocate → approve → dispatch → receive"
       >
         {available.length && destinationLocations.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
@@ -1250,7 +1252,13 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Recalls and quarantine" eyebrow="INV-08">
+        <SectionCard title="Recalls and quarantine" eyebrow="Safety">
+          <p className="mb-4 text-sm text-text-muted">
+            DRAP recall alerts wait for a person before any stock moves.{' '}
+            <Link className="underline underline-offset-4" href="/pharmacy/inventory/drap-recalls">
+              Review DRAP recall alerts
+            </Link>
+          </p>
           {lots.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
@@ -1325,7 +1333,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
         <SectionCard
           title="Near-expiry and return windows"
-          eyebrow="INV-09"
+          eyebrow="Expiry"
           actions={
             <div className="flex flex-wrap justify-end gap-2">
               {advice.expiry ? (
@@ -1369,7 +1377,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       </div>
 
-      <SectionCard title="Stock action centre" eyebrow="PUR-07 · ranked by due time">
+      <SectionCard title="Stock action centre" eyebrow="Ranked by due time">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-text-muted">
             Signals explain their evidence window and never create an order or movement.

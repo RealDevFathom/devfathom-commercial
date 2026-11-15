@@ -47,7 +47,7 @@ describe('owner importer wizard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
     await screen.findByText('Opening stock committed');
     expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'branch', stockLocationId: 'location', confirmed: true, previewHash: 'a'.repeat(64), mapping }));
-    expect(screen.getByText(/10 base units posted/)).toBeVisible();
+    expect(screen.getByText(/10 single units posted/)).toBeVisible();
   });
   it('invalidates the dry run and confirmation after a mapping edit', async () => {
     render(<OwnerImportWizard />);
@@ -69,6 +69,12 @@ describe('owner importer wizard', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
     expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Review the column mapping or choose a corrected file, then run the dry-run diff again.');
+    expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute('href', '#import-mapping');
+    fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
+    await screen.findByRole('button', { name: 'Commit opening stock' });
+    expect(mocks.preview.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.preview.mutateAsync.mock.calls[1][0]).toEqual(mocks.preview.mutateAsync.mock.calls[0][0]);
   });
   it('shows permission denial without upload controls', () => {
     mocks.options.error = { data: { code: 'FORBIDDEN' } };
@@ -100,6 +106,51 @@ it('shows rejected rows outside the valid-unit valuation and leaves commit disab
   preview.lines.push({...preview.lines[0],rowNumber:3,sourceRef:'INVALID',errors:['Invalid pack'],countedUnits:20});
   mocks.preview.mutateAsync.mockResolvedValue(preview);
   render(<OwnerImportWizard/>);await uploadAndPreview();
-  expect(screen.getByText(/1 of 2 valid rows · 10 counted base units · PKR 12.50 opening valuation/)).toBeVisible();
+  expect(screen.getByText(/1 of 2 valid rows · 10 counted single units · PKR 12.50 opening valuation/)).toBeVisible();
   expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();expect(screen.getByRole('button',{name:'Commit opening stock'})).toBeDisabled();
+});
+
+it('offers a corrected upload after an upload failure', async () => {
+  mocks.upload.mutateAsync.mockRejectedValueOnce(new Error('The worksheet could not be read.'));
+  render(<OwnerImportWizard />);
+  const file = new File(['A\n1'], 'stock.csv');
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+  fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+  await screen.findByRole('alert');
+  expect(screen.getByRole('alert')).toHaveTextContent('No inventory has changed. Check the file format against the CSV template, then choose the corrected file.');
+  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute('href', '#import-upload');
+  expect(screen.getByRole('link', { name: 'Download CSV template' })).toHaveAttribute('download');
+  fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+  await screen.findByRole('button', { name: 'Run dry-run diff' });
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('explains how to correct a blocked preview while keeping commit disabled', async () => {
+  const preview = await mocks.preview.mutateAsync();
+  preview.canCommit = false;
+  preview.lines[0].errors = ['Invalid pack'];
+  mocks.preview.mutateAsync.mockResolvedValue(preview);
+  render(<OwnerImportWizard />);
+  await uploadAndPreview();
+  expect(screen.getByText(/Fix the listed errors in your source file or column mapping/)).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute('href', '#import-mapping');
+  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute('href', '#import-upload');
+  expect(screen.getByRole('button', { name: 'Commit opening stock' })).toBeDisabled();
+  expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
+});
+
+it('keeps the reviewed input for a safe retry after a lost commit response', async () => {
+  mocks.commit.mutateAsync.mockRejectedValueOnce(new Error('Connection lost.'));
+  mocks.commit.mutateAsync.mockResolvedValueOnce({ sessionId: 'opening_session', totalUnits: 10, totalValueMinor: '1250', replayed: true });
+  render(<OwnerImportWizard />);
+  await uploadAndPreview();
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
+  await screen.findByRole('alert');
+  expect(screen.getByRole('alert')).toHaveTextContent('If the connection failed, retry Commit opening stock with the same reviewed file to recover its receipt safely.');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('No inventory has changed');
+  fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
+  await screen.findByText('Already committed · receipt recovered');
+  expect(mocks.commit.mutateAsync).toHaveBeenCalledTimes(2);
+  expect(mocks.commit.mutateAsync.mock.calls[1][0]).toEqual(mocks.commit.mutateAsync.mock.calls[0][0]);
 });

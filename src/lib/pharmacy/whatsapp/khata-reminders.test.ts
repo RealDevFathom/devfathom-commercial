@@ -11,6 +11,9 @@ const store = vi.hoisted(() => ({
   audits: [] as Array<Record<string, unknown>>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
+  /** The branch row the job reads: DEV-76 schedule switch and merchant details. */
+  branch: { id: 'branch-1' } as Record<string, unknown>,
+  scanSql: [] as string[],
 }));
 
 vi.mock('@/lib/entitlements', () => ({
@@ -25,8 +28,11 @@ vi.mock('../consent-writer', () => ({
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     // The scan query returns candidate accounts; any other raw query is a row lock.
-    $queryRaw: async (query: { sql: string }) =>
-      query.sql.includes('pharmacy_family_accounts') ? store.accounts : [{ id: 'patient-1' }],
+    $queryRaw: async (query: { sql: string }) => {
+      if (!query.sql.includes('pharmacy_family_accounts')) return [{ id: 'patient-1' }];
+      store.scanSql.push(query.sql);
+      return store.accounts;
+    },
     organization: {
       findUnique: async () => ({
         vertical: 'PHARMACY',
@@ -34,7 +40,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         timezone: store.timezone,
       }),
     },
-    pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
+    pharmacyBranch: { findFirst: async () => store.branch },
     medicine: {
       findMany: async () =>
         store.catalog.map((productName, index) => ({ id: `m${index}`, productName })),
@@ -87,6 +93,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 
 import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
 import {
+  formatKhataDueDate,
   planKhataReminder,
   processDueWhatsAppKhataReminders,
   readDueKhataAccounts,
@@ -131,6 +138,8 @@ beforeEach(() => {
   store.catalog = [];
   store.audits = [];
   store.timezone = 'Asia/Karachi';
+  store.branch = { id: 'branch-1' };
+  store.scanSql = [];
 });
 
 describe('planKhataReminder', () => {
@@ -240,7 +249,7 @@ describe('processDueWhatsAppKhataReminders', () => {
   });
 
   it('reads the send window and the day in UTC for a stored zone Intl refuses, instead of failing the run', async () => {
-    // NOW is 08:00 UTC, inside the 08:00-22:00 window in UTC.
+    // 09:00 UTC is inside the 09:00-22:00 send window in UTC.
     store.timezone = 'PKT';
     store.accounts = [account()];
     store.customers = [customer(true)];
@@ -248,7 +257,7 @@ describe('processDueWhatsAppKhataReminders', () => {
     const provider = new MockWhatsAppProvider(config);
 
     await expect(
-      processDueWhatsAppKhataReminders({ now: NOW, config, provider })
+      processDueWhatsAppKhataReminders({ now: new Date('2026-10-21T09:00:00Z'), config, provider })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
     expect(store.logs[0]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
@@ -555,6 +564,160 @@ describe('DEV-29 send-time variable compliance re-check', () => {
   });
 });
 
+describe('DEV-76 khata collection reminders', () => {
+  const fullConfig = readWhatsAppConfig({
+    PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+    PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+    PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_pay_en',
+    PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name,balance,dueDate,payTo',
+  });
+  function consented() {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+  }
+
+  it.each([
+    ['08:59 PKT', '2026-10-21T03:59:00Z', 0],
+    ['09:00 PKT', '2026-10-21T04:00:00Z', 1],
+    ['21:59 PKT', '2026-10-21T16:59:00Z', 1],
+    ['22:00 PKT', '2026-10-21T17:00:00Z', 0],
+    ['02:00 PKT', '2026-10-20T21:00:00Z', 0],
+  ])('enforces the 22:00-09:00 quiet hours at %s', async (_label, at, sends) => {
+    consented();
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppKhataReminders({ now: new Date(at), config, provider });
+    expect(provider.calls).toHaveLength(sends);
+    expect(store.logs).toHaveLength(sends);
+  });
+
+  it('sends the amount, local due date and Raast destination, and nothing else', async () => {
+    consented();
+    store.branch = {
+      id: 'branch-1',
+      khataReminderEnabled: true,
+      manualPaymentSettings: {
+        JAZZCASH: { destination: '0300 1111111', allowReferenceSkip: false },
+        RAAST: { destination: 'PK36 SCBL 0000 0011 2345 6702', allowReferenceSkip: false },
+      },
+    };
+    const provider = new MockWhatsAppProvider(fullConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: fullConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, prepared: 1, skippedConfiguration: 0 });
+    expect(provider.calls[0]).toMatchObject({
+      templateName: 'khata_due_pay_en',
+      parameters: [
+        'Khan household',
+        '500.00',
+        '10 Oct 2026',
+        'Raast PK36 SCBL 0000 0011 2345 6702',
+      ],
+    });
+    expect(store.logs[0]).toMatchObject({ kind: 'KHATA_REMINDER', dueDate: '2026-10-10' });
+  });
+
+  it('falls back to a wallet destination when Raast has none', async () => {
+    consented();
+    store.branch = {
+      id: 'branch-1',
+      manualPaymentSettings: {
+        RAAST: { destination: '', allowReferenceSkip: false },
+        EASYPAISA: { destination: 'Till\n98765', allowReferenceSkip: false },
+      },
+    };
+    const provider = new MockWhatsAppProvider(fullConfig);
+    await processDueWhatsAppKhataReminders({ now: NOW, config: fullConfig, provider });
+    expect(provider.calls[0]).toMatchObject({
+      parameters: ['Khan household', '500.00', '10 Oct 2026', 'Easypaisa Till 98765'],
+    });
+  });
+
+  it('fails closed when the template needs a pay destination the branch has not entered', async () => {
+    consented();
+    const provider = new MockWhatsAppProvider(fullConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: fullConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ skippedConfiguration: 1, prepared: 0 });
+    expect(result.configurationErrors).toContain('KHATA_PARAMETER_PAYTO_UNAVAILABLE');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('sends nothing from a branch whose owner switched reminders off', async () => {
+    consented();
+    store.branch = { id: 'branch-1', khataReminderEnabled: false };
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ prepared: 0, skippedNoConsent: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('uses the branch owner cadence and floor carried by the scan', async () => {
+    consented();
+    store.accounts = [{ ...account(), cadenceDays: 3, minBalanceMinor: 60_000 }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    // 500.00 owed is under this branch's 600.00 floor.
+    expect(result).toMatchObject({ scanned: 1, notDue: 1, prepared: 0 });
+    store.accounts = [{ ...account(), cadenceDays: 3, minBalanceMinor: 10_000 }];
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(store.logs[0].dedupeKey).toMatch(/^khata:family-1:c3:\d+$/);
+  });
+
+  it('applies the owner schedule and the recent-reminder cadence in the scan, before the limit', async () => {
+    await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider: new MockWhatsAppProvider(config),
+    });
+    const sql = store.scanSql[0] ?? '';
+    expect(sql).toContain('br."khataReminderEnabled" = true');
+    expect(sql).toContain('GREATEST(1, br."khataReminderMinBalanceMinor")');
+    expect(sql).toContain('NOT EXISTS');
+    expect(sql).toContain('make_interval(days => br."khataReminderCadenceDays")');
+  });
+});
+
+describe('planKhataReminder cadence', () => {
+  const candidate = {
+    familyAccountId: 'family-1',
+    balanceMinor: 50_000,
+    oldestOverdueAt: new Date('2026-10-10T00:00:00Z'),
+  };
+  it('keeps the weekly key shape and buckets other cadences by their own period', () => {
+    expect(planKhataReminder(candidate, NOW, 10_000, 7).dedupeKey).toBe(
+      planKhataReminder(candidate, NOW).dedupeKey
+    );
+    const daily = planKhataReminder(candidate, NOW, 10_000, 1).dedupeKey;
+    const nextDay = planKhataReminder(candidate, new Date(NOW.getTime() + 86_400_000), 10_000, 1);
+    expect(daily).toMatch(/^khata:family-1:c1:\d+$/);
+    expect(nextDay.dedupeKey).not.toBe(daily);
+    expect(planKhataReminder(candidate, NOW, 10_000, 99).dedupeKey).toMatch(/:w\d+$/);
+  });
+  it('formats the due date in the workspace calendar', () => {
+    expect(formatKhataDueDate(new Date('2026-10-09T20:00:00Z'), 'Asia/Karachi')).toBe(
+      '10 Oct 2026'
+    );
+    expect(formatKhataDueDate(new Date('2026-10-09T20:00:00Z'), 'UTC')).toBe('9 Oct 2026');
+  });
+});
+
 describe('DEV-730 owner reminder for one account', () => {
   it('refuses another organization without scanning, claiming or sending', async () => {
     store.accounts = [account()];
@@ -614,5 +777,44 @@ describe('DEV-730 owner reminder for one account', () => {
     queryRaw.mockClear();
     await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
     expect((queryRaw.mock.calls[0]![0] as { sql: string }).sql).not.toContain('acct."id" = ?');
+  });
+});
+
+describe('DEV-76 schedule switch and the DEV-730 owner send', () => {
+  it('still lets an owner send one account a reminder when scheduled reminders are off', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.branch = { id: 'branch-1', khataReminderEnabled: false };
+    const provider = new MockWhatsAppProvider(config);
+
+    const scheduled = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(scheduled).toMatchObject({ prepared: 0 });
+    const owner = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: { organizationId: 'org_a', branchId: 'branch-1', familyAccountId: 'family-1' },
+    });
+
+    expect(owner).toMatchObject({ scanned: 1, prepared: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('drops only the on/off switch from a one-account scan; cadence still applies', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
+    expect((queryRaw.mock.calls[0]![0] as { sql: string }).sql).toContain(
+      'br."khataReminderEnabled" = true'
+    );
+    queryRaw.mockClear();
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1, undefined, {
+      branchId: 'branch-1',
+      familyAccountId: 'family-1',
+    });
+    const sql = (queryRaw.mock.calls[0]![0] as { sql: string }).sql;
+    expect(sql).not.toContain('br."khataReminderEnabled" = true');
+    expect(sql).toContain('make_interval(days => br."khataReminderCadenceDays")');
+    expect(sql).toContain('GREATEST(1, br."khataReminderMinBalanceMinor")');
   });
 });

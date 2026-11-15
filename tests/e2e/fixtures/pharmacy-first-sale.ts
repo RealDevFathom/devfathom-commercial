@@ -290,6 +290,12 @@ export async function freshPharmacyFirstSale(
     await click(target);
     await noRawIdEntry(actor);
   };
+  // DEV-46: the opening-stock checklist link now opens the importer; this journey
+  // still opens supplier receiving, so it navigates there directly.
+  const receiving = async (actor: Page) => {
+    await actor.goto(new URL('/pharmacy/purchasing/receiving', tenantOrigin).href);
+    await noRawIdEntry(actor);
+  };
   const formFor = (actor: Page, submit: string) =>
     actor.locator('form').filter({ has: actor.getByRole('button', { name: submit, exact: true }) });
   const observe = (actor: Page) =>
@@ -564,7 +570,7 @@ export async function freshPharmacyFirstSale(
     await expect(page.getByText('Licence filed.', { exact: false })).toBeVisible();
     await setup(page);
 
-    await follow(page, 'Opening stock readiness', 'Receive opening stock');
+    await receiving(page);
     await click(page.getByRole('link', { name: 'Invite a colleague', exact: true }));
     await click(page.getByRole('button', { name: 'Add Member', exact: true }));
     await page.getByPlaceholder('Ali Raza', { exact: true }).fill('Test second approver');
@@ -615,7 +621,7 @@ export async function freshPharmacyFirstSale(
     await click(page.getByRole('button', { name: 'Done', exact: true }));
     await setup(page);
 
-    await follow(page, 'Opening stock readiness', 'Receive opening stock');
+    await receiving(page);
     await click(
       page
         .getByRole('navigation', { name: 'Purchasing surfaces' })
@@ -633,7 +639,7 @@ export async function freshPharmacyFirstSale(
       page.getByText('You raised this order, so you cannot approve it.', { exact: false })
     ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
-    await follow(colleague, 'Opening stock readiness', 'Receive opening stock');
+    await receiving(colleague);
     await click(
       colleague
         .getByRole('navigation', { name: 'Purchasing surfaces' })
@@ -648,7 +654,7 @@ export async function freshPharmacyFirstSale(
     ).toBeVisible();
 
     await setup(page);
-    await follow(page, 'Opening stock readiness', 'Receive opening stock');
+    await receiving(page);
     await choose(
       page.getByRole('combobox', { name: 'Purchase order', exact: true }),
       orderReference

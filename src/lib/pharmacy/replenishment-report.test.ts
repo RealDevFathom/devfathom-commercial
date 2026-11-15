@@ -87,6 +87,7 @@ function database() {
       ]),
     },
     pharmacyPurchaseOrderLine: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacySeasonalWindow: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyInterbranchTransferLine: { findMany: vi.fn().mockResolvedValue([]) },
     // An empty eligible-lot read still needs a scoped ledger observation.
     // This recorded zero does not establish complete stock or demand coverage.
@@ -169,6 +170,59 @@ describe('live replenishment report composition', () => {
     expect(mocks.stock.mock.calls[0].slice(1)).toEqual([scope, 'medicine']);
     expect(forbidden).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/patient|prescription|customer|forecastInput/);
+  });
+
+  it('reads the branch seasonal calendar and learns uplift only from this branch', async () => {
+    const { db, reads } = database();
+    const day = (date: string, units: number) => ({
+      ...scope,
+      id: `line-${date}`,
+      canonicalUnits: units,
+      createdAt: new Date(`${date}T10:00:00Z`),
+      sale: {
+        organizationId: 'org',
+        branchId: 'branch',
+        status: 'COMPLETED',
+        businessDate: new Date(`${date}T00:00:00Z`),
+        completedAt: new Date(`${date}T10:00:00Z`),
+        createdAt: new Date(`${date}T10:00:00Z`),
+        updatedAt: new Date(`${date}T10:00:00Z`),
+      },
+    });
+    reads.pharmacySaleLine.findMany.mockResolvedValue([
+      day('2026-09-10', 4),
+      day('2026-09-11', 12),
+      day('2026-09-12', 12),
+    ]);
+    reads.pharmacySeasonalWindow.findMany.mockResolvedValue([
+      {
+        id: 'dengue-2026',
+        branchId: 'branch',
+        kind: 'DENGUE',
+        label: 'Dengue season',
+        startDate: new Date('2026-09-11T00:00:00Z'),
+        endDate: new Date('2026-11-01T00:00:00Z'),
+      },
+    ]);
+    const result = await readPharmacyReplenishmentReport(db, input, readAt);
+    expect(reads.pharmacySeasonalWindow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org', branchId: 'branch' } })
+    );
+    expect(result.seasonalCalendar.label).toBe('ESTIMATE');
+    expect(result.seasonalCalendar.windows).toEqual([
+      {
+        id: 'dengue-2026',
+        branchId: 'branch',
+        kind: 'DENGUE',
+        label: 'Dengue season',
+        startDate: '2026-09-11',
+        endDateExclusive: '2026-11-01',
+      },
+    ]);
+    // Default guards need more history than three days, so nothing is presented as learned.
+    expect(result.seasonalCalendar.uplifts).toEqual([
+      expect.objectContaining({ key: 'DENGUE', status: 'INSUFFICIENT_HISTORY', upliftBps: null }),
+    ]);
   });
 
   it('keeps an empty demand period unknown despite a recorded zero stock balance', async () => {

@@ -18,12 +18,12 @@ import { createTRPCContext } from '@/server/trpc';
 export const PURCHASING_ROUTE = '/pharmacy/purchasing';
 
 export const PURCHASING_TABS = [
-  { href: PURCHASING_ROUTE, label: 'Overview', requirement: 'PUR-01..06' },
-  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers', requirement: 'PUR-01' },
-  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders', requirement: 'PUR-02/03' },
-  { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder', requirement: 'DEV-678' },
-  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in', requirement: 'PUR-02/04/05' },
-  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims', requirement: 'PUR-06' },
+  { href: PURCHASING_ROUTE, label: 'Overview' },
+  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers' },
+  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders' },
+  { href: `${PURCHASING_ROUTE}/reorder`, label: 'Reorder' },
+  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in' },
+  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims' },
 ] as const;
 
 /**
@@ -104,6 +104,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     message: 'This pack level has no effective conversion. Set one on the medicine first.',
     field: 'packLevelId',
   },
+  PACK_CONVERSION_MISMATCH: {
+    message:
+      "The units per pack on this line do not match the medicine's pack setup. Reload the page so the line uses the current pack conversion.",
+    field: 'packLevelId',
+  },
   RETURN_WINDOW_CLOSED: {
     message: "The supplier's return window has closed for one of these lines.",
     field: 'returnWindowEndsAt',
@@ -175,6 +180,7 @@ const KNOWN_REJECTIONS = new Set([
   'EXPIRED_PACK',
   'GS1_INVALID',
   'GTIN_MEDICINE_MISMATCH',
+  'PACK_CONVERSION_MISMATCH',
   'SERIALIZED_PACK_QUANTITY',
   'REVERSAL_STOCK_MOVED',
   'REVERSAL_PACKS_OPENED',

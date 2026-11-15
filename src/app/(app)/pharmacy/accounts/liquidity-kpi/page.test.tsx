@@ -114,7 +114,8 @@ describe('LiquidityKpiPage', () => {
     expect(output).toContain('50 / 200');
     expect(output).toContain('0.2500');
     expect(output).toContain('Export KPI CSV');
-    expect(output).toContain('Retrieved 2026-02-02T03:04:05.000Z');
+    expect(output).toMatch(/Retrieved\s+2 Feb 2026, 3:04 AM UTC/);
+    expect(output).not.toContain('finance_journal_lines');
     expect(output).not.toContain('Infinity');
   });
 
