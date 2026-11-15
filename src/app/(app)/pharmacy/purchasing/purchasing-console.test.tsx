@@ -1163,12 +1163,24 @@ describe('goods-in scan and duplicate serial', () => {
   it('DEV-693: shows an official DRAP price change as a hint on that medicine only', async () => {
     const officialPriceAlerts = vi.fn().mockResolvedValue([
       {
+        // Newer, but for a BOX: never shown on this STRIP line.
+        id: 'alert-box',
+        medicineId: 'med-1',
+        medicine: 'Amoxicillin 500mg',
+        sourceReference: 'SRO 2',
+        presentation: null,
+        packLevel: 'BOX',
+        notifiedPriceMinor: 99900,
+        effectiveDate: new Date('2027-01-01T00:00:00.000Z'),
+        createdAt: new Date('2026-11-15T00:00:00.000Z'),
+      },
+      {
         id: 'alert-1',
         medicineId: 'med-1',
         medicine: 'Amoxicillin 500mg',
         sourceReference: 'SRO 1',
-        presentation: null,
-        packLevel: null,
+        presentation: 'Capsule',
+        packLevel: 'STRIP',
         notifiedPriceMinor: 31500,
         effectiveDate: new Date('2026-12-01T00:00:00.000Z'),
         createdAt: new Date('2026-11-15T00:00:00.000Z'),
@@ -1180,8 +1192,9 @@ describe('goods-in scan and duplicate serial', () => {
     const view = render(await ReceivingPage({ searchParams: params({ order: 'po-1' }) }));
     expect(officialPriceAlerts).toHaveBeenCalledWith({ medicineIds: ['med-1'] });
     expect(
-      screen.getByText(/Official price changed as of 2026-12-01: Rs\s?315\.00/)
+      screen.getByText(/Official price changed as of 2026-12-01: Rs\s?315\.00 \(Capsule, STRIP\)/)
     ).toHaveTextContent('For information only: record the MRP printed on the pack in hand.');
+    expect(screen.queryByText(/999\.00/)).toBeNull();
     view.unmount();
 
     // No price access (or a failed read): receiving carries on with no hint.

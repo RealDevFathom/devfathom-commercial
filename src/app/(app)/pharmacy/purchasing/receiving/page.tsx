@@ -224,15 +224,12 @@ export default async function PharmacyReceivingPage({
   // DEV-693: official DRAP price changes for the medicines on this order, as a
   // read-only hint. Only roles that may see prices get them; anyone else, or a
   // read failure, simply sees no hint. Nothing here changes a price.
-  const officialPrices = new Map<string, string>();
+  let officialPriceAlerts: Awaited<ReturnType<typeof caller.officialPriceAlerts>> = [];
   if (selectedOrder?.lines.length) {
     try {
-      const alerts = await caller.officialPriceAlerts({
+      officialPriceAlerts = await caller.officialPriceAlerts({
         medicineIds: [...new Set(selectedOrder.lines.map((line) => line.medicineId))],
       });
-      for (const alert of alerts)
-        if (!officialPrices.has(alert.medicineId))
-          officialPrices.set(alert.medicineId, officialPriceText(alert));
     } catch {
       // No price permission or the alerts could not be read: receiving goes on unchanged.
     }
@@ -848,7 +845,22 @@ export default async function PharmacyReceivingPage({
                         />
                       ) : null;
                     const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
-                    const officialPrice = officialPrices.get(line.medicineId);
+                    // Newest alert for this medicine whose notice names no pack, or names
+                    // the pack on this line; a BOX notice never labels a STRIP line.
+                    const officialAlert = officialPriceAlerts.find(
+                      (alert) =>
+                        alert.medicineId === line.medicineId &&
+                        (!alert.packLevel || alert.packLevel === line.packLevel.level)
+                    );
+                    const officialPrice = officialAlert
+                      ? `${officialPriceText(officialAlert)}${
+                          officialAlert.presentation || officialAlert.packLevel
+                            ? ` (${[officialAlert.presentation, officialAlert.packLevel]
+                                .filter(Boolean)
+                                .join(', ')})`
+                            : ''
+                        }`
+                      : undefined;
                     return (
                       <div className="space-y-3" key={line.id}>
                         {officialPrice && (
