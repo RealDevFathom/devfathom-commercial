@@ -576,8 +576,9 @@ function ScopedPharmacyCounterConsole({
   // DEV-725: opening the drawer is the first step of the shift. Until the server
   // reports an OPEN drawer for this device, the opening-cash step replaces
   // scan/search, so no bill is built that cannot be charged. A failed status read
-  // falls back to the server's own refusal when the bill is created.
-  const drawerRequired = branchAuthorized && !drawerQuery.isError && !openDrawerSession;
+  // keeps the opening step available (enabled once the read has settled); the
+  // server still refuses a duplicate open.
+  const drawerRequired = branchAuthorized && !openDrawerSession;
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
