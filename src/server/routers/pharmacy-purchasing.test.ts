@@ -27,6 +27,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
+import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
@@ -119,6 +120,11 @@ function orderableSupplier() {
 function resolvableCatalog() {
   db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a' });
   db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+  // createPurchaseOrder resolves every line's medicine and pack level in one query each.
+  const byIds = async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+    (where?.id?.in ?? []).map((id) => ({ id }));
+  db.medicine.findMany.mockImplementation(byIds);
+  db.packLevel.findMany.mockImplementation(byIds);
 }
 
 const ORDER_LINE = {
@@ -422,6 +428,8 @@ describe('procurement write authorization', () => {
       expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
       expect(db.medicine.findFirst).not.toHaveBeenCalled();
       expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+      expect(db.medicine.findMany).not.toHaveBeenCalled();
+      expect(db.packLevel.findMany).not.toHaveBeenCalled();
       expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
       expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
       expect(db.$transaction).not.toHaveBeenCalled();
@@ -467,6 +475,8 @@ describe('procurement write authorization', () => {
     expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
     expect(db.medicine.findFirst).not.toHaveBeenCalled();
     expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.findMany).not.toHaveBeenCalled();
+    expect(db.packLevel.findMany).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
@@ -514,6 +524,8 @@ describe('procurement write authorization', () => {
     expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
     expect(db.medicine.findFirst).not.toHaveBeenCalled();
     expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.findMany).not.toHaveBeenCalled();
+    expect(db.packLevel.findMany).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
@@ -738,6 +750,36 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
         bonusCanonicalUnits: 20,
       },
     ]);
+  });
+
+  it('DEV-145: accepts the largest reorder draft with one lookup per table', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    const lines = Array.from({ length: REORDER_MAX_DRAFT_LINES }, (_, index) => ({
+      ...ORDER_LINE,
+      medicineId: `medicine_${index}`,
+    }));
+    await caller().createPurchaseOrder({ reference: 'PO-1', supplierId: 'supplier_a', lines });
+    expect(db.medicine.findMany).toHaveBeenCalledTimes(1);
+    expect(db.packLevel.findMany).toHaveBeenCalledTimes(1);
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create.mock.calls[0]![0].data.lines.create).toHaveLength(
+      REORDER_MAX_DRAFT_LINES
+    );
+  });
+
+  it('DEV-145: refuses an order when any line names an unknown medicine', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    db.medicine.findMany.mockResolvedValue([{ id: 'medicine_a' }]);
+    await expect(
+      caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE, { ...ORDER_LINE, medicineId: 'medicine_other_tenant' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
   });
 });
 

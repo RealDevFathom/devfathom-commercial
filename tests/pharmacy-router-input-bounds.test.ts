@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
 import { pharmacyPrescriptionsRouter } from '@/server/routers/pharmacy-prescriptions';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
+import { EXTRA_LOT_SLOTS } from '@/lib/pharmacy/pack-photo-receiving';
+import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
 
 // DEV-145: every array, string and record key a pharmacy router accepts must have
 // a business-sized ceiling, so an oversized payload is a validation error before
@@ -121,6 +123,59 @@ describe('pharmacy router input bounds', () => {
     const input = inputOf(pharmacyPurchasingRouter, 'recordQuote');
     expect(input.safeParse(quote(100)).success).toBe(true);
     expect(input.safeParse(quote(101)).success).toBe(false);
+  });
+
+  const orderLine = {
+    medicineId: 'medicine-1',
+    packLevelId: 'pack-1',
+    orderedPacks: 1,
+    canonicalUnitsPerPack: 10,
+    listPricePerPackMinor: 100,
+  };
+  const order = (count: number) => ({
+    reference: 'PO-1',
+    supplierId: 'sup-1',
+    lines: Array.from({ length: count }, () => orderLine),
+  });
+
+  it('accepts a purchase order as large as the largest reorder draft, and no larger', () => {
+    const input = inputOf(pharmacyPurchasingRouter, 'createPurchaseOrder');
+    expect(input.safeParse(order(REORDER_MAX_DRAFT_LINES)).success).toBe(true);
+    expect(input.safeParse(order(REORDER_MAX_DRAFT_LINES + 1)).success).toBe(false);
+  });
+
+  const serializedPack = (index: number) => ({
+    medicineId: 'medicine-1',
+    packLevelId: 'pack-1',
+    batchNumber: 'B1',
+    printedExpiry: new Date('2028-01-01'),
+    expiryPrecision: 'MONTH' as const,
+    printedMrpMinor: 500,
+    canonicalUnitsPerPack: 1,
+    receivedPacks: 1,
+    invoicedPricePerPackMinor: 400,
+    stockLocationId: 'loc-1',
+    gtin: '08901234567890',
+    serialNumber: `S${index}`,
+  });
+  const receipt = (count: number) => ({
+    reference: 'GRN-1',
+    branchId: 'branch-1',
+    supplierId: 'sup-1',
+    purchaseOrderId: 'po-1',
+    supplierInvoiceRef: 'INV-1',
+    supplierInvoiceDate: new Date('2026-11-01'),
+    warrantyEvidenceRef: 'warranty on invoice',
+    receivedAt: new Date('2026-11-02'),
+    lines: Array.from({ length: count }, (_, index) => serializedPack(index)),
+  });
+
+  it('receives a large serialized invoice in one receipt, up to every lot of a full order', () => {
+    const input = inputOf(pharmacyPurchasingRouter, 'createGoodsReceipt');
+    const fullOrderLots = REORDER_MAX_DRAFT_LINES * (1 + EXTRA_LOT_SLOTS.length);
+    expect(input.safeParse(receipt(1_000)).success).toBe(true);
+    expect(input.safeParse(receipt(fullOrderLots)).success).toBe(true);
+    expect(input.safeParse(receipt(fullOrderLots + 1)).success).toBe(false);
   });
 
   it('rejects an oversized record ID', () => {

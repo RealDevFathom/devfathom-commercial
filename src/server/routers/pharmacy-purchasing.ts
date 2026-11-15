@@ -113,7 +113,9 @@ import {
   readReorderFacts,
   REORDER_DEFAULT_COVER_DAYS,
   REORDER_DEFAULT_WINDOW_DAYS,
+  REORDER_MAX_DRAFT_LINES,
 } from '@/lib/pharmacy/reorder-drafts';
+import { EXTRA_LOT_SLOTS } from '@/lib/pharmacy/pack-photo-receiving';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { denyByDefaultProcedure, router } from '../trpc';
@@ -139,12 +141,18 @@ import {
 
 const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
-// DEV-145: business-sized ceilings checked before any DB work. A requisition,
-// quote, order or return is one supplier document; a receipt may split each
-// ordered line across batches, and an allocation fans receipt lines out to branches.
+// DEV-145: hard ceilings checked before any DB work, each sized so the server's own
+// drafting and receiving flows can never exceed it.
+// A requisition, quote (lines of one requisition) or return is a hand-entered document.
 const MAX_DOCUMENT_LINES = 100;
-const MAX_RECEIPT_LINES = 200;
-const MAX_RECEIPT_ALLOCATIONS = 500;
+// An order may be confirmed straight from a reorder draft, which holds up to one line
+// per planned medicine.
+const MAX_PURCHASE_ORDER_LINES = REORDER_MAX_DRAFT_LINES;
+// A receipt is filed once per supplier invoice and may split every ordered line into
+// lots (one per batch, expiry or serialized pack slot) on the receiving form.
+const MAX_RECEIPT_LINES = MAX_PURCHASE_ORDER_LINES * (1 + EXTRA_LOT_SLOTS.length);
+// A central receipt is allocated in one call, each line split across destination branches.
+const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
 function domainError(error: unknown): never {
   if (error instanceof ControlledRestorationDenied) {
@@ -983,7 +991,7 @@ const purchasingRouter = router({
                 .strict()
             )
             .min(1)
-            .max(MAX_DOCUMENT_LINES),
+            .max(MAX_PURCHASE_ORDER_LINES),
         })
         .strict()
     )
@@ -1029,14 +1037,22 @@ const purchasingRouter = router({
         await assertOrderBranches(ctx, {
           requisitionBranchId: quote?.requisition?.branchId ?? null,
         });
-        for (const line of input.lines) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-        }
+        // DEV-145: one lookup per table, not two per line, so a full reorder draft
+        // costs the same two queries as a one-line order.
+        const medicineIds = [...new Set(input.lines.map((line) => line.medicineId))];
+        const packLevelIds = [...new Set(input.lines.map((line) => line.packLevelId))];
+        const [medicines, packLevels] = await Promise.all([
+          ctx.db.medicine.findMany({
+            where: { id: { in: medicineIds }, saleable: true },
+            select: { id: true },
+          }),
+          ctx.db.packLevel.findMany({
+            where: { id: { in: packLevelIds } },
+            select: { id: true },
+          }),
+        ]);
+        if (medicines.length !== medicineIds.length || packLevels.length !== packLevelIds.length)
+          throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         // Reject impossible money or quantity terms before they reach the table.
         landedCost({
           lines: input.lines,
@@ -2591,7 +2607,7 @@ const purchasingRouter = router({
                 .strict()
             )
             .min(1)
-            .max(MAX_DOCUMENT_LINES),
+            .max(MAX_PURCHASE_ORDER_LINES),
         })
         .strict()
     )
