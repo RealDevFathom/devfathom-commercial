@@ -1125,14 +1125,25 @@ function ScopedPharmacyCounterConsole({
   );
 
   const stageRow = useCallback((row: CounterSearchRow) => {
+    const label = counterLabelScanDecision(row);
+    if (label.kind === 'BLOCKED') {
+      // DEV-90: the labelled package cannot be sold. Nothing stays staged, so it
+      // cannot be billed against another batch; the operator searches again.
+      setActiveRow(null);
+      setQuantityText('');
+      setSaleUnit(null);
+      setLotOverride(null);
+      setNotice({ tone: 'danger', message: label.message });
+      return false;
+    }
     setActiveRow(row);
     setQuantityText('');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
     // DEV-90: a shelf sticker for a non-FEFO batch stages that batch as the override.
-    const label = counterLabelScanDecision(row);
     setLotOverride(
       label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
     );
+    return true;
   }, []);
 
   const ensureSale = useCallback(async () => {
@@ -1339,14 +1350,16 @@ function ScopedPharmacyCounterConsole({
           return;
         const row = result.rows[0]!;
         const label = counterLabelScanDecision(row);
-        if (label.kind === 'OVERRIDE' || label.kind === 'BLOCKED') {
-          // Never auto-add: the labelled batch needs a reason, or cannot be sold at all.
+        if (label.kind === 'BLOCKED') {
+          // Clears the selection and reports why the labelled package cannot be sold.
+          stageRow(row);
+          return;
+        }
+        if (label.kind === 'OVERRIDE') {
+          // Never auto-add: selling the labelled batch out of FEFO order needs a reason.
           stageRow(row);
           setQuantityText('1');
-          setNotice({
-            tone: label.kind === 'BLOCKED' ? 'danger' : 'warning',
-            message: label.message,
-          });
+          setNotice({ tone: 'warning', message: label.message });
           return;
         }
         // A shelf-label scan always restages, so no earlier batch override carries over.

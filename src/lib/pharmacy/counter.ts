@@ -405,9 +405,11 @@ export async function searchCounterCatalog(
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
     let labelLot: CounterLabelLot | null = null;
+    let labelLotRow: LotRow | null = null;
 
     for (const lot of medicineLots) {
       if (lot.id === labelLotId) {
+        labelLotRow = lot;
         labelLot = {
           inventoryLotId: lot.id,
           batchNumber: lot.batch.batchNumber,
@@ -441,8 +443,13 @@ export async function searchCounterCatalog(
       }
     }
 
+    // DEV-90: a sellable shelf-label lot is the one being sold, so its own pack
+    // conversion and price drive the sale units, even when it is not FEFO's lot.
+    const priced: LotRow | null =
+      labelLotRow && labelLot?.blockedBy === null ? labelLotRow : (best?.lot ?? null);
+
     const presentationId =
-      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
+      (priced && presentationByPackLevel.get(priced.packLevelId)) ??
       medicine.presentations[0]?.id ??
       null;
     if (!presentationId) continue;
@@ -451,13 +458,13 @@ export async function searchCounterCatalog(
       medicine.presentations[0]!;
 
     let saleUnits: SaleUnitOption[] = [];
-    if (best) {
+    if (priced) {
       const levels = packLevelsByPresentation.get(presentationId) ?? [];
       try {
         saleUnits = saleUnitOptions({
           packLevels: levels,
-          rootPackLevelId: best.lot.packLevelId,
-          unitsPerPack: best.lot.unitsPerPack,
+          rootPackLevelId: priced.packLevelId,
+          unitsPerPack: priced.unitsPerPack,
         });
       } catch {
         // A pack hierarchy that disagrees with the received lot cannot derive a
@@ -465,9 +472,9 @@ export async function searchCounterCatalog(
         // from, so the sealed pack and the loose unit stay sellable.
         try {
           saleUnits = lotSaleUnitOptions({
-            packLevelId: best.lot.packLevelId,
-            levelLabel: levels.find((level) => level.id === best!.lot.packLevelId)?.level ?? 'PACK',
-            unitsPerPack: best.lot.unitsPerPack,
+            packLevelId: priced.packLevelId,
+            levelLabel: levels.find((level) => level.id === priced!.packLevelId)?.level ?? 'PACK',
+            unitsPerPack: priced.unitsPerPack,
           });
         } catch {
           saleUnits = [];
@@ -477,20 +484,20 @@ export async function searchCounterCatalog(
 
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
-    const roundingIncrementMinor = best
+    const roundingIncrementMinor = priced
       ? mrpRoundingIncrementForLot(mrps, {
-          packLevelId: best.lot.packLevelId,
-          batchNumber: best.lot.batch.batchNumber,
+          packLevelId: priced.packLevelId,
+          batchNumber: priced.batch.batchNumber,
         })
       : 1;
 
-    const saleableUnits = best
+    const saleableUnits = priced
       ? saleUnits.map((option) => {
           const preview = previewSaleLine({
             option,
             quantity: 1,
-            printedMrpMinor: best!.lot.printedMrpMinor,
-            unitsPerPack: best!.lot.unitsPerPack,
+            printedMrpMinor: priced!.printedMrpMinor,
+            unitsPerPack: priced!.unitsPerPack,
             roundingIncrementMinor,
             availableUnits: onHandUnits,
           });
@@ -518,9 +525,9 @@ export async function searchCounterCatalog(
       route: presentation.route,
       matchedOn: matches.get(medicine.id) ?? 'NAME',
       recommendedLotId: best?.lot.id ?? null,
-      packLevelId: best?.lot.packLevelId ?? null,
-      unitsPerPack: best?.lot.unitsPerPack ?? null,
-      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
+      packLevelId: priced?.packLevelId ?? null,
+      unitsPerPack: priced?.unitsPerPack ?? null,
+      printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
       batchNumber: best?.lot.batch.batchNumber ?? null,
       nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,

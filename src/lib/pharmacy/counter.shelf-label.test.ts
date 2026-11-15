@@ -11,13 +11,21 @@ import { shelfLabelCode } from './shelf-label-code';
 const scope = { organizationId: 'org-a', branchId: 'branch-a' };
 const at = new Date('2026-11-15T06:00:00Z');
 
-function lot(id: string, labelNumber: number, expiresAt: string, state = 'ACTIVE') {
-  return {
-    id,
-    shelfLabelNumber: labelNumber,
+function lot(
+  id: string,
+  labelNumber: number,
+  expiresAt: string,
+  state = 'ACTIVE',
+  pack: { packLevelId: string; unitsPerPack: number; printedMrpMinor: number } = {
     packLevelId: 'pack-box',
     unitsPerPack: 10,
     printedMrpMinor: 1_000,
+  }
+) {
+  return {
+    id,
+    shelfLabelNumber: labelNumber,
+    ...pack,
     receivedAt: new Date('2026-01-01T00:00:00Z'),
     batch: { batchNumber: `B-${id}`, expiresAt: new Date(expiresAt), state, medicineId: 'med-a' },
   };
@@ -84,6 +92,14 @@ function counterDb(options: { lots: ReturnType<typeof lot>[]; registeredBarcode?
           unitsPerParent: 10,
           presentationId: 'p',
         },
+        // A smaller standalone pack of the same presentation: five units.
+        {
+          id: 'pack-five',
+          level: 'POUCH',
+          parentPackLevelId: null,
+          unitsPerParent: 5,
+          presentationId: 'p',
+        },
       ]),
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
@@ -137,6 +153,48 @@ describe('DEV-90 shelf sticker scan at the counter', () => {
       inventoryLotId: 'late',
       message: expect.stringContaining('batch B-late'),
     });
+  });
+
+  it('quotes and stages the labelled lot with its own pack conversion and price', async () => {
+    const pouch = lot('pouch', 10, '2028-01-01T00:00:00Z', 'ACTIVE', {
+      packLevelId: 'pack-five',
+      unitsPerPack: 5,
+      printedMrpMinor: 600,
+    });
+    const { rows } = await searchCounterCatalog(
+      counterDb({ lots: [early, pouch] }) as never,
+      scope,
+      { query: shelfLabelCode(10), at }
+    );
+    expect(rows[0]).toMatchObject({
+      recommendedLotId: 'early',
+      packLevelId: 'pack-five',
+      unitsPerPack: 5,
+      printedMrpMinor: 600,
+      labelLot: { inventoryLotId: 'pouch' },
+    });
+    expect(rows[0]!.saleUnits[0]).toEqual({
+      kind: 'PACK',
+      packLevelId: 'pack-five',
+      levelLabel: 'POUCH',
+      canonicalUnitsPerSaleUnit: 5,
+    });
+    expect(rows[0]!.saleableUnits[0]).toMatchObject({ kind: 'PACK', unitPriceMinor: 600 });
+  });
+
+  it('keeps quoting the FEFO lot when the labelled lot cannot be sold', async () => {
+    const pouch = lot('pouch', 10, '2028-01-01T00:00:00Z', 'RECALLED', {
+      packLevelId: 'pack-five',
+      unitsPerPack: 5,
+      printedMrpMinor: 600,
+    });
+    const { rows } = await searchCounterCatalog(
+      counterDb({ lots: [early, pouch] }) as never,
+      scope,
+      { query: shelfLabelCode(10), at }
+    );
+    expect(rows[0]).toMatchObject({ packLevelId: 'pack-box', unitsPerPack: 10 });
+    expect(rows[0]!.labelLot).toMatchObject({ blockedBy: 'RECALLED' });
   });
 
   it('sells straight through when the labelled lot is the FEFO lot', async () => {
