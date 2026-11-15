@@ -647,7 +647,7 @@ export default async function PharmacyReturnsPage({
                 required
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Received on"
                 name="receivedAt"
                 notice={notice}

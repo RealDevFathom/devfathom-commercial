@@ -53,6 +53,7 @@ function caller() {
       aggregate: mocks.paymentAggregate,
       create: mocks.paymentCreate,
     },
+    transaction: { create: vi.fn().mockResolvedValue({ id: 'transaction-1' }) },
     $queryRaw: mocks.queryRaw,
   };
   return financeRouter.createCaller({

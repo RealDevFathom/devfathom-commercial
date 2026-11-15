@@ -242,6 +242,105 @@ describe('opt-in pharmacy Owner / Operator access', () => {
   });
 });
 
+describe('mandatory resignation review constraints', () => {
+  const pending = {
+    type: 'Resignation',
+    userId: 'other-user',
+    status: 'PENDING',
+    targetRole: 'EMPLOYEE',
+  };
+  const grants = ['*', 'resignation:*', 'resignation:review'];
+
+  describe.each(['rolePermissions', 'overrides'] as const)('%s ALLOW', (source) => {
+    it.each(grants)(
+      '%s cannot bypass resource constraints for any reviewer role',
+      async (capability) => {
+        const db = authorizationDb({ [source]: [{ capability, effect: 'ALLOW' }] });
+        for (const role of ['ADMIN', 'HR', 'EMPLOYEE']) {
+          const subject = { ...employee, role };
+          // Persisted capabilities establish eligibility even without a static role grant.
+          await expect(can(subject, 'resignation:review', pending, { db })).resolves.toBe(true);
+          await expect(
+            can(subject, 'resignation:review', { ...pending, userId: subject.id }, { db })
+          ).resolves.toBe(false);
+          for (const status of ['APPROVED', 'DECLINED', 'WITHDRAWN']) {
+            await expect(
+              can(subject, 'resignation:review', { ...pending, status }, { db })
+            ).resolves.toBe(false);
+          }
+        }
+        await expect(
+          can(
+            { ...employee, role: 'HR' },
+            'resignation:review',
+            { ...pending, targetRole: 'ADMIN' },
+            { db }
+          )
+        ).resolves.toBe(false);
+        await expect(
+          can(
+            { ...employee, role: 'ADMIN' },
+            'resignation:review',
+            { ...pending, targetRole: 'ADMIN' },
+            { db }
+          )
+        ).resolves.toBe(true);
+      }
+    );
+  });
+
+  it('fails closed on absent or incomplete resources even with wildcard ALLOW', async () => {
+    const db = authorizationDb({ rolePermissions: [{ capability: '*', effect: 'ALLOW' }] });
+    const subject = { ...employee, role: 'ADMIN' };
+    const resources = [
+      undefined,
+      { type: 'Resignation' },
+      { ...pending, type: 'User' },
+      { ...pending, status: undefined },
+      { ...pending, userId: undefined },
+      { ...pending, userId: '' },
+      { ...pending, targetRole: undefined },
+      { ...pending, targetRole: '' },
+    ];
+    for (const resource of resources) {
+      await expect(can(subject, 'resignation:review', resource, { db })).resolves.toBe(false);
+    }
+  });
+
+  it.each(['ADMIN', 'HR', 'EMPLOYEE'])(
+    'preserves static eligibility and constraints for %s',
+    async (role) => {
+      const subject = { ...employee, role };
+      const db = authorizationDb({});
+      await expect(can(subject, 'resignation:review', pending, { db })).resolves.toBe(
+        role !== 'EMPLOYEE'
+      );
+      await expect(
+        can(subject, 'resignation:review', { ...pending, userId: subject.id }, { db })
+      ).resolves.toBe(false);
+      await expect(
+        can(subject, 'resignation:review', { ...pending, status: 'APPROVED' }, { db })
+      ).resolves.toBe(false);
+    }
+  );
+
+  it.each(grants)('preserves %s DENY precedence over valid reviews', async (capability) => {
+    const subject = { ...employee, role: 'ADMIN' };
+    for (const db of [
+      authorizationDb({
+        rolePermissions: [{ capability: '*', effect: 'ALLOW' }],
+        overrides: [{ capability, effect: 'DENY' }],
+      }),
+      authorizationDb({
+        rolePermissions: [{ capability, effect: 'DENY' }],
+        overrides: [{ capability: 'resignation:review', effect: 'ALLOW' }],
+      }),
+    ]) {
+      await expect(can(subject, 'resignation:review', pending, { db })).resolves.toBe(false);
+    }
+  });
+});
+
 describe('custom ABAC decisions', () => {
   const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
     roleTemplatesForVertical('PHARMACY')
@@ -437,7 +536,7 @@ describe('custom ABAC decisions', () => {
       'orders:void',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(49);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(50);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -517,6 +616,38 @@ describe('hospitality capability namespace', () => {
       await expect(
         can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })
       ).resolves.toBe(false);
+    }
+  });
+});
+
+describe('restaurant sign-in order-taking capability', () => {
+  it.each([
+    ['explicit grant', [{ capability: 'orders:take', effect: 'ALLOW' }], [], true],
+    ['owner wildcard', [{ capability: '*', effect: 'ALLOW' }], [], true],
+    [
+      'user deny overrides owner',
+      [{ capability: '*', effect: 'ALLOW' }],
+      [{ capability: 'orders:take', effect: 'DENY' }],
+      false,
+    ],
+    [
+      'role deny overrides user allow',
+      [{ capability: 'orders:take', effect: 'DENY' }],
+      [{ capability: 'orders:take', effect: 'ALLOW' }],
+      false,
+    ],
+    ['no grant', [], [], false],
+  ] as const)('%s', async (_name, rolePermissions, overrides, expected) => {
+    const db = authorizationDb({
+      rolePermissions: [...rolePermissions],
+      overrides: [...overrides],
+    });
+    expect(ALL_ACTIONS).toContain('orders:take');
+    expect(POLICIES['orders:take']).toEqual([]);
+    for (const role of ['ADMIN', 'EMPLOYEE']) {
+      await expect(can({ ...employee, role }, 'orders:take', undefined, { db })).resolves.toBe(
+        expected
+      );
     }
   });
 });

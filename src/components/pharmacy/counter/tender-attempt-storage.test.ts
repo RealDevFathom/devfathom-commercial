@@ -55,6 +55,27 @@ describe('original tender attempt storage', () => {
     persistTenderAttempt(attempt);
     expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
   });
+  it('DEV-713 retains a manual card reference and approval code, and rejects mixed evidence', () => {
+    const attempt = original();
+    attempt.input.type = 'CARD';
+    delete attempt.input.cashReceivedMinor;
+    attempt.input.providerRef = 'RRN123456';
+    attempt.input.approvalCode = 'A1B2C3';
+    attempt.draft.cashReceived = '';
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+    clearTenderAttempt(attempt);
+    for (const change of [
+      { approvalCode: undefined },
+      { payerName: 'Ayesha' },
+      { type: 'RAAST' as const, providerRef: '001234', payerName: 'Ayesha' },
+      { type: 'BANK_TRANSFER' as const },
+      { providerRef: '4242424242424242' },
+    ]) {
+      const mixed = { ...attempt, input: { ...attempt.input, ...change } };
+      expect(() => persistTenderAttempt(mixed)).toThrow();
+    }
+  });
   it('uses the final actual router tender input and outcome contract', () => {
     expectTypeOf<TenderAttemptInput>().toEqualTypeOf<
       inferRouterInputs<AppRouter>['pharmacySales']['tender']

@@ -1,5 +1,3 @@
-import { DefaultAzureCredential } from '@azure/identity';
-import { BlobServiceClient } from '@azure/storage-blob';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -52,13 +50,11 @@ function localUploadRoot(env: Readonly<Record<string, string | undefined>>): str
     return null;
   }
 }
-let blobService: BlobServiceClient | undefined;
 let s3Client: S3Client | undefined;
 
 export type StorageUnavailableReason = 'disabled' | 'invalid_configuration';
 export type StorageAvailability =
   | { available: true; adapter: 'local'; root: string }
-  | { available: true; adapter: 'azure'; account: string; container: string }
   | { available: true; adapter: 's3'; bucket: string; region: string }
   | { available: false; reason: StorageUnavailableReason };
 
@@ -82,11 +78,6 @@ export function getStorageAvailability(
     return root
       ? { available: true, adapter: 'local', root }
       : { available: false, reason: 'invalid_configuration' };
-  }
-  if (adapter === 'azure') {
-    const account = env.AZURE_STORAGE_ACCOUNT_NAME?.trim();
-    const container = env.AZURE_STORAGE_CONTAINER?.trim();
-    if (account && container) return { available: true, adapter, account, container };
   }
   if (adapter === 's3') {
     // Credentials come from the runtime (an ECS task role); only the bucket and
@@ -118,7 +109,7 @@ type ObjectStore = {
 
 /**
  * A missing S3 object, in the shape the readers of getUpload already test for:
- * the local adapter's `ENOENT`, Azure's `BlobNotFound`, or any `statusCode` of 404.
+ * the local adapter's `ENOENT` or any `statusCode` of 404.
  * The S3 SDK's own error carries neither a `code` nor a `statusCode`, only its
  * `name` and `$metadata.httpStatusCode`, so without this a missing prescription
  * image would read as a server failure instead of "unavailable".
@@ -146,30 +137,7 @@ function isMissingS3Object(error: unknown): boolean {
   return name === 'NoSuchKey' || name === 'NotFound' || $metadata?.httpStatusCode === 404;
 }
 
-let blobAccount: string | undefined;
 let s3Region: string | undefined;
-
-function azureStore(account: string, name: string): ObjectStore {
-  if (!blobService || blobAccount !== account) {
-    blobService = new BlobServiceClient(
-      `https://${account}.blob.core.windows.net`,
-      new DefaultAzureCredential()
-    );
-    blobAccount = account;
-  }
-  const blobs = blobService.getContainerClient(name);
-  return {
-    async put(key, data, contentType) {
-      await blobs.getBlockBlobClient(key).uploadData(data, {
-        blobHTTPHeaders: { blobContentType: contentType },
-      });
-    },
-    get: (key) => blobs.getBlockBlobClient(key).downloadToBuffer(),
-    async remove(key) {
-      await blobs.getBlockBlobClient(key).deleteIfExists();
-    },
-  };
-}
 
 function s3Store(bucket: string, region: string): ObjectStore {
   if (!s3Client || s3Region !== region) {
@@ -195,7 +163,7 @@ function s3Store(bucket: string, region: string): ObjectStore {
       return Buffer.from(await response.Body.transformToByteArray());
     },
     async remove(key) {
-      // S3 answers a delete of a missing key with success, like deleteIfExists.
+      // S3 answers a delete of a missing key with success.
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
     },
   };
@@ -204,8 +172,7 @@ function s3Store(bucket: string, region: string): ObjectStore {
 function objectStore(): ObjectStore | string {
   const availability = assertStorageAvailable();
   if (availability.adapter === 'local') return availability.root;
-  if (availability.adapter === 's3') return s3Store(availability.bucket, availability.region);
-  return azureStore(availability.account, availability.container);
+  return s3Store(availability.bucket, availability.region);
 }
 
 export async function putUpload(

@@ -92,7 +92,7 @@ let dbA: import('@/lib/tenancy/scoped-db').ScopedDb;
 let dbB: import('@/lib/tenancy/scoped-db').ScopedDb;
 
 /**
- * An in-memory object store standing in for Azure Blob / the local disk. Keeps
+ * An in-memory object store standing in for S3 / the local disk. Keeps
  * the battery hermetic while still exercising the real retention CALLS — what is
  * being proven is that the domain deletes when it should, not that `fs` works.
  */
