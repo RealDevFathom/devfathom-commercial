@@ -860,6 +860,8 @@ describe('DEM-03 restock interest', () => {
     const phone = '03001234567';
     const created: Array<Record<string, unknown>> = [];
     const db = {
+      // The restock tables bind the branch for row-level security first.
+      $queryRaw: async () => [],
       pharmacyInventoryLot: {
         findFirst: async () => ({
           id: 'lot-a',
@@ -872,6 +874,9 @@ describe('DEM-03 restock interest', () => {
         findMany: async () => [
           {
             id: 'interest-a',
+            status: 'OPEN',
+            // Waiting inside the back-in-stock window, as the stored row would be.
+            createdAt: new Date('2026-05-31T23:00:00.000Z'),
             patientId: 'patient-a',
             channel: 'WHATSAPP',
             reserveOnArrival: false,
