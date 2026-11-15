@@ -47,6 +47,7 @@ import {
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
+import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
   CounterTenderPanel,
@@ -2025,16 +2026,7 @@ function ScopedPharmacyCounterConsole({
   );
 
   if (branchesQuery.isLoading) {
-    return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
-          <p className="text-sm text-text-muted" role="status">
-            Loading branches…
-          </p>
-        </SectionCard>
-      </div>
-    );
+    return <CounterSkeleton />;
   }
 
   if (branchesQuery.isError) {
