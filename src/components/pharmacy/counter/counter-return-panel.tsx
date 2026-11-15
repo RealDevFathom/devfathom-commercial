@@ -437,8 +437,9 @@ export function ReturnForm({
         </p>
       )}
       {message && <p role="status">{message}</p>}
-      {attempt?.kind === 'refund' && managerPinField}
-      {attempt && (
+      {/* A saved refund stays unrecoverable for a user who no longer holds refund access. */}
+      {attempt?.kind === 'refund' && refundAuthorized && managerPinField}
+      {attempt && (attempt.kind === 'return' || refundAuthorized) && (
         <Button
           className="h-11"
           onClick={() =>
