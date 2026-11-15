@@ -137,7 +137,7 @@ export async function ledgerCurrencies(
   return rows.map((row) => row.currency);
 }
 
-export type MarginDimension = 'line' | 'batch' | 'product' | 'branch';
+export type MarginDimension = 'line' | 'batch' | 'product' | 'branch' | 'productClass';
 
 export type MarginRow = {
   key: string | null;
@@ -148,7 +148,8 @@ export type MarginRow = {
 };
 
 /**
- * FIN-03: gross margin by sale line, manufacturing batch, product or branch.
+ * FIN-03: gross margin by sale line, manufacturing batch, product, branch or product class
+ * (#718: medicine vs non-drug retail).
  *
  * Gross margin is `revenue - discount - cost`: revenue is recognised gross and
  * the discount is subtracted explicitly, so a report can always say how much of
@@ -177,7 +178,15 @@ export function grossMarginQuery(
     batch: Prisma.sql`lot."manufacturingBatchId"`,
     product: Prisma.sql`line."productId"`,
     branch: Prisma.sql`line."branchId"`,
+    // #718: medicine vs non-drug retail margin, derived from the existing FRONT_SHOP family.
+    // A leg with no catalogue product stays unclassified (NULL) rather than guessed.
+    productClass: Prisma.sql`CASE WHEN product."id" IS NULL THEN NULL WHEN product."productFamily" = 'FRONT_SHOP' THEN 'NON_DRUG_RETAIL' ELSE 'MEDICINE' END`,
   }[input.by];
+  const productJoin =
+    input.by === 'productClass'
+      ? Prisma.sql`LEFT JOIN "pharmacy_medicines" product
+          ON product."organizationId" = line."organizationId" AND product."id" = line."productId"`
+      : Prisma.empty;
 
   return Prisma.sql`
     WITH signed AS (
@@ -189,6 +198,7 @@ export function grossMarginQuery(
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
         LEFT JOIN "pharmacy_inventory_lots" lot
           ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
+        ${productJoin}
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}

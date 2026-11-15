@@ -30,6 +30,10 @@ import {
   approveTransfer,
   closeRecall,
   createCount,
+  CYCLE_COUNT_DEFAULT_SIZE,
+  CYCLE_COUNT_MAX_SIZE,
+  CYCLE_COUNT_REASON_MAX,
+  dailyCycleCountList,
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
@@ -77,6 +81,11 @@ import {
 } from '@/lib/pharmacy/stock-signals-operations';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  SOLO_OWNER_POLICY,
+  soloOwnerApprovalAllowed,
+  verifyPurchaseApprover,
+} from '@/lib/pharmacy/purchase-approval';
+import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
@@ -109,6 +118,8 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 // Storage zones and their cold-chain readings belong to whoever runs the stock
 // (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
+const SOLO_COUNT_APPROVAL_REFUSED =
+  'Only the pharmacy owner who works alone can approve their own count, with their current PIN.';
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -1351,6 +1362,33 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-682: today's cycle-count list — fast movers and high-value positions,
+   * ranked in SQL. It is a read; nothing is saved until a person submits the
+   * counted quantities (`createCount`) and confirms the variance (`approveCount`).
+   */
+  dailyCycleCountList: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          size: z.number().int().min(1).max(CYCLE_COUNT_MAX_SIZE).default(CYCLE_COUNT_DEFAULT_SIZE),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await dailyCycleCountList(
+          ctx.db,
+          await admittedScopeFor(ctx, input.branchId),
+          new Date(),
+          input.size
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
   approveCount: inventoryControl
     .input(
       z
@@ -1358,19 +1396,76 @@ export const pharmacyInventoryRouter = router({
           branchId,
           countId: z.string().min(1),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+          // DEV-682: required (server-side) whenever the count has a variance.
+          varianceReason: z.string().trim().max(CYCLE_COUNT_REASON_MAX).optional(),
+          // DEV-682 solo-pharmacy rule: a sole owner co-authorizes their own
+          // above-threshold variance with a fresh PIN instead of a second person.
+          soloPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          approveCount(
-            txDb(tx),
-            await admittedScopeFor(ctx, input.branchId),
-            input.countId,
-            input.idempotencyKeyPrefix
+        const scope = await admittedScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (input.soloPin === undefined)
+            return approveCount(
+              db,
+              scope,
+              input.countId,
+              input.idempotencyKeyPrefix,
+              input.varianceReason
+            );
+          if (
+            !(await soloOwnerApprovalAllowed(
+              db,
+              scope.organizationId,
+              scope.actorId,
+              scope.branchId
+            ))
           )
-        );
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_COUNT_APPROVAL_REFUSED });
+          const pin = await verifyPurchaseApprover(db, {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            approverId: scope.actorId,
+            pin: input.soloPin,
+          });
+          if ('blocked' in pin)
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_COUNT_APPROVAL_REFUSED });
+          const approved = await approveCount(
+            db,
+            scope,
+            input.countId,
+            input.idempotencyKeyPrefix,
+            input.varianceReason,
+            { soloSelfApproval: true }
+          );
+          await db.auditLog.create({
+            data: {
+              organizationId: scope.organizationId,
+              actorId: scope.actorId,
+              actorType: 'USER',
+              source: 'TRPC',
+              category: 'PHARMACY_INVENTORY',
+              operation: 'OTHER',
+              action: 'pharmacy.inventoryCountSoloApproval',
+              targetType: 'PharmacyInventoryCount',
+              targetId: input.countId,
+              metadata: {
+                branchId: scope.branchId,
+                approverId: scope.actorId,
+                pinVerified: true,
+                policy: SOLO_OWNER_POLICY,
+              },
+            },
+          });
+          return approved;
+        });
       } catch (error) {
         domainError(error);
       }

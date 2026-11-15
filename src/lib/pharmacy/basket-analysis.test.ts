@@ -96,6 +96,18 @@ describe('pharmacy basket bundle proposals', () => {
     expect(result).toEqual([]);
   });
 
+  it('never proposes an OTC medicine for a promotional bundle (#718)', () => {
+    const result = mineBundleProposals(
+      [
+        { id: 's1', productIds: ['soap', 'otc'] },
+        { id: 's2', productIds: ['soap', 'otc'] },
+      ],
+      products,
+      { ...config, minimumSupport: 0, minimumLift: 0 }
+    );
+    expect(result).toEqual([]);
+  });
+
   it('uses configurable thresholds and limits rather than embedded research estimates', () => {
     const fixtures = [
       { id: 's1', productIds: ['soap', 'cream'] },

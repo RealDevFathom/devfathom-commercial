@@ -2,7 +2,10 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
-import { processDueWhatsAppRefillReminders } from '@/lib/pharmacy/whatsapp/refill-reminders';
+import {
+  processDueSubscriptionRefillReminders,
+  processDueWhatsAppRefillReminders,
+} from '@/lib/pharmacy/whatsapp/refill-reminders';
 
 /**
  * PH-B3 — scheduled WhatsApp refill-reminder job. Called by the platform
@@ -26,5 +29,8 @@ export async function POST(request: Request) {
   }
   const input = (await request.json().catch(() => ({}))) as { limit?: unknown };
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) ? input.limit : 100;
-  return NextResponse.json(await processDueWhatsAppRefillReminders({ limit }));
+  const captures = await processDueWhatsAppRefillReminders({ limit });
+  // DEV-73: refill-subscription cycles use the same neutral template and consent gates.
+  const subscriptions = await processDueSubscriptionRefillReminders({ limit });
+  return NextResponse.json({ ...captures, subscriptions });
 }

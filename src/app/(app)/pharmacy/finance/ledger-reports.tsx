@@ -15,6 +15,8 @@ import {
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { EMPTY_LEDGER_LABELS, type LedgerLabels } from '@/lib/pharmacy/finance-labels';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatUtcInstant } from '@/lib/utc-instant';
+import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
@@ -28,7 +30,11 @@ type TrueProfit = Awaited<ReturnType<TrueProfitCaller['trueProfit']>>;
 type Report = Valuation | Margin | Leakage | TrueProfit;
 type Group = Margin['by'];
 const day = 86_400_000;
-const groups: Group[] = ['line', 'batch', 'product', 'branch'];
+const groups: Group[] = ['line', 'batch', 'product', 'branch', 'productClass'];
+const classLabels: Record<string, string> = {
+  MEDICINE: 'Medicine',
+  NON_DRUG_RETAIL: 'Non-drug retail',
+};
 type ProfitGroup = TrueProfit['by'];
 const profitGroups: ProfitGroup[] = ['item', 'category', 'hour', 'staff'];
 const profitGroupLabels: Record<ProfitGroup, string> = {
@@ -43,6 +49,7 @@ const groupLabels: Record<Group, string> = {
   batch: 'Batch',
   product: 'Medicine',
   branch: 'Branch',
+  productClass: 'Medicine vs non-drug',
 };
 
 /** Name for a ledger dimension id; raw ids are never the primary label. */
@@ -99,12 +106,16 @@ function Metadata({ report, branchName }: { report: Report; branchName: string }
       </p>
       <p>{report.definition}</p>
       <p>
-        Built only from entries posted to the books (source: {report.source}); completeness{' '}
+        Built only from entries posted to the books (source:{' '}
+        {plainReportSource(report.source) ?? 'posted accounts'}); completeness{' '}
         {report.coverage.completeness}. Refunds count only once they are posted as reversals.
       </p>
       <p>
-        Retrieved: {report.freshness.retrievedAt.toISOString()}. Latest posting:{' '}
-        {report.freshness.latestPostingAt ?? 'unknown'}.
+        Retrieved: {formatUtcInstant(report.freshness.retrievedAt)}. Latest posting:{' '}
+        {report.freshness.latestPostingAt
+          ? formatUtcInstant(report.freshness.latestPostingAt)
+          : 'unknown'}
+        .
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>
@@ -223,6 +234,8 @@ function marginKeyLabel(report: Margin, key: string | null) {
     return key ? named(labels.batches, key) : 'Refunds not yet matched to a batch';
   if (report.by === 'product') return named(labels.medicines, key);
   if (report.by === 'branch') return named(labels.branches, key);
+  // #718: medicine vs non-drug retail margin.
+  if (report.by === 'productClass') return key ? (classLabels[key] ?? key) : unknown;
   return key ? `Sale line ref ${key}` : unknown;
 }
 

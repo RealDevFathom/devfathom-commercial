@@ -48,6 +48,9 @@ import { PharmacyJournalVoucherError } from '@/lib/pharmacy/accounts/general-jou
 import { moduleForPath, moduleForProcedure } from '@/lib/module-catalog';
 import type { TRPCContext } from '../trpc';
 import { pharmacyGeneralJournalRouter } from './pharmacy-general-journal';
+// Loaded with the file (as restaurant-growth.test.ts does) so building the whole
+// root router is not timed against a single test's 5 s budget under a loaded run.
+import { appRouter } from './_app';
 
 const TX = { tx: true };
 
@@ -126,8 +129,7 @@ describe('pharmacyGeneralJournal router — registration', () => {
     expect(moduleForPath('/pharmacy/accounts/general-journal')).toBe('pharmacy-finance');
   });
 
-  it('is mounted on the root router', async () => {
-    const { appRouter } = await import('./_app');
+  it('is mounted on the root router', () => {
     expect(Object.keys(appRouter._def.procedures)).toEqual(
       expect.arrayContaining([
         'pharmacyGeneralJournal.post',

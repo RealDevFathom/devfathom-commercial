@@ -59,6 +59,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
@@ -346,10 +347,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-counter',
     pharmacyCapabilities: ['pharmacy:counter'],
   },
+  // DEV-240: stock control belongs to inventory staff and managers; a cashier or
+  // pharmacist without either grant is not offered it.
   {
     label: 'Inventory',
     href: '/pharmacy/inventory',
     icon: PackageSearch,
+    adminOnly: true,
+    memberCapabilities: ['pharmacy:inventory', 'pharmacy:manage'],
     group: 'Pharmacy',
   },
   {
@@ -683,18 +688,9 @@ export function useVisibleNavigation() {
     entitlements.vertical === 'PHARMACY' &&
     Boolean(session?.user.id) &&
     isModuleGranted('pharmacy-core', entitlements.enabledModules);
-  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: pharmacyRail,
-    // A transient failure must not leave the rail without entries the member
-    // holds; only an authorization refusal is final.
-    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
-    staleTime: 30_000,
-  });
-  // A cached answer for another signed-in identity cannot expose an entry.
-  const railCapabilities =
-    pharmacyRail && railAccess.data && railAccess.data.userId === session?.user.id
-      ? railAccess.data.capabilities
-      : [];
+  // DEV-240: keyed by member and tenant, so a switch never reuses another
+  // identity's rail.
+  const { capabilities: railCapabilities } = usePharmacyNavigationAccess(pharmacyRail);
   const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
     enabled: safetyModule,
     retry: false,

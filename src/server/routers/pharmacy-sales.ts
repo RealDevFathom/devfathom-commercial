@@ -1,4 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
 import {
   authorizeCounterApproval,
@@ -30,6 +31,11 @@ import {
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  readKhataReminderSettings,
+  saveKhataReminderSettings,
+} from '@/lib/pharmacy/khata-reminder-branch-settings';
+import { khataReminderSettingsSchema } from '@/lib/pharmacy/khata-reminder-settings';
+import {
   executeSandboxPayment,
   sandboxPaymentInput,
   PharmacyPaymentSandboxError,
@@ -53,6 +59,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
@@ -158,10 +165,20 @@ import {
   authenticateRefundPin,
   REFUND_FORBIDDEN,
   REFUND_PIN_POLICY,
+  RETURN_FORBIDDEN,
+  RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
 import { managerBranchIds } from '../pharmacy-manager-branches';
+import {
+  LOST_SALE_OUTCOMES,
+  LostSalesError,
+  lostSalesSummary,
+  setDemandOutcome,
+  settleLostSales,
+  updateLostSalesSettings,
+} from '@/lib/pharmacy/lost-sales';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -228,6 +245,13 @@ const demandReason = z.enum([
   'SEARCH_FAILURE',
   'SERVICE_FAILURE',
 ]);
+const lostSaleOutcome = z.enum(LOST_SALE_OUTCOMES);
+/** DEV-81: optional notify-when-back phone; digits with an optional leading +. */
+const notifyPhone = z
+  .string()
+  .trim()
+  .max(20)
+  .regex(/^\+?[\d\s-]{10,19}$/);
 const txDb = (tx: unknown) => tx as ScopedDb;
 
 async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
@@ -283,6 +307,33 @@ async function marginScopeFor(
 }
 
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
+/** #727: the online counter prices each line against the branch's live promotions. */
+const COUNTER_LINE_PRICING = { applyCounterPromotions: true } as const;
+
+/**
+ * #727: promotions are managed by a `pharmacy:manage` holder (capability checked by the
+ * procedure) for a branch they are assigned to; an organization ADMIN may use any branch.
+ */
+async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  if (ctx.organization?.vertical !== 'PHARMACY')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy workspace required.' });
+  const user = ctx.session!.user;
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (assignment?.branchId !== branch)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return scope;
+}
 type CounterLineRequest = Omit<
   SaleLineInput,
   'override' | 'approvedByUserId' | 'approvalPolicy'
@@ -398,6 +449,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof LostSalesError)
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CONSENT_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
   if (error instanceof BranchOperationDeniedError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
@@ -920,6 +981,31 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
+  // DEV-76: the owner sets each branch's khata reminder cadence and balance floor.
+  khataReminderSettings: adminProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) =>
+      readKhataReminderSettings(ctx.db, await branchScopeOrForbidden(ctx, input.branchId))
+    ),
+  saveKhataReminderSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: khataReminderSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, khataReminderSettings: input.settings },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -1599,6 +1685,14 @@ export const pharmacySalesRouter = router({
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-97: only someone who takes payment opens a drawer. A pharmacist without
+        // `pharmacy:counter` builds the bill and hands it to counter staff, whose
+        // tender keeps its own capability and drawer checks.
+        const takesPayment =
+          !input.quotation &&
+          (await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+            db: ctx.db,
+          }));
         // createSale enforces the persisted regulatory gate in this transaction.
         // DEV-725: opening the drawer is the first step of the shift. A counter
         // bill is never started on a device with no OPEN drawer, so the cashier
@@ -1607,7 +1701,7 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
-            if (input.quotation) return;
+            if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
             await lockOpenPharmacyDrawer(db, scope, input.deviceId);
           });
@@ -1680,7 +1774,14 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      annotateAudit(ctx, { skipInput: true });
+      // The input stays out of the audit row (it can carry a controlled PIN), but
+      // the bill it targeted is named so a refused add can be traced (DEV-712).
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId },
+      });
       // PH-A4 (F10): a batch taken out of FEFO order is a safety decision, so its
       // audit row is labelled as one — refused attempts included, since the
       // label is set before the domain runs. The override row itself is written
@@ -1726,7 +1827,7 @@ export const pharmacySalesRouter = router({
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             const { prescription } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput);
+            if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
@@ -1742,7 +1843,7 @@ export const pharmacySalesRouter = router({
               presentationId: input.presentationId,
               units,
             });
-            const result = await addSaleLine(db, scope, lineInput);
+            const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
@@ -1893,7 +1994,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, lineInput);
+            const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1992,7 +2093,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, lineInput);
+          const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -2188,15 +2289,39 @@ export const pharmacySalesRouter = router({
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
+          // DEV-621: the signed-in manager's or owner's own PIN, re-entered for every return.
+          managerPin: z.string().regex(/^\d{4,8}$/),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-621: a return restocks stock and posts the refund liability, so a cashier
+        // alone cannot record one. A manager or owner (a solo owner included) re-enters
+        // their own PIN, exactly as for refundTender.
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
+        // The PIN never reaches the return's idempotency payload.
+        const { managerPin, ...line } = input;
+        // An independent transaction, so a refused PIN commits its lockout strike.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.returnLine',
+        });
+        annotateAudit(ctx, {
+          metadata: {
+            policy: REFUND_PIN_POLICY,
+            approverId: scope.actorId,
+            pinVerified: 'verified' in pin,
+          },
+        });
+        if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), scope, input);
+            return await returnSaleLine(txDb(tx), scope, line);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };
@@ -2226,12 +2351,99 @@ export const pharmacySalesRouter = router({
           estimatedMarginMinor: z.number().int().optional(),
           customerId: z.string().min(1).optional(),
           consentRecorded: z.boolean().optional(),
+          // DEV-81 lost-sales capture. Price, visit and loss are server-derived.
+          terminalId: z.string().trim().min(1).max(128).optional(),
+          requestedQty: z.number().int().positive().optional(),
+          outcome: lostSaleOutcome.optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: notifyPhone.optional(),
+          freeText: z.string().trim().max(500).optional(),
+          matchedProductId: z.string().min(1).optional(),
+          matchConfidence: z.number().min(0).max(1).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await captureDemand(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const { branchId: branch, ...demand } = input;
+        return await captureDemand(ctx.db, await scopeFor(ctx, branch), demand);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: one tap on a counter outcome chip. Optional; never gates tender. */
+  setDemandOutcome: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          demandId: z.string().min(1),
+          outcome: lostSaleOutcome,
+          substituteProductId: z.string().min(1).optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: notifyPhone.optional(),
+          freeText: z.string().trim().max(500).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { branchId: branch, ...outcome } = input;
+        return await setDemandOutcome(ctx.db, await scopeFor(ctx, branch), outcome);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates. */
+  settleLostSales: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await settleLostSales(ctx.db, await scopeFor(ctx, input.branchId));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: estimated lost sales by visit; a manager or owner view. */
+  lostSalesSummary: protectedProcedure
+    .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
+    .query(async ({ ctx, input }) =>
+      lostSalesSummary(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.from,
+        input.to
+      )
+    ),
+  /**
+   * DEV-81: the branch's estimate parameters. The 0.43 default is an
+   * illustrative grocery-study figure, so a manager or owner (a solo owner
+   * holds `pharmacy:manage`) may tune it; every change is audited.
+   */
+  updateLostSalesSettings: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          unknownLossProbability: z.number().min(0).max(1).optional(),
+          measuredRateMinEvents: z.number().int().min(1).max(100_000).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+      try {
+        const { branchId: branch, ...settings } = input;
+        const result = await updateLostSalesSettings(ctx.db, scope, settings);
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          action: 'lost_sales_settings_updated',
+          targetType: 'PharmacyBranch',
+          targetId: branch,
+          description: 'Lost-sales estimate parameters changed.',
+          metadata: { branchId: branch, ...settings },
+        });
+        return result;
       } catch (error) {
         fail(error);
       }
@@ -2309,6 +2521,90 @@ export const pharmacySalesRouter = router({
    * #730: rule-based complementary-item suggestions for the bill. Read-only;
    * never suggests Rx-only, controlled, restricted or high-alert items.
    */
+  /** #727: every promotion of a branch, newest first, including disabled ones. */
+  promotions: capabilityProcedure('pharmacy:manage')
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await promotionScope(ctx, input.branchId);
+      return ctx.db.pharmacyPromotion.findMany({
+        where: { organizationId: scope.organizationId, branchId: scope.branchId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        take: 200,
+      });
+    }),
+  /**
+   * #727: publish a dated promotion. The creating manager authorizes every discount it
+   * grants, so it is recorded as the line approver. A medicine target must be saleable and
+   * non-regulated; the counter also never applies a promotion to an Rx, restricted or
+   * controlled medicine.
+   */
+  createPromotion: capabilityProcedure('pharmacy:manage')
+    .input(pharmacyPromotionInput)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await promotionScope(ctx, input.branchId);
+      if (input.medicineId) {
+        const medicine = await ctx.db.medicine.findFirst({
+          where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
+          select: { rx: true, restricted: true, controlled: true },
+        });
+        if (!medicine || medicine.rx || medicine.restricted || medicine.controlled)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Choose a saleable medicine that is not Rx, restricted or controlled.',
+          });
+      }
+      annotateAudit(ctx, {
+        action: 'pharmacy_promotion_created',
+        targetType: 'PharmacyPromotion',
+        metadata: {
+          branchId: scope.branchId,
+          medicineId: input.medicineId ?? null,
+          effectiveFrom: input.effectiveFrom.toISOString(),
+          effectiveTo: input.effectiveTo.toISOString(),
+          benefitBasisPoints: input.benefitBasisPoints ?? null,
+          benefitMinor: input.benefitMinor ?? null,
+        },
+      });
+      const promotion = await ctx.db.pharmacyPromotion.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          name: input.name,
+          medicineId: input.medicineId ?? null,
+          effectiveFrom: input.effectiveFrom,
+          effectiveTo: input.effectiveTo,
+          benefitBasisPoints: input.benefitBasisPoints ?? null,
+          benefitMinor: input.benefitMinor ?? null,
+          priority: input.priority,
+          createdByUserId: scope.actorId,
+        },
+      });
+      annotateAudit(ctx, { targetId: promotion.id });
+      return promotion;
+    }),
+  /** #727: one-way disable. Lines already priced keep their discount and receipt name. */
+  disablePromotion: capabilityProcedure('pharmacy:manage')
+    .input(z.object({ branchId, promotionId: z.string().trim().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await promotionScope(ctx, input.branchId);
+      annotateAudit(ctx, {
+        action: 'pharmacy_promotion_disabled',
+        targetType: 'PharmacyPromotion',
+        targetId: input.promotionId,
+      });
+      const disabled = await ctx.db.pharmacyPromotion.updateMany({
+        where: {
+          id: input.promotionId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+        },
+        data: { active: false, disabledAt: new Date(), disabledByUserId: scope.actorId },
+      });
+      if (disabled.count !== 1)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Active promotion not found.' });
+      return { promotionId: input.promotionId, active: false };
+    }),
   upsellSuggestions: protectedProcedure
     .input(
       z
@@ -2496,6 +2792,18 @@ export const pharmacySalesRouter = router({
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
+  /**
+   * DEV-97: whether the counter offers the drawer and payment controls. Presentation
+   * only: openDrawer and tender keep their own `pharmacy:counter` checks.
+   */
+  settlementAccess: protectedProcedure.query(async ({ ctx }) => ({
+    userId: ctx.session.user.id,
+    organizationId: ctx.session.user.organizationId,
+    authorized: await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+    }),
+  })),
+
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
@@ -2643,6 +2951,22 @@ export const pharmacySalesRouter = router({
           },
         ];
       });
+    }),
+
+  /**
+   * DEV-623: the branch's unpaid OPEN and HELD bills. A bill lost to a reload or
+   * another browser keeps its stock allocated, so the counter lists them here to
+   * resume or void. The same gate as `counterCart` and `transition`.
+   */
+  openBills: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await listOpenBills(ctx.db, scope);
+      } catch (error) {
+        fail(error);
+      }
     }),
 
   /** The open bill with the FEFO allocation each line actually drew (POS-03). */

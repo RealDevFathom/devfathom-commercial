@@ -34,9 +34,11 @@ const priorCatalogDigests = {
   // DEV-509 (#1071): the procurement, dispensing, safety and CRM module route
   // prefixes now name existing pages; the hashed data differs only by those four.
   // DEV-519 (#1082): the Finance role template also grants reports:operational.
+  // DEV-622 (#1241): the opt-in "Pharmacist and cashier" role template (with its
+  // description); no existing template changes.
   // DEV-505 (#1277): pharmacy:inventory on the Manager template; the hashed data
   // differs only by that one grant.
-  PHARMACY: 'd4b624df014130820d3e3d68af5b29e529cf3ba47d6b802c503804ccf6747e45',
+  PHARMACY: 'f594a3b045d556315d79842a8499ee27238b33688bde0d86af94d85a929b2acd',
 };
 
 const property = {

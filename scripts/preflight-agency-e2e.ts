@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import pg from 'pg';
 
-import { resolveAgencyE2eDatabaseUrl } from './agency-e2e-environment.js';
+import { agencyE2eEnvironment } from './agency-e2e-environment.js';
 
 async function main() {
-  const databaseUrl = resolveAgencyE2eDatabaseUrl();
+  const databaseUrl = agencyE2eEnvironment().DATABASE_URL!;
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
   try {
     const result = await pool.query<{

@@ -2,9 +2,10 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
-import { pointsForNetPaid } from '@/lib/commerce/loyalty-arithmetic';
+import { earnedPointsFor, pointsForNetPaid } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockCustomerConsent } from './consent-writer';
+import { khataEarnRetained } from './loyalty-khata-earn';
 import type { LedgerScope } from './stock-ledger';
 
 /** Internal refund transaction only. No provider calls or stock-return accrual. */
@@ -54,9 +55,25 @@ export async function reverseRefundedEarnedPoints(
   const earn = await db.pharmacyLoyaltyPointsEntry.findFirst({
     where: { ...binding, kind: 'EARN' },
   });
+  // DEV-746: a versioned sale never earned on its CREDIT tender; that money earns, and is
+  // reversed, per collection. Sales from before versioning keep their original reversal.
+  const legacy = Boolean(earn) && !earn!.programVersionId;
+  if (refund.originalTender.type === 'CREDIT' && !legacy)
+    return reverseKhataEarnedPoints(db, scope, refund, binding, key);
   if (!earn) return null;
+  const rule = earn.programVersionId
+    ? await db.pharmacyLoyaltyProgramVersion.findFirst({
+        where: { organizationId: scope.organizationId, id: earn.programVersionId },
+      })
+    : null;
+  const pointsFor = (netPaidMinor: number) =>
+    rule ? earnedPointsFor(netPaidMinor, rule) : pointsForNetPaid(netPaidMinor);
   // Stops the operator's refund and names who must look, so a deliberate TRPCError.
-  if (earn.netPaidMinor === null || earn.points !== pointsForNetPaid(earn.netPaidMinor))
+  if (
+    earn.netPaidMinor === null ||
+    (earn.programVersionId && !rule) ||
+    earn.points !== pointsFor(earn.netPaidMinor)
+  )
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
       message: 'Earn basis requires accounting review.',
@@ -67,17 +84,19 @@ export async function reverseRefundedEarnedPoints(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         saleId: refund.saleId,
-        originalTender: { type: { not: 'LOYALTY' } },
+        originalTender: { type: legacy ? { not: 'LOYALTY' } : { notIn: ['LOYALTY', 'CREDIT'] } },
       },
       _sum: { amountMinor: true },
     }),
     db.pharmacyLoyaltyPointsEntry.aggregate({
-      where: { ...binding, kind: 'EARN_REVERSAL' },
+      where: legacy
+        ? { ...binding, kind: 'EARN_REVERSAL' }
+        : { ...binding, kind: 'EARN_REVERSAL', tender: { type: { not: 'CREDIT' } } },
       _sum: { points: true },
     }),
   ]);
   const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
-  const target = earn.points - pointsForNetPaid(netPaidMinor);
+  const target = earn.points - pointsFor(netPaidMinor);
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -90,6 +109,72 @@ export async function reverseRefundedEarnedPoints(
       refundId: refund.id,
       actorId: scope.actorId,
       idempotencyKey: key,
+    },
+  });
+  return { ...entry, replayed: false };
+}
+
+/**
+ * DEV-746: a refund of a CREDIT tender takes back the points its khata collections earned
+ * on money that is no longer owed. Each collection keeps its own program version.
+ */
+async function reverseKhataEarnedPoints(
+  db: ScopedDb,
+  scope: LedgerScope,
+  refund: { id: string; originalTenderId: string; originalTender: { amountMinor: number } },
+  binding: { organizationId: string; branchId: string; customerId: string; saleId: string },
+  idempotencyKey: string
+) {
+  const earns = await db.pharmacyLoyaltyPointsEntry.findMany({
+    where: { ...binding, tenderId: refund.originalTenderId, kind: 'KHATA_EARN' },
+    include: { programVersion: true },
+    orderBy: [{ earnStartMinor: 'asc' }, { id: 'asc' }],
+  });
+  if (!earns.length) return null;
+  if (earns.some((earn) => !earn.programVersion || earn.netPaidMinor === null))
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Earn basis requires accounting review.',
+    });
+  const [refunded, reversed] = await Promise.all([
+    db.pharmacyRefund.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        originalTenderId: refund.originalTenderId,
+      },
+      _sum: { amountMinor: true },
+    }),
+    db.pharmacyLoyaltyPointsEntry.aggregate({
+      where: { ...binding, tenderId: refund.originalTenderId, kind: 'EARN_REVERSAL' },
+      _sum: { points: true },
+    }),
+  ]);
+  const capMinor = Math.max(
+    0,
+    refund.originalTender.amountMinor - (refunded._sum.amountMinor ?? 0)
+  );
+  const totals = khataEarnRetained(
+    earns.map((earn) => ({
+      points: earn.points,
+      netPaidMinor: earn.netPaidMinor!,
+      earnStartMinor: earn.earnStartMinor ?? 0,
+      rule: earn.programVersion!,
+    })),
+    capMinor
+  );
+  const points = -(totals.earnedPoints - totals.retainedPoints) - (reversed._sum.points ?? 0);
+  if (points >= 0) return null;
+  const entry = await db.pharmacyLoyaltyPointsEntry.create({
+    data: {
+      ...binding,
+      kind: 'EARN_REVERSAL',
+      points,
+      netPaidMinor: totals.retainedMinor,
+      tenderId: refund.originalTenderId,
+      refundId: refund.id,
+      actorId: scope.actorId,
+      idempotencyKey,
     },
   });
   return { ...entry, replayed: false };

@@ -91,6 +91,7 @@ it('preserves legacy reset registration and explicitly composed handler behavior
       'demo-reset',
       'pharmacy.sop.autoGenerate',
       'pharmacy.sop.autoGenerateBranch',
+      'pharmacy.sop.escalateOverdue',
     ].sort()
   );
   await runRestaurantJob(context);

@@ -55,6 +55,10 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   // DEV-725: a counter bill is only created on a device with an OPEN drawer.
   lockOpenPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-a' })),
 }));
+// DEV-623: the open-bills read itself has its own suite (open-bills.test.ts).
+vi.mock('@/lib/pharmacy/open-bills', () => ({
+  listOpenBills: vi.fn(async () => [{ saleId: 'sale-a', status: 'OPEN' }]),
+}));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
 }));
@@ -82,6 +86,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
+import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import {
   changeSaleStatus,
   createSale,
@@ -203,6 +208,7 @@ const reads = () => [
   readPharmacyReceiptFormat,
   readPharmacyReceiptTaxIdentity,
   readDispensingLabelSources,
+  listOpenBills,
 ];
 
 beforeEach(() => {
@@ -340,6 +346,12 @@ const paths: {
     name: 'counterReceiptFormat',
     run: (caller, branchId = 'branch-a') => caller.counterReceiptFormat({ branchId }),
     allowed: { revision: 1 },
+  },
+  {
+    // DEV-623: open and held bills are listed under the same branch gate as the cart.
+    name: 'openBills',
+    run: (caller, branchId = 'branch-a') => caller.openBills({ branchId }),
+    allowed: [{ saleId: 'sale-a', status: 'OPEN' }],
   },
 ];
 
@@ -712,6 +724,7 @@ describe('counter receipt authorization', () => {
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
+          managerPin: '1234',
         }),
       write: returnSaleLine,
     },

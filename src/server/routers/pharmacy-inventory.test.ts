@@ -1342,6 +1342,12 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         idempotencyKey: 'write-off-1',
       }),
   },
+  // DEV-682 — the daily cycle-count list names branch stock positions.
+  {
+    name: 'dailyCycleCountList',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().dailyCycleCountList({ branchId: 'branch_a' }),
+  },
   // DEV-660 — the branch stock reads.
   {
     name: 'nearExpiryBoard',
@@ -2187,7 +2193,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(40);
+    expect(ASSIGNMENT_GATED).toHaveLength(41);
   });
 });
 
@@ -2707,9 +2713,7 @@ describe('DEV-82 — live cold-chain sensor management', () => {
   it('refuses credential issuance without pharmacy:inventory', async () => {
     grant([allow('pharmacy:counter')]);
     db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
-    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject(
-      CAPABILITY_REFUSAL
-    );
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject(CAPABILITY_REFUSAL);
     await expect(
       caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' })
     ).rejects.toMatchObject(CAPABILITY_REFUSAL);
