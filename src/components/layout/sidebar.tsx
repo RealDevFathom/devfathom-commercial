@@ -50,6 +50,7 @@ import {
   BedDouble,
   DoorOpen,
   MessageSquareText,
+  Printer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -453,6 +454,14 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
+  },
+  {
+    label: 'Printer settings',
+    href: '/pharmacy/settings/printers',
+    icon: Printer,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
   },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing

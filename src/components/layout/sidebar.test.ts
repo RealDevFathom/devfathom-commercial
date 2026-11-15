@@ -159,6 +159,7 @@ describe('pharmacy navigation', () => {
         '/pharmacy/medicines',
         '/pharmacy/regulatory',
         '/pharmacy/settings/branches',
+        '/pharmacy/settings/printers',
         '/pharmacy/finance',
       ]) {
         expect(visible).not.toContain(adminRoute);

@@ -111,6 +111,7 @@ import {
 import {
   assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
+  counterFormatFromLayout,
   printCounterBrowserReceipt,
   reserveCounterBrowserPrint,
   type CounterBrowserPrintReservation,
@@ -466,7 +467,11 @@ function ScopedPharmacyCounterConsole({
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
-  const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
+  // DEV-742: a cashier's paper choice overrides the branch's saved paper for this session only.
+  const [receiptFormatChoice, setReceiptFormatChoice] = useState<{
+    branchId: string;
+    format: CounterReceiptFormat;
+  } | null>(null);
   const [receiptReprint, setReceiptReprint] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
@@ -529,6 +534,18 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+  const savedReceiptFormat = trpc.pharmacySales.counterReceiptFormat.useQuery(
+    { branchId },
+    { enabled: branchAuthorized, staleTime: 60_000, retry: false }
+  );
+  const receiptFormat =
+    receiptFormatChoice?.branchId === branchId
+      ? receiptFormatChoice.format
+      : counterFormatFromLayout(savedReceiptFormat.data?.layout);
+  const setReceiptFormat = useCallback(
+    (format: CounterReceiptFormat) => setReceiptFormatChoice({ branchId, format }),
+    [branchId]
+  );
 
   useEffect(
     () => () => {
