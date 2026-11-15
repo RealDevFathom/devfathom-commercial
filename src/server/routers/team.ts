@@ -43,6 +43,22 @@ const notificationPrefsSchema = z
   .strict();
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
+// DEV-828 F01: the only User fields a profile save hands back to the caller.
+const PROFILE_RESPONSE_SELECT = {
+  id: true,
+  name: true,
+  phone: true,
+  bio: true,
+  skills: true,
+} as const satisfies Prisma.UserSelect;
+const profileResponseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  phone: z.string().nullable(),
+  bio: z.string().nullable(),
+  skills: z.array(z.string()),
+});
+
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
 
 // #435: admin:access lets a member into the admin procedures, but granting or
@@ -762,10 +778,15 @@ export const teamRouter = router({
         skills: z.array(z.string()).optional(),
       })
     )
+    // DEV-828 F01: never return the whole User row — it carries the password
+    // verifier and the TOTP seed. Select only what the profile editor shows, and
+    // parse the result through an explicit schema so a new column cannot leak.
+    .output(profileResponseSchema)
     .mutation(async ({ ctx, input }) => {
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: input,
+        select: PROFILE_RESPONSE_SELECT,
       });
     }),
 
@@ -1066,9 +1087,12 @@ export const teamRouter = router({
               });
             }
           }
+          // DEV-828 F02: select only the notice/audit fields; the full row
+          // carries the member's password verifier and TOTP seed.
           const updated = await tx.user.update({
             where: { id: input.id },
             data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+            select: { id: true, name: true, status: true },
           });
           return { before, updated };
         }
@@ -1099,7 +1123,7 @@ export const teamRouter = router({
         console.error('[layOffMember] notice email failed for', before.email, err);
       }
 
-      return updated;
+      return { success: true as const, id: updated.id, status: updated.status };
     }),
 
   // Performance notes — admin-authored feedback on a team member.
