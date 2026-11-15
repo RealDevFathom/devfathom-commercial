@@ -2767,6 +2767,63 @@ describe('PharmacyCounterConsole browser print audit', () => {
     expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(2);
   });
 });
+describe('PharmacyCounterConsole search latency (DEV-575)', () => {
+  function lastSearchOptions() {
+    return mocks.queryOptions.mock.calls.filter(([name]) => name === 'counterSearch').at(-1)?.[1];
+  }
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('submits a typed search 150 ms after the last keystroke and aborts superseded ones', () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'pa' } });
+    fireEvent.change(search, { target: { value: 'para' } });
+
+    act(() => vi.advanceTimersByTime(149));
+    expect(lastSearchOptions()).toMatchObject({ enabled: false });
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(lastSearchOptions()).toMatchObject({
+      enabled: true,
+      trpc: { abortOnUnmount: true },
+    });
+  });
+
+  it('never searches the digits of a scanner burst before its Enter', async () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const code = '8964000123456';
+    for (let length = 1; length <= code.length; length += 1) {
+      fireEvent.change(search, { target: { value: code.slice(0, length) } });
+      act(() => vi.advanceTimersByTime(10));
+    }
+    // A scanner that pauses before its Enter still has not searched a partial code.
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(
+      mocks.queryOptions.mock.calls.filter(
+        ([name, options]) => name === 'counterSearch' && (options as { enabled: boolean }).enabled
+      )
+    ).toEqual([]);
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.searchQuery).toHaveBeenCalledExactlyOnceWith(
+      { branchId: 'branch-a', query: code },
+      { staleTime: 10_000 }
+    );
+  });
+});
+
 describe('DEV-618 counter composition', () => {
   it('shows the auto-print copy only beside the auto-print checkbox, reworded', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
