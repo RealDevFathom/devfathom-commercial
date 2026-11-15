@@ -29,6 +29,13 @@ import {
   readManualPaymentSettings,
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
+import { discountPolicySchema } from '@/lib/pharmacy/smart-discount';
+import {
+  readDiscountPolicySettings,
+  readDiscountSuggestions,
+  recordCompetitorPrice,
+  saveDiscountPolicy,
+} from '@/lib/pharmacy/smart-discount-service';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -894,6 +901,74 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
+  /** DEV-66: smart-discount policy (minimum margin, maximum depth, evidence windows). */
+  discountPolicy: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      return readDiscountPolicySettings(ctx.db, scope);
+    }),
+  saveDiscountPolicy: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          policy: discountPolicySchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, discountPolicy: input.policy },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveDiscountPolicy(txDb(tx), scope, input));
+    }),
+  /** DEV-66: append-only competitor discount log (price per sealed pack). */
+  recordCompetitorPrice: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().trim().min(1).max(128),
+          packLevelId: z.string().trim().min(1).max(128),
+          competitorLabel: z.string().trim().min(1).max(80),
+          observedPriceMinor: z.number().int().positive().max(1_000_000_000),
+          observedAt: z.coerce.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      annotateAudit(ctx, {
+        targetType: 'PharmacyCompetitorPriceObservation',
+        metadata: { medicineId: input.medicineId },
+      });
+      return recordCompetitorPrice(ctx.db, scope, input);
+    }),
+  /**
+   * DEV-66: discount suggestions capped at MRP, floored by the minimum-margin
+   * guard, never for regulated (Rx-only, restricted, controlled) stock.
+   */
+  discountSuggestions: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineIds: z.array(z.string().trim().min(1).max(128)).min(1).max(50),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return readDiscountSuggestions(ctx.db, scope, { medicineIds: input.medicineIds });
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });

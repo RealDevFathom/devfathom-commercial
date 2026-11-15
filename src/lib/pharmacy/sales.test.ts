@@ -435,6 +435,70 @@ describe('POS-04 discount guardrails', () => {
   });
 });
 
+describe('DEV-66 minimum-margin guard', () => {
+  const approved = { approvedByUserId: 'manager-a', approvalPolicy: 'MANAGER_PIN' };
+  it('refuses a discount that leaves less than the configured minimum margin', () => {
+    // Cost 800, 20% minimum margin on price: floor is 1000.
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 250,
+        grossMinor: 1_200,
+        costMinor: 800,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).toThrow('MARGIN_GUARDRAIL');
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 200,
+        grossMinor: 1_200,
+        costMinor: 800,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps the cost floor when no minimum margin is configured', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 400,
+        grossMinor: 1_200,
+        costMinor: 800,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('never blocks an undiscounted line sold at MRP', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 0,
+        grossMinor: 900,
+        costMinor: 800,
+        minMarginBps: 2_000,
+      })
+    ).not.toThrow();
+  });
+
+  it('still refuses any discount on regulated stock', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: true,
+        discountMinor: 1,
+        grossMinor: 1_200,
+        costMinor: 100,
+        minMarginBps: 0,
+        ...approved,
+      })
+    ).toThrow('REGULATED_DISCOUNT_REFUSED');
+  });
+});
+
 describe('POS-06 linked returns', () => {
   it('refuses cumulative returns above the quantity sold', async () => {
     const db = {
