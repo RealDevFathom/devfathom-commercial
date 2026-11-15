@@ -2,10 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 const approval = vi.hoisted(() => ({
-  soloOwnerApprovalAllowed: vi.fn(async () => false),
   verifyPurchaseApprover: vi.fn(
     async (): Promise<{ blocked: string } | { verified: true }> => ({ verified: true })
   ),
+}));
+// Only an ADMIN holds `admin:access` in these fixtures; the router test runs the real engine.
+const abac = vi.hoisted(() => ({
+  can: vi.fn(async (subject: { role: string }, action: string) => action === 'admin:access' && subject.role === 'ADMIN'),
+}));
+vi.mock('@/lib/abac', () => ({
+  can: abac.can,
+  subjectFromSession: (user: { id: string; role?: string }) => ({ id: user.id, role: user.role ?? 'EMPLOYEE' }),
 }));
 vi.mock('./purchase-approval', () => ({
   APPROVAL_BLOCKED: 'An authorized approver must enter a valid PIN.',
@@ -211,7 +218,6 @@ describe('DEV-681 a person decides each draft', () => {
       currentSellingPriceMinor: 95000,
       priceList: { importedById: 'buyer' },
     };
-    approval.soloOwnerApprovalAllowed.mockResolvedValue(false);
     approval.verifyPurchaseApprover.mockResolvedValue({ verified: true });
     db = {
       $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
@@ -226,29 +232,44 @@ describe('DEV-681 a person decides each draft', () => {
         create: vi.fn(async ({ data }) => ({ id: 'price-new', ...data })),
       },
       auditLog: { create: vi.fn() },
+      // Another active administrator exists unless a test says otherwise.
+      user: {
+        findMany: vi.fn(async () => [
+          { id: 'admin-2', role: 'ADMIN', department: null, status: 'ACTIVE' },
+          { id: 'cashier', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+        ]),
+      },
     };
   });
+  const onlyCashiersBesidesMe = () =>
+    db.user.findMany.mockResolvedValue([
+      { id: 'cashier', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+    ]);
   const decide = (decision: 'APPROVE' | 'REJECT', lineIds = ['line-1'], pin?: string) =>
     decideSupplierPriceDrafts(db as unknown as ScopedDb, scope, { lineIds, decision, pin });
 
-  it('refuses the importer approving their own list when they are not a solo owner', async () => {
+  it('keeps separation: the importer cannot approve while another active admin could', async () => {
     line.priceList = { importedById: 'owner' };
     await expect(decide('APPROVE', ['line-1'], '1234')).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: expect.stringContaining('another owner or administrator'),
     });
+    expect(db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', status: 'ACTIVE', id: { not: 'owner' } } })
+    );
+    expect(abac.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'admin-2' }),
+      'admin:access',
+      undefined,
+      expect.anything()
+    );
     expect(approval.verifyPurchaseApprover).not.toHaveBeenCalled();
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
   });
 
-  it('lets a solo owner approve their own import only with a fresh PIN, and audits the policy', async () => {
+  it('lets the sole admin (other staff are cashiers) self-approve with a fresh PIN, audited as self-approval', async () => {
     line.priceList = { importedById: 'owner' };
-    approval.soloOwnerApprovalAllowed.mockResolvedValue(true);
-    approval.verifyPurchaseApprover.mockResolvedValue({ blocked: 'An authorized approver must enter a valid PIN.' });
-    await expect(decide('APPROVE')).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
-
-    approval.verifyPurchaseApprover.mockResolvedValue({ verified: true });
+    onlyCashiersBesidesMe();
     await decide('APPROVE', ['line-1'], '1234');
     expect(approval.verifyPurchaseApprover).toHaveBeenLastCalledWith(db, {
       organizationId: 'org-a',
@@ -260,14 +281,36 @@ describe('DEV-681 a person decides each draft', () => {
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'pharmacySupplierPriceLists.approveDraft',
-        metadata: { policy: 'PHARMACY_SOLO_OWNER_PIN', pinVerified: true, importedById: 'owner' },
+        actorId: 'owner',
+        metadata: {
+          policy: 'PHARMACY_SOLO_OWNER_PIN',
+          selfApproval: true,
+          pinVerified: true,
+          importedById: 'owner',
+        },
       }),
     });
   });
 
+  it('refuses a sole-admin self-approval with a wrong or missing PIN and writes no price', async () => {
+    line.priceList = { importedById: 'owner' };
+    onlyCashiersBesidesMe();
+    approval.verifyPurchaseApprover.mockResolvedValue({
+      blocked: 'An authorized approver must enter a valid PIN.',
+    });
+    await expect(decide('APPROVE', ['line-1'], '9999')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'An authorized approver must enter a valid PIN.',
+    });
+    await expect(decide('APPROVE')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplierPriceListLine.updateMany).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('needs no PIN when a different owner approves', async () => {
     await decide('APPROVE');
-    expect(approval.soloOwnerApprovalAllowed).not.toHaveBeenCalled();
+    expect(db.user.findMany).not.toHaveBeenCalled();
     expect(approval.verifyPurchaseApprover).not.toHaveBeenCalled();
   });
 

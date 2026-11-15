@@ -4,7 +4,7 @@ import { SupplierPriceListsConsole } from '@/components/pharmacy/supplier-price-
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
-import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
+import { otherPriceApproverExists } from '@/lib/pharmacy/supplier-price-lists';
 import { AccessState, PurchasingHeader, PurchasingTabs } from '../_components/console-chrome';
 import { PURCHASING_ROUTE, tenantContext } from '../_lib/console';
 
@@ -26,14 +26,15 @@ export default async function PharmacySupplierPriceListsPage() {
   // The server refuses approvals without owner/administrator authority (the
   // same as setting a pack price); offer the control only to those people.
   const user = ctx.session.user;
-  const [canApprove, soloOwner] = await Promise.all([
+  const [canApprove, otherApprover] = await Promise.all([
     can(subjectFromSession(user), 'admin:access', undefined, {
       db: ctx.db,
       source: 'TRPC',
       ip: ctx.requestMeta?.ip ?? null,
     }),
-    soloOwnerApprovalAllowed(ctx.db, ctx.entitlements.organizationId, user.id),
+    otherPriceApproverExists(ctx.db, ctx.entitlements.organizationId, user.id),
   ]);
+  const soloOwner = !otherApprover;
   return (
     <main className="min-w-0 space-y-6">
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />

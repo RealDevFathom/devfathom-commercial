@@ -9,12 +9,8 @@ import { normalizeMedicineText } from './medicine';
 import { parseOwnerUpload } from './migration/owner-import-upload';
 import { readMoneyMinor, readText, type SourceTable } from './migration/source-values';
 import { currentPackPrice, lockPrices } from './pricing';
-import {
-  APPROVAL_BLOCKED,
-  SOLO_OWNER_POLICY,
-  soloOwnerApprovalAllowed,
-  verifyPurchaseApprover,
-} from './purchase-approval';
+import { can, subjectFromSession } from '@/lib/abac';
+import { APPROVAL_BLOCKED, SOLO_OWNER_POLICY, verifyPurchaseApprover } from './purchase-approval';
 
 /**
  * DEV-681 — supplier price-list import and price-change alerts.
@@ -413,6 +409,28 @@ export async function supplierPriceListReview(
 export const SELF_PRICE_APPROVAL =
   'You imported this price list, so another owner or administrator must approve it.';
 
+/**
+ * Whether any OTHER active member could approve a price draft, decided by the
+ * same ABAC action (`admin:access`) the approval procedure requires. When none
+ * can, the owner or administrator who imported the list is the sole approver
+ * and may self-approve with a fresh PIN (standing solo-owner rule).
+ */
+export async function otherPriceApproverExists(
+  db: ScopedDb,
+  organizationId: string,
+  actorId: string
+) {
+  const others = await db.user.findMany({
+    where: { organizationId, status: 'ACTIVE', id: { not: actorId } },
+    select: { id: true, role: true, department: true, status: true },
+  });
+  for (const other of others) {
+    if (await can(subjectFromSession(other), 'admin:access', undefined, { db, source: 'TRPC' }))
+      return true;
+  }
+  return false;
+}
+
 export async function decideSupplierPriceDrafts(
   db: ScopedDb,
   scope: SupplierPriceListScope,
@@ -432,13 +450,14 @@ export async function decideSupplierPriceDrafts(
     if (lines.length !== ids.length)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Price draft not found.' });
     // Segregation of duties: whoever imported a list does not approve its
-    // prices. The one exception is a solo owner, who has nobody else to ask:
-    // they re-enter their PIN now, and the approval names that policy.
+    // prices while another owner/administrator could. When nobody else can,
+    // the importer is the sole approver: they re-enter their PIN now, and the
+    // audit record marks the approval as a self-approval under that policy.
     const selfApproval =
       input.decision === 'APPROVE' &&
       lines.some((line) => line.priceList.importedById === scope.actorId);
     if (selfApproval) {
-      if (!(await soloOwnerApprovalAllowed(scoped, scope.organizationId, scope.actorId)))
+      if (await otherPriceApproverExists(scoped, scope.organizationId, scope.actorId))
         throw new TRPCError({ code: 'FORBIDDEN', message: SELF_PRICE_APPROVAL });
       const attempt = await verifyPurchaseApprover(scoped, {
         organizationId: scope.organizationId,
@@ -521,7 +540,14 @@ export async function decideSupplierPriceDrafts(
             packPriceId,
           },
           ...(selfApproval && line.priceList.importedById === scope.actorId
-            ? { metadata: { policy: SOLO_OWNER_POLICY, pinVerified: true, importedById: scope.actorId } }
+            ? {
+                metadata: {
+                  policy: SOLO_OWNER_POLICY,
+                  selfApproval: true,
+                  pinVerified: true,
+                  importedById: scope.actorId,
+                },
+              }
             : {}),
         },
       });

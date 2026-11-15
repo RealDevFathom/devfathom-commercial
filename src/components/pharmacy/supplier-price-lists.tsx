@@ -44,7 +44,7 @@ export function SupplierPriceListsConsole({
   /** Owner or administrator: the server's `admin:access`, as for setting a pack price. */
   canApprove: boolean;
   actorId: string;
-  /** The only active member, who may approve a list they imported with a fresh PIN. */
+  /** No other active owner/administrator: may approve a list they imported with a fresh PIN. */
   soloOwner: boolean;
 }) {
   const utils = trpc.useUtils();
@@ -286,8 +286,8 @@ export function SupplierPriceListsConsole({
                   onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))}
                 />
                 <span id="price-pin-help" className="block text-xs text-text-muted">
-                  You imported this list and are the only active member, so re-enter your PIN to
-                  approve. The approval is recorded under the solo-owner policy.
+                  You imported this list and no other owner or administrator is active, so re-enter
+                  your PIN to approve. The approval is recorded as a self-approval.
                 </span>
               </label>
             )}
