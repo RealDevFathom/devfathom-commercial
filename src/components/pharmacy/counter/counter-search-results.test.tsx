@@ -135,7 +135,7 @@ describe('CounterSearchResults safety flags', () => {
     const strength = screen.getByText('500 mg');
     expect(strength.tagName).toBe('BDI');
     expect(strength).toHaveAttribute('dir', 'auto');
-    expect(strength.parentElement).toHaveClass('ms-1');
+    expect(strength.parentElement).toHaveClass('block');
     expect(strength.closest('button')).toHaveClass('text-start');
     expect(screen.getByText('250.00')).toHaveClass('text-end');
   });
@@ -155,8 +155,11 @@ describe('CounterSearchResults safety flags', () => {
     const stock = screen.getByText(/Batch B-1044/);
     expect(stock).not.toHaveClass('truncate');
     expect(stock).toHaveClass('break-words');
-    expect(stock).toHaveTextContent(row.presentation);
-    expect(stock).toHaveTextContent('Tablet');
+    // Form, strength and stock each sit on their own line (DEV-500).
+    const form = screen.getByText(row.presentation, { exact: false });
+    expect(form).toHaveTextContent('Tablet');
+    expect(form).not.toBe(stock);
+    expect(stock).not.toHaveTextContent('Tablet');
     expect(stock).toHaveTextContent('Exp 2028-06-30');
     expect(stock).toHaveTextContent('240 tabs');
     expect(stock).toHaveTextContent('Fridge F-1');

@@ -188,7 +188,8 @@ export function CounterSearchResults({
               >
                 {counterMedicineDisplayName(row)}
                 {row.strength ? (
-                  <span className="ms-1 font-normal text-text-body">
+                  <span className="block text-xs font-normal text-text-body">
+                    <span className="sr-only">Strength </span>
                     <bdi dir="auto">{row.strength}</bdi>
                   </span>
                 ) : null}
@@ -202,10 +203,13 @@ export function CounterSearchResults({
                 <span className="sr-only">Pack MRP </span>
                 {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
               </span>
-              <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
+              <span className="col-span-2 min-w-0 break-words text-xs text-text-body">
+                <span className="sr-only">Form </span>
                 {row.presentation}
                 {row.dosageForm ? ` · ${row.dosageForm}` : ''}
-                {` · Batch ${row.batchNumber ?? '—'}`}
+              </span>
+              <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
+                {`Batch ${row.batchNumber ?? '—'}`}
                 {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
                 {` · ${formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}`}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}

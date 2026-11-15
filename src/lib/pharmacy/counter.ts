@@ -246,6 +246,39 @@ function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): A
   };
 }
 
+type CounterRankable = Pick<CounterSearchRow, 'brandName' | 'displayName' | 'matchedOn'> &
+  Partial<Pick<CounterSearchRow, 'onHandUnits'>>;
+
+/**
+ * Relevance tier, lowest first: exact barcode, then a brand or generic name that
+ * STARTS with the query, then an alias hit (so "panadol" lists the branded
+ * product before the generic it is an alias of), then a name that merely
+ * contains it, then ingredient / form matches.
+ */
+export function counterMatchRank(row: CounterRankable, query: string): number {
+  if (row.matchedOn === 'BARCODE') return 0;
+  const needle = query.trim().toLocaleLowerCase();
+  const starts = [row.brandName, row.displayName].some((name) =>
+    name?.trim().toLocaleLowerCase().startsWith(needle)
+  );
+  if (starts) return 1;
+  if (row.matchedOn === 'ALIAS') return 2;
+  if (row.matchedOn === 'NAME') return 3;
+  return 4;
+}
+
+export function compareCounterRows(
+  left: CounterRankable,
+  right: CounterRankable,
+  query: string
+): number {
+  return (
+    counterMatchRank(left, query) - counterMatchRank(right, query) ||
+    Number((right.onHandUnits ?? 0) > 0) - Number((left.onHandUnits ?? 0) > 0) ||
+    left.displayName.localeCompare(right.displayName)
+  );
+}
+
 /**
  * POS-02 result rows for one branch.
  *
@@ -492,11 +525,7 @@ export async function searchCounterCatalog(
     });
   }
 
-  rows.sort(
-    (left, right) =>
-      Number(right.onHandUnits > 0) - Number(left.onHandUnits > 0) ||
-      left.displayName.localeCompare(right.displayName)
-  );
+  rows.sort((left, right) => compareCounterRows(left, right, input.query));
   return { rows, truncated: matches.size > medicineIds.length };
 }
 
