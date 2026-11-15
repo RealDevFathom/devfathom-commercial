@@ -462,10 +462,15 @@ describe('sales, voids and returns take stock locks in the global order', () => 
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async () => ({}) },
     };
-    await changeSaleStatus(db as never, scope, 'sale', 'void', 'Customer cancelled', {
-      staffProfileId: 'staff',
-      pin: '1234',
-    });
+    await changeSaleStatus(
+      db as never,
+      scope,
+      'sale',
+      'void',
+      { kind: 'COUNTER', actorIsManager: true },
+      'Customer cancelled',
+      { staffProfileId: 'staff', pin: '1234' }
+    );
     expect(trace.locks()[0]).toBe('register');
     expect(trace.locks()).toContain('balance');
     expectGlobalOrder(trace.locks());

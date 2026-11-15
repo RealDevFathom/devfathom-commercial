@@ -196,14 +196,14 @@ export default async function SupplierCreditFollowUpPage({
   }
   if (!access || access.kind === 'denied') {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {heading}
         <Notice title={access ? 'Financial report access required' : 'Report access unavailable'}>
           {access
             ? 'An active session, financial and operational report permissions, and Pharmacy reports and procurement access are required. Ask your workspace administrator to review access.'
             : 'Your session, permissions or branch scope could not be verified. Reload to retry, or contact your workspace administrator.'}
         </Notice>
-      </main>
+      </div>
     );
   }
   const { ctx, branches } = access;
@@ -318,7 +318,7 @@ export default async function SupplierCreditFollowUpPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {heading}
       <SectionCard title="Prepare follow-up" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted" id="follow-up-period">
@@ -401,6 +401,6 @@ export default async function SupplierCreditFollowUpPage({
       ) : packet ? (
         <FollowUpPacket packet={packet} />
       ) : null}
-    </main>
+    </div>
   );
 }

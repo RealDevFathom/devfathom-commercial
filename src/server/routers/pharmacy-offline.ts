@@ -47,6 +47,7 @@ import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import { manualTenderCaptureSchema, validateManualTenderPolicy, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
+import { counterOperatorDenial } from '@/lib/pharmacy/counter-capability';
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { adminProcedure, router } from '../trpc';
@@ -551,6 +552,19 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           deviceSecret: secret,
         };
         await activeBranch(db, ctx.scope.organizationId, ctx.scope.branchId);
+        // DEV-831: an enrolled terminal does not lend its branch to the actor.
+        // Establishment, snapshots and replay take the online counter's live
+        // grant and branch-assignment gate before any token, snapshot or sale.
+        if (!manager) {
+          const denial = await counterOperatorDenial(
+            db,
+            actor.session.user,
+            ctx.scope.organizationId,
+            ctx.scope.branchId,
+            { source: 'REST', ip: clientIp(request) }
+          );
+          if (denial) throw new CounterTransportError(denial, 403);
+        }
         if (operation === 'establish') {
           z.object({}).strict().parse(body);
           return {

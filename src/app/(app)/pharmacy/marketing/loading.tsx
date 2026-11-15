@@ -2,7 +2,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 export default function LoadingMarketing() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrowMuted
         className="[&_p]:text-text-body [&_[data-slot=eyebrow]]:text-text-body"
@@ -15,6 +15,6 @@ export default function LoadingMarketing() {
           Checking access and fetching saved campaigns…
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

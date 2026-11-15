@@ -227,6 +227,24 @@ describe('processDueWhatsAppRefillReminders', () => {
     expect(provider.calls).toHaveLength(1);
   });
 
+  it('counts a reminder held back by quiet hours apart from missing consent', async () => {
+    store.captures = [capture('capture-1')];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    // 18:00 UTC is 23:00 in Asia/Karachi, inside the 22:00-09:00 quiet window.
+    const result = await processDueWhatsAppRefillReminders({
+      now: new Date('2026-09-29T18:00:00.000Z'),
+      config,
+      provider,
+    });
+
+    expect(result).toMatchObject({ scanned: 1, skippedQuietHours: 1, skippedNoConsent: 0 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
   it.each([
     ['08:30 PKT', '2026-09-29T03:30:00Z', 0],
     ['09:00 PKT', '2026-09-29T04:00:00Z', 1],

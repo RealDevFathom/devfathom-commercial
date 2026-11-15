@@ -2337,6 +2337,45 @@ describe('manual quarantine resolution authorization', () => {
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
+  // DEV-832 (F08 sibling): the recall contact list names customers who bought
+  // the lot, so it needs the safety grant and masks phones without patient records.
+  describe('drapRecallActions patient contact', () => {
+    const row = {
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      quarantinedUnits: 4,
+      patientName: 'Synthetic Patient',
+      patientPhone: '+923001234567',
+    };
+
+    it('refuses a member without pharmacy:safety before reading contacts', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      await expect(
+        caller().drapRecallActions({ recallNoticeId: 'recall_1' })
+      ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('masks the phone for a safety holder without patient records', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:safety')]);
+      db.$queryRaw.mockResolvedValue([row]);
+      const rows = await caller().drapRecallActions({ recallNoticeId: 'recall_1' });
+      expect(JSON.stringify(rows)).not.toContain('+923001234567');
+      expect(rows).toEqual([{ ...row, patientPhone: '*********4567' }]);
+    });
+
+    it('returns the full phone to a safety holder who also holds patient records', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:safety'), allow('pharmacy:prescriptions')]);
+      db.$queryRaw.mockResolvedValue([row]);
+      await expect(caller().drapRecallActions({ recallNoticeId: 'recall_1' })).resolves.toEqual([
+        row,
+      ]);
+    });
+  });
+
   it('requires safety authority to read, confirm or dismiss DRAP recall drafts', async () => {
     await expect(caller().drapRecallQueue()).rejects.toMatchObject(CAPABILITY_REFUSAL);
     await expect(caller().confirmDrapRecall({ ingestId: 'ingest_1' })).rejects.toMatchObject(

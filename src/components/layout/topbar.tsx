@@ -87,7 +87,7 @@ export function Topbar({
   onMenuClick,
   brand,
 }: {
-  onMenuClick?: () => void;
+  onMenuClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   brand?: TenantBrand;
 } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
@@ -180,6 +180,7 @@ export function Topbar({
         {/* Mobile menu button */}
         {onMenuClick && (
           <button
+            type="button"
             onClick={onMenuClick}
             className="studio-icon-button lg:hidden"
             aria-label="Open menu"

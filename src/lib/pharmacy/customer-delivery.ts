@@ -294,7 +294,14 @@ export async function recordDeliveryCommand(
             )
           )
         );
-        await changeSaleStatus(db, scope, sale.id, 'void', 'Failed delivery physically returned');
+        await changeSaleStatus(
+          db,
+          scope,
+          sale.id,
+          'void',
+          { kind: 'FAILED_DELIVERY_RETURN' },
+          'Failed delivery physically returned'
+        );
         for (const line of sale.lines)
           for (const allocation of line.allocations) {
             const movement = movements.get(allocation.id)!;

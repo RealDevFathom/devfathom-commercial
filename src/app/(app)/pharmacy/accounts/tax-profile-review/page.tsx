@@ -225,14 +225,14 @@ function VersionSelect({
 
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Tax profile review"
         description="Compare two approved, recorded branch tax configurations and export their evidence."
       />
       {children}
-    </main>
+    </div>
   );
 }
 
