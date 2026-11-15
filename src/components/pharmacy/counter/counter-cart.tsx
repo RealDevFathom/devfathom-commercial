@@ -198,7 +198,7 @@ export function CounterCartPanel({
                           {allocation.overridden ? (
                             <StatusPill status="override" tone="warning" label="Batch override" />
                           ) : allocation.overridden === false ? (
-                            <StatusPill status="fefo" tone="neutral" label="FEFO" />
+                            <StatusPill status="fefo" tone="neutral" label="Earliest expiry" />
                           ) : null}
                           <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
                         </div>
@@ -386,7 +386,7 @@ export function CounterLotOverride({
                 <span>Batch {lot.batchNumber}</span>
                 <span>Exp {formatReceiptDate(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
-                {fefo ? <StatusPill status="fefo" tone="neutral" label="FEFO" /> : null}
+                {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}
                 {blocked ? (
                   <StatusPill
                     status="blocked"
@@ -435,7 +435,7 @@ export function CounterLotOverride({
         disabled={disabled}
         onClick={() => onChange(null)}
       >
-        Keep FEFO batch
+        Keep recommended batch
       </button>
     </div>
   );

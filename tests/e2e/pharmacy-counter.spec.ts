@@ -582,7 +582,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await makeBill();
     await pressControl(
       page
-        .getByRole('group', { name: 'Tender', exact: true })
+        .getByRole('group', { name: 'Payment method', exact: true })
         .getByRole('button', { name: 'Khata', exact: true })
     );
     await page.getByLabel('Family Khata account').selectOption(familyId);
