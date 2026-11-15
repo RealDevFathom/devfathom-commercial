@@ -313,6 +313,8 @@ export const financeRouter = router({
         select: {
           legalName: true,
           displayName: true,
+          invoiceAddress: true,
+          taxId: true,
           brand: { select: { logoUrl: true, supportEmail: true } },
         },
       });
@@ -322,6 +324,8 @@ export const financeRouter = router({
         displayName: organization.displayName,
         logoUrl: organization.brand?.logoUrl ?? null,
         supportEmail: organization.brand?.supportEmail ?? null,
+        address: organization.invoiceAddress ?? null,
+        taxId: organization.taxId ?? null,
       };
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
       return {

@@ -31,6 +31,8 @@ function invoice(overrides: Record<string, unknown> = {}) {
       displayName: 'Northwind Studio',
       logoUrl: null,
       supportEmail: null,
+      address: null,
+      taxId: null,
     },
     project: null,
     notes: null,
@@ -146,5 +148,35 @@ describe('InvoicePrintView', () => {
 
     expect(screen.getAllByText('Harbor Labs')).toHaveLength(1);
     expect(issuer.querySelector('img')).toBeNull();
+  });
+
+  it('prints the agency address and tax ID in the issuer block', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({
+        issuer: {
+          legalName: 'Northwind Studio LLC',
+          displayName: 'Northwind Studio',
+          logoUrl: null,
+          supportEmail: null,
+          address: '1 Quay St, Lagos',
+          taxId: 'TIN-12345',
+        },
+      }),
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.getByTestId('invoice-issuer-address')).toHaveTextContent('1 Quay St, Lagos');
+    expect(screen.getByTestId('invoice-issuer-tax-id')).toHaveTextContent('Tax ID: TIN-12345');
+  });
+
+  it('omits address and tax ID lines when the agency has none', () => {
+    mocks.useQuery.mockReturnValue({ isLoading: false, data: invoice() });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.queryByTestId('invoice-issuer-address')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoice-issuer-tax-id')).not.toBeInTheDocument();
   });
 });

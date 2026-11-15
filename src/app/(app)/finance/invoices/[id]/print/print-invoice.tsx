@@ -122,6 +122,16 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
               {issuer.legalName !== issuer.displayName && (
                 <p className="mt-1 text-xs text-slate-500">{issuer.legalName}</p>
               )}
+              {issuer.address && (
+                <p data-testid="invoice-issuer-address" className="mt-1 text-xs text-slate-600">
+                  {issuer.address}
+                </p>
+              )}
+              {issuer.taxId && (
+                <p data-testid="invoice-issuer-tax-id" className="mt-1 text-xs text-slate-600">
+                  Tax ID: {issuer.taxId}
+                </p>
+              )}
               {issuer.supportEmail && (
                 <p className="mt-1 text-xs text-slate-500">{issuer.supportEmail}</p>
               )}
