@@ -11,7 +11,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -158,6 +158,19 @@ describe('MOCK — deterministic references and scriptable declines', () => {
     expect(
       MOCK_PROVIDER.execute({ capability: 'SALE', amount: '99.54', operationRef: 'd' }).declineCode
     ).toBe('EXPIRED_CARD');
+  });
+
+  it('never scripts a decline from the amount cents in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      for (const amount of ['10.13', '5.51', '99.54']) {
+        const outcome = MOCK_PROVIDER.execute({ capability: 'SALE', amount, operationRef: 'p' });
+        expect(outcome.approved).toBe(true);
+        expect(outcome.declineCode).toBeNull();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('never declines a post-authorization operation on a designated amount', () => {

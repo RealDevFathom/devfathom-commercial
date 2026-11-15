@@ -156,8 +156,19 @@ function centsComponent(amount: Prisma.Decimal): number {
   return amount.times(100).mod(100).abs().toNumber();
 }
 
+/**
+ * The scripted cent-code declines are a test/demo hook only. They must never run in
+ * a production build: a genuine charge of 10.13, 5.51 or 99.54 would otherwise be
+ * refused on the amount alone, and the same hook would be a trap once a real card
+ * provider is wired behind this contract.
+ */
+function declineScriptingEnabled(): boolean {
+  return process.env.NODE_ENV !== 'production';
+}
+
 function declineCodeFor(capability: PaymentCapability, amount: Prisma.Decimal): string | null {
   if (!AUTHORIZING.has(capability)) return null;
+  if (!declineScriptingEnabled()) return null;
   return DECLINE_CODES[centsComponent(amount)] ?? null;
 }
 
