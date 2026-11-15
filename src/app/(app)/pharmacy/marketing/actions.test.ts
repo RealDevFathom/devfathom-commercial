@@ -209,6 +209,14 @@ it('reads growth periods as whole local days and shows a plain next step without
   expect(result.message).toContain('Contact DevFathom support');
   expect(result.message).not.toMatch(/UNAVAILABLE|CONFIGURATION/);
 });
+it('asks for dates instead of silently doing nothing when growth dates are empty', async () => {
+  const result = await marketingAction(
+    form({ operation: 'growth-generate', timeZone: 'Asia/Karachi', from: '', lastDay: '' })
+  );
+  expect(result.error).toBe(true);
+  expect(result.message).toContain('first day and a last day');
+  expect(mocks.generateGrowth).not.toHaveBeenCalled();
+});
 it('reads send times as workspace wall-clock time', async () => {
   mocks.createDraft.mockResolvedValue({ id: 'saved-draft' });
   await marketingAction(

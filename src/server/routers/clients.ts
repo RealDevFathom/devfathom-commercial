@@ -290,6 +290,8 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const existing = await ctx.db.client.findUnique({ where: { id }, select: { id: true } });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Client not found' });
       return ctx.db.client.update({ where: { id }, data });
     }),
 
@@ -315,6 +317,11 @@ export const clientsRouter = router({
   deleteContact: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const contact = await ctx.db.clientContact.findUnique({
+        where: { id: input.id },
+        select: { id: true },
+      });
+      if (!contact) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contact not found' });
       return ctx.db.clientContact.delete({ where: { id: input.id } });
     }),
 
@@ -444,6 +451,7 @@ export const clientsRouter = router({
         where: { id: input.id },
         select: { signedAt: true },
       });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
       const contract = await ctx.db.contract.update({
         where: { id: input.id },
         data: {
@@ -463,6 +471,11 @@ export const clientsRouter = router({
   deleteContract: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.contract.findUnique({
+        where: { id: input.id },
+        select: { id: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
       const contract = await ctx.db.contract.delete({ where: { id: input.id } });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_deleted',

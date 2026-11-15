@@ -50,6 +50,7 @@ import {
   BedDouble,
   DoorOpen,
   MessageSquareText,
+  Printer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -379,6 +380,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-core',
   },
   {
+    label: 'Khata',
+    href: '/pharmacy/khata',
+    icon: Landmark,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-counter',
+  },
+  {
     label: 'Loyalty points',
     href: '/pharmacy/loyalty',
     icon: Users,
@@ -410,13 +419,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-dispensing',
     pharmacyCapabilities: ['pharmacy:dispense'],
   },
+  // DEV-35: the substitution workspace opens for dispense or Pharmacy Safety.
   {
     label: 'Substitution',
     href: '/pharmacy/substitution',
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:dispense'],
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:safety'],
   },
   {
     label: 'Controlled register',
@@ -452,6 +462,14 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
+  },
+  {
+    label: 'Printer settings',
+    href: '/pharmacy/settings/printers',
+    icon: Printer,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
   },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing
