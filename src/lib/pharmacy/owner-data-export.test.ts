@@ -715,56 +715,87 @@ describe('purgeExpiredOwnerDataExports', () => {
 describe('purging archives of exports that never succeeded (DEV-844)', () => {
   const now = new Date('2026-11-15T10:00:00.000Z');
   const token = 'fedcba9876543210fedcba9876543210';
+  const UNRECORDED = {
+    type: 'PHARMACY_OWNER_DATA_EXPORT_V1',
+    status: { in: ['FAILED', 'CANCELLED'] },
+    finishedAt: { lt: new Date('2026-11-14T10:00:00.000Z') },
+    // Only jobs no result names an archive for: a recorded archive is never touched here.
+    result: { equals: Prisma.AnyNull },
+  };
+  const MARKER = { result: { filename: null, purgedAt: now.toISOString() } };
 
-  it('deletes the reserved archive of a failed or cancelled job 24 hours after it ended', async () => {
-    const findMany = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 'job-failed', organizationId: 'org-a', payload: { archiveToken: token } },
-        { id: 'job-cancelled', organizationId: 'org-b', payload: { archiveToken: token } },
-      ]);
+  function platformDb(abandoned: unknown[], claims: number[] = []) {
+    const findMany = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(abandoned);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    for (const count of claims) updateMany.mockResolvedValueOnce({ count });
     const update = vi.fn().mockResolvedValue({});
-    const purged = await purgeExpiredOwnerDataExports(
-      { platformJob: { findMany, update } } as never,
-      now
-    );
+    return { platformJob: { findMany, updateMany, update } };
+  }
+
+  it('claims, then deletes, the reserved archive of a failed or cancelled job 24 hours after it ended', async () => {
+    const db = platformDb([
+      { id: 'job-failed', organizationId: 'org-a', payload: { archiveToken: token } },
+      { id: 'job-cancelled', organizationId: 'org-b', payload: { archiveToken: token } },
+    ]);
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
     expect(purged).toBe(2);
-    expect(findMany.mock.calls[1]![0].where).toEqual({
-      type: 'PHARMACY_OWNER_DATA_EXPORT_V1',
-      status: { in: ['FAILED', 'CANCELLED'] },
-      finishedAt: { lt: new Date('2026-11-14T10:00:00.000Z') },
-      // Only jobs no result names an archive for: a recorded archive is never touched here.
-      result: { equals: Prisma.AnyNull },
-    });
+    expect(db.platformJob.findMany.mock.calls[1]![0].where).toEqual(UNRECORDED);
+    // Each claim re-checks every condition on that one row, under its row lock.
+    expect(db.platformJob.updateMany.mock.calls).toEqual([
+      [{ where: { ...UNRECORDED, id: 'job-failed' }, data: MARKER }],
+      [{ where: { ...UNRECORDED, id: 'job-cancelled' }, data: MARKER }],
+    ]);
     expect(m.deleteUpload.mock.calls).toEqual([
       ['org-a', `owner-data-export-job-failed-${token}.zip`],
       ['org-b', `owner-data-export-job-cancelled-${token}.zip`],
     ]);
-    expect(update).toHaveBeenCalledWith({
-      where: { id: 'job-failed' },
-      data: { result: { filename: null, purgedAt: now.toISOString() } },
-    });
-    expect(m.deleteUpload.mock.invocationCallOrder[0]).toBeLessThan(
-      update.mock.invocationCallOrder[0]!
+    // Purge first: the claim is taken before anything is deleted.
+    expect(db.platformJob.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      m.deleteUpload.mock.invocationCallOrder[0]!
     );
+    expect(db.platformJob.updateMany.mock.invocationCallOrder[1]).toBeLessThan(
+      m.deleteUpload.mock.invocationCallOrder[1]!
+    );
+    expect(db.platformJob.update).not.toHaveBeenCalled();
+  });
+
+  it('deletes nothing and overwrites nothing when a platform retry got there first', async () => {
+    // Read as failed, then retried (and perhaps rebuilt) before the claim: it matches no row.
+    const db = platformDb(
+      [
+        { id: 'job-retried', organizationId: 'org-a', payload: { archiveToken: token } },
+        { id: 'job-failed', organizationId: 'org-a', payload: { archiveToken: token } },
+      ],
+      [0, 1]
+    );
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
+    expect(purged).toBe(1);
+    expect(m.deleteUpload).toHaveBeenCalledExactlyOnceWith(
+      'org-a',
+      `owner-data-export-job-failed-${token}.zip`
+    );
+    expect(db.platformJob.update).not.toHaveBeenCalled();
+  });
+
+  it('stops before deleting anything else when a delete fails, so its claim rolls back', async () => {
+    const db = platformDb([
+      { id: 'job-a', organizationId: 'org-a', payload: { archiveToken: token } },
+      { id: 'job-b', organizationId: 'org-a', payload: { archiveToken: token } },
+    ]);
+    m.deleteUpload.mockRejectedValueOnce(new Error('storage down'));
+    await expect(purgeExpiredOwnerDataExports(db as never, now)).rejects.toThrow('storage down');
+    expect(m.deleteUpload).toHaveBeenCalledOnce();
+    expect(db.platformJob.updateMany).toHaveBeenCalledOnce();
   });
 
   it('marks a job without a reserved token swept without deleting anything', async () => {
-    const findMany = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 'job-legacy', organizationId: 'org-a', payload: { from: null } },
-        { id: 'job-bad', organizationId: 'org-a', payload: { archiveToken: '../../x' } },
-      ]);
-    const update = vi.fn().mockResolvedValue({});
-    const purged = await purgeExpiredOwnerDataExports(
-      { platformJob: { findMany, update } } as never,
-      now
-    );
+    const db = platformDb([
+      { id: 'job-legacy', organizationId: 'org-a', payload: { from: null } },
+      { id: 'job-bad', organizationId: 'org-a', payload: { archiveToken: '../../x' } },
+    ]);
+    const purged = await purgeExpiredOwnerDataExports(db as never, now);
     expect(purged).toBe(0);
     expect(m.deleteUpload).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledTimes(2);
+    expect(db.platformJob.updateMany).toHaveBeenCalledTimes(2);
   });
 });

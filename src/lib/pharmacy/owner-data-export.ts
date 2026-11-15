@@ -308,30 +308,41 @@ export async function purgeExpiredOwnerDataExports(
  * are selected, so an archive a job result names is never touched here.
  * Recording `purgedAt` on the empty result sweeps each job once; a platform
  * retry clears the result, so a retried job that fails again is swept again.
+ *
+ * A platform retry reuses the reserved name, so each job is claimed before its
+ * archive is deleted: a conditional update, in this transaction, that matches
+ * only while the job is still failed or cancelled, past expiry and without a
+ * result. A retry that committed first makes the claim match nothing, so
+ * nothing is deleted or overwritten. A claim that lands first holds the row
+ * lock until this purge commits, so the retry waits until the archive is gone
+ * and only then re-queues the job to build it again. A failed delete rolls the
+ * claim back.
  */
 async function purgeUnrecordedOwnerDataExports(db: ScopedDb, now: Date): Promise<number> {
+  const unrecorded = {
+    type: OWNER_DATA_EXPORT_JOB_TYPE,
+    status: { in: ['FAILED', 'CANCELLED'] },
+    finishedAt: { lt: new Date(now.getTime() - OWNER_DATA_EXPORT_LINK_TTL_MS) },
+    result: { equals: Prisma.AnyNull },
+  } satisfies Prisma.PlatformJobWhereInput;
   const abandoned = await db.platformJob.findMany({
-    where: {
-      type: OWNER_DATA_EXPORT_JOB_TYPE,
-      status: { in: ['FAILED', 'CANCELLED'] },
-      finishedAt: { lt: new Date(now.getTime() - OWNER_DATA_EXPORT_LINK_TTL_MS) },
-      result: { equals: Prisma.AnyNull },
-    },
+    where: unrecorded,
     orderBy: { finishedAt: 'asc' },
     take: PURGE_BATCH,
     select: { id: true, organizationId: true, payload: true },
   });
   let purged = 0;
   for (const job of abandoned) {
+    const claimed = await db.platformJob.updateMany({
+      where: { ...unrecorded, id: job.id },
+      data: { result: { filename: null, purgedAt: now.toISOString() } },
+    });
+    if (claimed.count !== 1) continue;
     const filename = reservedOwnerDataExportObjectName(job.id, job.payload);
     if (job.organizationId && filename) {
       await deleteUpload(job.organizationId, filename);
       purged += 1;
     }
-    await db.platformJob.update({
-      where: { id: job.id },
-      data: { result: { filename: null, purgedAt: now.toISOString() } },
-    });
   }
   return purged;
 }
