@@ -48,6 +48,7 @@ vi.mock('@/lib/pharmacy/receipt-print', async (original) => ({
   readPharmacyReceiptFormat: vi.fn(async () => ({ layout: { paperWidth: 32 }, revision: 1 })),
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart } from '@/lib/pharmacy/counter';
 import { readPharmacyReceiptFormat } from '@/lib/pharmacy/receipt-print';
@@ -630,4 +631,45 @@ describe('counter receipt reads and cash tender keep DENY over ALLOW (DEV-659)',
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('DEV-97 settlement UI decision', () => {
+  const roleRules = (key: string): Rule[] =>
+    PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => ({
+      capability,
+      effect: 'ALLOW',
+    }));
+
+  it.each(['pharmacist', 'cashier'])(
+    'uses the canonical settlement grant for the default %s',
+    async (key) => {
+      const f = fixture(roleRules(key));
+      await expect(f.caller().settlementAccess()).resolves.toEqual({
+        authorized: key === 'cashier',
+        userId: 'user-a',
+        organizationId: 'org-a',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows an individual pharmacist counter override without changing the role', async () => {
+    const f = fixture(roleRules('pharmacist'), { overrides: [COUNTER] });
+    await expect(f.caller().settlementAccess()).resolves.toEqual({
+      authorized: true,
+      userId: 'user-a',
+      organizationId: 'org-a',
+    });
+  });
+
+  it('honors an explicit counter denial over the cashier grant', async () => {
+    const f = fixture(roleRules('cashier'), {
+      overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+    await expect(f.caller().settlementAccess()).resolves.toEqual({
+      authorized: false,
+      userId: 'user-a',
+      organizationId: 'org-a',
+    });
+  });
 });

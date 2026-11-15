@@ -434,6 +434,19 @@ function ScopedPharmacyCounterConsole({
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
+  const settlementAccess = trpc.pharmacySales.settlementAccess.useQuery(undefined, {
+    retry: false,
+  });
+  // A background refresh retains its confirmed answer; errors and absent grants
+  // withhold payment controls. The server remains the authority for every write.
+  const settlementIdentityMatches =
+    settlementAccess.data?.userId === accountId &&
+    settlementAccess.data?.organizationId === organizationId;
+  const canSettlePayments =
+    settlementIdentityMatches &&
+    settlementAccess.data?.authorized === true &&
+    !settlementAccess.isError;
+
   const branchesQuery = trpc.pharmacySales.counterBranches.useQuery(undefined, {
     staleTime: 60_000,
   });
@@ -579,7 +592,7 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
-  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
+  const drawerQueryEnabled = Boolean(canSettlePayments && branchAuthorized && branchId && deviceId);
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
@@ -643,7 +656,7 @@ function ScopedPharmacyCounterConsole({
   );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
-    { enabled: Boolean(branchId) }
+    { enabled: canSettlePayments && branchAuthorized }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
@@ -1020,8 +1033,8 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const openPayment = useCallback(() => {
-    setPaymentOpen(true);
-  }, []);
+    if (canSettlePayments && branchAuthorized) setPaymentOpen(true);
+  }, [canSettlePayments, branchAuthorized]);
 
   const startNextBill = useCallback(() => {
     if (busy || attemptRef.current) return;
@@ -1476,6 +1489,7 @@ function ScopedPharmacyCounterConsole({
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
       if (
+        !canSettlePayments ||
         !saleId ||
         busy ||
         blocked ||
@@ -1578,6 +1592,7 @@ function ScopedPharmacyCounterConsole({
     },
     [
       autoPrint,
+      canSettlePayments,
       billState,
       blocked,
       branchId,
@@ -2256,15 +2271,16 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-              {openDrawerSession ? (
+              {canSettlePayments && openDrawerSession ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : (
                 <Button
                   type="button"
                   variant="outline"
                   className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                  disabled={busy || !drawerStatusKnown}
+                  disabled={!canSettlePayments || busy || !drawerStatusKnown}
                   onClick={() => {
+                    if (!canSettlePayments) return;
                     setPending('drawer');
                     openDrawer
                       .mutateAsync({
@@ -2731,7 +2747,7 @@ function ScopedPharmacyCounterConsole({
             ) : (
               <Button
                 className="h-14 w-full justify-between"
-                disabled={billState !== 'ready' || blocked || busy}
+                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -2741,6 +2757,29 @@ function ScopedPharmacyCounterConsole({
                 </kbd>
               </Button>
             )}
+            {!canSettlePayments ? (
+              <div
+                role="status"
+                className={`mt-2 text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
+              >
+                <p>
+                  {settlementAccess.isError
+                    ? "Couldn't check payment access."
+                    : settlementIdentityMatches && settlementAccess.data?.authorized === false
+                      ? 'Payments are taken by counter staff.'
+                      : 'Checking payment access…'}
+                </p>
+                {settlementAccess.isError ? (
+                  <Button
+                    variant="outline"
+                    className="mt-2 min-h-11"
+                    onClick={() => void settlementAccess.refetch()}
+                  >
+                    Retry payment access
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
               {blocked
                 ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
@@ -2752,7 +2791,7 @@ function ScopedPharmacyCounterConsole({
                       ? 'Refresh this bill to verify payment before taking more money.'
                       : 'Cash, card, bank transfer, wallet or khata.'}
             </p>
-            {billState !== 'ready' && billState !== 'settled' && saleId ? (
+            {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
                 Review payment status
               </Button>
@@ -2798,7 +2837,11 @@ function ScopedPharmacyCounterConsole({
       >
         <div className="min-w-0 flex-1">
           <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+            {!canSettlePayments
+              ? 'Counter staff take payments.'
+              : blocked
+                ? 'Payment locked · safety block'
+                : 'Balance due'}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
@@ -2815,7 +2858,7 @@ function ScopedPharmacyCounterConsole({
         </Button>
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
-          disabled={billState !== 'ready' || blocked || busy}
+          disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
@@ -2823,6 +2866,7 @@ function ScopedPharmacyCounterConsole({
       </div>
       <CounterOverlay
         title="Payment"
+        enabled={canSettlePayments}
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         initialFocus={tenderRef}
@@ -3216,6 +3260,7 @@ function ScopedPharmacyCounterConsole({
 function CounterOverlay({
   title,
   open,
+  enabled = true,
   onOpenChange,
   initialFocus,
   finalFocus,
@@ -3226,6 +3271,7 @@ function CounterOverlay({
 }: {
   title: string;
   open: boolean;
+  enabled?: boolean;
   onOpenChange: (open: boolean) => void;
   initialFocus?: RefObject<HTMLDivElement | null>;
   finalFocus: RefObject<HTMLInputElement | null>;
@@ -3234,6 +3280,8 @@ function CounterOverlay({
   drawer?: boolean;
   children: ReactNode;
 }) {
+  // Permission loss must unmount even the normally retained, closed contents.
+  if (!enabled) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal keepMounted>

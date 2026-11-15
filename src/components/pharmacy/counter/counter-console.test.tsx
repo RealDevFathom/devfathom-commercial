@@ -135,6 +135,7 @@ vi.mock('@/lib/trpc', async () => {
     trpc: {
       useUtils: () => utils,
       pharmacySales: router([
+        'settlementAccess',
         'manualPaymentSettings',
         'counterBranches',
         'counterKeymap',
@@ -446,6 +447,11 @@ beforeEach(() => {
     'refundAccess',
   ])
     mocks.queries[name] = query();
+  mocks.queries.settlementAccess = query({
+    authorized: true,
+    userId: 'account-a',
+    organizationId: 'org-a',
+  });
   // A counter taking cash has an open drawer; tests about a closed drawer say so.
   mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-default' } });
   mocks.queries.counterBranches = query({
@@ -3260,3 +3266,125 @@ it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('DEV-97 counter settlement access', () => {
+  it.each([
+    { userId: 'other-account', organizationId: 'org-a' },
+    { userId: 'account-a', organizationId: 'other-org' },
+  ])('ignores a cached grant for a different identity ($userId / $organizationId)', (identity) => {
+    mocks.queries.settlementAccess = query({ authorized: true, ...identity });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Take payment', hidden: true })
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+  });
+
+  it('keeps Tender and Start next bill available to a counter-authorized cashier after settlement', () => {
+    mocks.queries.counterCart = query(
+      cart({
+        status: 'COMPLETED',
+        receiptNumber: 42,
+        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+      })
+    );
+    const { rerender } = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(screen.getByRole('group', { name: 'Tender', hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start next bill' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+    // The newly empty bill has no cart query result.
+    mocks.queries.counterCart = query();
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText('No open bill')).toBeInTheDocument();
+  });
+
+  it.each([false, undefined])(
+    'withholds payment controls without a confirmed grant (%s)',
+    (authorized) => {
+      mocks.queries.settlementAccess = query(
+        authorized === undefined
+          ? undefined
+          : { authorized, userId: 'account-a', organizationId: 'org-a' }
+      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+      for (const button of screen.getAllByRole('button', { name: /^Pay/ }))
+        expect(button).toBeDisabled();
+      expect(screen.queryByText('Drawer open')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Take payment', hidden: true })
+      ).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+      expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+      expect(mocks.queryOptions).toHaveBeenCalledWith(
+        'drawerStatus',
+        expect.objectContaining({ enabled: false })
+      );
+      expect(mocks.queryOptions).toHaveBeenCalledWith(
+        'manualPaymentSettings',
+        expect.objectContaining({ enabled: false })
+      );
+      expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+      expect(
+        screen.getByText(
+          authorized === false ? 'Payments are taken by counter staff.' : 'Checking payment access…'
+        )
+      ).toBeInTheDocument();
+    }
+  );
+
+  it('keeps a confirmed grant while refreshing and removes tender controls when revoked', () => {
+    const access = query({ authorized: true, userId: 'account-a', organizationId: 'org-a' });
+    mocks.queries.settlementAccess = access;
+    const { rerender } = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    access.isFetching = true;
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeInTheDocument();
+    access.data = { authorized: false, userId: 'account-a', organizationId: 'org-a' };
+    access.isFetching = false;
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.queryByRole('button', { name: 'Take payment', hidden: true })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Payments are taken by counter staff.')).toBeInTheDocument();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('shows a retry on access failure and keeps payments disabled even with cached permission', () => {
+    const access = {
+      ...query({ authorized: true, userId: 'account-a', organizationId: 'org-a' }),
+      isError: true,
+    };
+    mocks.queries.settlementAccess = access;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText("Couldn't check payment access.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment access' }));
+    expect(access.refetch).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole('button', { name: 'Take payment', hidden: true })
+    ).not.toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: /^Pay/ }))
+      expect(button).toBeDisabled();
+  });
+
+  it('lets a counter-authorized operator open a drawer and take payment', async () => {
+    mocks.queries.drawerStatus = query({ openDrawer: null });
+    mocks.mutations.openDrawer!.mockResolvedValue({ id: 'drawer-new' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await waitFor(() =>
+      expect(screen.getByText('Cash drawer opened for this counter.')).toBeInTheDocument()
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open drawer' })).toBeEnabled());
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    enterPayment('BANK_TRANSFER');
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+  });
+});

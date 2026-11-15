@@ -2126,6 +2126,15 @@ export const pharmacySalesRouter = router({
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
+  /** DEV-97: presentation only; drawer and tender mutations retain their own checks. */
+  settlementAccess: protectedProcedure.query(async ({ ctx }) => ({
+    userId: ctx.session.user.id,
+    organizationId: ctx.session.user.organizationId,
+    authorized: await can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+    }),
+  })),
+
   /** DEV-647: whether the counter offers refunds. refundTender enforces the same rule. */
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
