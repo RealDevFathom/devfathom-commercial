@@ -406,6 +406,7 @@ export default async function PharmacyInventoryPage({
           countId: field(data, 'countId'),
           idempotencyKeyPrefix: `ui-count:${field(data, 'countId')}`,
           varianceReason: field(data, 'varianceReason') || undefined,
+          soloPin: field(data, 'soloPin') || undefined,
         });
       else if (action === 'write-off')
         await actionCaller.writeOff({
@@ -924,6 +925,21 @@ export default async function PharmacyInventoryPage({
                           name="varianceReason"
                           placeholder="Recount confirmed; breakage not logged"
                           required
+                        />
+                      </label>
+                    ) : null}
+                    {count.status === 'AWAITING_COAUTH' &&
+                    count.createdById === ctx.session.user.id ? (
+                      <label className="text-sm">
+                        Your PIN, if you work alone
+                        <Input
+                          autoComplete="off"
+                          className="mt-1 w-32"
+                          inputMode="numeric"
+                          maxLength={8}
+                          name="soloPin"
+                          pattern="[0-9]{4,8}"
+                          type="password"
                         />
                       </label>
                     ) : null}

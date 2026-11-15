@@ -265,6 +265,18 @@ export async function dailyCycleCountList(
               SELECT 1 FROM "pharmacy_stock_movements" r
               WHERE r."organizationId" = mv."organizationId" AND r."reversesMovementId" = mv.id
             )
+            -- An OPEN, HELD or VOID sale already holds its SALE movement, but
+            -- nothing was sold until checkout completes.
+            AND NOT EXISTS (
+              SELECT 1 FROM "pharmacy_sale_line_allocations" a
+              JOIN "pharmacy_sale_lines" sl
+                ON sl."organizationId" = a."organizationId" AND sl.id = a."saleLineId"
+              JOIN "pharmacy_sales" s
+                ON s."organizationId" = sl."organizationId" AND s.id = sl."saleId"
+              WHERE a."organizationId" = mv."organizationId"
+                AND a."stockMovementId" = mv.id
+                AND s.status <> 'COMPLETED'
+            )
             AND mv."occurredAt" >= ${salesSince}
             AND mv."occurredAt" <= ${at}
         ), 0)::bigint AS "soldUnits"
@@ -406,7 +418,16 @@ export async function approveCount(
   scope: LedgerScope,
   countId: string,
   idempotencyKeyPrefix: string,
-  varianceReason?: string
+  varianceReason?: string,
+  options: {
+    /**
+     * DEV-682 solo-pharmacy rule: the caller has already proved the actor is the
+     * pharmacy's only active member and re-verified their PIN, and records the
+     * audit row in this transaction. Only then may the counter co-authorize
+     * their own above-threshold variance.
+     */
+    soloSelfApproval?: boolean;
+  } = {}
 ) {
   // Approval reads the lifecycle state and posts its variance as one critical
   // section. Idempotency keys only deduplicate a replay that uses the same
@@ -429,7 +450,11 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  if (count.status === 'AWAITING_COAUTH' && count.createdById === scope.actorId)
+  if (
+    count.status === 'AWAITING_COAUTH' &&
+    count.createdById === scope.actorId &&
+    options.soloSelfApproval !== true
+  )
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
   // DEV-682: a variance is posted only with the reason the confirming person
   // gave for it; a count that matches the book needs none.

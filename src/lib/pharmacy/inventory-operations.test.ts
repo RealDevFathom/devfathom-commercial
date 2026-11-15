@@ -335,6 +335,10 @@ describe('DEV-682 dailyCycleCountList', () => {
     const sql = query.sql.replace(/\s+/g, ' ');
     expect(sql).toContain(`b.disposition = 'AVAILABLE'`);
     expect(sql).toContain(`mv.kind = 'SALE'`);
+    // Unfinished baskets already hold SALE movements but sold nothing yet.
+    expect(sql).toContain(`a."stockMovementId" = mv.id AND s.status <> 'COMPLETED'`);
+    // A reversed sale (and the reversal itself) is not a sale.
+    expect(sql).toContain(`mv."reversesMovementId" IS NULL`);
     expect(sql).toContain('"pharmacy_inventory_count_lines"');
     expect(query.values).toEqual(
       expect.arrayContaining([

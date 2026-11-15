@@ -282,6 +282,47 @@ describe('DEV-682 daily cycle count', () => {
         countId: 'count-1',
         idempotencyKeyPrefix: 'ui-count:count-1',
         varianceReason: 'Two strips broken, not logged',
+        soloPin: undefined,
+      })
+    );
+  });
+
+  it('offers the solo-owner PIN only on a count the viewer raised that awaits a co-author', async () => {
+    ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+      {
+        id: 'count-own',
+        status: 'AWAITING_COAUTH',
+        createdById: 'user',
+        createdAt: new Date('2026-11-15'),
+        varianceReason: null,
+        lines: [{ varianceUnits: -9 }],
+      },
+      {
+        id: 'count-other',
+        status: 'AWAITING_COAUTH',
+        createdById: 'someone-else',
+        createdAt: new Date('2026-11-15'),
+        varianceReason: null,
+        lines: [{ varianceUnits: -9 }],
+      },
+    ]);
+    await show();
+    expect(screen.getAllByLabelText('Your PIN, if you work alone')).toHaveLength(1);
+    const form = screen.getByLabelText('Your PIN, if you work alone').closest('form')!;
+    fireEvent.change(within(form).getByLabelText('Variance reason'), {
+      target: { value: 'Breakage' },
+    });
+    fireEvent.change(within(form).getByLabelText('Your PIN, if you work alone'), {
+      target: { value: '2468' },
+    });
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(mocks.approveCount).toHaveBeenCalledExactlyOnceWith({
+        branchId: branch.id,
+        countId: 'count-own',
+        idempotencyKeyPrefix: 'ui-count:count-own',
+        varianceReason: 'Breakage',
+        soloPin: '2468',
       })
     );
   });
