@@ -158,6 +158,7 @@ vi.mock('@/lib/trpc', async () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'refundAccess',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -418,6 +419,7 @@ beforeEach(() => {
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'refundAccess',
   ])
     mocks.queries[name] = query();
   mocks.queries.drawerStatus = query({ openDrawer: null });

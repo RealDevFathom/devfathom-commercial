@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 
 vi.mock('server-only', () => ({}));
+// DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: async () => true,
+  verifyRefundPin: async () => ({ verified: true }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -687,6 +693,7 @@ describe('counter receipt authorization', () => {
           amountMinor: 100,
           reason: 'Returned medicine',
           idempotencyKey: 'refund-1',
+          managerPin: '1234',
         }),
       write: refundPharmacyTender,
     },

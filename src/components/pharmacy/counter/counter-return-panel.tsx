@@ -76,27 +76,36 @@ type Props = {
   accountId: string;
   deviceId: () => string;
   businessDate: () => Date;
+  /** DEV-647: managers and owners only. The server enforces the same rule. */
+  refundAuthorized?: boolean;
 };
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-export function CounterReturnPanel(props: Props) {
+export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
   const [open, setOpen] = useState(false);
+  // DEV-647: cashiers record returns only; refunds stay with managers and owners.
+  const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
+  const refundAuthorized = access.data?.authorized === true;
+  const title = refundAuthorized ? 'Returns & refunds' : 'Returns';
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
-        Returns & refunds
+        {title}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogTitle>Returns & refunds</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Find the original receipt, record returned stock, then refund its original tenders.
+            {refundAuthorized
+              ? 'Find the original receipt, record returned stock, then refund its original tenders.'
+              : 'Find the original receipt and record returned stock. A manager or owner refunds it.'}
           </DialogDescription>
           {open && (
             <ReturnForm
               key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
               {...props}
+              refundAuthorized={refundAuthorized}
             />
           )}
         </DialogContent>
@@ -114,7 +123,14 @@ function subscribeConnection(changed: () => void) {
   };
 }
 
-export function ReturnForm({ branchId, organizationId, accountId, deviceId, businessDate }: Props) {
+export function ReturnForm({
+  branchId,
+  organizationId,
+  accountId,
+  deviceId,
+  businessDate,
+  refundAuthorized = false,
+}: Props) {
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -155,6 +171,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
+  const [managerPin, setManagerPin] = useState('');
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -206,15 +223,18 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(next: Attempt, controlledWitness?: ControlledWitness) {
+  const managerPinReady = witnessPinPattern.test(managerPin);
+
+  async function execute(next: Attempt, controlledWitness?: ControlledWitness, pin?: string) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
     const retry = !!attempt;
     setBusy(true);
     setError('');
     setMessage('');
-    // A witness PIN is single-use: clear it whatever the outcome.
+    // Witness and manager PINs are single-use: clear them whatever the outcome.
     setWitnessPin('');
+    setManagerPin('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       // The witness PIN is deliberately excluded from persistent storage.
@@ -241,11 +261,27 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           );
           return;
         }
-      } else
-        await refund.mutateAsync({
+      } else {
+        // The manager PIN is sent with the request only, never saved with the attempt.
+        const result = await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
+          managerPin: pin ?? '',
         });
+        if (isBlockedResult(result)) {
+          // Refused before any money moved. Keep a retried attempt for reconciliation.
+          if (!retry) {
+            try {
+              localStorage.removeItem(storageKey);
+              setAttempt(null);
+            } catch {
+              /* Keep recovery locked. */
+            }
+          }
+          setError(`${result.blocked}${retry ? ' Then retry the saved refund.' : ''}`);
+          return;
+        }
+      }
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
@@ -254,7 +290,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       setAmount('');
       setMessage(
         next.kind === 'return'
-          ? 'Return recorded. Choose an original tender to refund.'
+          ? refundAuthorized
+            ? 'Return recorded. Choose an original tender to refund.'
+            : 'Return recorded. A manager or owner must refund it with their PIN.'
           : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
@@ -333,6 +371,27 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     </section>
   );
 
+  const managerPinField = (
+    <div className="space-y-2">
+      <Label htmlFor="refund-manager-pin">Your manager or owner PIN</Label>
+      <Input
+        id="refund-manager-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={8}
+        className="h-11"
+        aria-describedby="refund-manager-pin-hint"
+        disabled={busy || !online || !ready}
+        value={managerPin}
+        onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
+      />
+      <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
+        Required for every refund. The PIN is never saved on this device.
+      </p>
+    </div>
+  );
+
   function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
@@ -378,16 +437,20 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       )}
       {message && <p role="status">{message}</p>}
+      {attempt?.kind === 'refund' && managerPinField}
       {attempt && (
         <Button
           className="h-11"
-          onClick={() => void execute(attempt, witness)}
+          onClick={() =>
+            void execute(attempt, witness, attempt.kind === 'refund' ? managerPin : undefined)
+          }
           disabled={
             busy ||
             !online ||
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
-            (attempt.kind === 'return' && (!data || !witnessReady))
+            (attempt.kind === 'return' && (!data || !witnessReady)) ||
+            (attempt.kind === 'refund' && !managerPinReady)
           }
         >
           Retry saved {attempt.kind}
@@ -674,82 +737,98 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Record return
             </Button>
           </fieldset>
-          <fieldset
-            disabled={locked || stale}
-            className="space-y-3 rounded-lg border border-border-subtle p-4"
-          >
-            <legend className="px-1 font-semibold">2. Refund original tender</legend>
-            <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
-            <Label htmlFor="refund-tender">Original tender</Label>
-            <select
-              id="refund-tender"
-              className={selectClass}
-              value={tenderId}
-              onChange={(event) => {
-                setTenderId(event.target.value);
-                setManual(false);
-              }}
+          {refundAuthorized ? (
+            <fieldset
+              disabled={locked || stale}
+              className="space-y-3 rounded-lg border border-border-subtle p-4"
             >
-              <option value="">Choose tender</option>
-              {data.tenders.map((row) => (
-                <option key={row.id} value={row.id} disabled={row.refundedMinor >= row.amountMinor}>
-                  {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
-                </option>
-              ))}
-            </select>
-            <Label htmlFor="refund-amount">Refund amount (PKR)</Label>
-            <Input
-              id="refund-amount"
-              className="h-11"
-              inputMode="decimal"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-            <p className="text-sm text-text-muted">
-              Refund up to PKR {formatMinor(available)} on this tender. Repeat with another original
-              tender for a mixed payment. Loyalty refunds restore redeemed points.
+              <legend className="px-1 font-semibold">2. Refund original tender</legend>
+              <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
+              <Label htmlFor="refund-tender">Original tender</Label>
+              <select
+                id="refund-tender"
+                className={selectClass}
+                value={tenderId}
+                onChange={(event) => {
+                  setTenderId(event.target.value);
+                  setManual(false);
+                }}
+              >
+                <option value="">Choose tender</option>
+                {data.tenders.map((row) => (
+                  <option
+                    key={row.id}
+                    value={row.id}
+                    disabled={row.refundedMinor >= row.amountMinor}
+                  >
+                    {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                  </option>
+                ))}
+              </select>
+              <Label htmlFor="refund-amount">Refund amount (PKR)</Label>
+              <Input
+                id="refund-amount"
+                className="h-11"
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+              <p className="text-sm text-text-muted">
+                Refund up to PKR {formatMinor(available)} on this tender. Repeat with another
+                original tender for a mixed payment. Loyalty refunds restore redeemed points.
+              </p>
+              {manualRequired && (
+                <label className="flex min-h-11 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={manual}
+                    onChange={(event) => setManual(event.target.checked)}
+                  />
+                  No provider refund adapter is configured. Issue CASH from this drawer; manual
+                  reversal required. I will reconcile the original provider separately.
+                </label>
+              )}
+              {!attempt && managerPinField}
+              <Button
+                variant="destructive"
+                className="h-11"
+                disabled={
+                  !tender ||
+                  !Number.isSafeInteger(amountMinor) ||
+                  amountMinor <= 0 ||
+                  amountMinor > available ||
+                  (manualRequired && !manual) ||
+                  !managerPinReady
+                }
+                onClick={() =>
+                  void execute(
+                    {
+                      kind: 'refund',
+                      saleId,
+                      input: {
+                        branchId,
+                        originalTenderId: tenderId,
+                        amountMinor,
+                        deviceId: deviceId(),
+                        businessDate: businessDate().toISOString(),
+                        reason,
+                        idempotencyKey: browserUuid(),
+                        manualCashFallback: manualRequired && manual,
+                      },
+                    },
+                    undefined,
+                    managerPin
+                  )
+                }
+              >
+                Confirm refund
+              </Button>
+            </fieldset>
+          ) : (
+            <p role="note" className="text-sm text-text-muted">
+              Refunds need a manager or owner. Ask one to refund this receipt with their PIN.
             </p>
-            {manualRequired && (
-              <label className="flex min-h-11 items-start gap-2">
-                <input
-                  type="checkbox"
-                  checked={manual}
-                  onChange={(event) => setManual(event.target.checked)}
-                />
-                No provider refund adapter is configured. Issue CASH from this drawer; manual
-                reversal required. I will reconcile the original provider separately.
-              </label>
-            )}
-            <Button
-              variant="destructive"
-              className="h-11"
-              disabled={
-                !tender ||
-                !Number.isSafeInteger(amountMinor) ||
-                amountMinor <= 0 ||
-                amountMinor > available ||
-                (manualRequired && !manual)
-              }
-              onClick={() =>
-                void execute({
-                  kind: 'refund',
-                  saleId,
-                  input: {
-                    branchId,
-                    originalTenderId: tenderId,
-                    amountMinor,
-                    deviceId: deviceId(),
-                    businessDate: businessDate().toISOString(),
-                    reason,
-                    idempotencyKey: browserUuid(),
-                    manualCashFallback: manualRequired && manual,
-                  },
-                })
-              }
-            >
-              Confirm refund
-            </Button>
-          </fieldset>
+          )}
           <section aria-label="Return and refund history" className="space-y-2">
             <h3 className="font-semibold">Return and refund history</h3>
             {data.returns.length === 0 && <p>No returns recorded.</p>}
