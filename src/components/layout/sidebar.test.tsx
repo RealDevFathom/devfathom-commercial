@@ -614,10 +614,17 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     pharmacyRailQuery.safety = true;
     pharmacyRailQuery.sop = true;
     try {
-      for (const pathname of routes) {
+      for (const route of routes) {
+        // DEV-502: the not-found catch-all is not a destination. Render it at a
+        // real unknown address; it must mark no entry current.
+        const notFound = route === '/pharmacy/[...missing]';
+        const pathname = notFound ? '/pharmacy/does-not-exist' : route;
         cleanup();
         renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
-        expect({ pathname, current: currentLinks().length }).toEqual({ pathname, current: 1 });
+        expect({ pathname, current: currentLinks().length }).toEqual({
+          pathname,
+          current: notFound ? 0 : 1,
+        });
       }
     } finally {
       pharmacyRailQuery.safety = false;

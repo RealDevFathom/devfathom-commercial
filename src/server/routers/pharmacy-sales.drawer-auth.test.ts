@@ -37,6 +37,10 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   openPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-1', status: 'OPEN' })),
   recordPharmacyCashMovement: vi.fn(async () => ({ id: 'movement-1' })),
   closePharmacyDrawer: vi.fn(async () => ({ id: 'drawer-1', status: 'CLOSED' })),
+  handoverPharmacyDrawer: vi.fn(async () => ({
+    drawer: { id: 'drawer-1' },
+    handover: { id: 'handover-1' },
+  })),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
 }));
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
@@ -55,6 +59,7 @@ import { readPharmacyReceiptFormat } from '@/lib/pharmacy/receipt-print';
 import {
   applyPharmacyTender,
   closePharmacyDrawer,
+  handoverPharmacyDrawer,
   openPharmacyDrawer,
   recordPharmacyCashMovement,
 } from '@/lib/pharmacy/settlement';
@@ -134,7 +139,12 @@ function fixture(
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
 
-const settlement = () => [openPharmacyDrawer, recordPharmacyCashMovement, closePharmacyDrawer];
+const settlement = () => [
+  openPharmacyDrawer,
+  recordPharmacyCashMovement,
+  closePharmacyDrawer,
+  handoverPharmacyDrawer,
+];
 
 type DrawerPath = {
   name: string;
@@ -186,6 +196,34 @@ const managerDrawerPaths: DrawerPath[] = [
         reason: 'Petty cash',
       }),
     command: () => recordPharmacyCashMovement,
+    // DEV-821: a manager's paid-in/out may use any open drawer of the branch.
+    options: [{ kind: 'COUNTER', actorIsManager: true }],
+  },
+  {
+    // DEV-821: naming someone else to run the till is a manager's, as is a float.
+    name: 'openDrawer naming another cashier',
+    run: (caller, branchId = 'branch-a') =>
+      caller.openDrawer({
+        branchId,
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        openingFloatMinor: 0,
+        operatingCashierId: 'cashier-b',
+      }),
+    command: () => openPharmacyDrawer,
+    options: [{ requireCurrentBusinessDate: true }],
+  },
+  {
+    // DEV-821: handing an open till to another cashier.
+    name: 'handoverDrawer',
+    run: (caller, branchId = 'branch-a') =>
+      caller.handoverDrawer({
+        branchId,
+        drawerSessionId: 'drawer-1',
+        toCashierId: 'cashier-b',
+        reason: 'Shift change',
+      }),
+    command: () => handoverPharmacyDrawer,
   },
   {
     name: 'closeDrawer',

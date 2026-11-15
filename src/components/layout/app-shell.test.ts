@@ -37,7 +37,7 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
   AdministratorStaffProfileCallout: () => null,
 }));
 
-import { AppShell, isPathModuleEnabled } from './app-shell';
+import { AppShell, isPathModuleEnabled, moduleDisplayName } from './app-shell';
 
 describe('AppShell module guard', () => {
   beforeEach(() => {
@@ -167,5 +167,30 @@ describe('AppShell module guard', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Licence details are PLACEHOLDER – not a real licence'
     );
+  });
+  it('names a disabled module without leaking its internal key (DEV-502)', () => {
+    mocks.pathname.mockReturnValue('/pharmacy/reports');
+    const props: ComponentProps<typeof AppShell> = {
+      brand: {
+        organizationId: 'org_test',
+        displayName: 'Test pharmacy',
+        logoUrl: null,
+        markUrl: null,
+        faviconUrl: null,
+        primaryColor: null,
+        accentColor: null,
+      },
+      children: createElement('p', null, 'Reports content'),
+    };
+    render(createElement(AppShell, props));
+
+    const main = screen.getByRole('main');
+    expect(screen.getByRole('heading', { name: 'This module is not enabled' })).toBeInTheDocument();
+    expect(main).toHaveTextContent('does not include Pharmacy Reports.');
+    expect(main).not.toHaveTextContent('pharmacy-reports');
+    expect(screen.queryByText('Reports content')).not.toBeInTheDocument();
+    expect(moduleDisplayName('restaurant-insights')).not.toContain('-');
+    expect(moduleDisplayName('no-such-module')).toBe('this module');
+    expect(moduleDisplayName(null)).toBe('this module');
   });
 });

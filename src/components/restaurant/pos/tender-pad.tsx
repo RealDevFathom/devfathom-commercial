@@ -10,6 +10,9 @@ import { StatusPill } from '@/components/ui/status-pill';
 import type { TerminalRequest } from './checkout-panel';
 
 const MONEY = /^\d+(\.\d{1,2})?$/;
+const APPROVAL_CODE = /^[A-Za-z0-9]{2,12}$/;
+// Last 4 digits or the machine reference; 13+ digits could be a full card number.
+const REFERENCE = /^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/;
 
 export type TenderResult = {
   tenderId: string;
@@ -49,6 +52,8 @@ export function TenderPad({
   const [amount, setAmount] = useState(amountDue ?? '');
   const [cashReceived, setCashReceived] = useState(amountDue ?? '');
   const [tipAmount, setTipAmount] = useState('');
+  const [approvalCode, setApprovalCode] = useState('');
+  const [reference, setReference] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TenderResult | null>(null);
@@ -78,10 +83,31 @@ export function TenderPad({
       return;
     }
 
+    if (type === 'CARD' && !APPROVAL_CODE.test(approvalCode.trim())) {
+      setError('Enter the approval code printed on the card machine slip.');
+      return;
+    }
+    if (type === 'CARD' && !REFERENCE.test(reference.trim())) {
+      setError('Enter the last 4 digits or the card machine reference. Never the full card number.');
+      return;
+    }
+
     const tender =
       type === 'CASH'
         ? { type, amount, cashReceived }
-        : { type, amount, ...(tipAmount ? { tipAmount } : {}) };
+        : {
+            type,
+            amount,
+            ...(tipAmount ? { tipAmount } : {}),
+            ...(type === 'CARD'
+              ? {
+                  manualConfirmation: {
+                    approvalCode: approvalCode.trim(),
+                    reference: reference.trim(),
+                  },
+                }
+              : {}),
+          };
     setPending(true);
     onPendingChange?.(true);
     setError(null);
@@ -94,6 +120,10 @@ export function TenderPad({
       setResult(next);
       setAmount(next.remainingDue);
       if (type === 'CASH') setCashReceived(next.remainingDue);
+      if (type === 'CARD') {
+        setApprovalCode('');
+        setReference('');
+      }
       await onApplied(next);
     } catch (requestError) {
       setError(message(requestError));
@@ -133,7 +163,7 @@ export function TenderPad({
             className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             <option value="CASH">Cash</option>
-            <option value="CARD">Card</option>
+            <option value="CARD">Card (confirmed on card machine)</option>
             <option value="OTHER">Other</option>
           </select>
         </div>
@@ -177,6 +207,38 @@ export function TenderPad({
           />
         </div>
       )}
+      {type === 'CARD' ? (
+        <div className="space-y-3">
+          <p className="text-sm text-text-muted">
+            Take the payment on the card machine first. Confirm it was approved, then enter the
+            details from the slip.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor={`card-approval-${billId}`}>Approval code</Label>
+              <Input
+                id={`card-approval-${billId}`}
+                value={approvalCode}
+                disabled={pending || disabled || result?.settled}
+                onChange={(event) => setApprovalCode(event.target.value)}
+                autoComplete="off"
+                className="h-11 font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`card-reference-${billId}`}>Last 4 digits or reference</Label>
+              <Input
+                id={`card-reference-${billId}`}
+                value={reference}
+                disabled={pending || disabled || result?.settled}
+                onChange={(event) => setReference(event.target.value)}
+                autoComplete="off"
+                className="h-11 font-mono"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       {result ? (
         <div role="status" className="grid gap-1 rounded-lg bg-surface-sunken p-3 text-sm">
           <span className="font-mono tabular-nums text-text-strong">

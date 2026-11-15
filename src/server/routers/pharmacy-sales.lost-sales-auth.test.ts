@@ -35,7 +35,20 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   recoverDemandWithAlternate: vi.fn(async () => ({ ...DEMAND_ROW, status: 'RECOVERED' })),
   demandAggregate: vi.fn(async () => ({ label: 'Estimate', rows: [] })),
   addRestockInterest: vi.fn(async () => ({ id: 'interest-1' })),
-  captureSafeRestockArrival: vi.fn(async () => ({ notified: 0 })),
+  // DEV-845: the whole notification row, as Prisma returns it without a select.
+  captureSafeRestockArrival: vi.fn(async () => [
+    {
+      interestId: 'interest-1',
+      reservation: null,
+      notification: {
+        id: 'notification-1',
+        status: 'CAPTURED',
+        channel: 'WHATSAPP',
+        destination: '03001234567',
+        idempotencyKey: 'restock:interest-1:lot-1',
+      },
+    },
+  ]),
   optOutRestockInterest: vi.fn(async () => ({ id: 'interest-1' })),
   recoverRestockInterest: vi.fn(async () => ({ id: 'interest-1' })),
   restockRecoveryReport: vi.fn(async () => ({ rows: [] })),
@@ -373,5 +386,27 @@ describe('DEV-817 demand-event manager reports', () => {
     const { caller } = fixture([MANAGER, COUNTER], { assigned: ['branch-b'] });
     await expect(path.run(caller())).rejects.toMatchObject(OUTSIDE);
     expect(path.command()).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-845 captureSafeRestockArrival never returns the destination phone', () => {
+  it.each([
+    { label: 'an assigned counter member', rules: [COUNTER], role: 'EMPLOYEE' as const },
+    { label: 'an assigned manager', rules: [MANAGER, COUNTER], role: 'EMPLOYEE' as const },
+    { label: 'a tenant admin', rules: [MANAGER, COUNTER], role: 'ADMIN' as const },
+  ])('returns only id, status and hasContact to $label', async ({ rules, role }) => {
+    const { caller } = fixture(rules, { role, assigned: ['branch-a'] });
+    const result = await caller().captureSafeRestockArrival({
+      branchId: 'branch-a',
+      inventoryLotId: 'lot-1',
+    });
+    expect(result).toEqual([
+      {
+        interestId: 'interest-1',
+        reservation: null,
+        notification: { id: 'notification-1', status: 'CAPTURED', hasContact: true },
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(PHONE);
   });
 });

@@ -20,10 +20,29 @@ export function isOwnerDataExportObjectName(name: string): boolean {
   return /^owner-data-export-/iu.test(name);
 }
 
+/** 128 random bits, as the hex token in an archive name. */
+export function newOwnerDataExportArchiveToken(): string {
+  return randomBytes(16).toString('hex');
+}
+
 /** A fresh, unguessable object name for one export job. */
 export function newOwnerDataExportObjectName(jobId: string): string {
   if (!JOB_ID.test(jobId)) throw new Error('Invalid export job id.');
-  return `${OWNER_DATA_EXPORT_OBJECT_PREFIX}${jobId}-${randomBytes(16).toString('hex')}.zip`;
+  return `${OWNER_DATA_EXPORT_OBJECT_PREFIX}${jobId}-${newOwnerDataExportArchiveToken()}.zip`;
+}
+
+/**
+ * DEV-844 — the archive name a job reserved when it was queued. Its token is
+ * stored in the job's payload, so every attempt (a worker retry, a platform
+ * retry) writes this one object instead of leaving a new, unrecorded archive
+ * behind each time an upload outlives its job transaction. Null for a job
+ * queued before DEV-844, which carries no token.
+ */
+export function reservedOwnerDataExportObjectName(jobId: string, payload: unknown): string | null {
+  if (!JOB_ID.test(jobId) || !payload || typeof payload !== 'object') return null;
+  const token = (payload as { archiveToken?: unknown }).archiveToken;
+  if (typeof token !== 'string' || !TOKEN.test(token)) return null;
+  return `${OWNER_DATA_EXPORT_OBJECT_PREFIX}${jobId}-${token}.zip`;
 }
 
 /**

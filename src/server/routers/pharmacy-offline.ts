@@ -426,7 +426,10 @@ export async function replayCounterCommand(
       idempotencyKey: command.idempotencyKey,
       leasedReceipt: command.leasedReceipt,
     },
-    { deviceSecret, signature: receiptSignature }
+    { deviceSecret, signature: receiptSignature },
+    // DEV-821: an enrolled counter replays a sale it took offline into its own drawer;
+    // the device is authenticated by its secret and the signed command above.
+    { drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' } }
   );
   if (!('settled' in result) || !result.settled)
     throw new CounterTransportError('offline_total_changed', 409);

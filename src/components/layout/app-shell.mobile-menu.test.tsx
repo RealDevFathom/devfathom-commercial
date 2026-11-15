@@ -43,26 +43,29 @@ vi.mock('./topbar', () => ({
     </header>
   ),
 }));
-vi.mock('./sidebar', () => ({
-  Sidebar: ({ onNavigate, onClose }: { onNavigate?: () => void; onClose?: () => void }) => (
-    <aside>
-      {onClose ? (
-        <button type="button" onClick={onClose}>
-          Close menu
-        </button>
-      ) : null}
-      <nav>
-        <a href="/pharmacy/counter" onClick={onNavigate}>
-          Counter
-        </a>
-        <a href="/pharmacy/stock" onClick={onNavigate}>
-          Stock
-        </a>
-      </nav>
-    </aside>
-  ),
-  TopNavigation: () => null,
-}));
+vi.mock('./sidebar', async () => {
+  const { default: Link } = await import('next/link');
+  return {
+    Sidebar: ({ onNavigate, onClose }: { onNavigate?: () => void; onClose?: () => void }) => (
+      <aside>
+        {onClose ? (
+          <button type="button" onClick={onClose}>
+            Close menu
+          </button>
+        ) : null}
+        <nav>
+          <Link href="/pharmacy/counter" onClick={onNavigate}>
+            Counter
+          </Link>
+          <Link href="/pharmacy/stock" onClick={onNavigate}>
+            Stock
+          </Link>
+        </nav>
+      </aside>
+    ),
+    TopNavigation: () => null,
+  };
+});
 
 import { AppShell } from './app-shell';
 
