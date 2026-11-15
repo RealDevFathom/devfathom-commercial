@@ -399,8 +399,9 @@ export default async function PharmacyReportsPage({
         ['Cash', money(metrics.cashMinor)],
         ['Cash variance', money(metrics.cashVarianceMinor)],
         ['Refunds', money(metrics.refundsMinor)],
-        ['Open stock signals', metrics.openStockSignals],
-        ['Recommended orders', metrics.recommendedOrders],
+        // DEV-729: null means stock signals were never worked out for this scope, not zero.
+        ['Open stock signals', metrics.openStockSignals ?? 'Not calculated yet'],
+        ['Recommended orders', metrics.recommendedOrders ?? 'Not calculated yet'],
         ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
         ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
       ]

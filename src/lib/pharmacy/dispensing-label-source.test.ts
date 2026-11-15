@@ -128,3 +128,27 @@ describe('label source provenance', () => {
     expect(db.pharmacySaleLine.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('label licence on a profile start day (DEV-298)', () => {
+  const dayStart = new Date('2026-10-21T00:00:00.000Z');
+  it.each([
+    ['00:30 PKT on the start day', '2026-10-20T19:30:00.000Z', dayStart],
+    ['23:59 PKT the day before', '2026-10-20T18:59:00.000Z', new Date('2026-10-20T18:59:00.000Z')],
+  ])(
+    'selects the version in force on the workspace day at %s',
+    async (_label, completedAt, asOf) => {
+      const { db } = fixture();
+      await readDispensingLabelSources(
+        db as unknown as ScopedDb,
+        actorScope,
+        { ...receipt, completedAt } as CounterReceipt,
+        'Asia/Karachi'
+      );
+      expect(db.branchRegulatoryProfile.findFirst.mock.calls[0]![0].where).toEqual({
+        ...scope,
+        effectiveFrom: { lte: asOf },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+      });
+    }
+  );
+});

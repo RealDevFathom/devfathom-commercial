@@ -9,6 +9,7 @@ import {
   lotDimension,
   medicineHasIngredient,
 } from './report-dimensions';
+import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -83,7 +84,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'openStockSignals',
     'Open stock signals',
-    'Open low-stock, stockout, expiry, recall, quarantine, and related signals.',
+    'Open low-stock, stockout, expiry, recall, quarantine, and related signals. Unknown (not calculated yet) until stock signals have been evaluated for every selected branch; a zero is never asserted without that evidence.',
     'pharmacy_stock_signals',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -101,7 +102,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'recommendedOrders',
     'Recommended orders',
-    'Open stock signals with a linked requisition action.',
+    'Open stock signals with a linked requisition action. Unknown (not calculated yet) until stock signals have been evaluated for every selected branch.',
     'pharmacy_stock_signals + pharmacy_stock_signal_actions',
     'selected branches at read time',
     '/pharmacy/purchasing',
@@ -428,9 +429,9 @@ export async function readPharmacyOwnerCommandCentre(
         : db.branchRegulatoryProfile.count({
             where: {
               branchId: { in: filters.branchIds },
-              effectiveFrom: { lte: at },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-              qualifiedPersonValidFrom: { lte: at },
+              // DEV-298: profile and coverage start on the workspace's calendar day; expiry stays at `at`.
+              ...regulatoryProfileInForceWhere(at, filters.timeZone),
+              qualifiedPersonValidFrom: { lte: regulatoryStartInstant(at, filters.timeZone) },
               qualifiedPersonValidTo: { gt: at },
             },
           }),
@@ -444,6 +445,11 @@ export async function readPharmacyOwnerCommandCentre(
           ),
     ]);
   const khataAgingMinor = dimensional ? null : await readKhataAgingMinor(db, filters.branchIds);
+  // DEV-729: the evaluator leaves a signal row (in any status) wherever it has run. A
+  // branch with none has never been calculated, so a zero there is unknown, not "all fine".
+  const signalHistory = await db.$queryRaw<Array<{ evaluatedBranches: number }>>(
+    Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
+  );
   const m = money[0] ?? {
     salesMinor: 0,
     marginMinor: null,
@@ -452,6 +458,10 @@ export async function readPharmacyOwnerCommandCentre(
     cashVarianceMinor: dimensional ? null : 0,
   };
   const s = stock[0] ?? { open: 0, recommended: 0 };
+  // Stock signals and recommended orders are only a count once every selected
+  // branch has been evaluated; before that a zero would read as "all fine".
+  const signalsCalculated =
+    (signalHistory[0]?.evaluatedBranches ?? 0) >= new Set(filters.branchIds).size;
   const e = expiry[0] ?? { d30: 0, d60: 0, d90: 0, d180: 0, quarantine: 0 };
   return {
     filters,
@@ -465,9 +475,9 @@ export async function readPharmacyOwnerCommandCentre(
     },
     metrics: {
       ...m,
-      openStockSignals: s.open,
+      openStockSignals: signalsCalculated ? s.open : null,
       lostDemandEvents: lostDemand ? (lostDemand[0]?.value ?? 0) : null,
-      recommendedOrders: s.recommended,
+      recommendedOrders: signalsCalculated ? s.recommended : null,
       expiryValueMinor30: e.d30,
       expiryValueMinor60: e.d60,
       expiryValueMinor90: e.d90,
