@@ -29,7 +29,7 @@ import {
   type SaleUnitOption,
 } from './counter-pricing';
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
-import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
+import { mrpRoundingIncrementForLot, normalizeMedicineText, packStripSize } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
 
@@ -400,11 +400,14 @@ export async function searchCounterCatalog(
     let saleUnits: SaleUnitOption[] = [];
     if (best) {
       const levels = packLevelsByPresentation.get(presentationId) ?? [];
+      // DEV-705: a standalone "10x10" box also sells by the strip.
+      const unitsPerStrip = packStripSize(presentation.presentation, best.lot.unitsPerPack);
       try {
         saleUnits = saleUnitOptions({
           packLevels: levels,
           rootPackLevelId: best.lot.packLevelId,
           unitsPerPack: best.lot.unitsPerPack,
+          unitsPerStrip,
         });
       } catch {
         // A pack hierarchy that disagrees with the received lot cannot derive a
@@ -415,6 +418,7 @@ export async function searchCounterCatalog(
             packLevelId: best.lot.packLevelId,
             levelLabel: levels.find((level) => level.id === best!.lot.packLevelId)?.level ?? 'PACK',
             unitsPerPack: best.lot.unitsPerPack,
+            unitsPerStrip,
           });
         } catch {
           saleUnits = [];

@@ -97,12 +97,15 @@ export function saleUnitOptions(input: {
   packLevels: readonly PackLevelNode[];
   rootPackLevelId: string;
   unitsPerPack: number;
+  /** Strip size for a standalone pack, from its reviewed pack wording (DEV-705). */
+  unitsPerStrip?: number | null;
 }): SaleUnitOption[] {
   assertPositiveInteger(input.unitsPerPack);
   const chain = chainFrom(input.packLevels, input.rootPackLevelId);
   // The receiving setup also supports a standalone pack counted directly in
   // canonical units. It offers that sealed pack and, when it holds more than
-  // one, the loose canonical unit — never an invented strip.
+  // one, the loose canonical unit, plus a strip only when the caller supplies
+  // one that divides the pack exactly — never an invented strip.
   // A leaf received within an existing hierarchy is already one canonical
   // unit; its unitsPerParent describes its parent, not the received pack.
   if (chain.length === 1) {
@@ -116,6 +119,7 @@ export function saleUnitOptions(input: {
       packLevelId: pack.id,
       levelLabel: pack.level,
       unitsPerPack: canonicalUnits,
+      unitsPerStrip: pack.parentPackLevelId === null ? input.unitsPerStrip : null,
     });
   }
 
@@ -143,16 +147,19 @@ export function saleUnitOptions(input: {
 /**
  * The sale units a lot can always be sold in from its own frozen conversion:
  * the sealed pack and, when the pack holds more than one, the loose canonical
- * unit. No strip is offered because a strip only exists in a pack hierarchy.
+ * unit. A strip is offered only when the caller passes a `unitsPerStrip` that
+ * divides the pack exactly (DEV-705: the reviewed "10x10" pack wording, see
+ * `packStripSize`); otherwise no strip is invented.
  *
  * Used for a standalone pack, and as the fallback when the pack table no
  * longer agrees with the received lot: `unitsPerPack` is what the server
- * prices from (MED-08), so both options remain prices the server will honour.
+ * prices from (MED-08), so every option remains a price the server will honour.
  */
 export function lotSaleUnitOptions(input: {
   packLevelId: string;
   levelLabel: string;
   unitsPerPack: number;
+  unitsPerStrip?: number | null;
 }): SaleUnitOption[] {
   assertPositiveInteger(input.unitsPerPack);
   const pack: SaleUnitOption = {
@@ -162,15 +169,29 @@ export function lotSaleUnitOptions(input: {
     canonicalUnitsPerSaleUnit: input.unitsPerPack,
   };
   if (input.unitsPerPack === 1) return [pack];
-  return [
-    pack,
-    {
-      kind: 'UNIT',
+  const strip = input.unitsPerStrip;
+  const options: SaleUnitOption[] = [pack];
+  if (
+    typeof strip === 'number' &&
+    Number.isSafeInteger(strip) &&
+    strip > 1 &&
+    strip < input.unitsPerPack &&
+    input.unitsPerPack % strip === 0
+  ) {
+    options.push({
+      kind: 'STRIP',
       packLevelId: input.packLevelId,
-      levelLabel: 'UNIT',
-      canonicalUnitsPerSaleUnit: 1,
-    },
-  ];
+      levelLabel: 'STRIP',
+      canonicalUnitsPerSaleUnit: strip,
+    });
+  }
+  options.push({
+    kind: 'UNIT',
+    packLevelId: input.packLevelId,
+    levelLabel: 'UNIT',
+    canonicalUnitsPerSaleUnit: 1,
+  });
+  return options;
 }
 
 /**

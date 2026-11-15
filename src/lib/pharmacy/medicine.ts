@@ -86,6 +86,33 @@ export function parseDefaultPackSize(
   return { level, unitsPerParent: units };
 }
 
+/**
+ * DEV-705: the strip size of a standalone box whose reviewed pack wording is a
+ * two-factor chain such as "10x10", "3 x 10's" or "Blister 10 x 10" — strips
+ * times units per strip, the order Pakistani pack labels print. The importer
+ * already reads that wording as a box of strips (`parseDefaultPackSize`); the
+ * last factor is the strip. Returns null unless the wording parses to exactly
+ * the lot's frozen units per pack, so a revised or ambiguous pack (one factor,
+ * three factors, a carton, a measured volume) never yields a strip.
+ */
+export function packStripSize(
+  input: string | null | undefined,
+  unitsPerPack: number
+): number | null {
+  if (!input || !Number.isSafeInteger(unitsPerPack) || unitsPerPack <= 1) return null;
+  const parsed = parseDefaultPackSize(input);
+  if (!parsed || parsed.level !== 'BOX' || parsed.unitsPerParent !== unitsPerPack) return null;
+  const chain = input
+    .trim()
+    .toLowerCase()
+    .replace(PACK_MEASURE, ' ')
+    .match(/\d+(?:\s*[x×*]\s*\d+)+/);
+  const factors = (chain?.[0].match(/\d+/g) ?? []).map(Number).filter((factor) => factor > 1);
+  if (factors.length !== 2) return null;
+  const strip = factors[1]!;
+  return strip < unitsPerPack && unitsPerPack % strip === 0 ? strip : null;
+}
+
 export function medicineDuplicateKey(input: {
   productName: string;
   strengths: readonly { value: number | string; unit: string }[];

@@ -316,6 +316,57 @@ describe('incrementRepeatScan (POS-03: repeat scan increments the same unit)', (
   });
 });
 
+describe('lotSaleUnitOptions strip (DEV-705)', () => {
+  it('adds a strip between pack and unit only when it divides the pack exactly', () => {
+    expect(
+      lotSaleUnitOptions({
+        packLevelId: 'box',
+        levelLabel: 'BOX',
+        unitsPerPack: 100,
+        unitsPerStrip: 10,
+      })
+    ).toEqual([
+      { kind: 'PACK', packLevelId: 'box', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 100 },
+      { kind: 'STRIP', packLevelId: 'box', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+      { kind: 'UNIT', packLevelId: 'box', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+    ]);
+    for (const unitsPerStrip of [null, 1, 7, 100, 200, 2.5]) {
+      expect(
+        lotSaleUnitOptions({
+          packLevelId: 'box',
+          levelLabel: 'BOX',
+          unitsPerPack: 100,
+          unitsPerStrip,
+        }).map((option) => option.kind)
+      ).toEqual(['PACK', 'UNIT']);
+    }
+  });
+
+  it('passes the strip through for a standalone pack, not for a hierarchy leaf', () => {
+    const box = { id: 'box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 100 };
+    expect(
+      saleUnitOptions({
+        packLevels: [box],
+        rootPackLevelId: 'box',
+        unitsPerPack: 100,
+        unitsPerStrip: 10,
+      }).map((option) => [option.kind, option.canonicalUnitsPerSaleUnit])
+    ).toEqual([
+      ['PACK', 100],
+      ['STRIP', 10],
+      ['UNIT', 1],
+    ]);
+    expect(
+      saleUnitOptions({
+        packLevels: THREE_LEVEL,
+        rootPackLevelId: 'unit',
+        unitsPerPack: 1,
+        unitsPerStrip: 10,
+      }).map((option) => option.kind)
+    ).toEqual(['PACK']);
+  });
+});
+
 describe('lotSaleUnitOptions (pack table disagrees with the lot)', () => {
   it('keeps the sealed pack and the loose unit from the lot’s frozen conversion', () => {
     expect(lotSaleUnitOptions({ packLevelId: 'box', levelLabel: 'BOX', unitsPerPack: 60 })).toEqual(

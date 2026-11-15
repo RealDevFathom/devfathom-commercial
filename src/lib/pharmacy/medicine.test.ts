@@ -5,6 +5,7 @@ import {
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
+  packStripSize,
   parseDefaultPackSize,
   parseSimpleMedicineStrength,
 } from './medicine';
@@ -150,5 +151,26 @@ describe('pharmacy medicine invariants', () => {
         dosageForm: 'Tablet',
       })
     ).not.toBe(exact);
+  });
+});
+
+describe('packStripSize (DEV-705)', () => {
+  it('reads the strip from a two-factor box chain that matches the lot', () => {
+    expect(packStripSize('10x10', 100)).toBe(10);
+    expect(packStripSize('Blister 10 x 10', 100)).toBe(10);
+    expect(packStripSize("3 x 10's", 30)).toBe(10);
+    expect(packStripSize('2 × 14 tablets', 28)).toBe(14);
+  });
+
+  it('never yields a strip for wording that does not describe one exactly', () => {
+    expect(packStripSize('10x10', 50)).toBeNull();
+    expect(packStripSize('100 tablets', 100)).toBeNull();
+    expect(packStripSize('Strip of 10', 10)).toBeNull();
+    expect(packStripSize('1 x 10', 10)).toBeNull();
+    expect(packStripSize('5 x 2 x 10', 100)).toBeNull();
+    expect(packStripSize('Carton 10 x 10', 100)).toBeNull();
+    expect(packStripSize('10 x 10 ml vials', 10)).toBeNull();
+    expect(packStripSize('', 100)).toBeNull();
+    expect(packStripSize(null, 100)).toBeNull();
   });
 });
