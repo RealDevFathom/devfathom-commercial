@@ -364,6 +364,18 @@ describe('promotion receipt line (#727)', () => {
     });
     expect(raw.receiptSnapshot?.facts.lines[0]).toContain('Promotion: Winter week (-1.00)');
   });
+
+  it('keeps the promotion on browser-printed thermal and A4 receipts, in both languages', () => {
+    const source = receipt({ lines: [promoted] });
+    expect(buildCounterReceiptPreview(source, 'en', 80)).toContain(
+      'Promotion: Winter week (-1.00)'
+    );
+    expect(buildCounterReceiptPreview(source, 'en', 58)).toContain('Winter week');
+    expect(buildCounterReceiptPreview(source, 'ur', 80)).toContain(
+      COUNTER_RECEIPT_STRINGS.ur.promotion
+    );
+    expect(buildCounterReceiptPreview(receipt(), 'en', 80)).not.toContain('Promotion:');
+  });
 });
 
 describe('receiptTitle', () => {
