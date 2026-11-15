@@ -67,6 +67,7 @@ import {
   integerField,
   money,
   moneyFieldMinor,
+  optionalMoneyFieldMinor,
   noticeFrom,
   NO_ACTOR,
   optionalField,
@@ -312,6 +313,7 @@ export default async function PharmacyReceivingPage({
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
         qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'freight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -382,6 +384,7 @@ export default async function PharmacyReceivingPage({
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'directFreight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -784,6 +787,13 @@ export default async function PharmacyReceivingPage({
                     required
                     hint="Where the warranty or source declaration for this consignment is filed."
                   />
+                  <TextField
+                    inputMode="decimal"
+                    label="Freight on this supplier invoice (PKR)"
+                    name="freight"
+                    notice={notice}
+                    hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
+                  />
                 </div>
 
                 <div className="space-y-3">
@@ -994,6 +1004,13 @@ export default async function PharmacyReceivingPage({
                 name="directDistributorStrn"
                 notice={notice}
                 hint="As printed on this purchase bill."
+              />
+              <TextField
+                inputMode="decimal"
+                label="Freight on this supplier invoice (PKR)"
+                name="directFreight"
+                notice={notice}
+                hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
               />
               <TextAreaField
                 className="sm:col-span-2"
@@ -1454,7 +1471,7 @@ function ReceiptDetail({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium text-text-strong">{line.medicine.productName}</span>
               <span className="font-mono text-sm tabular-nums text-text-strong">
-                {money(line.unitCostMinor)} / unit
+                {money(line.unitCostMinor)} / unit landed
               </span>
             </div>
             <p className="mt-1 text-xs text-text-muted">
@@ -1466,6 +1483,9 @@ function ReceiptDetail({
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
               {line.canonicalUnitsPerPack} ={' '}
               {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}
+              {line.allocatedFreightMinor > 0
+                ? ` · freight share ${money(line.allocatedFreightMinor)}`
+                : ''}
             </p>
             <p className="mt-1 text-xs text-text-muted">
               Accepted {units(line.acceptedCanonicalUnits)} into {line.stockLocation.name}

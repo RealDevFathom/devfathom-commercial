@@ -2720,7 +2720,6 @@ describe('DEV-618 counter composition', () => {
           override: {
             inventoryLotId: 'lot-later',
             reason: 'Patient needs longer dating',
-            approvalPolicy: 'PHARMACIST_ON_DUTY',
           },
         })
       )
