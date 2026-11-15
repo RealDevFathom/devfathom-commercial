@@ -8000,6 +8000,7 @@ enum RestaurantTenderType {
 enum RestaurantPaymentProvider {
   MOCK
   TERMINAL
+  MANUAL
 }
 
 enum RestaurantTerminalProviderMode {

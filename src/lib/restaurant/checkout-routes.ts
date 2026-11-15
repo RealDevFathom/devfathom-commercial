@@ -150,8 +150,25 @@ export const compBody = z
 const CASH_TENDER = z
   .object({ type: z.literal('CASH'), amount: MONEY, cashReceived: MONEY })
   .strict();
+/** The cashier confirms the card machine approved the payment: the approval code from
+ * the slip plus the last 4 digits or terminal reference. A 13+ digit value (a possible
+ * full card number) is refused. */
+const MANUAL_CARD_CONFIRMATION = z
+  .object({
+    approvalCode: z.string().trim().regex(/^[A-Za-z0-9]{2,12}$/),
+    reference: z
+      .string()
+      .trim()
+      .regex(/^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/),
+  })
+  .strict();
 const CARD_TENDER = z
-  .object({ type: z.literal('CARD'), amount: MONEY, tipAmount: MONEY.optional() })
+  .object({
+    type: z.literal('CARD'),
+    amount: MONEY,
+    tipAmount: MONEY.optional(),
+    manualConfirmation: MANUAL_CARD_CONFIRMATION.optional(),
+  })
   .strict();
 const OTHER_TENDER = z
   .object({ type: z.literal('OTHER'), amount: MONEY, tipAmount: MONEY.optional() })

@@ -12,7 +12,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -622,6 +622,148 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
     );
     expect(bill?.status).toBe('OPEN');
     expect(bill?.receiptNumber).toBeNull();
+  });
+
+  it('refuses a MOCK card tender in production and saves nothing', async () => {
+    const { billId } = await openBill(2);
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      await expect(
+        deps.tenders.applyTender(deps.createTenantDb(orgId), {
+          billId,
+          tender: { type: 'CARD', amount: '10.00' },
+          actor: actor(),
+          now: AT,
+        })
+      ).rejects.toMatchObject({ reason: 'CARD_DECLINED' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+      events: await tx.restaurantPaymentEvent.count({ where: { payment: { billId } } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
+  });
+
+  it('under NODE_ENV=production a real organization completes a manually confirmed card sale (MANUAL, with the actor)', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    vi.stubEnv('NODE_ENV', 'production');
+    let result: Awaited<ReturnType<typeof deps.tenders.applyTender>>;
+    try {
+      result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: {
+          type: 'CARD',
+          amount: grandTotal,
+          manualConfirmation: { approvalCode: 'AB12CD', reference: '4242' },
+        },
+        actor: actor(),
+        now: AT,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(result.settled).toBe(true);
+    const payment = await read((tx) =>
+      tx.restaurantPayment.findUnique({
+        where: { id: result.paymentId! },
+        select: {
+          provider: true,
+          status: true,
+          staffProfileId: true,
+          deviceId: true,
+          providerRef: true,
+          events: { select: { eventType: true, payload: true } },
+        },
+      })
+    );
+    expect(payment).toMatchObject({
+      provider: 'MANUAL',
+      status: 'CAPTURED',
+      staffProfileId: ids.operator,
+      deviceId,
+      providerRef: '4242',
+    });
+    expect(payment?.events).toHaveLength(1);
+    expect(payment?.events[0]).toMatchObject({
+      eventType: 'MANUAL_CONFIRMED',
+      payload: { provider: 'MANUAL', manuallyConfirmed: true, approvalCode: 'AB12CD' },
+    });
+  });
+
+  it('refuses a manually confirmed card tender without a valid approval code and saves nothing', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: {
+          type: 'CARD',
+          amount: grandTotal,
+          manualConfirmation: { approvalCode: '', reference: '4242' },
+        },
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+      events: await tx.restaurantPaymentEvent.count({ where: { payment: { billId } } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
+  });
+
+  it('refuses the MOCK for a real organization under NODE_ENV=development and saves nothing', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    vi.stubEnv('NODE_ENV', 'development');
+    try {
+      await expect(
+        deps.tenders.applyTender(deps.createTenantDb(orgId), {
+          billId,
+          tender: { type: 'CARD', amount: grandTotal },
+          actor: actor(),
+          now: AT,
+        })
+      ).rejects.toMatchObject({ reason: 'CARD_DECLINED' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0 });
+  });
+
+  it('lets the MOCK approve for a demo organization under NODE_ENV=production', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    await deps.withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: orgId }, data: { isDemo: true } })
+    );
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: { type: 'CARD', amount: grandTotal },
+        actor: actor(),
+        now: AT,
+      });
+      expect(result.settled).toBe(true);
+      const payment = await read((tx) =>
+        tx.restaurantPayment.findUnique({
+          where: { id: result.paymentId! },
+          select: { provider: true, status: true },
+        })
+      );
+      expect(payment).toEqual({ provider: 'MOCK', status: 'CAPTURED' });
+    } finally {
+      vi.unstubAllEnvs();
+      await deps.withPlatformDb((tx) =>
+        tx.organization.update({ where: { id: orgId }, data: { isDemo: false } })
+      );
+    }
   });
 
   it('rejects an over-tender beyond the bill balance', async () => {
