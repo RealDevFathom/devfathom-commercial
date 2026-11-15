@@ -352,8 +352,8 @@ export function ReturnForm({
         </p>
       ) : pharmacists.data && pharmacists.data.length === 0 ? (
         <p role="status">
-          No independent pharmacist with an active staff PIN is available. Ask your administrator
-          to configure one.
+          No independent pharmacist with an active staff PIN is available. Ask your administrator to
+          configure one.
         </p>
       ) : null}
       <Label htmlFor="return-witness-pin">Witness PIN</Label>
@@ -485,10 +485,16 @@ export function ReturnForm({
             spellCheck={false}
             maxLength={40}
             required
-            aria-describedby="return-receipt-hint"
+            aria-invalid={unparsed}
+            aria-describedby={
+              unparsed ? 'return-receipt-error return-receipt-hint' : 'return-receipt-hint'
+            }
             value={number}
             disabled={locked}
-            onChange={(event) => setNumber(event.target.value)}
+            onChange={(event) => {
+              setNumber(event.target.value);
+              if (unparsed) setSearched(null);
+            }}
             className="h-11"
           />
         </div>
@@ -503,6 +509,12 @@ export function ReturnForm({
         <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
           Enter the number printed on the receipt, for example 1042 or QA-1042.
         </p>
+        {unparsed && (
+          <p id="return-receipt-error" className="w-full text-sm text-destructive">
+            Enter a receipt number made of digits, for example 1042 or QA-1042. Negative numbers and
+            zero are not receipt numbers.
+          </p>
+        )}
       </form>
       {lookup.isFetching && !!searched?.value && <p role="status">Looking up receipt…</p>}
       {!unparsed && lookup.isError && (
