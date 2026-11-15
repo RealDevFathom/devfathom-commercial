@@ -18,7 +18,11 @@
  * `assertActivationReady` fail-closed for pharmacy organizations.
  */
 import type { PrismaClient } from '@/generated/prisma/client';
-import { isPackageCompatibleWithVertical, roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import {
+  isPackageCompatibleWithVertical,
+  PHARMACY_OPT_IN_ROLE_KEYS,
+  roleTemplatesForVertical,
+} from '@/lib/vertical-catalog';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
 import { readSupplierCompliancePolicy } from './supplier-compliance-policy';
@@ -243,9 +247,9 @@ export async function evaluatePharmacyReadiness(
   organizationId: string,
   at: Date = new Date()
 ): Promise<PharmacyReadiness> {
-  // Owner / Operator is opt-in, never an additional activation prerequisite.
+  // Owner / Operator and Pharmacist and cashier are opt-in, never activation prerequisites.
   const requiredRoleKeys = roleTemplatesForVertical('PHARMACY')
-    .filter((template) => template.key !== 'owner-operator')
+    .filter((template) => !PHARMACY_OPT_IN_ROLE_KEYS.has(template.key))
     .map((template) => template.key);
   // DEV-753: the owner's supplier checks. Never rejects; a missing or unreadable row is on.
   const supplierPolicy = readSupplierCompliancePolicy(db, organizationId);

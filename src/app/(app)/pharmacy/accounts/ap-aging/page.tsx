@@ -16,6 +16,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { createTRPCContext } from '@/server/trpc';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { ExportCsv } from './export-csv';
 import { parseAgingQuery, type AgingQuery as Query } from './query';
 
@@ -256,9 +257,9 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         <>
           <SectionCard title="View limits" titleLevel={2}>
             <p role="status" className="text-sm text-text-muted">
-              Branch {state.branchId}, as of the end of {state.view.asOf} (UTC). Retrieved{' '}
-              {state.retrievedAt.toISOString()}. Only supplier expense invoices recorded here and
-              payments made against them count; other money movements never settle them.{' '}
+              As of the end of {state.view.asOf} (UTC). Retrieved{' '}
+              {formatUtcInstant(state.retrievedAt)}. Only supplier expense invoices recorded here
+              and payments made against them count; other money movements never settle them.{' '}
               {state.view.complete
                 ? `${state.view.scannedInvoices} invoices read.`
                 : `Read capped at ${AP_AGING_MAX_INVOICES} invoices; this view is incomplete.`}

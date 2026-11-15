@@ -5,6 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import type { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
 import { officialPriceText } from '@/lib/pharmacy/official-price';
 
@@ -22,6 +23,14 @@ const cell = (value: unknown) => {
   const text = value == null ? '' : String(value);
   return `"${(/^[\s]*[=+@-]/.test(text) ? "'" + text : text).replaceAll('"', '""')}"`;
 };
+const POLICY_SOURCE_LABELS: Readonly<Record<string, string>> = {
+  drap: 'DRAP notice',
+  manual: 'Manual price',
+};
+
+/** 'drap' → 'DRAP notice'; an unknown source reads generically, never as the stored code. */
+export const policySourceLabel = (source: string) => POLICY_SOURCE_LABELS[source] ?? 'Other source';
+
 export function pricesCsv(data: PriceData) {
   const header = [
     'Medicine',
@@ -159,7 +168,7 @@ export function PriceNoticesView({
                       </div>
                     </td>
                     <td className="p-3">
-                      {r.source}
+                      {policySourceLabel(r.source)}
                       <div className="whitespace-nowrap text-text-muted">
                         {r.effectiveDate.toISOString().slice(0, 10)}
                       </div>
@@ -187,10 +196,10 @@ export function PriceNoticesView({
       </SectionCard>
       <SectionCard title="Earlier DRAP price notices" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
-          Current prices as of {data.asOf.toISOString()}. DRAP notices are for information only and
-          never change a price: set pack prices yourself from the MRP printed on the pack. Earlier
-          notices stay here unchanged as history. Variance = selling − confirmed MRP for the same
-          pack.
+          Current prices as of {formatUtcInstant(data.asOf)}. DRAP notices are for information only
+          and never change a price: set pack prices yourself from the MRP printed on the pack.
+          Earlier notices stay here unchanged as history. Variance = selling − confirmed MRP for the
+          same pack.
         </p>
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <Button variant="outline" disabled={!data.packRows.length} onClick={exportCsv}>

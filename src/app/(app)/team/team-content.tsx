@@ -13,6 +13,7 @@ import {
   Loader2,
   Check,
   Copy,
+  CircleAlert,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -408,7 +409,11 @@ export function AddMemberModal({
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+  const [sent, setSent] = useState<{
+    email: string;
+    inviteUrl: string;
+    emailDelivery: 'SENT' | 'FAILED';
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
@@ -462,7 +467,12 @@ export function AddMemberModal({
           // Organization overview, which Organization's People list shares.
           utils.organizationAdmin.overview.invalidate();
           onInvited?.();
-          setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
+          setCopied(false);
+          setSent({
+            email: submittedEmail,
+            inviteUrl: data.inviteUrl,
+            emailDelivery: data.emailDelivery,
+          });
         },
         onError: (err) => setError(err.message),
       }
@@ -471,9 +481,14 @@ export function AddMemberModal({
 
   const handleCopy = async () => {
     if (!sent) return;
-    await navigator.clipboard.writeText(sent.inviteUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(sent.inviteUrl);
+      setCopied(true);
+      setError('');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Could not copy the link. Select and copy the invite link below.');
+    }
   };
 
   return (
@@ -499,33 +514,59 @@ export function AddMemberModal({
           {sent ? (
             <div className="p-6">
               <div className="flex flex-col items-center py-6 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-                  <Check className="h-7 w-7 text-primary" />
+                <div
+                  className={cn(
+                    'flex h-14 w-14 items-center justify-center rounded-full',
+                    sent.emailDelivery === 'SENT'
+                      ? 'bg-success/10 text-success'
+                      : 'bg-destructive/10 text-destructive'
+                  )}
+                >
+                  {sent.emailDelivery === 'SENT' ? (
+                    <Check className="h-7 w-7" />
+                  ) : (
+                    <CircleAlert className="h-7 w-7" />
+                  )}
                 </div>
-                <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
-                  Invitation sent to {sent.email}
-                </h3>
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  They&apos;ll receive an email to set their password and finish their profile.
-                </p>
+                <div role={sent.emailDelivery === 'FAILED' ? 'alert' : 'status'}>
+                  <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
+                    {sent.emailDelivery === 'SENT'
+                      ? `Invitation sent to ${sent.email}`
+                      : `Invite email failed for ${sent.email}`}
+                  </h3>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {sent.emailDelivery === 'SENT'
+                      ? 'They’ll receive an email to set their password and finish their profile.'
+                      : 'The invitation was created, but the email could not be sent. Copy the link to share it directly, or retry sending.'}
+                  </p>
+                </div>
+                {error && (
+                  <p role="alert" className="mt-3 text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
                 <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
                   <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
                 </div>
-                <div className="mt-4 flex w-full items-center gap-2">
-                  <button
-                    onClick={handleCopy}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-                  >
+                <div className="mt-4 flex w-full flex-wrap items-center gap-2">
+                  <Button variant="outline" size="touch" onClick={handleCopy}>
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                     {copied ? 'Copied!' : 'Copy invite link'}
-                  </button>
-                  <button
-                    onClick={onClose}
-                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
-                  >
+                  </Button>
+                  {sent.emailDelivery === 'FAILED' && (
+                    <Button
+                      variant="outline"
+                      size="touch"
+                      onClick={handleSubmit}
+                      disabled={inviteMember.isPending || !departmentReady}
+                    >
+                      {inviteMember.isPending ? 'Sending…' : 'Resend invite'}
+                    </Button>
+                  )}
+                  <Button size="touch" onClick={onClose}>
                     Done
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

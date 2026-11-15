@@ -15,6 +15,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyGeneralJournalRouter } from '@/server/routers/pharmacy-general-journal';
 import { createTRPCContext } from '@/server/trpc';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 export const metadata: Metadata = { title: 'General journal vouchers · Pharmacy accounts' };
 
@@ -165,8 +166,7 @@ function Register({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
   return (
     <SectionCard title="Voucher register" titleLevel={2}>
       <p className="text-sm text-text-muted">
-        Branch {state.branchId}. Retrieved {state.retrievedAt.toISOString()}. Amounts are in minor
-        units shown as major.minor.
+        Retrieved {formatUtcInstant(state.retrievedAt)}. Amounts are shown with two decimals.
       </p>
       {state.vouchers.length === 0 ? (
         <p className="mt-4 text-sm">

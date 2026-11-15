@@ -172,7 +172,7 @@ export function FinancialComparison({
   validationError?: string;
 }) {
   const notice = !canFinancial
-    ? 'Permission required: reports:financial is required.'
+    ? 'Permission required: financial reports access is required.'
     : !posEnabled
       ? 'Restaurant POS is not included in this organization’s current package.'
       : validationError
@@ -369,7 +369,7 @@ export function FinancialComparison({
               {report.refundAdjustedNetSalesUnavailableReason}
             </p>
             <div className="space-y-2 border-t border-border-subtle pt-4 text-sm text-text-muted">
-              <p>Source: {report.source} · Decimal major currency units · Business-date periods</p>
+              <p>Source: daily-close chain tips · Decimal major currency units · Business-date periods</p>
               <p className="break-words">
                 As of: {report.asOf} · Observed through: {report.observedThrough}
               </p>
