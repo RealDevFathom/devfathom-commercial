@@ -709,6 +709,16 @@ async function loadSettlementContext(
   // against whichever policy happens to be effective when payment is collected.
   const serviceAmount = formatMoney(bill.serviceChargeTotal);
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
+  // Principal already returned by a refund is no longer retained by the bill, so it
+  // must not count toward settlement; otherwise a bill could settle short.
+  const refundedPrincipal = money(
+    (
+      await tx.restaurantRefund.aggregate({
+        where: { billId: bill.id },
+        _sum: { amount: true },
+      })
+    )._sum.amount ?? ZERO
+  );
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -725,7 +735,7 @@ async function loadSettlementContext(
     at,
     proposedTenderType,
     priorTenderWeights: taxablePriorTenders,
-    acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
+    acceptedPrincipal: sub(sum(priorTenders.map((tender) => tender.amount)), refundedPrincipal),
     afterTaxDiscount,
     serviceCharge: { amount: serviceAmount, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
@@ -840,7 +850,7 @@ async function finalizeTaxSettlement(
         afterTaxByLine[lineIndex] ?? ZERO
       ),
       buckets: units.flatMap((unit) =>
-        (bill.splitKind === 'FRACTIONAL' ? [] : unit.line.buckets).map((bucket) => ({
+        unit.line.buckets.map((bucket) => ({
           unitOrdinal: unit.identity.unitOrdinal,
           ruleVersionId: bucket.ruleId,
           paymentCategory: bucket.category,
@@ -859,22 +869,21 @@ async function finalizeTaxSettlement(
       ),
     };
   });
-  const tenderTaxAllocations =
-    bill.splitKind === 'FRACTIONAL'
-      ? undefined
-      : allocateTenderTax(
-          [
-            ...priorTenders,
-            {
-              id: finalTenderId,
-              type: input.tender.type,
-              amount: money(input.tender.amount),
-              createdAt: at,
-            },
-          ],
-          settlement,
-          lines
-        );
+  // Fractional bills freeze the same per-unit buckets (keyed by source order item)
+  // and per-tender tax facts, so refunds reverse exact settled tax (DEV-773).
+  const tenderTaxAllocations = allocateTenderTax(
+    [
+      ...priorTenders,
+      {
+        id: finalTenderId,
+        type: input.tender.type,
+        amount: money(input.tender.amount),
+        createdAt: at,
+      },
+    ],
+    settlement,
+    lines
+  );
   const inclusiveMerchandiseTax = sum(
     settlement.quote.lines.flatMap((line) =>
       line.buckets
