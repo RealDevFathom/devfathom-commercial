@@ -146,6 +146,7 @@ import {
   readPharmacyTenderOutcome,
   recordPharmacyCashMovement,
   refundPharmacyTender,
+  requireCurrentPharmacyBusinessDate,
 } from '@/lib/pharmacy/settlement';
 import {
   actorMayRefund,
@@ -920,6 +921,8 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
+          // DEV-630: money taken now books on today, never a client-chosen day.
+          await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
           return recordKhataRepayment(db, scope, input);
         });
       } catch (error) {
@@ -1107,9 +1110,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // DEV-630: a points tender settles the sale, so it books on today too.
+          await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
+          return redeemSalePoints(db, scope, input);
+        });
       } catch (error) {
         fail(error);
       }
@@ -1149,7 +1156,10 @@ export const pharmacySalesRouter = router({
           input.openingFloatMinor > 0
             ? await requireDrawerManagerAccess(ctx, input.branchId)
             : await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
+        // DEV-630: a drawer opens on the branch's current business day only.
+        return await ctx.db.$transaction(async (tx) =>
+          openPharmacyDrawer(txDb(tx), scope, input, { requireCurrentBusinessDate: true })
+        );
       } catch (error) {
         fail(error);
       }
@@ -1240,8 +1250,11 @@ export const pharmacySalesRouter = router({
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
+        // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
+          applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
+            requireCurrentBusinessDate: true,
+          })
         );
       }
       const scope = await khataScope(ctx, input.branchId, 'write');
@@ -1275,7 +1288,9 @@ export const pharmacySalesRouter = router({
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
-        const result = await applyPharmacyTender(db, scope, normalized);
+        const result = await applyPharmacyTender(db, scope, normalized, undefined, {
+          requireCurrentBusinessDate: true,
+        });
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
         await db.pharmacyKhataEvent.create({
@@ -1362,7 +1377,7 @@ export const pharmacySalesRouter = router({
                 code: 'FORBIDDEN',
                 message: 'You do not have permission for this action.',
               });
-            return refundPharmacyTender(db, scope, refund);
+            return refundPharmacyTender(db, scope, refund, { requireCurrentBusinessDate: true });
           }
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
@@ -1378,7 +1393,9 @@ export const pharmacySalesRouter = router({
               Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
             );
           }
-          const result = await refundPharmacyTender(db, scope, refund);
+          const result = await refundPharmacyTender(db, scope, refund, {
+            requireCurrentBusinessDate: true,
+          });
           if (charge && 'refundId' in result && typeof result.refundId === 'string') {
             const id = `khata-refund:${result.refundId}`;
             const prior = await db.pharmacyKhataEvent.findFirst({

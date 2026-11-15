@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The drawer and close family, and the tender and refund that move cash through
 // the same drawer, take their branch from the input. `scopeFor` refuses a branch
@@ -154,6 +154,7 @@ let db: {
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
+  organization: { findUnique: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn> };
 };
 
@@ -190,9 +191,21 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     user: { findUnique: vi.fn().mockResolvedValue(null) },
   };
 });
+
+// DEV-630: money writes book on the branch's current business day, so the clock is
+// pinned to the fixture's day (14:00 in Karachi).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-20T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 
 describe('pharmacy drawer, close and cash procedures: the branch in the input', () => {
   it('refuses non-admin changes to reference-skip policy before accessing the branch', async () => {
