@@ -1,8 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-return-panel';
+import {
+  CounterReturnPanel,
+  estimateReturnRefundMinor,
+  parseReceiptNumber,
+  ReturnForm,
+} from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
+  returnAndRefund: vi.fn(),
   refund: vi.fn(),
   refetch: vi.fn(),
   history: {} as Record<string, unknown>,
@@ -17,6 +23,7 @@ vi.mock('@/lib/trpc', () => ({
       returnHistory: { useQuery: () => mocks.history },
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
+      returnAndRefund: { useMutation: () => ({ mutateAsync: mocks.returnAndRefund }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
       refundAccess: { useQuery: () => mocks.refundAccess },
     },
@@ -39,11 +46,20 @@ function chooseReceipt() {
 function enterManagerPin(pin = '2468') {
   fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), { target: { value: pin } });
 }
+/** DEV-501: record the return without refunding it now. */
+function recordOnly() {
+  fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'none' } });
+}
+function setLooseUnits(units: string) {
+  fireEvent.change(screen.getByLabelText('Return quantity (strips)'), { target: { value: '0' } });
+  fireEvent.change(screen.getByLabelText('Plus loose units'), { target: { value: units } });
+}
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   mocks.refetch.mockResolvedValue({});
   mocks.returnLine.mockResolvedValue({});
+  mocks.returnAndRefund.mockResolvedValue({ refund: { amountMinor: 100 } });
   mocks.refund.mockResolvedValue({});
   mocks.pharmacists = { data: [{ id: 'staff-w', name: 'Witness Pharmacist' }] };
   mocks.refundAccess = { data: { authorized: true } };
@@ -74,6 +90,8 @@ beforeEach(() => {
           canonicalUnits: 10,
           canonicalUnitsPerSaleUnit: 10,
           returnedUnits: 2,
+          netMinor: 1000,
+          returnedMinor: 200,
           lots: [
             { lotId: 'lot-a', batchNumber: 'A', returnableUnits: 3, restockAllowed: true },
             { lotId: 'lot-b', batchNumber: 'B', returnableUnits: 5, restockAllowed: false },
@@ -187,10 +205,29 @@ describe('counter returns', () => {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
     fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
-    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision (optional)'), {
       target: { value: 'seal unknown' },
     });
-    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'cash' } });
+    enterManagerPin();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    await waitFor(() =>
+      expect(mocks.returnAndRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branchId: 'b',
+          integrityDecision: 'seal unknown',
+          managerPin: '2468',
+          refund: expect.objectContaining({ originalTenderId: 'cash', deviceId: 'd' }),
+        })
+      )
+    );
+  });
+  it('books a record-only return to the active branch', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    recordOnly();
     enterManagerPin();
     fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
     await waitFor(() =>
@@ -246,20 +283,29 @@ describe('counter returns', () => {
     expect(screen.getByRole('button', { name: 'Find receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
   });
-  it('requires inspected stock and confirmation before posting a return', async () => {
+  it('requires a line, a valid quantity and the PIN before posting a return', async () => {
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines.push({ ...history.data.lines[0], id: 'line-2', name: 'Other medicine' });
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    recordOnly();
     const submit = screen.getByRole('button', { name: 'Record return' });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
-    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
-      target: { value: 'seal unknown' },
+    enterManagerPin();
+    // 1 strip (10 base units) exceeds the 8 still returnable.
+    fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
+      target: { value: '1' },
     });
-    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    expect(submit).toBeDisabled();
+    expect(screen.getByText(/Enter between 1 and 8 base units/)).toBeVisible();
+    setLooseUnits('0');
+    expect(submit).toBeDisabled();
+    setLooseUnits('1');
+    expect(submit).toBeEnabled();
+    enterManagerPin('');
     expect(submit).toBeDisabled();
     enterManagerPin();
-    expect(submit).toBeEnabled();
     fireEvent.click(submit);
     await waitFor(() =>
       expect(mocks.returnLine).toHaveBeenCalledWith(
@@ -268,9 +314,12 @@ describe('counter returns', () => {
           disposition: 'QUARANTINE',
           canonicalUnits: 1,
           quarantineLocationId: 'q',
+          // An empty inspection note records the counter inspection with the reason.
+          integrityDecision: 'Inspected at the counter: Wrong item / strip',
         })
       )
     );
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
     await screen.findByText(/Return recorded/);
   });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
@@ -354,19 +403,14 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
   fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
   expect(restock).not.toBeDisabled();
   fireEvent.change(screen.getByLabelText('Stock disposition'), { target: { value: 'RESTOCK' } });
-  fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+  fireEvent.change(screen.getByLabelText('Inspection and integrity decision (optional)'), {
     target: { value: 'Physical batch A verified, intact' },
   });
-  fireEvent.change(screen.getByLabelText('Return quantity (base units)'), {
-    target: { value: '4' },
-  });
-  fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
-  expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
-  fireEvent.change(screen.getByLabelText('Return quantity (base units)'), {
-    target: { value: '3' },
-  });
-  fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+  recordOnly();
   enterManagerPin();
+  setLooseUnits('4');
+  expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+  setLooseUnits('3');
   fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
   await waitFor(() =>
     expect(mocks.returnLine).toHaveBeenCalledWith(
@@ -381,14 +425,14 @@ describe('controlled medicine returns', () => {
     const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
     history.data.lines[0].controlled = true;
   }
-  function fillControlledReturn() {
+  function fillControlledReturn(refundTo = 'none') {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
     fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
-    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision (optional)'), {
       target: { value: 'sealed' },
     });
-    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: refundTo } });
     enterManagerPin();
   }
 
@@ -609,5 +653,338 @@ describe('DEV-647 refund access', () => {
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry saved refund' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Refund recorded/)).not.toBeInTheDocument();
+  });
+});
+
+describe('DEV-501 returns in six steps or fewer', () => {
+  const key = 'pharmacy-return:o:a:b';
+  /** A one-line receipt paid with one cash tender: 2 strips of 10 at PKR 12.00 each. */
+  function singleLineReceipt() {
+    mocks.history = {
+      refetch: mocks.refetch,
+      data: {
+        saleId: 'sale',
+        lines: [
+          {
+            id: 'line',
+            name: 'Medicine',
+            quantity: 2,
+            saleUnit: 'STRIP',
+            levelLabel: 'STRIP',
+            canonicalUnits: 20,
+            canonicalUnitsPerSaleUnit: 10,
+            returnedUnits: 0,
+            netMinor: 2400,
+            returnedMinor: 0,
+            lots: [{ lotId: 'lot-a', batchNumber: 'A', returnableUnits: 20, restockAllowed: true }],
+          },
+        ],
+        tenders: [{ id: 'cash', type: 'CASH', amountMinor: 2400, refundedMinor: 0, refunds: [] }],
+        returns: [],
+        locations: [{ id: 'q', name: 'Quarantine' }],
+        refundableMinor: 0,
+      },
+    };
+  }
+
+  it('prices a returned quantity as the server snapshots it', () => {
+    const line = { canonicalUnits: 3, returnedUnits: 0, netMinor: 1000, returnedMinor: 0 };
+    expect(estimateReturnRefundMinor(line, 1)).toBe(333);
+    expect(estimateReturnRefundMinor({ ...line, returnedUnits: 1, returnedMinor: 333 }, 1)).toBe(
+      333
+    );
+    // The final slice takes the rounding remainder.
+    expect(estimateReturnRefundMinor({ ...line, returnedUnits: 2, returnedMinor: 666 }, 1)).toBe(
+      334
+    );
+    expect(estimateReturnRefundMinor(line, 0)).toBe(0);
+    expect(estimateReturnRefundMinor(line, Number.NaN)).toBe(0);
+  });
+
+  it('completes a one-line return and refund in six steps with one confirm', async () => {
+    singleLineReceipt();
+    let steps = 0;
+    const step = (action: () => void) => {
+      steps += 1;
+      action();
+    };
+    render(<CounterReturnPanel {...base} />);
+    // 1. Open returns.
+    step(() => fireEvent.click(screen.getByRole('button', { name: 'Returns & refunds' })));
+    // 2. Scan or type the receipt; a single match in this branch opens it, and its only
+    //    returnable line and only tender are selected.
+    step(() => {
+      fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: 'QA-12' } });
+      fireEvent.submit(screen.getByLabelText('Receipt number').closest('form')!);
+    });
+    expect(screen.getByRole('button', { name: /Receipt 12/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(screen.getByLabelText('Sold line')).toHaveValue('line');
+    expect(screen.getByLabelText('Refund to')).toHaveValue('cash');
+    // 3. Quantity in the unit it was sold in.
+    step(() =>
+      fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
+        target: { value: '2' },
+      })
+    );
+    // The refund is prefilled from the line: 2 strips = PKR 24.00.
+    expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('24.00');
+    // 4. Reason.
+    step(() => fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'DAMAGED' } }));
+    // 5. Manager or owner PIN.
+    step(() => enterManagerPin());
+    // 6. One confirm records the return and refunds it.
+    step(() => fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' })));
+    expect(steps).toBeLessThanOrEqual(6);
+    await waitFor(() => expect(mocks.returnAndRefund).toHaveBeenCalledOnce());
+    const sent = mocks.returnAndRefund.mock.calls[0][0];
+    expect(sent).toMatchObject({
+      branchId: 'b',
+      saleLineId: 'line',
+      canonicalUnits: 20,
+      disposition: 'QUARANTINE',
+      quarantineLocationId: 'q',
+      reason: 'DAMAGED',
+      integrityDecision: 'Inspected at the counter: Damaged',
+      managerPin: '2468',
+      refund: {
+        originalTenderId: 'cash',
+        deviceId: 'd',
+        businessDate: new Date('2026-09-29'),
+        manualCashFallback: false,
+      },
+    });
+    // The untouched prefill refunds the return's exact value, priced by the server.
+    expect(sent.refund.amountMinor).toBeUndefined();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+    expect(mocks.refund).not.toHaveBeenCalled();
+    await screen.findByText(/Return recorded and refunded: PKR 1.00/);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it('enters quantity in the sold unit plus loose units', async () => {
+    singleLineReceipt();
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    expect(screen.getByLabelText('Return quantity (strips)')).toHaveValue(1);
+    expect(screen.getByLabelText('Plus loose units')).toHaveValue(0);
+    expect(screen.getByText(/Returning 10 base units \(1 strip\)/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Plus loose units'), { target: { value: '5' } });
+    expect(screen.getByText(/Returning 15 base units \(1 strip \+ 5 loose\)/)).toBeVisible();
+    expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('18.00');
+    fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
+      target: { value: '3' },
+    });
+    enterManagerPin();
+    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
+      target: { value: '1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    await waitFor(() =>
+      expect(mocks.returnAndRefund).toHaveBeenCalledWith(
+        expect.objectContaining({ canonicalUnits: 15 })
+      )
+    );
+  });
+
+  it('labels a unit sale in units without a loose field', () => {
+    singleLineReceipt();
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0] = {
+      ...history.data.lines[0],
+      saleUnit: 'UNIT',
+      levelLabel: null,
+      canonicalUnitsPerSaleUnit: 1,
+    };
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    expect(screen.getByLabelText('Return quantity (units)')).toHaveValue(1);
+    expect(screen.queryByLabelText('Plus loose units')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('1.20');
+  });
+
+  it('lets the refund be lowered but never raised above the returned value', async () => {
+    singleLineReceipt();
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    const amount = screen.getByLabelText('Refund for this return (PKR)');
+    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    expect(amount).toHaveValue('12.00');
+    expect(screen.getByText(/You can lower it, up to PKR 12.00/)).toBeVisible();
+    fireEvent.change(amount, { target: { value: '12.01' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(amount, { target: { value: '0' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(amount, { target: { value: 'abc' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(amount, { target: { value: '10.50' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.returnAndRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refund: expect.objectContaining({ originalTenderId: 'cash', amountMinor: 1050 }),
+        })
+      )
+    );
+  });
+
+  it('bounds the prefill by what the tender has left and sends it explicitly', async () => {
+    singleLineReceipt();
+    const history = mocks.history as { data: { tenders: Array<Record<string, unknown>> } };
+    history.data.tenders = [
+      { id: 'cash', type: 'CASH', amountMinor: 800, refundedMinor: 0, refunds: [] },
+      { id: 'card', type: 'CARD', amountMinor: 1600, refundedMinor: 0, refunds: [] },
+    ];
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    // A mixed payment needs its tender chosen.
+    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    expect(screen.getByLabelText('Refund to')).toHaveValue('');
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'cash' } });
+    expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('8.00');
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.returnAndRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refund: expect.objectContaining({ originalTenderId: 'cash', amountMinor: 800 }),
+        })
+      )
+    );
+  });
+
+  it('requires the explicit cash fallback for a card refund', () => {
+    singleLineReceipt();
+    const history = mocks.history as { data: { tenders: Array<Record<string, unknown>> } };
+    history.data.tenders = [
+      { id: 'card', type: 'CARD', amountMinor: 2400, refundedMinor: 0, refunds: [] },
+    ];
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/No provider refund adapter/));
+    expect(submit).toBeEnabled();
+  });
+
+  it('keeps cashiers out of the combined return and refund', () => {
+    singleLineReceipt();
+    render(<ReturnForm {...props} refundAuthorized={false} />);
+    chooseReceipt();
+    expect(
+      screen.queryByRole('button', { name: 'Confirm return & refund' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Refund to')).not.toBeInTheDocument();
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+  });
+
+  it('reports a refused PIN without recording or keeping a fresh attempt', async () => {
+    singleLineReceipt();
+    mocks.returnAndRefund.mockResolvedValueOnce({ blocked: 'Enter your manager or owner PIN.' });
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Return not recorded. Enter your manager or owner PIN.'
+      )
+    );
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Return recorded/)).not.toBeInTheDocument();
+  });
+
+  it('restores an ambiguous return and refund with the same payload and no PIN', async () => {
+    singleLineReceipt();
+    mocks.returnAndRefund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin('9753');
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    await screen.findByRole('button', { name: 'Retry saved return and refund' });
+    const first = mocks.returnAndRefund.mock.calls[0][0];
+    const saved = localStorage.getItem(key)!;
+    expect(saved).toContain('"kind":"returnRefund"');
+    expect(saved).not.toContain('9753');
+    expect(saved).not.toContain('managerPin');
+    view.unmount();
+    render(<ReturnForm {...props} />);
+    const retry = await screen.findByRole('button', { name: 'Retry saved return and refund' });
+    expect(retry).toBeDisabled();
+    enterManagerPin('9753');
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.returnAndRefund).toHaveBeenCalledTimes(2));
+    expect(mocks.returnAndRefund.mock.calls[1][0]).toEqual(first);
+    expect(mocks.returnAndRefund.mock.calls[1][0].idempotencyKey).toBe(first.idempotencyKey);
+  });
+
+  it('keeps a saved return and refund for a manager when the user has no refund access', async () => {
+    singleLineReceipt();
+    mocks.returnAndRefund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    await screen.findByRole('button', { name: 'Retry saved return and refund' });
+    view.unmount();
+    render(<ReturnForm {...base} />);
+    expect(screen.getByRole('button', { name: 'Retry saved return and refund' })).toBeDisabled();
+    expect(
+      screen.getByText(/This saved return and refund is kept for reconciliation/)
+    ).toBeVisible();
+    expect(mocks.returnAndRefund).toHaveBeenCalledOnce();
+  });
+
+  it('sends a controlled witness with the combined confirm without persisting it', async () => {
+    singleLineReceipt();
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0].controlled = true;
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'staff-w' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '4826' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.returnAndRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          controlledWitness: { staffProfileId: 'staff-w', pin: '4826' },
+          managerPin: '2468',
+        })
+      )
+    );
+    for (const [, value] of setItem.mock.calls) {
+      expect(value).not.toContain('4826');
+      expect(value).not.toContain('2468');
+    }
+    await screen.findByText(/Return recorded and refunded/);
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+  });
+
+  it('asks which receipt when a number matches more than one sale', () => {
+    singleLineReceipt();
+    const first = (mocks.lookup as { data: Array<Record<string, unknown>> }).data[0];
+    mocks.lookup = { isSuccess: true, data: [first, { ...first, id: 'sale-2' }] };
+    render(<ReturnForm {...props} />);
+    fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: '12' } });
+    fireEvent.submit(screen.getByLabelText('Receipt number').closest('form')!);
+    expect(screen.getByText(/Receipt numbers can repeat/)).toBeVisible();
+    // Nothing is opened until the right date and counter is chosen.
+    for (const match of screen.getAllByRole('button', { name: /Receipt 12/ }))
+      expect(match).toHaveAttribute('aria-pressed', 'false');
   });
 });

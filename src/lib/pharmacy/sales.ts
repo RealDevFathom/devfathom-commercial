@@ -1132,6 +1132,25 @@ export async function returnSaleLine(
   };
 }
 
+/**
+ * DEV-501: the money value snapshotted for one recorded sale return, so the counter can
+ * refund exactly what that return is worth in the same transaction. A replayed return
+ * reads the same snapshot, so its refund amount (and refund idempotency hash) is stable.
+ */
+export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, returnId: string) {
+  const where = { organizationId: scope.organizationId, branchId: scope.branchId, returnId };
+  const select = { grossMinor: true, discountMinor: true } as const;
+  const [lines, holds] = await Promise.all([
+    db.pharmacySaleReturnLine.findMany({ where, select }),
+    db.pharmacyUnidentifiedReturnHold.findMany({ where, select }),
+  ]);
+  const rows = [...lines, ...holds];
+  // A return always has rows; an unpriced (legacy) row cannot be valued for a refund.
+  if (!rows.length || rows.some((row) => row.grossMinor == null || row.discountMinor == null))
+    throw new PharmacySaleError('INVALID_STATE');
+  return rows.reduce((sum, row) => sum + row.grossMinor! - row.discountMinor!, 0);
+}
+
 export async function captureDemand(
   db: ScopedDb,
   scope: LedgerScope,

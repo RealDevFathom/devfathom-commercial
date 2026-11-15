@@ -744,6 +744,25 @@ describe('counter receipt authorization', () => {
         }),
       write: returnSaleLine,
     },
+    {
+      name: 'returnAndRefund',
+      run: (caller: Caller) =>
+        caller.returnAndRefund({
+          branchId: 'branch-a',
+          saleLineId: 'line-1',
+          canonicalUnits: 1,
+          reason: 'Returned medicine',
+          integrityDecision: 'Sealed pack',
+          idempotencyKey: 'return-1',
+          refund: {
+            originalTenderId: 'tender-1',
+            deviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          },
+          managerPin: '1234',
+        }),
+      write: returnSaleLine,
+    },
   ])('$name requires counter capability and assignment before writing (#578)', async (path) => {
     const noCapability = fixture([]);
     assign(noCapability, ['branch-a']);
