@@ -23,6 +23,7 @@ import {
   dispatchTransfer,
   releaseQuarantinedPart,
   reserveSupplierClaim,
+  writeOff,
 } from './inventory-operations';
 import { transferStock } from './stock-ledger';
 import { STOCK_LOCK_ORDER, type StockLockClass } from './stock-lock-order';
@@ -250,6 +251,50 @@ describe('count approval and quarantine release take stock locks in the global o
     expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
     expectLockedBeforeWrites(trace);
   });
+});
+
+describe('write-off takes stock locks in the global order', () => {
+  it.each([
+    ['a second-person witness', 'witness', false],
+    ['the solo self-witness (DEV-628)', 'actor', true],
+  ])(
+    'locks the written-off balance before reading or writing it, with %s',
+    async (_label, witnessId, solo) => {
+      const trace = recorder();
+      const db = {
+        $queryRaw: trace.$queryRaw,
+        user: { findFirst: vi.fn(async () => ({ id: witnessId })) },
+        pharmacyInventoryLot: { findFirst: vi.fn(async () => ({ id: 'lot-a', unitsPerPack: 1 })) },
+        pharmacyStockBalance: {
+          findFirst: vi.fn(async () => {
+            trace.events.push({ kind: 'read', values: [], text: 'balance read' });
+            return { onHandUnits: 5, sealedPacks: 0, looseUnits: 5 };
+          }),
+        },
+        pharmacyStockMovement: { create: movementCreate(trace) },
+        pharmacyCustodyRecord: { create: vi.fn(async () => ({ id: 'custody' })) },
+      };
+      await writeOff(
+        db as never,
+        scope,
+        {
+          inventoryLotId: 'lot-a',
+          stockLocationId: 'shelf',
+          units: 1,
+          witnessId,
+          reason: 'Damaged',
+          evidenceRef: 'PHOTO-1',
+          idempotencyKey: 'write-off',
+        },
+        { soloSelfWitness: solo }
+      );
+      expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE']);
+      const lockAt = trace.events.findIndex((event) => event.kind === 'balance');
+      const readAt = trace.events.findIndex((event) => event.text === 'balance read');
+      expect(lockAt).toBeLessThan(readAt);
+      expectLockedBeforeWrites(trace);
+    }
+  );
 });
 
 describe('supplier claims and returns take stock locks in the global order', () => {

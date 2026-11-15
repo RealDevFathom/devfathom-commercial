@@ -570,6 +570,15 @@ export async function writeOff(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  // DEV-825: lock the one balance this write-off removes from through the shared
+  // helper (after the witness credential, a document-class lock), then read it.
+  await lockStockBalances(db, scope, [
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition: input.disposition ?? 'AVAILABLE',
+    },
+  ]);
   const a = await removalArrangement(
     db,
     scope,
