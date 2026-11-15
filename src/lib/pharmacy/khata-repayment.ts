@@ -61,7 +61,8 @@ function repaymentIdentity(scope: FamilyKhataScope, idempotencyKey: string) {
     .digest('hex');
   return {
     idempotencyKey: `${KHATA_REPAYMENT_KEY_PREFIX}${digest}`,
-    receiptReference: `KP-${digest.slice(0, 10).toUpperCase()}`,
+    // 64 bits: the reference must stay unique across an organization's whole history.
+    receiptReference: `KP-${digest.slice(0, 16).toUpperCase()}`,
   };
 }
 
@@ -95,15 +96,32 @@ export async function searchKhataRepaymentAccounts(
     orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
     take: 20,
   });
-  return Promise.all(
-    accounts.map(async (account) => ({
-      id: account.id,
-      displayName: account.displayName,
-      creditLimitMinor: account.creditLimitMinor,
-      phoneLast4: account.payer.phoneLast4 ?? null,
-      balanceMinor: await readKhataBalance(db, scope, account.id),
-    }))
-  );
+  // One grouped query for every listed account's full-ledger balance.
+  const totals = accounts.length
+    ? await db.pharmacyKhataEvent.groupBy({
+        by: ['familyAccountId', 'kind'],
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          familyAccountId: { in: accounts.map((account) => account.id) },
+        },
+        _sum: { amountMinor: true },
+      })
+    : [];
+  const balances = new Map<string, number>();
+  for (const row of totals)
+    balances.set(
+      row.familyAccountId,
+      (balances.get(row.familyAccountId) ?? 0) +
+        (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0)
+    );
+  return accounts.map((account) => ({
+    id: account.id,
+    displayName: account.displayName,
+    creditLimitMinor: account.creditLimitMinor,
+    phoneLast4: account.payer.phoneLast4 ?? null,
+    balanceMinor: balances.get(account.id) ?? 0,
+  }));
 }
 
 /**

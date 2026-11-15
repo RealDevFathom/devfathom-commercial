@@ -61,8 +61,8 @@ function fixture(options: { prior?: Record<string, unknown>; closed?: boolean } 
             .filter((event) => event.kind === kind)
             .reduce((total, event) => total + (event.amountMinor as number), 0);
         return [
-          { kind: 'CHARGE', _sum: { amountMinor: sum('CHARGE') } },
-          { kind: 'PAYMENT', _sum: { amountMinor: sum('PAYMENT') } },
+          { familyAccountId: 'family_1', kind: 'CHARGE', _sum: { amountMinor: sum('CHARGE') } },
+          { familyAccountId: 'family_1', kind: 'PAYMENT', _sum: { amountMinor: sum('PAYMENT') } },
         ];
       }),
     },
@@ -133,7 +133,7 @@ describe('K4 counter khata repayment (DEV-731)', () => {
       })
     );
     expect(slip).toMatchObject({
-      receiptReference: expect.stringMatching(/^KP-[0-9A-F]{10}$/),
+      receiptReference: expect.stringMatching(/^KP-[0-9A-F]{16}$/),
       accountName: 'Khan family',
       amountMinor: 3_000,
       tender: 'CASH',
@@ -344,6 +344,13 @@ describe('K4 counter khata repayment (DEV-731)', () => {
         balanceMinor: 7_000,
       },
     ]);
+    expect(db.pharmacyKhataEvent.groupBy).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyKhataEvent.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ['familyAccountId', 'kind'],
+        where: expect.objectContaining({ familyAccountId: { in: ['family_1'] } }),
+      })
+    );
     expect(db.pharmacyFamilyAccount.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useDeferredValue, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -86,10 +86,25 @@ function writeStoredAttempt(storageKey: string, attempt: UnresolvedAttempt | nul
   }
 }
 
-/** The server answered with a refusal, so its transaction rolled back and nothing was taken. */
-function serverRefused(cause: unknown) {
+/**
+ * Refusals that prove this exact attempt was never recorded: input checks that would
+ * have refused the first send too, and business checks the server makes only after
+ * looking for a replay. Auth (401/403), rate limits, conflicts and anything else keep
+ * the attempt, since the original may still have committed.
+ */
+const NOT_RECORDED_REASONS = new Set([
+  'INVALID_AMOUNT',
+  'REFERENCE_REQUIRED',
+  'ACCOUNT_NOT_FOUND',
+  'PAYMENT_EXCEEDS_BALANCE',
+  'DRAWER_NOT_OPEN',
+  'DAY_CLOSED',
+  'PERIOD_CLOSED',
+]);
+
+function provenNotRecorded(cause: unknown) {
   const status = (cause as { data?: { httpStatus?: unknown } } | null)?.data?.httpStatus;
-  return typeof status === 'number' && status >= 400 && status < 500;
+  return status === 400 && cause instanceof Error && NOT_RECORDED_REASONS.has(cause.message);
 }
 
 /** The counter device id lives in browser storage; reading it can throw. */
@@ -130,8 +145,15 @@ function useKhataPaymentSession(storageKey: string): KhataPaymentSession {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-/** K4 (DEV-731): receive money against a khata account, outside any bill. */
+/**
+ * K4 (DEV-731): receive money against a khata account, outside any bill. Keyed by
+ * organization/account/branch so switching branch loads that branch's own attempt.
+ */
 export function CounterKhataPaymentPanel(props: Props) {
+  return <KhataPaymentPanelForScope key={attemptStorageKey(props)} {...props} />;
+}
+
+function KhataPaymentPanelForScope(props: Props) {
   const [open, setOpen] = useState(false);
   const session = useKhataPaymentSession(attemptStorageKey(props));
   return (
@@ -175,7 +197,8 @@ export function KhataPaymentForm({
     parentSession ?? localSession;
   const device = safeDeviceId(deviceId);
   const [query, setQuery] = useState('');
-  const deferredQuery = useDeferredValue(query.trim());
+  const [searchTerm, setSearchTerm] = useState('');
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [tender, setTender] = useState<Tender>('CASH');
@@ -185,7 +208,7 @@ export function KhataPaymentForm({
 
   const accounts = trpc.pharmacySales.khataPaymentAccounts.useQuery({
     branchId,
-    query: deferredQuery,
+    query: searchTerm,
   });
   const drawer = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: device ?? '' },
@@ -239,9 +262,9 @@ export function KhataPaymentForm({
       setPayerReference('');
       void accounts.refetch();
     } catch (cause) {
-      // Only a server refusal proves nothing was recorded; any other failure stays
-      // unresolved so the next step is a retry of this exact payment.
-      if (serverRefused(cause)) setUnresolved(null);
+      // Only a refusal that proves nothing was recorded clears the attempt; any other
+      // failure stays unresolved so the next step is a retry of this exact payment.
+      if (provenNotRecorded(cause)) setUnresolved(null);
       setError(counterErrorMessage(cause));
     } finally {
       setPending(false);
@@ -362,7 +385,13 @@ export function KhataPaymentForm({
           className="h-11"
           placeholder="Account name or last 4 phone digits"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setQuery(value);
+            // Wait for a pause in typing before asking the server.
+            if (searchTimer.current) clearTimeout(searchTimer.current);
+            searchTimer.current = setTimeout(() => setSearchTerm(value.trim()), 250);
+          }}
         />
       </div>
       <div role="radiogroup" aria-label="Khata accounts" className="grid gap-1">

@@ -261,4 +261,45 @@ describe('counter khata payment (DEV-731)', () => {
     expect(await screen.findByText(/Reference KP-0123456789/)).toBeTruthy();
     expect(localStorage.getItem('pharmacy-khata-payment:o:a:b')).toBeNull();
   });
+
+  it.each([
+    ['an expired session', 401, 'UNAUTHORIZED'],
+    ['a revoked permission', 403, 'Pharmacy counter permission required.'],
+  ])('keeps the attempt when a retry fails with %s', async (_label, httpStatus, message) => {
+    mocks.record.mockRejectedValueOnce(new Error('Network down'));
+    mocks.record.mockRejectedValueOnce(Object.assign(new Error(message), { data: { httpStatus } }));
+    render(<KhataPaymentForm {...props} />);
+    chooseAccount();
+    enterAmount('15');
+    fireEvent.click(submit());
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry previous payment' }));
+    await waitFor(() => expect(mocks.record).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Retry previous payment' })).toBeTruthy();
+    expect(localStorage.getItem('pharmacy-khata-payment:o:a:b')).not.toBeNull();
+  });
+
+  it('keeps each branch its own unconfirmed attempt when the counter switches branch', async () => {
+    mocks.record.mockRejectedValueOnce(new Error('Network down'));
+    const view = render(<CounterKhataPaymentPanel {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Khata payment' }));
+    chooseAccount();
+    enterAmount('15');
+    fireEvent.click(submit());
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    view.rerender(<CounterKhataPaymentPanel {...props} branchId="c" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Khata payment' }));
+    expect(screen.queryByRole('button', { name: 'Retry previous payment' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    view.rerender(<CounterKhataPaymentPanel {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Khata payment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry previous payment' }));
+    await waitFor(() => expect(mocks.record).toHaveBeenCalledTimes(2));
+    expect(mocks.record.mock.calls[1]![0]).toMatchObject({ branchId: 'b' });
+  });
 });
