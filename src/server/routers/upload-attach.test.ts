@@ -39,7 +39,9 @@ const BOUND_ELSEWHERE = {
 function makeDb() {
   const db = {
     uploadedFile: { findFirst: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })) },
-    uploadedFileLegacyBinding: { findFirst: vi.fn(async () => null) },
+    uploadedFileLegacyBinding: {
+      findFirst: vi.fn(async (): Promise<{ id: string } | null> => null),
+    },
     projectMember: { findUnique: vi.fn(async () => ({ role: 'MEMBER' })) },
     task: { findUnique: vi.fn(async () => ({ column: { board: { projectId: 'project_1' } } })) },
     projectFile: { create: vi.fn(async ({ data }) => ({ id: 'pf_new', ...data })) },
