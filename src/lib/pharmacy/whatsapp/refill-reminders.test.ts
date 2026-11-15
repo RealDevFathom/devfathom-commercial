@@ -71,7 +71,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 });
 
 import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
-import { planRefillReminder, processDueWhatsAppRefillReminders } from './refill-reminders';
+import {
+  planRefillReminder,
+  processDueSubscriptionRefillReminders,
+  processDueWhatsAppRefillReminders,
+} from './refill-reminders';
 
 const DISPENSED_AT = new Date('2026-09-01T09:00:00.000Z');
 // 30 tablets, once daily: runs out 2026-10-01T09:00Z; 3-day lead opens 2026-09-28T09:00Z.
@@ -245,6 +249,67 @@ describe('processDueWhatsAppRefillReminders', () => {
       provider,
     });
     expect(result).toMatchObject({ configured: false, scanned: 0 });
+    expect(provider.calls).toEqual([]);
+  });
+});
+
+describe('processDueSubscriptionRefillReminders (DEV-73)', () => {
+  function cycle(dueAt = '2026-10-01T09:00:00.000Z') {
+    return {
+      id: 'cycle-1',
+      organizationId: 'org_a',
+      branchId: 'branch-1',
+      patientId: 'patient-1',
+      dueAt: new Date(dueAt),
+      reminderLeadDays: 3,
+    };
+  }
+
+  it('sends the neutral utility template once per cycle, naming only the due date', async () => {
+    store.captures = [cycle()];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const first = await processDueSubscriptionRefillReminders({ now: NOW, config, provider });
+    const second = await processDueSubscriptionRefillReminders({ now: NOW, config, provider });
+
+    expect(first).toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
+    expect(second).toMatchObject({ scanned: 1, prepared: 0, sent: 0 });
+    expect(provider.calls).toEqual([
+      {
+        kind: 'template',
+        to: '923001234567',
+        template: 'refillReminder',
+        templateName: 'refill_due_v1',
+        language: 'en',
+        parameters: ['2026-10-01'],
+      },
+    ]);
+    expect(store.logs).toHaveLength(1);
+    expect(store.logs[0]).toMatchObject({
+      kind: 'REFILL_REMINDER',
+      dedupeKey: 'refill-subscription:cycle-1',
+      refillCaptureId: null,
+      dueDate: '2026-10-01',
+    });
+    expect(JSON.stringify([provider.calls, store.logs])).not.toMatch(/panadol|tablet|mg\b/i);
+  });
+
+  it('waits for the subscription lead window and skips customers without consent', async () => {
+    store.captures = [cycle('2026-10-10T09:00:00.000Z')];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    await expect(
+      processDueSubscriptionRefillReminders({ now: NOW, config, provider })
+    ).resolves.toMatchObject({ scanned: 1, notDue: 1 });
+
+    store.captures = [cycle()];
+    store.consents = [];
+    await expect(
+      processDueSubscriptionRefillReminders({ now: NOW, config, provider })
+    ).resolves.toMatchObject({ scanned: 1, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
   });
 });

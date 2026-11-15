@@ -15,6 +15,32 @@ describe('inviteCopyForVertical', () => {
     expect(copy.baseRoleLabels).toEqual({ EMPLOYEE: 'Staff', HR: 'Manager', ADMIN: 'Admin' });
   });
 
+  it('gives pharmacy one role picker with distinct owner-role descriptions (DEV-673)', () => {
+    const copy = inviteCopyForVertical('PHARMACY');
+    expect(copy.roleTemplateBaseRoles).toEqual({
+      admin: 'ADMIN',
+      owner: 'ADMIN',
+      'owner-operator': 'ADMIN',
+      manager: 'HR',
+    });
+    const descriptions = copy.roleTemplateDescriptions!;
+    const owners = ['admin', 'owner', 'owner-operator'].map((key) => descriptions[key]);
+    expect(owners.every((text) => typeof text === 'string' && text.length > 0)).toBe(true);
+    expect(new Set(owners).size).toBe(3);
+    // A caller mutating its copy never leaks into the next tenant's form.
+    (copy.roleTemplateBaseRoles as Record<string, string>).pharmacist = 'ADMIN';
+    expect(inviteCopyForVertical('PHARMACY').roleTemplateBaseRoles).not.toHaveProperty(
+      'pharmacist'
+    );
+  });
+
+  it.each(['AGENCY', 'HOSPITALITY', restaurantVertical] as const)(
+    'keeps the separate base role switch for %s',
+    (vertical) => {
+      expect(inviteCopyForVertical(vertical).roleTemplateBaseRoles).toBeUndefined();
+    }
+  );
+
   it('keeps restaurant copy for restaurant tenants', () => {
     const copy = inviteCopyForVertical(restaurantVertical);
     expect(copy.staffRoleLabel).toBe('Restaurant staff role');

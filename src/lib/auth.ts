@@ -820,6 +820,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           userId: token.id as string,
           role: typeof token.role === 'string' ? token.role : null,
         });
+        // #1252: clearing the cookie alone leaves a copied token valid. Bump the
+        // revocation counter so the next revalidation (REVALIDATE_AFTER_MS)
+        // rejects every token issued before this sign-out. Guarded on the
+        // token's own snapshot so an already-revoked token cannot end a newer
+        // session. Auth.js still clears the cookie if this write throws.
+        if (typeof token.organizationId === 'string') {
+          const userId = token.id as string;
+          const tokenVersion = typeof token.tokenVersion === 'number' ? token.tokenVersion : 0;
+          await withTenantDb(token.organizationId, (tenantDb) =>
+            tenantDb.user.updateMany({
+              where: { id: userId, tokenVersion },
+              data: { tokenVersion: { increment: 1 } },
+            })
+          );
+        }
       }
     },
   },

@@ -14,7 +14,10 @@ import { ManualPaymentSettingsPanel } from '@/components/pharmacy/counter/manual
 import { KhataReminderSettingsPanel } from '@/components/pharmacy/counter/khata-reminder-settings-panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
-import { isCounterKhataRepayment } from '@/lib/pharmacy/bookkeeping';
+import {
+  isCounterKhataRepayment,
+  isNativeApSettlementTransaction,
+} from '@/lib/pharmacy/bookkeeping';
 import {
   Table,
   TableBody,
@@ -691,6 +694,11 @@ export default async function PharmacyFinancePage({
                         <span className="text-sm text-text-muted">
                           Counter khata receipt: also settled the khata and drawer, so it is not
                           reversed here.
+                        </span>
+                      ) : item.status === 'POSTED' && isNativeApSettlementTransaction(item) ? (
+                        <span className="text-sm text-text-muted">
+                          Supplier expense invoice payment: reverse it through the invoice
+                          settlement so the invoice balance stays correct.
                         </span>
                       ) : item.status === 'POSTED' ? (
                         <form action={perform} className="flex min-w-72 gap-2">
