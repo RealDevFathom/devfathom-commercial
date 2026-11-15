@@ -54,6 +54,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const currency = invoice.currency;
   const subtotal = Number(invoice.subtotal);
   const tax = Number(invoice.tax);
+  const discount = Number(invoice.discount ?? 0);
   const total = Number(invoice.total);
   const amountPaid = Number(invoice.amountPaid);
   const balance = Number(invoice.balance);
@@ -92,7 +93,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           </Link>
           <button
             onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
           >
             <Printer className="h-3.5 w-3.5" /> Print / Save as PDF
           </button>
@@ -218,6 +219,12 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 <span>Subtotal</span>
                 <span className="tabular-nums">{moneyLabel(subtotal, currency)}</span>
               </div>
+              {discount > 0 && (
+                <div className="flex justify-between text-text-muted">
+                  <span>Discount</span>
+                  <span className="tabular-nums">{moneyLabel(-discount, currency)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-slate-600">
                 <span>Tax</span>
                 <span className="tabular-nums">{moneyLabel(tax, currency)}</span>

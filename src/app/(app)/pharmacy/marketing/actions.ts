@@ -77,6 +77,11 @@ export async function marketingAction(
         break;
       }
       case 'growth-generate': {
+        if (!text('from') || !text('lastDay'))
+          return {
+            error: true,
+            message: 'Choose both a first day and a last day before generating insights.',
+          };
         const result = await caller.generateGrowth({
           branchId,
           ...period(),
@@ -135,7 +140,7 @@ export async function marketingAction(
         break;
       case 'draft': {
         const field = text('field');
-        if (field !== 'receiptCount' && field !== 'daysSinceLastReceipt')
+        if (field !== 'receiptCount' && field !== 'daysSinceLastReceipt' && field !== 'churnScore')
           return { error: true, message: 'Choose a supported retail field.' };
         const draft = await caller.createDraft({
           branchId,

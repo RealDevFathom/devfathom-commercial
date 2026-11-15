@@ -103,8 +103,8 @@ describe('pharmacy navigation', () => {
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
-  /** What a manager holding procurement and operational reports is granted (#979). */
-  const operatingCapabilities = ['pharmacy:procurement', 'reports:operational'];
+  /** What a manager holding procurement and operational reports is granted (#979, DEV-240). */
+  const operatingCapabilities = ['pharmacy:manage', 'pharmacy:procurement', 'reports:operational'];
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',
@@ -159,6 +159,7 @@ describe('pharmacy navigation', () => {
         '/pharmacy/medicines',
         '/pharmacy/regulatory',
         '/pharmacy/settings/branches',
+        '/pharmacy/settings/printers',
         '/pharmacy/finance',
       ]) {
         expect(visible).not.toContain(adminRoute);
@@ -255,6 +256,7 @@ describe('pharmacy navigation', () => {
       expect(visible).toContain('/pharmacy/counter');
       for (const hidden of [
         '/pharmacy/counter/close',
+        '/pharmacy/inventory',
         '/pharmacy/reports',
         '/pharmacy/prescriptions',
         '/pharmacy/pharmacist-queue',
@@ -275,8 +277,47 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
+    it.each(['pharmacy:inventory', 'pharmacy:manage'])(
+      'shows Inventory to a member holding %s, and always to administrators (DEV-240)',
+      (capability) => {
+        expect(hrefs('EMPLOYEE', ['pharmacy:counter', 'pharmacy:close'])).not.toContain(
+          '/pharmacy/inventory'
+        );
+        expect(hrefs('EMPLOYEE', [capability])).toContain('/pharmacy/inventory');
+        expect(hrefs('ADMIN')).toContain('/pharmacy/inventory');
+      }
+    );
+
+    it('shows Substitution to a Pharmacy Safety holder without dispensing (DEV-35)', () => {
+      const visible = hrefs('EMPLOYEE', ['pharmacy:safety']);
+      expect(visible).toContain('/pharmacy/substitution');
+      expect(visible).not.toContain('/pharmacy/pharmacist-queue');
+      expect(hrefs('EMPLOYEE', ['reports:operational'])).not.toContain('/pharmacy/substitution');
+    });
+
     it('keeps the administrator-only day close for administrators', () => {
       expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    });
+
+    it('offers day close to a member granted pharmacy:close, such as a Pharmacist (DEV-127)', () => {
+      expect(hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review'])).not.toContain(
+        '/pharmacy/counter/close'
+      );
+      expect(
+        hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'])
+      ).toContain('/pharmacy/counter/close');
+    });
+
+    it('keeps day close behind its module even for a pharmacy:close holder (DEV-127)', () => {
+      const withoutCounter = {
+        ...everyPharmacyModule,
+        enabledModules: everyPharmacyModule.enabledModules.filter(
+          (module) => module !== 'pharmacy-counter'
+        ),
+      };
+      expect(hrefs('EMPLOYEE', ['pharmacy:close'], withoutCounter)).not.toContain(
+        '/pharmacy/counter/close'
+      );
     });
 
     it('shows Team to administrators, and to members only with the HR directory', () => {

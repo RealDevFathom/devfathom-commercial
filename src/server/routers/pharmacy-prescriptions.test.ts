@@ -522,12 +522,7 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
       action === 'pharmacy:counter'
         ? ['pharmacy:counter', 'pharmacy:counter']
-        : [
-            'pharmacy:counter',
-            'pharmacy:dispense',
-            'pharmacy:counter',
-            'pharmacy:dispense',
-          ]
+        : ['pharmacy:counter', 'pharmacy:dispense', 'pharmacy:counter', 'pharmacy:dispense']
     );
   });
 
@@ -1132,5 +1127,149 @@ describe('PH-A3 prescription OCR prefill', () => {
       message: 'The prescription could not be read. Enter the details by hand.',
     });
     expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+
+  it('DEV-63: drafts an unconfirmed cart with salt/strength matches from the OCR fixture', async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const amox = { ingredientId: 'ing-amox', ingredient: { name: 'Amoxicillin' } };
+    mocks.medicines.mockResolvedValue([
+      {
+        id: 'medicine-rx',
+        productName: 'Fathomcillin E2E',
+        brandName: null,
+        strengths: [{ ...amox, value: { toString: () => '250' }, unit: 'mg' }],
+        presentations: [{ id: 'pres-rx', presentation: 'Capsule' }],
+      },
+      {
+        id: 'medicine-generic',
+        productName: 'Generic Amox',
+        brandName: null,
+        strengths: [{ ...amox, value: { toString: () => '500' }, unit: 'mg' }],
+        presentations: [],
+      },
+    ]);
+    const receipt = await upload();
+    const cart = await caller().draftCartFromSource({
+      sourceFileRef: receipt.url,
+      minConfidence: 0.7,
+    });
+    expect(cart).toMatchObject({
+      status: 'DRAFT',
+      requiresPharmacistConfirmation: true,
+      lines: [
+        {
+          confirmed: false,
+          lowConfidence: false,
+          suggestedMedicineId: 'medicine-rx',
+          suggestedPresentationId: 'pres-rx',
+          candidates: [
+            { medicineId: 'medicine-rx', matchKind: 'SALT_AND_STRENGTH' },
+            { medicineId: 'medicine-generic', matchKind: 'SALT_ONLY' },
+          ],
+        },
+      ],
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().draftCartFromSource({ sourceFileRef: receipt.url, minConfidence: 0.7 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+describe('DEV-626 patient and prescriber registration', () => {
+  function directoryContext() {
+    const ctx = context();
+    const patientCreate = vi.fn(async ({ data }) => ({ id: 'patient-new', ...data }));
+    const prescriberFind = vi.fn().mockResolvedValue(null);
+    const prescriberCreate = vi.fn(async ({ data }) => ({ id: 'prescriber-new', ...data }));
+    ctx.db = {
+      ...ctx.db,
+      pharmacyPatient: { create: patientCreate },
+      pharmacyPrescriber: { findFirst: prescriberFind, create: prescriberCreate },
+    } as unknown as typeof ctx.db;
+    return { ctx, patientCreate, prescriberFind, prescriberCreate };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+  });
+
+  it('registers a prescriber with trimmed fields and blank optionals left absent', async () => {
+    const { ctx, prescriberFind, prescriberCreate } = directoryContext();
+    await expect(
+      caller(ctx).createPrescriber({
+        name: '  Dr Ayesha Khan ',
+        registrationNumber: ' PMDC-12345 ',
+        phone: '',
+        facility: ' City Clinic ',
+      })
+    ).resolves.toMatchObject({ id: 'prescriber-new', registrationNumber: 'PMDC-12345' });
+    expect(prescriberFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', registrationNumber: 'PMDC-12345' },
+      })
+    );
+    expect(prescriberCreate).toHaveBeenCalledWith({
+      data: {
+        name: 'Dr Ayesha Khan',
+        registrationNumber: 'PMDC-12345',
+        phone: undefined,
+        facility: 'City Clinic',
+      },
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:prescriptions',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('refuses a duplicate registration number, including a concurrent insert', async () => {
+    const { ctx, prescriberFind, prescriberCreate } = directoryContext();
+    prescriberFind.mockResolvedValueOnce({ id: 'existing' });
+    const input = { name: 'Dr A', registrationNumber: 'PMDC-1' };
+    await expect(caller(ctx).createPrescriber(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(prescriberCreate).not.toHaveBeenCalled();
+
+    prescriberCreate.mockRejectedValueOnce(Object.assign(new Error('unique'), { code: 'P2002' }));
+    await expect(caller(ctx).createPrescriber(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+  });
+
+  it('registers a patient with trimmed fields and keeps identifiers out of the audit input', async () => {
+    const { ctx, patientCreate } = directoryContext();
+    const created = await caller(ctx).createPatient({
+      displayName: ' Synthetic Patient ',
+      cnic: '35202-1234567-1',
+      phone: '',
+    });
+    expect(patientCreate).toHaveBeenCalledWith({
+      data: { displayName: 'Synthetic Patient', cnic: '35202-1234567-1', phone: undefined },
+    });
+    expect(created).toMatchObject({ id: 'patient-new', displayName: 'Synthetic Patient' });
+    expect(ctx.audit.detail.skipInput).toBe(true);
+  });
+
+  it.each([
+    ['without the prescription permission', () => mocks.can.mockResolvedValue(false)],
+    ['without the dispensing module', () => mocks.hasModule.mockReturnValue(false)],
+  ])('refuses both registrations %s before writing', async (_label, deny) => {
+    deny();
+    const { ctx, patientCreate, prescriberCreate } = directoryContext();
+    await expect(caller(ctx).createPatient({ displayName: 'Patient' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller(ctx).createPrescriber({ name: 'Dr A', registrationNumber: 'PMDC-1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(patientCreate).not.toHaveBeenCalled();
+    expect(prescriberCreate).not.toHaveBeenCalled();
   });
 });

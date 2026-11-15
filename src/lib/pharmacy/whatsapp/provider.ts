@@ -10,12 +10,23 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
+/**
+ * Placeholders an approved khata template may carry. `name` and `balance` are
+ * required; DEV-76 adds the local due date and the branch's Raast / wallet
+ * destination (`payTo`). None of them can name a medicine.
+ */
+export const KHATA_TEMPLATE_PARAMETERS = ['name', 'balance', 'dueDate', 'payTo'] as const;
+export type KhataTemplateParameter = (typeof KHATA_TEMPLATE_PARAMETERS)[number];
+export type KhataParameterOrder = readonly KhataTemplateParameter[];
+
 export type WhatsAppConfig = {
   provider: 'meta' | 'mock';
   accessToken: string | null;
   phoneNumberId: string | null;
   /** Explicit owner of this deployment's configured sender. */
   organizationId?: string | null;
+  /** WhatsApp Business Account id whose account-health webhooks this tenant owns. */
+  businessAccountId?: string | null;
   appSecret: string | null;
   verifyToken: string | null;
   graphVersion: string;
@@ -24,10 +35,7 @@ export type WhatsAppConfig = {
   liveSendApproved: boolean;
   templates: Record<WhatsAppTemplateKey, string | null>;
   khataTemplates: Record<WhatsAppTemplateLanguage, string | null>;
-  khataParameterOrder: Record<
-    WhatsAppTemplateLanguage,
-    readonly ['name', 'balance'] | readonly ['balance', 'name'] | null
-  >;
+  khataParameterOrder: Record<WhatsAppTemplateLanguage, KhataParameterOrder | null>;
   reminderLeadDays: number;
 };
 
@@ -78,17 +86,25 @@ function envValue(env: Env, key: string): string | null {
   return value ? value : null;
 }
 
-function parameterOrder(
-  value: string | null
-): readonly ['name', 'balance'] | readonly ['balance', 'name'] | null {
-  if (value === 'name,balance') return ['name', 'balance'];
-  if (value === 'balance,name') return ['balance', 'name'];
-  return null;
+function isKhataTemplateParameter(value: string): value is KhataTemplateParameter {
+  return (KHATA_TEMPLATE_PARAMETERS as readonly string[]).includes(value);
 }
 
-function englishKhataParameterOrder(
-  value: string | null
-): readonly ['name', 'balance'] | readonly ['balance', 'name'] | null {
+/**
+ * A comma-separated placeholder order such as `name,balance,dueDate,payTo`.
+ * Each key appears at most once and `name` and `balance` are mandatory; any
+ * unknown or repeated key fails closed.
+ */
+function parameterOrder(value: string | null): KhataParameterOrder | null {
+  if (value === null) return null;
+  const keys = value.split(',').map((key) => key.trim());
+  if (!keys.every(isKhataTemplateParameter)) return null;
+  if (new Set(keys).size !== keys.length) return null;
+  if (!keys.includes('name') || !keys.includes('balance')) return null;
+  return keys;
+}
+
+function englishKhataParameterOrder(value: string | null): KhataParameterOrder | null {
   // An omitted value keeps the established English contract, but an explicitly
   // invalid value must fail closed rather than silently selecting an order.
   return value === null ? ['name', 'balance'] : parameterOrder(value);
@@ -115,6 +131,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     accessToken: envValue(env, 'PHARMACY_WHATSAPP_ACCESS_TOKEN'),
     phoneNumberId: envValue(env, 'PHARMACY_WHATSAPP_PHONE_NUMBER_ID'),
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
+    businessAccountId: envValue(env, 'PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID'),
     appSecret: envValue(env, 'PHARMACY_WHATSAPP_APP_SECRET'),
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',

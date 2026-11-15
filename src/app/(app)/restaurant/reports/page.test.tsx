@@ -154,7 +154,7 @@ describe('Restaurant financial report integration', () => {
     expect(reportMocks.payments).not.toHaveBeenCalled();
     expect(reportMocks.financialComparison).not.toHaveBeenCalled();
     expect(
-      screen.getByText('Permission required: reports:financial is required.')
+      screen.getByText('Permission required: financial reports access is required.')
     ).toBeInTheDocument();
   });
 
@@ -313,7 +313,7 @@ describe('Profitability diagnostics caller', () => {
     expect(reportMocks.foodCost).not.toHaveBeenCalled();
     expect(reportMocks.profitabilityTabs.mock.lastCall![0].diagnostics).toBeUndefined();
     expect(screen.queryByText('Recipe review priorities')).not.toBeInTheDocument();
-    expect(screen.getAllByText('reports:financial is required.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Financial reports access is required.').length).toBeGreaterThan(0);
     expect(reportMocks.overview).toHaveBeenCalledTimes(1);
   });
 

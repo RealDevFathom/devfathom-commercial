@@ -78,11 +78,21 @@ export default async function PharmacyMarketingPage({
   let workspace: Awaited<ReturnType<typeof loadWorkspace>> = null;
   let failed = false;
   let denied = false;
+  let deniedReason = '';
   try {
     workspace = await loadWorkspace(params);
   } catch (error) {
     failed = true;
     denied = error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code);
+    // Router denials name the single missing requirement and the next step.
+    if (
+      denied &&
+      error instanceof TRPCError &&
+      error.code === 'FORBIDDEN' &&
+      error.message !== error.code
+    ) {
+      deniedReason = error.message;
+    }
   }
   if (failed) {
     return (
@@ -94,7 +104,8 @@ export default async function PharmacyMarketingPage({
         >
           <p role="alert" className="text-sm text-text-body">
             {denied
-              ? 'An owner account, Pharmacy CRM license and an active pharmacy branch are required. Contact your workspace administrator.'
+              ? deniedReason ||
+                'An owner account, Pharmacy CRM license and an active pharmacy branch are required. Contact your workspace administrator.'
               : 'The workspace could not be loaded. Reload to try again.'}
           </p>
           <Link
@@ -212,7 +223,7 @@ export default async function PharmacyMarketingPage({
               {review.rules.all
                 .map(
                   (rule) =>
-                    `${rule.field === 'receiptCount' ? 'Completed receipts' : 'Days since last receipt'} ${rule.operator === 'gte' ? 'at least' : rule.operator === 'lte' ? 'at most' : 'equal to'} ${rule.value}`
+                    `${rule.field === 'receiptCount' ? 'Completed receipts' : rule.field === 'churnScore' ? 'Churn score (0–100)' : 'Days since last receipt'} ${rule.operator === 'gte' ? 'at least' : rule.operator === 'lte' ? 'at most' : 'equal to'} ${rule.value}`
                 )
                 .join('; ')}
               .
@@ -304,7 +315,7 @@ export default async function PharmacyMarketingPage({
               {delivery.attempts.map((attempt) => (
                 <li key={attempt.id}>
                   {attempt.provider} attempt {attempt.attemptNumber} ·{' '}
-                  {attempt.reservedAt.toISOString()} ·{' '}
+                  {localDateTimeLabel(attempt.reservedAt, zone)} ·{' '}
                   {attempt.contradictory
                     ? 'Conflicting evidence — resend blocked'
                     : attempt.delivered
@@ -507,6 +518,7 @@ export default async function PharmacyMarketingPage({
                 <select className={control} name="field">
                   <option value="receiptCount">Completed receipt count</option>
                   <option value="daysSinceLastReceipt">Days since last receipt</option>
+                  <option value="churnScore">Churn score, 0–100 (nightly)</option>
                 </select>
               </label>
               <label className="block text-sm">

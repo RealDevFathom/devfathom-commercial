@@ -277,8 +277,8 @@ export async function readPharmacyDailyWorkPack(
           source.limitReached = (source.returnedRows ?? 0) >= source.rowLimit;
           source.missingInputs.push(
             source.limitReached
-              ? '200-row source cap reached; further records may be omitted.'
-              : 'Anomaly reader caps at 200 before scope-payload filtering; completeness remains unknown.'
+              ? 'Only the first 200 records are shown; more may exist.'
+              : 'Up to 200 alerts are checked before branch filtering, so this list may be incomplete.'
           );
           if (source.limitReached) source.coverage = 'partial';
         }

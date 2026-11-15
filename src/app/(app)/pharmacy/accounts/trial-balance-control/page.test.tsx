@@ -110,7 +110,9 @@ describe('TrialBalanceControlPage', () => {
     expect(output).toContain('Unknown raw code');
     expect(output).toContain('title="UNKNOWN_RAW_CODE"');
     expect(output).toContain('9007199254740993.01');
-    expect(output).toContain('Retrieved 2026-02-02T03:04:05.000Z');
+    expect(output).toContain('Retrieved 2 Feb 2026, 3:04 AM UTC');
+    expect(output).toMatch(/Source:\s+posted accounts/);
+    expect(output).not.toContain('finance_journal_lines');
     expect(output).not.toContain('journal must not be consumed');
   });
 

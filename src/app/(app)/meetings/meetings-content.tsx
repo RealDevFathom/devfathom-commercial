@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useId, useState, useMemo, useCallback, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -27,6 +27,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
+import { isMeetingTimeRangeValid, MEETING_TIME_ORDER_ERROR } from '@/lib/meetings/time-range';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
 import { format, isToday, isTomorrow } from 'date-fns';
@@ -206,8 +207,13 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
+  const timeErrorId = useId();
+  const invalidTimeRange =
+    !!(date && startTime && endTime) &&
+    !isMeetingTimeRangeValid(new Date(`${date}T${startTime}`), new Date(`${date}T${endTime}`));
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !date || !startTime || !endTime || invalidTimeRange) return;
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -263,7 +269,12 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div
+          className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+          role="group"
+          aria-label="Meeting times"
+          aria-describedby={invalidTimeRange ? timeErrorId : undefined}
+        >
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
             <input
@@ -292,6 +303,12 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             />
           </div>
         </div>
+
+        {invalidTimeRange && (
+          <p id={timeErrorId} role="alert" className="text-sm text-destructive">
+            {MEETING_TIME_ORDER_ERROR}
+          </p>
+        )}
 
         {/* Recurrence */}
         <div>
@@ -362,8 +379,10 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            disabled={
+              !title.trim() || !date || !startTime || !endTime || invalidTimeRange || isPending
+            }
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -467,8 +486,13 @@ const MeetingCard = memo(function MeetingCard({
     setIsEditing(true);
   };
 
+  const timeErrorId = useId();
+  const invalidTimeRange =
+    !!(eDate && eStart && eEnd) &&
+    !isMeetingTimeRangeValid(new Date(`${eDate}T${eStart}`), new Date(`${eDate}T${eEnd}`));
+
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
+    if (!eTitle.trim() || !eDate || !eStart || !eEnd || invalidTimeRange) return;
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
@@ -513,7 +537,12 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div
+            className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+            role="group"
+            aria-label="Meeting times"
+            aria-describedby={invalidTimeRange ? timeErrorId : undefined}
+          >
             <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">Date</label>
               <input
@@ -542,6 +571,11 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
+          {invalidTimeRange && (
+            <p id={timeErrorId} role="alert" className="text-sm text-destructive">
+              {MEETING_TIME_ORDER_ERROR}
+            </p>
+          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -603,8 +637,15 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
-              className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              disabled={
+                !eTitle.trim() ||
+                !eDate ||
+                !eStart ||
+                !eEnd ||
+                invalidTimeRange ||
+                updateMeeting.isPending
+              }
+              className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
             </button>

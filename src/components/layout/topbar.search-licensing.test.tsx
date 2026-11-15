@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
       role: 'EMPLOYEE',
       status: 'ACTIVE',
       name: 'Test member',
+      title: 'An unrelated job title',
       email: 'member@example.test',
     },
   },
@@ -455,4 +456,24 @@ describe('command palette category search licensing', () => {
     );
     expect(screen.getByText('Searching…')).toBeInTheDocument();
   });
+});
+
+it.each([
+  ['ADMIN', 'Admin'],
+  ['HR', 'Manager'],
+  ['EMPLOYEE', 'Staff'],
+])('identifies the pharmacy workspace role %s explicitly in the header', (role, label) => {
+  mocks.vertical = 'PHARMACY';
+  mocks.session.user.role = role;
+  render(<Topbar />);
+  expect(screen.getByText(`Workspace role: ${label}`)).toBeVisible();
+  expect(screen.queryByText('An unrelated job title')).not.toBeInTheDocument();
+});
+
+
+it('does not invent a workspace role for an unrecognized session role', () => {
+  mocks.session.user.role = 'UNRECOGNIZED';
+  render(<Topbar />);
+  expect(screen.getByText('Workspace member')).toBeVisible();
+  expect(screen.queryByText(/Workspace role:/)).not.toBeInTheDocument();
 });

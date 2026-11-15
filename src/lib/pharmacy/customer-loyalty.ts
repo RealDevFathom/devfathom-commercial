@@ -9,10 +9,18 @@ import { assertRxSaleAllowed } from './rx-sale-gate';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
+import {
+  earnedPointsFor,
+  pointsForNetPaid,
+  redemptionFor,
+} from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { currentLoyaltyProgram, hasLoyaltyEarningConsent } from './loyalty-program';
 import type { LedgerScope } from './stock-ledger';
+
+/** Tenders that never earn at sale time: points themselves, and khata until it is paid. */
+export const SALE_EARN_EXCLUDED_TENDERS: readonly string[] = ['LOYALTY', 'CREDIT'];
 
 export class PharmacyLoyaltyError extends Error {
   constructor(
@@ -106,11 +114,18 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
     include: { tenders: true },
   });
   if (!sale?.customerId) return null;
+  // DEV-746: points are earned on money received. Points tenders never earn, and a khata
+  // (CREDIT) tender earns only when the debt is paid at the counter (earnKhataCollectionPoints).
   const netPaidMinor = sale.tenders
-    .filter((tender) => tender.type !== 'LOYALTY')
+    .filter((tender) => !SALE_EARN_EXCLUDED_TENDERS.includes(tender.type))
     .reduce((sum, tender) => sum + tender.amountMinor, 0);
-  const points = pointsForNetPaid(netPaidMinor);
+  if (netPaidMinor === 0) return null;
+  // No rate set by the owner means nothing is earned; no default rate is assumed.
+  const program = await currentLoyaltyProgram(db, scope.organizationId);
+  if (!program) return null;
+  const points = earnedPointsFor(netPaidMinor, program);
   if (points === 0) return null;
+  if (!(await hasLoyaltyEarningConsent(db, scope.organizationId, sale.customerId))) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
       organizationId: scope.organizationId,
@@ -120,6 +135,7 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       kind: 'EARN',
       points,
       netPaidMinor,
+      programVersionId: program.id,
       actorId: scope.actorId,
       idempotencyKey: `loyalty:earn:${sale.id}`,
     },
@@ -336,7 +352,7 @@ export async function readCustomerSnapshot(
     select: { id: true, displayName: true, phoneLast4: true, creditLimitMinor: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  const [points, sales, pointsHistory, pointsCount] = await Promise.all([
+  const [points, sales, pointsHistory, pointsCount, program] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
       _sum: { points: true },
@@ -378,6 +394,7 @@ export async function readCustomerSnapshot(
     db.pharmacyLoyaltyPointsEntry.count({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
     }),
+    currentLoyaltyProgram(db, scope.organizationId),
   ]);
   const creditBalanceMinor = sales
     .flatMap((sale) => sale.tenders)
@@ -392,6 +409,8 @@ export async function readCustomerSnapshot(
   return {
     customer,
     pointsBalance: points._sum.points ?? 0,
+    // DEV-746: false until the owner sets an earn rate; nothing new is earned until then.
+    earnRateSet: Boolean(program),
     pointsHistory,
     pointsCount,
     pointsPage: page,
@@ -418,21 +437,69 @@ async function assertLoyaltyHistoryBranch(db: ScopedDb, scope: LedgerScope) {
   if (!branch) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
 }
 
+const LOYALTY_SEARCH_MAX_TERMS = 6;
+
+// DEV-671: the loyalty name is a snapshot taken when the customer was first linked at the
+// counter, so matching only that one column missed customers known by their patient name,
+// phone number or loyalty number. Every word must match one of those identity fields.
+function loyaltyCustomerSearch(query: string): Prisma.PharmacyCustomerWhereInput[] {
+  return query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, LOYALTY_SEARCH_MAX_TERMS)
+    .map((term) => {
+      const match: Prisma.PharmacyCustomerWhereInput[] = [
+        { displayName: { contains: term, mode: 'insensitive' } },
+        { patient: { displayName: { contains: term, mode: 'insensitive' } } },
+        { id: term },
+      ];
+      const digits = term.replace(/\D/g, '');
+      if (/^\+?[\d()-]+$/.test(term) && digits.length >= 4) {
+        if (digits.length === 4) match.push({ phoneLast4: digits });
+        // Stored numbers mix +92 and 0 prefixes; compare the subscriber part.
+        const local = digits.length > 4 ? digits.replace(/^(?:92|0)/, '') : digits;
+        match.push({ patient: { phone: { contains: local } } });
+      }
+      return { OR: match };
+    });
+}
+
 export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, query = '') {
   if (query.trim().length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
   await assertLoyaltyHistoryBranch(db, scope);
+  const terms = loyaltyCustomerSearch(query);
   // Retail identities are tenant-wide; balances and entries below are branch-specific.
-  const customers = await db.pharmacyCustomer.findMany({
+  const rows = await db.pharmacyCustomer.findMany({
     where: {
       organizationId: scope.organizationId,
       active: true,
-      displayName: { contains: query.trim(), mode: 'insensitive' },
+      ...(terms.length ? { AND: terms } : {}),
     },
     select: { id: true, displayName: true, phoneLast4: true },
     orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
     take: 51,
   });
-  return { customers: customers.slice(0, 50), hasMore: customers.length > 50 };
+  const customers = rows.slice(0, 50);
+  const balances = customers.length
+    ? await db.pharmacyLoyaltyPointsEntry.groupBy({
+        by: ['customerId'],
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          customerId: { in: customers.map((customer) => customer.id) },
+        },
+        _sum: { points: true },
+      })
+    : [];
+  const pointsBy = new Map(balances.map((row) => [row.customerId, row._sum.points ?? 0]));
+  return {
+    customers: customers.map((customer) => ({
+      ...customer,
+      pointsBalance: pointsBy.get(customer.id) ?? 0,
+    })),
+    hasMore: rows.length > 50,
+  };
 }
 
 export async function readLoyaltyHistory(

@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +44,19 @@ export function cashMinor(value: string): number | null {
   return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
 }
 
+/**
+ * DEV-623: unpaid bills keep their stock off the shelf. The close does not void
+ * them; it says how many are left so they are resumed or voided on the counter.
+ */
+export function openBillsWarning(bills: { open: number; held: number }): string {
+  const parts = [
+    bills.open ? `${bills.open} open` : '',
+    bills.held ? `${bills.held} held` : '',
+  ].filter(Boolean);
+  const total = bills.open + bills.held;
+  return `${parts.join(' and ')} ${total === 1 ? 'bill is' : 'bills are'} still unpaid and holding stock. Resume or void ${total === 1 ? 'it' : 'them'} from Open bills on the counter.`;
+}
+
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 // Optional deep link (e.g. Ask Fathom's cash-close drill-through): the branch and
@@ -54,15 +68,30 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   const entitlements = useEntitlements();
   const user = session?.user;
   const sessionVerdict = evaluateSessionUser(user);
+  const isAdmin = user?.role === 'ADMIN';
+  const memberSession =
+    status === 'authenticated' &&
+    sessionVerdict.ok &&
+    !isAdmin &&
+    Boolean(user?.id) &&
+    user?.organizationId === entitlements.organizationId &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules);
+  // DEV-127: a non-administrator opens the console only when the server's own
+  // day-close guard (`pharmacy:close` through the ABAC engine) admits them. The
+  // procedures re-check it on every call; this only avoids a dead-end screen.
+  // DEV-240: the same member- and tenant-bound read as the rail, so an answer
+  // cached for another identity cannot open the console.
+  const { query: access, capabilities } = usePharmacyNavigationAccess(memberSession);
+  const closeGranted = memberSession && capabilities.includes('pharmacy:close');
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
-    user?.role !== 'ADMIN' ||
-    user.organizationId !== entitlements.organizationId ||
+    !(isAdmin || closeGranted) ||
+    user?.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     let detail =
-      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.';
+      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
     if (status === 'loading') {
       detail = 'Checking day-close access…';
     } else if (status !== 'authenticated') {
@@ -74,17 +103,42 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
     } else if (!isModuleGranted('pharmacy-counter', entitlements.enabledModules)) {
       detail =
         'The Pharmacy Counter module is not enabled for this workspace. Ask your workspace administrator to enable it for day close.';
+    } else if (memberSession && access.isLoading) {
+      detail = 'Checking day-close access…';
+    } else if (memberSession && access.isError && access.error?.data?.code !== 'FORBIDDEN') {
+      // A network or server failure is not a missing permission.
+      detail = 'Could not check day-close access. Reload the page to try again.';
     }
     return (
-      <SectionCard title="Day close unavailable">
-        <p role="status">{detail}</p>
-      </SectionCard>
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Day close"
+          description="Reconcile each drawer, record any variance, then lock the business day."
+        />
+        <SectionCard title="Day close unavailable" titleLevel={2}>
+          <p role="status">{detail}</p>
+        </SectionCard>
+      </div>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} initial={initial} />;
+  return (
+    <DayCloseBranches
+      key={`${user.organizationId}:${user.id}`}
+      initial={initial}
+      ownerView={isAdmin}
+    />
+  );
 }
 
-function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
+function DayCloseBranches({
+  initial,
+  ownerView,
+}: {
+  initial?: DayCloseInitial;
+  /** The owner-only cash-close anomaly check is offered to administrators only. */
+  ownerView: boolean;
+}) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(
@@ -151,6 +205,7 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
           branchId={branchId}
           date={date}
           currency={currency}
+          ownerView={ownerView}
         />
       )}
     </div>
@@ -161,10 +216,12 @@ function DayCloseForm({
   branchId,
   date,
   currency,
+  ownerView,
 }: {
   branchId: string;
   date: string;
   currency: string;
+  ownerView: boolean;
 }) {
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
@@ -269,7 +326,7 @@ function DayCloseForm({
             {open.length === 1 ? 'drawer' : 'drawers'} counted.
           </p>
         )}
-        <div className="mt-4 space-y-2" aria-label="Tender totals">
+        <div className="mt-4 space-y-2" role="group" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <div key={row.type} className="space-y-1">
               <p className="text-sm text-text-body">
@@ -356,6 +413,11 @@ function DayCloseForm({
               });
             }}
           >
+            {data.openBills && data.openBills.open + data.openBills.held > 0 ? (
+              <p className="text-sm text-warning" role="alert">
+                {openBillsWarning(data.openBills)}
+              </p>
+            ) : null}
             {!data.drawers.length && (
               <p>No drawers were opened for this date. You can record and lock an empty day.</p>
             )}
@@ -472,7 +534,7 @@ function DayCloseForm({
         )}
       </SectionCard>
       {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
-      {report && <CashCloseCheckPanel branchId={branchId} date={date} />}
+      {report && ownerView && <CashCloseCheckPanel branchId={branchId} date={date} />}
     </div>
   );
 }

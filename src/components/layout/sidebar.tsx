@@ -50,6 +50,7 @@ import {
   BedDouble,
   DoorOpen,
   MessageSquareText,
+  Printer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -58,6 +59,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
@@ -89,6 +91,12 @@ interface NavItem {
   hotelCapabilities?: readonly HotelCapability[];
   /** Shown only when the signed-in user holds one of these capabilities. */
   pharmacyCapabilities?: readonly string[];
+  /**
+   * `adminOnly` entries only: also shown to a non-administrator holding one of
+   * these capabilities, for pages whose server gate admits an administrator OR
+   * the capability (day close: `pharmacy:close`, DEV-127).
+   */
+  memberCapabilities?: readonly string[];
   /**
    * In a pharmacy workspace, shown to non-administrators only while this module
    * is granted. Without it the page has nothing for them there, so the entry
@@ -317,13 +325,15 @@ export const navigation: NavItem[] = [
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
-  // #979: the day-close console only opens for a pharmacy administrator, so a
-  // cashier is not offered an entry that ends in "Day close unavailable".
+  // #979: a cashier is not offered an entry that ends in "Day close unavailable".
+  // DEV-127: the console opens for an administrator or a member granted
+  // `pharmacy:close` (the Pharmacist template), exactly as its procedures do.
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',
     icon: Monitor,
     adminOnly: true,
+    memberCapabilities: ['pharmacy:close'],
     group: 'Pharmacy',
     module: 'pharmacy-counter',
   },
@@ -335,10 +345,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-counter',
     pharmacyCapabilities: ['pharmacy:counter'],
   },
+  // DEV-240: stock control belongs to inventory staff and managers; a cashier or
+  // pharmacist without either grant is not offered it.
   {
     label: 'Inventory',
     href: '/pharmacy/inventory',
     icon: PackageSearch,
+    adminOnly: true,
+    memberCapabilities: ['pharmacy:inventory', 'pharmacy:manage'],
     group: 'Pharmacy',
   },
   {
@@ -369,6 +383,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     adminOnly: true,
     module: 'pharmacy-core',
+  },
+  {
+    label: 'Khata',
+    href: '/pharmacy/khata',
+    icon: Landmark,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-counter',
   },
   {
     label: 'Loyalty points',
@@ -402,13 +424,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-dispensing',
     pharmacyCapabilities: ['pharmacy:dispense'],
   },
+  // DEV-35: the substitution workspace opens for dispense or Pharmacy Safety.
   {
     label: 'Substitution',
     href: '/pharmacy/substitution',
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:dispense'],
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:safety'],
   },
   {
     label: 'Controlled register',
@@ -444,6 +467,14 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
+  },
+  {
+    label: 'Printer settings',
+    href: '/pharmacy/settings/printers',
+    icon: Printer,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
   },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing
@@ -587,7 +618,13 @@ export function visibleNavigation(
       )
         return false;
       if (item.hrAccess) return isAdmin || isHr;
-      if (item.adminOnly) return isAdmin;
+      if (item.adminOnly)
+        return (
+          isAdmin ||
+          Boolean(
+            item.memberCapabilities?.some((capability) => pharmacyCapabilities.includes(capability))
+          )
+        );
       if (item.memberModule && !isAdmin && entitlements.vertical === 'PHARMACY')
         return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
@@ -649,18 +686,9 @@ export function useVisibleNavigation() {
     entitlements.vertical === 'PHARMACY' &&
     Boolean(session?.user.id) &&
     isModuleGranted('pharmacy-core', entitlements.enabledModules);
-  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: pharmacyRail,
-    // A transient failure must not leave the rail without entries the member
-    // holds; only an authorization refusal is final.
-    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
-    staleTime: 30_000,
-  });
-  // A cached answer for another signed-in identity cannot expose an entry.
-  const railCapabilities =
-    pharmacyRail && railAccess.data && railAccess.data.userId === session?.user.id
-      ? railAccess.data.capabilities
-      : [];
+  // DEV-240: keyed by member and tenant, so a switch never reuses another
+  // identity's rail.
+  const { capabilities: railCapabilities } = usePharmacyNavigationAccess(pharmacyRail);
   const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
     enabled: safetyModule,
     retry: false,

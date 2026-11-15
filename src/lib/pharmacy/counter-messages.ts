@@ -11,6 +11,45 @@
  * imports `counterErrorMessage` and never formats a failure itself.
  */
 
+import { capabilityMatches } from '@/lib/abac/capabilities';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+
+/** The refusal the server sends when the actor may not sell a prescription-only line. */
+const RX_SALE_DENIED_SERVER_MESSAGE =
+  'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.';
+
+/**
+ * DEV-622: the shipped pharmacy roles that can finish a prescription sale alone. They hold
+ * both the exact `pharmacy:dispense` grant the Rx sale gate checks and `pharmacy:counter`
+ * for payment, matched by the same rule the server uses. Wildcards never reach the
+ * dispensing grant, so the plain Owner (`pharmacy:*`) and the workspace administrator
+ * (`*`) are not named: they cannot sell a prescription line either.
+ */
+export const RX_SALE_COMPLETING_ROLE_NAMES: readonly string[] = PHARMACY_ROLE_TEMPLATES.filter(
+  (role) =>
+    (['pharmacy:dispense', 'pharmacy:counter'] as const).every((action) =>
+      role.capabilities.some((grant) => capabilityMatches(grant, action))
+    )
+).map((role) => role.name);
+
+function whoCanCompleteSale(names: readonly string[]): string {
+  const quoted = names.map((name) => `“${name}”`);
+  const list =
+    quoted.length <= 2
+      ? quoted.join(' or ')
+      : `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}`;
+  return `Someone with the ${list} role can complete this sale.`;
+}
+
+/** DEV-622: shown when someone without the dispensing grant reaches a prescription line. */
+export const COUNTER_RX_NEEDS_PHARMACIST_MESSAGE = `Only a pharmacist can sell a prescription-only or restricted medicine. ${whoCanCompleteSale(RX_SALE_COMPLETING_ROLE_NAMES)}`;
+
+/** DEV-622: shown when someone without counter (payment) access tries to take payment. */
+export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE = `Your role does not take payments or open the cash drawer. ${whoCanCompleteSale(RX_SALE_COMPLETING_ROLE_NAMES)}`;
+
+/** The server's generic capability refusal (no `pharmacy:counter` for payment and drawer). */
+const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action.';
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -40,12 +79,21 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
+  VOUCHER_CATEGORY_REFUSED:
+    'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
+  VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
-  INVALID_STATE: 'This bill has already moved on. Refresh the counter and try again.',
+  // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
+  // itself, so the sentence never sends the operator to refresh.
+  INVALID_STATE:
+    'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
+  // DEV-623: money taken on a bill comes back through a refund, never a void.
+  BILL_HAS_PAYMENTS:
+    'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -56,6 +104,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+  // DEV-630: the server books money on today in the workspace zone only.
+  BUSINESS_DATE_NOT_CURRENT:
+    'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
@@ -69,26 +120,85 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   PATIENT_NOT_FOUND: 'That patient is not available in this workspace. Select the patient again.',
   PRESCRIPTION_PATIENT_MISMATCH:
     'This bill carries a prescription for a different patient. Link that patient instead.',
-  SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
+  SALE_NOT_OPEN:
+    'That bill is no longer open for payment: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
   OVER_TENDER: 'That payment is more than the amount still due on this bill.',
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
-  UNCERTIFIED_PROVIDER:
-    'This tender needs a connected provider. Take another tender.',
+  UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  INVALID_RECEIPT_LEASE:
+    "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
+  LEASE_REQUIRES_SETTLEMENT:
+    'An offline bill must be paid in full in one payment. Enter the full amount due.',
   // Khata repayments (K4, DEV-731).
   PAYMENT_EXCEEDS_BALANCE:
     'That payment is more than the khata balance still owed. Enter the amount owed or less.',
   ACCOUNT_NOT_FOUND: 'That khata account is not active on this branch. Search again.',
   REFERENCE_REQUIRED: 'Enter the transfer or wallet reference for a non-cash payment.',
   PERIOD_CLOSED: 'The accounting period for today is closed. Ask the owner to reopen it.',
+  // DEV-622: the server's Rx sale refusal (a default Cashier on a prescription line, at
+  // add-line or at payment) names who can finish the bill.
+  [RX_SALE_DENIED_SERVER_MESSAGE]: COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
 };
+
+/**
+ * DEV-712: how loudly a refusal is shown. Routine state — a bill that already
+ * moved on, a drawer still closed, a short search — is a neutral `info` notice.
+ * `danger` is kept for what the operator must not miss: controlled-drug blocks
+ * and a payment whose outcome is in doubt.
+ * Any other mapped reason is a `warning` the operator can correct. A failure
+ * this module does not know stays `danger`: it may be a safety refusal raised
+ * as prose (a controlled-medicine denial), which must not be quietened.
+ */
+export type CounterNoticeTone = 'info' | 'warning' | 'danger';
+
+const COUNTER_INFO_REASONS = new Set([
+  'INVALID_STATE',
+  'SALE_NOT_OPEN',
+  'NOT_FOUND',
+  'DRAWER_NOT_OPEN',
+  'OPEN_DRAWER',
+  'DAY_CLOSED',
+  'INVALID_QUERY',
+  'INVALID_QUANTITY',
+  'INVALID_UNITS',
+  'INVALID_AMOUNT',
+  'INVALID_RECEIPT_LEASE',
+  'LEASE_REQUIRES_SETTLEMENT',
+]);
+
+const COUNTER_DANGER_REASONS = new Set([
+  // Controlled-drug blocks.
+  'COAUTH_REQUIRED',
+  'CONSENT_REQUIRED',
+  // A payment recorded with different details: its outcome is in doubt.
+  'IDEMPOTENCY_CONFLICT',
+]);
+
+export function counterErrorTone(error: unknown): CounterNoticeTone {
+  const reason = error instanceof Error ? error.message : '';
+  if (COUNTER_INFO_REASONS.has(reason)) return 'info';
+  if (COUNTER_DANGER_REASONS.has(reason)) return 'danger';
+  return COUNTER_ERROR_MESSAGES[reason] ? 'warning' : 'danger';
+}
+
+/**
+ * DEV-712: the refusal a write gets when its bill was already settled, voided or
+ * held. The counter answers it by re-reading the bill and opening a fresh one.
+ */
+export function counterBillMovedOn(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === 'INVALID_STATE' || error.message === 'SALE_NOT_OPEN')
+  );
+}
 
 /**
  * A reason code as the aggregates raise it: SCREAMING_SNAKE_CASE, no spaces.
@@ -124,4 +234,27 @@ export function counterErrorMessage(error: unknown): string {
   if (mapped) return mapped;
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
+}
+
+function isForbidden(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('data' in error)) return false;
+  const data = (error as { data?: unknown }).data;
+  return (
+    typeof data === 'object' && data !== null && (data as { code?: unknown }).code === 'FORBIDDEN'
+  );
+}
+
+/**
+ * DEV-622: payment and drawer actions need `pharmacy:counter`. A default Pharmacist is
+ * refused with the server's generic sentence; at those two actions it means the operator's
+ * role does not take payments, so the counter says who can finish the bill instead.
+ */
+export function counterPaymentErrorMessage(error: unknown): string {
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  )
+    return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
+  return counterErrorMessage(error);
 }
