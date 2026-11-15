@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   readOwnerBriefingDemand: vi.fn(),
   renderOwnerBriefingWhatsApp: vi.fn(),
   refreshPharmacyAnomalySignals: vi.fn(),
+  readLicenceRenewalReminders: vi.fn(),
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
@@ -52,6 +53,10 @@ vi.mock('./anomaly-signals-operations', () => ({
   ],
 }));
 
+vi.mock('./licence-renewal-operations', () => ({
+  readLicenceRenewalReminders: mocks.readLicenceRenewalReminders,
+}));
+
 const actualBriefing = await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing');
 vi.mock('./owner-briefing', async () => ({
   ...(await vi.importActual<typeof import('./owner-briefing')>('./owner-briefing')),
@@ -78,6 +83,7 @@ describe('RPT-03 owner digest', () => {
     mocks.tenantDb.pharmacyOwnerDigestSetting.updateMany.mockResolvedValue({ count: 1 });
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
+    mocks.readLicenceRenewalReminders.mockResolvedValue([]);
     mocks.renderOwnerBriefingWhatsApp.mockImplementation(
       actualBriefing.renderOwnerBriefingWhatsApp
     );
@@ -142,6 +148,59 @@ describe('RPT-03 owner digest', () => {
     expect(digest.rendered).toContain('cashMinor: PKR 60.00');
     expect(digest.rendered).not.toContain('cashVarianceMinor');
     expect(digest.rendered).toContain('deviceFiscalOfflineExceptions: Not available');
+    expect(digest.rendered).toContain('Anomaly review signals: 0');
+  });
+
+  it('#720 adds a renewal line for a licence expiring in 30 days, and none once renewed', async () => {
+    const actualRenewal =
+      await vi.importActual<typeof import('./licence-renewal')>('./licence-renewal');
+    const at = new Date('2026-09-04T08:00:00.000Z');
+    const subject = {
+      kind: 'BRANCH_LICENCE' as const,
+      holder: 'Main',
+      reference: 'DSL-123',
+      validTo: new Date(at.getTime() + 30 * 24 * 60 * 60 * 1000),
+      provinceCode: 'PK-PB',
+      licenceCategory: 'PHARMACY',
+    };
+    mocks.readLicenceRenewalReminders.mockResolvedValueOnce(
+      actualRenewal.licenceRenewalReminders([subject], at)
+    );
+    const input = {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    };
+    const digest = await composeOwnerDigest({} as never, input);
+
+    expect(mocks.readLicenceRenewalReminders).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+    });
+    expect(digest.rendered).toContain(
+      'Renewal: Drug sale licence (Main, DSL-123) expires in 30 days. Fee: Rs 3,000 (pharmacy).'
+    );
+    expect(digest.whatsappBody).toContain('Drug sale licence expires in 30 days.');
+    expect(digest.whatsappBody).not.toContain('DSL-123');
+
+    const renewed = await composeOwnerDigest({} as never, input);
+    expect(renewed.renewals).toEqual([]);
+    expect(renewed.rendered).not.toContain('Renewal:');
+    expect(renewed.whatsappBody).not.toContain('renewal');
+  });
+
+  it('#720 still captures the digest when the renewal read fails', async () => {
+    mocks.readLicenceRenewalReminders.mockRejectedValueOnce(new Error('unreadable'));
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.renewals).toEqual([]);
     expect(digest.rendered).toContain('Anomaly review signals: 0');
   });
 

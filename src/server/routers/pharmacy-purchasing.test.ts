@@ -1323,6 +1323,43 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
 
+  it('refuses a supplier bill that is already filed, in any letter case, before any write (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'POSTED',
+    });
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, supplierInvoiceRef: 'inv-8841' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: expect.any(String),
+          supplierId: 'supplier_a',
+          supplierInvoiceRef: { equals: 'inv-8841', mode: 'insensitive' },
+        },
+      })
+    );
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a duplicate direct purchase bill before the approver PIN is checked (DEV-679)', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      id: 'receipt_0',
+      reference: 'GRN-0',
+      status: 'DRAFT',
+    });
+    await expect(
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Cash and carry', approvedByUserId: 'approver_a', pin: '1234' },
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SUPPLIER_INVOICE' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
   it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
     'keeps a %s DENY effective for a tenant admin without a role',
     async (capability) => {
@@ -1352,6 +1389,67 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+  });
+
+  it('receives a non-drug retail line with no batch, expiry or MRP at the shop retail price (#718)', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+    });
+    const { batchNumber, printedExpiry, printedMrpMinor, ...retailLine } = RECEIPT_LINE;
+    void [batchNumber, printedExpiry, printedMrpMinor];
+    await caller().createGoodsReceipt({ ...RECEIPT, lines: [retailLine] });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line).toMatchObject({
+      batchNumber: 'RETAIL-NOEXP',
+      printedExpiry: new Date('9998-12-31T00:00:00.000Z'),
+      expiryPrecision: 'DAY',
+      printedMrpMinor: 45_000,
+    });
+  });
+
+  it.each([
+    ['batch', { batchNumber: undefined }, 'MISSING_BATCH'],
+    ['expiry', { printedExpiry: undefined }, 'MISSING_EXPIRY'],
+    ['printed MRP', { printedMrpMinor: undefined }, 'MISSING_MRP'],
+  ])('still refuses a medicine line without its %s (#718)', async (_field, omitted, reason) => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'PHARMACEUTICAL',
+      retailPriceMinor: null,
+    });
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, lines: [{ ...RECEIPT_LINE, ...omitted }] })
+    ).rejects.toMatchObject({ message: expect.stringContaining(reason) });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('names a non-drug house batch after the expiry scanned from GS1 (#718)', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+    });
+    db.medicineBarcode.findFirst.mockResolvedValue({ presentation: { medicineId: 'medicine_a' } });
+    const { batchNumber, printedExpiry, printedMrpMinor, ...retailLine } = RECEIPT_LINE;
+    void [batchNumber, printedExpiry, printedMrpMinor];
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        { ...retailLine, gs1Payload: ']d2010896123456789417271231' },
+        { ...retailLine, gs1Payload: ']d2010896123456789417281130' },
+      ],
+    });
+    const lines = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(lines[0]).toMatchObject({
+      batchNumber: 'RETAIL-2027-12-31-D',
+      printedExpiry: new Date('2027-12-31T00:00:00.000Z'),
+    });
+    expect(lines[1]).toMatchObject({
+      batchNumber: 'RETAIL-2028-11-30-D',
+      printedExpiry: new Date('2028-11-30T00:00:00.000Z'),
+    });
   });
 
   it('stamps the order landed cost, with its rebate, freight and other charges, on the receipt line', async () => {
@@ -2695,6 +2793,7 @@ const sensitiveReads = {
   debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'medicine' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
   '%s sensitive read security',
@@ -2793,6 +2892,7 @@ const branchActions = {
   debitNotePositions: sensitiveReads.debitNotePositions,
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
   supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
+  reorderDrafts: sensitiveReads.reorderDrafts,
 };
 describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
   '%s branch security',
@@ -3001,6 +3101,7 @@ const readActions = {
   requisitions: () => caller().requisitions(),
   purchaseOrders: () => caller().purchaseOrders(),
   receivedAgainstOrder: () => caller().receivedAgainstOrder({ purchaseOrderId: 'po_a' }),
+  officialPriceAlerts: () => caller().officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
@@ -3010,6 +3111,7 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {
   it('inventories every query so a new read cannot silently omit the authorization matrix', () => {
@@ -3486,4 +3588,32 @@ it('does not let self-provisioning reactivate an archived staff profile', async 
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
   expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+});
+
+describe('DEV-693 official price hints at goods-in', () => {
+  function withAlerts() {
+    const findMany = vi.fn(async () => []);
+    Object.assign(db, { pharmacyDrapPriceAlert: { findMany } });
+    return findMany;
+  }
+
+  it('gives a receiver without price access no hint and reads no alert', async () => {
+    const findMany = withAlerts();
+    await expect(caller().officialPriceAlerts({ medicineIds: ['med_a'] })).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads only open alerts of the caller tenant for the medicines on the bench', async () => {
+    const findMany = withAlerts();
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) =>
+        action === 'pharmacy:procurement' || action === 'pharmacy:safety'
+    );
+    await caller().officialPriceAlerts({ medicineIds: ['med_a'] });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', dismissedAt: null, medicineId: { in: ['med_a'] } },
+      })
+    );
+  });
 });

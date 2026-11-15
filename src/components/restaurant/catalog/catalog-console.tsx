@@ -785,7 +785,7 @@ export function RestaurantCatalogConsole({
                             <span className="block font-medium text-text-strong">
                               {product.name}
                             </span>
-                            <span className="block max-w-72 truncate text-xs text-text-faint">
+                            <span className="block max-w-72 truncate text-xs text-text-muted">
                               {product.description ?? product.id}
                             </span>
                           </TableCell>
@@ -899,7 +899,7 @@ export function RestaurantCatalogConsole({
                                 <p className="truncate text-sm font-medium text-text-strong">
                                   {variant.name}
                                 </p>
-                                <p className="font-mono text-[0.6875rem] text-text-faint">
+                                <p className="font-mono text-[0.6875rem] text-text-muted">
                                   Order {variant.sortOrder}
                                 </p>
                               </div>
@@ -1595,7 +1595,7 @@ export function RestaurantCatalogConsole({
                             <span className="block font-medium text-text-strong">
                               {allergen.name}
                             </span>
-                            <span className="font-mono text-[0.6875rem] text-text-faint">
+                            <span className="font-mono text-[0.6875rem] text-text-muted">
                               {allergen.id}
                             </span>
                           </TableCell>
@@ -2030,7 +2030,7 @@ export function RestaurantCatalogConsole({
                                 {product?.name ?? 'Unknown'}
                               </span>
                               {variant ? (
-                                <span className="text-xs text-text-faint">{variant.name}</span>
+                                <span className="text-xs text-text-muted">{variant.name}</span>
                               ) : null}
                             </TableCell>
                             <TableCell>

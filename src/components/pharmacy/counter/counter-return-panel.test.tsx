@@ -153,6 +153,35 @@ describe('counter returns', () => {
     expect(mocks.returnLine).not.toHaveBeenCalled();
     expect(mocks.refund).not.toHaveBeenCalled();
   });
+  it('labels the line with the pack level sold and hides internal lot ids (DEV-638)', () => {
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0] = {
+      ...history.data.lines[0],
+      saleUnit: 'PACK',
+      levelLabel: 'STRIP',
+      lots: [
+        {
+          lotId: 'cmvzl8u3u01pq4oqrosqy5nsi',
+          batchNumber: 'QA-B2',
+          expiresAt: new Date('2027-05-31T00:00:00Z'),
+          returnableUnits: 8,
+          restockAllowed: true,
+        },
+      ],
+    };
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    const line = screen.getByRole('option', { name: /Medicine/ });
+    expect(line).toHaveTextContent('Medicine · 1 strip of 10 · 8 units returnable');
+    expect(line).not.toHaveTextContent(/box/i);
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expect(screen.getByText(/One sold strip contains 10 base units/)).toBeVisible();
+    expect(screen.queryByText(/box/i)).not.toBeInTheDocument();
+    const lot = screen.getByRole('option', { name: /QA-B2/ });
+    expect(lot).toHaveTextContent('Batch QA-B2 · expires 2027-05-31 · 8 units remaining');
+    expect(lot).not.toHaveTextContent('cmvzl8u3u01pq4oqrosqy5nsi');
+    expect(lot).toHaveValue('cmvzl8u3u01pq4oqrosqy5nsi');
+  });
   it('books the return and the refund to the active branch', async () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
@@ -162,9 +191,12 @@ describe('counter returns', () => {
       target: { value: 'seal unknown' },
     });
     fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    enterManagerPin();
     fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
     await waitFor(() =>
-      expect(mocks.returnLine).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({ branchId: 'b', managerPin: '2468' })
+      )
     );
   });
   it('sends the cash refund to the active branch drawer', async () => {
@@ -225,6 +257,9 @@ describe('counter returns', () => {
       target: { value: 'seal unknown' },
     });
     fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    expect(submit).toBeDisabled();
+    enterManagerPin();
+    expect(submit).toBeEnabled();
     fireEvent.click(submit);
     await waitFor(() =>
       expect(mocks.returnLine).toHaveBeenCalledWith(
@@ -331,6 +366,7 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
     target: { value: '3' },
   });
   fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+  enterManagerPin();
   fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
   await waitFor(() =>
     expect(mocks.returnLine).toHaveBeenCalledWith(
@@ -353,6 +389,7 @@ describe('controlled medicine returns', () => {
       target: { value: 'sealed' },
     });
     fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    enterManagerPin();
   }
 
   it('does not ask for a witness on a non-controlled line', () => {
@@ -382,6 +419,7 @@ describe('controlled medicine returns', () => {
         expect.objectContaining({
           saleLineId: 'line',
           controlledWitness: { staffProfileId: 'staff-w', pin: '4826' },
+          managerPin: '2468',
         })
       )
     );
@@ -389,8 +427,11 @@ describe('controlled medicine returns', () => {
     for (const [, value] of setItem.mock.calls) {
       expect(value).not.toContain('4826');
       expect(value).not.toContain('controlledWitness');
+      expect(value).not.toContain('2468');
+      expect(value).not.toContain('managerPin');
     }
     expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+    expect(screen.getByLabelText('Your manager or owner PIN')).toHaveValue('');
   });
 
   it('reports a blocked controlled return as a failure, not success', async () => {
@@ -444,11 +485,14 @@ describe('controlled medicine returns', () => {
       target: { value: 'staff-w' },
     });
     fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1111' } });
+    expect(retry).toBeDisabled();
+    enterManagerPin();
     fireEvent.click(retry);
     await waitFor(() =>
       expect(mocks.returnLine).toHaveBeenCalledWith({
         ...saved.input,
         controlledWitness: { staffProfileId: 'staff-w', pin: '1111' },
+        managerPin: '2468',
       })
     );
     await waitFor(() =>
@@ -459,14 +503,38 @@ describe('controlled medicine returns', () => {
   });
 });
 describe('DEV-647 refund access', () => {
-  it('hides the refund step from a cashier but keeps returns', () => {
+  it('hides the return and refund steps from a cashier (DEV-621)', () => {
     render(<ReturnForm {...props} refundAuthorized={false} />);
     chooseReceipt();
-    expect(screen.getByRole('button', { name: 'Record return' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Record return' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Sold line')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Original tender')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
-    expect(screen.getByText(/Refunds need a manager or owner/)).toBeVisible();
+    expect(screen.getByText(/Returns and refunds need a manager or owner/)).toBeVisible();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+  });
+  it('keeps a saved return for a manager when the user has no refund access (DEV-621)', () => {
+    const saved = {
+      kind: 'return',
+      saleId: 'sale',
+      input: {
+        branchId: 'b',
+        saleLineId: 'line',
+        canonicalUnits: 1,
+        disposition: 'QUARANTINE',
+        quarantineLocationId: 'q',
+        reason: 'WRONG_ITEM',
+        integrityDecision: 'sealed',
+        idempotencyKey: 'saved-key',
+      },
+    };
+    localStorage.setItem('pharmacy-return:o:a:b', JSON.stringify(saved));
+    render(<ReturnForm {...base} />);
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/This saved return is kept for reconciliation/)).toBeVisible();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
   });
   it('fails closed to the cashier view when refund access is not granted', () => {
     render(<ReturnForm {...base} />);

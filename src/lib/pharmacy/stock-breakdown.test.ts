@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PackLevelNode } from './counter-pricing';
-import { baseUnitNoun, formatStockBreakdown, lotStockBreakdown } from './stock-breakdown';
+import {
+  baseUnitNoun,
+  formatSoldQuantity,
+  formatStockBreakdown,
+  lotStockBreakdown,
+  soldUnitNoun,
+} from './stock-breakdown';
 
 const boxOfStrips = [
   { levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 100 },
@@ -94,5 +100,53 @@ describe('lotStockBreakdown (DEV-727)', () => {
         packLevels: undefined,
       })
     ).toBe('34 units');
+  });
+});
+
+describe('formatSoldQuantity (DEV-638)', () => {
+  it('names a standalone strip sold as kind PACK by its own level, never a box', () => {
+    const line = {
+      quantity: 1,
+      saleUnit: 'PACK',
+      levelLabel: 'STRIP',
+      canonicalUnitsPerSaleUnit: 10,
+    };
+    expect(formatSoldQuantity(line)).toBe('1 strip of 10');
+    expect(soldUnitNoun(line.saleUnit, line.levelLabel)).toBe('strip');
+  });
+  it('pluralises the sold level and drops the size for loose units', () => {
+    expect(
+      formatSoldQuantity({
+        quantity: 2,
+        saleUnit: 'PACK',
+        levelLabel: 'BOX',
+        canonicalUnitsPerSaleUnit: 30,
+      })
+    ).toBe('2 boxes of 30');
+    expect(
+      formatSoldQuantity({
+        quantity: 3,
+        saleUnit: 'UNIT',
+        levelLabel: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+      })
+    ).toBe('3 units');
+  });
+  it('names loose units as units even when the line carries the pack level label', () => {
+    // lotSaleUnitOptions gives the loose UNIT option the sealed pack's level id.
+    const line = {
+      quantity: 3,
+      saleUnit: 'UNIT',
+      levelLabel: 'STRIP',
+      canonicalUnitsPerSaleUnit: 1,
+    };
+    expect(formatSoldQuantity(line)).toBe('3 units');
+    expect(soldUnitNoun(line.saleUnit, line.levelLabel)).toBe('unit');
+  });
+  it('falls back to a neutral pack word when no level label is stored', () => {
+    expect(
+      formatSoldQuantity({ quantity: 1, saleUnit: 'PACK', canonicalUnitsPerSaleUnit: 10 })
+    ).toBe('1 pack of 10');
+    expect(soldUnitNoun('PACK', null)).toBe('pack');
   });
 });

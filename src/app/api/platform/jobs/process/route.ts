@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processPlatformJobs } from '@/lib/platform/jobs';
+import { processDueChurnScoring } from '@/lib/pharmacy/churn-scoring';
 import { processDueOwnerDigests } from '@/lib/pharmacy/owner-digest';
 
 export const maxDuration = 300;
@@ -20,11 +21,12 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => ({}))) as { maxJobs?: unknown };
   const maxJobs =
     typeof input.maxJobs === 'number' && Number.isFinite(input.maxJobs) ? input.maxJobs : 25;
-  const [jobs, ownerDigests] = await Promise.all([
+  const [jobs, ownerDigests, churnScoring] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
+    processDueChurnScoring(new Date(), maxJobs),
   ]);
-  return NextResponse.json({ ...jobs, ownerDigests });
+  return NextResponse.json({ ...jobs, ownerDigests, churnScoring });
 }
 
 export const GET = POST;

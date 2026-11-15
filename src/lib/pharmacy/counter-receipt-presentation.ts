@@ -10,6 +10,7 @@ import {
   localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
+  receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLine,
   type CounterReceiptLocale,
@@ -149,10 +150,12 @@ export function buildCounterReceiptPreview(
       issuedAt: `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
+        const promotion = receiptPromotionLabel(line, locale);
         return [
           presentation.identity,
           counterLinePricing(line, locale),
           ...presentation.allocations,
+          ...(promotion ? [promotion] : []),
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),

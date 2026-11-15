@@ -158,6 +158,12 @@ export async function processDueWhatsAppKhataReminders(
     provider?: WhatsAppProvider;
     smsConfig?: SmsConfig;
     smsProvider?: SmsProvider;
+    /**
+     * DEV-730 owner "Send reminder": restrict the run to one family account. The same
+     * overdue, consent, quiet-hour, once-per-week and SMS-fallback gates apply as the
+     * scheduled job.
+     */
+    account?: { organizationId: string; branchId: string; familyAccountId: string };
   } = {}
 ): Promise<KhataReminderRunResult> {
   const now = options.now ?? new Date();
@@ -191,12 +197,18 @@ export async function processDueWhatsAppKhataReminders(
       ? smsConfig.organizationId
       : null;
   if (!organizationId) return result;
+  // An owner's single-account send never scans another workspace's accounts.
+  if (options.account && options.account.organizationId !== organizationId) {
+    result.configured = false;
+    result.configurationErrors.push('ORGANIZATION_NOT_CONFIGURED');
+    return result;
+  }
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   // Catalogue names for the send-time variable re-check, read once per run.
   let catalogNames: Set<string> | null = null;
   const accounts = await withPlatformDb((db) =>
-    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
+    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor, options.account)
   );
 
   for (const account of accounts) {
@@ -442,9 +454,13 @@ export async function readDueKhataAccounts(
   organizationId: string,
   now: Date,
   limit: number,
-  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR
+  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR,
+  only?: { branchId: string; familyAccountId: string }
 ): Promise<DueAccount[]> {
   const floor = Math.max(1, Number.isSafeInteger(minBalanceMinor) ? minBalanceMinor : 1);
+  const accountFilter = only
+    ? Prisma.sql`AND acct."branchId" = ${only.branchId} AND acct."id" = ${only.familyAccountId}`
+    : Prisma.empty;
   return db.$queryRaw<DueAccount[]>(Prisma.sql`
     WITH payments AS (
       SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
@@ -471,6 +487,7 @@ export async function readDueKhataAccounts(
      AND payments."familyAccountId" = ev."familyAccountId"
      AND payments."settlesChargeId" = ev."id"
     WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
+      ${accountFilter}
     GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName", acct."payerCustomerId"
     HAVING SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END) >= ${floor}

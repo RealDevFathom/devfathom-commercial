@@ -32,6 +32,7 @@ export class PharmacyInventoryError extends Error {
       | 'INVALID_STATE'
       | 'COAUTH_REQUIRED'
       | 'COLD_CHAIN_STORAGE_REQUIRED'
+      | 'VARIANCE_REASON_REQUIRED'
   ) {
     super(reason);
   }

@@ -6,7 +6,11 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  DRAP_REGISTRY_CONNECTOR_ID,
+  DRAP_REGISTRY_LABEL,
+  DRAP_REGISTRY_RIGHTS,
   MANUAL_FILE_RIGHTS,
+  type ConnectorRights,
   type ConnectorSchedule,
   type MedicineReferenceField,
   type NormalizedMedicineReferenceRow,
@@ -28,7 +32,39 @@ export const REGULATED_REFERENCE_FIELDS = [
   'controlled',
 ] as const satisfies readonly MedicineReferenceField[];
 
+export type ReferenceConnectorKey = 'manual-file' | typeof DRAP_REGISTRY_CONNECTOR_ID;
+
+type ReferenceConnectorDescriptor = {
+  key: ReferenceConnectorKey;
+  label: string;
+  digestAdapter: string;
+  sourceType: 'IMPORT' | 'REGULATOR';
+  rights: ConnectorRights;
+  /** Official sources match existing medicines by registration number and never write directly. */
+  official: boolean;
+};
+
+export const REFERENCE_CONNECTORS: Record<ReferenceConnectorKey, ReferenceConnectorDescriptor> = {
+  'manual-file': {
+    key: 'manual-file',
+    label: 'Manual CSV / Excel',
+    digestAdapter: 'MANUAL_FILE',
+    sourceType: 'IMPORT',
+    rights: MANUAL_FILE_RIGHTS,
+    official: false,
+  },
+  [DRAP_REGISTRY_CONNECTOR_ID]: {
+    key: DRAP_REGISTRY_CONNECTOR_ID,
+    label: DRAP_REGISTRY_LABEL,
+    digestAdapter: 'DRAP_REGISTRY_FILE',
+    sourceType: 'REGULATOR',
+    rights: DRAP_REGISTRY_RIGHTS,
+    official: true,
+  },
+};
+
 type RunInput = {
+  connectorKey?: ReferenceConnectorKey;
   organizationId: string;
   actorId: string;
   triggerKind: 'MANUAL' | 'SCHEDULED_CALL';
@@ -45,9 +81,11 @@ function sortedValues(values: NormalizedMedicineReferenceRow['values']) {
   );
 }
 
-export function manualConnectorInputDigest(input: Pick<RunInput, 'fileName' | 'rows'>): string {
+export function manualConnectorInputDigest(
+  input: Pick<RunInput, 'fileName' | 'rows' | 'connectorKey'>
+): string {
   const canonical = {
-    adapter: 'MANUAL_FILE',
+    adapter: REFERENCE_CONNECTORS[input.connectorKey ?? 'manual-file'].digestAdapter,
     fileName: input.fileName,
     rows: input.rows.map((row) => ({
       rowSourceKey: row.rowSourceKey,
@@ -146,6 +184,7 @@ export async function runManualReferenceConnector(
   db: ScopedDb | Prisma.TransactionClient,
   input: RunInput
 ) {
+  const descriptor = REFERENCE_CONNECTORS[input.connectorKey ?? 'manual-file'];
   const inputDigest = manualConnectorInputDigest(input);
   await db.$queryRawUnsafe(
     'SELECT pg_advisory_xact_lock(hashtext($1))',
@@ -154,12 +193,12 @@ export async function runManualReferenceConnector(
 
   const connector = await db.pharmacyReferenceConnector.upsert({
     where: {
-      organizationId_key: { organizationId: input.organizationId, key: 'manual-file' },
+      organizationId_key: { organizationId: input.organizationId, key: descriptor.key },
     },
     create: {
       organizationId: input.organizationId,
-      key: 'manual-file',
-      label: 'Manual CSV / Excel',
+      key: descriptor.key,
+      label: descriptor.label,
       adapter: 'MANUAL_FILE',
       enabled: true,
       schedule: { kind: 'MANUAL' },
@@ -171,7 +210,9 @@ export async function runManualReferenceConnector(
   if (!connector.enabled)
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
-      message: 'Manual reference connector is disabled.',
+      message: descriptor.official
+        ? 'DRAP registry reference connector is disabled.'
+        : 'Manual reference connector is disabled.',
     });
 
   const completed = await db.pharmacyReferenceConnectorRun.findFirst({
@@ -248,29 +289,46 @@ export async function runManualReferenceConnector(
       continue;
     }
 
-    const target = row.targetMedicineId
-      ? await db.medicine.findFirst({
-          where: { id: row.targetMedicineId },
-          select: {
-            id: true,
-            productName: true,
-            brandName: true,
-            manufacturer: true,
-            drapRegistrationNumber: true,
-            rx: true,
-            restricted: true,
-            controlled: true,
-          },
-        })
+    const targetSelect = {
+      id: true,
+      productName: true,
+      brandName: true,
+      manufacturer: true,
+      drapRegistrationNumber: true,
+      rx: true,
+      restricted: true,
+      controlled: true,
+    } as const;
+    let target = row.targetMedicineId
+      ? await db.medicine.findFirst({ where: { id: row.targetMedicineId }, select: targetSelect })
       : null;
     if (row.targetMedicineId && !target) {
       rowsRejected += 1;
       rejections.push({ rowSourceKey: row.rowSourceKey, reasons: ['TARGET_MEDICINE_NOT_FOUND'] });
       continue;
     }
+    // Official registry rows pre-fill the catalogue entry that already carries their
+    // registration number, so a pharmacist reviews an update instead of a duplicate.
+    const registration = row.values.drapRegistrationNumber;
+    if (!target && descriptor.official && registration) {
+      const matches = await db.medicine.findMany({
+        where: { drapRegistrationNumber: registration },
+        select: targetSelect,
+        take: 2,
+      });
+      if (matches.length > 1) {
+        rowsRejected += 1;
+        rejections.push({
+          rowSourceKey: row.rowSourceKey,
+          reasons: ['AMBIGUOUS_DRAP_REGISTRATION'],
+        });
+        continue;
+      }
+      target = matches[0] ?? null;
+    }
 
     const directChanges: { brandName?: string; manufacturer?: string } = {};
-    if (target) {
+    if (target && !descriptor.official) {
       for (const field of DIRECT_REFERENCE_FIELDS) {
         const value = row.values[field];
         if (value !== undefined && target[field] !== value) directChanges[field] = value;
@@ -283,11 +341,12 @@ export async function runManualReferenceConnector(
     }
 
     const proposed = regulatedChanges(row, target);
-    if (!target) {
-      for (const field of DIRECT_REFERENCE_FIELDS) {
-        const value = row.values[field];
-        if (value !== undefined) proposed[field] = value;
-      }
+    for (const field of DIRECT_REFERENCE_FIELDS) {
+      const value = row.values[field];
+      if (value === undefined) continue;
+      // An official source proposes descriptive changes too: nothing it supplies is written
+      // until a person confirms it.
+      if (!target || (descriptor.official && target[field] !== value)) proposed[field] = value;
     }
     if (Object.keys(proposed).length) {
       await db.pharmacyReferenceConnectorProposal.create({
@@ -300,12 +359,12 @@ export async function runManualReferenceConnector(
           payload: asJson({
             values: proposed,
             source: {
-              connectorId: 'manual-file',
-              label: 'Manual CSV / Excel',
+              connectorId: descriptor.key,
+              label: descriptor.label,
               fileName: input.fileName,
               batchId: input.batchId,
               rowSourceKey: row.rowSourceKey,
-              rights: MANUAL_FILE_RIGHTS,
+              rights: descriptor.rights,
             },
           }),
         },

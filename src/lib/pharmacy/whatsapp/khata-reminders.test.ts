@@ -89,6 +89,7 @@ import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
 import {
   planKhataReminder,
   processDueWhatsAppKhataReminders,
+  readDueKhataAccounts,
   sanitizeReminderDisplayName,
 } from './khata-reminders';
 
@@ -551,5 +552,67 @@ describe('DEV-29 send-time variable compliance re-check', () => {
     await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
     expect(provider.calls).toHaveLength(1);
     expect(store.audits).toHaveLength(0);
+  });
+});
+
+describe('DEV-730 owner reminder for one account', () => {
+  it('refuses another organization without scanning, claiming or sending', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: { organizationId: 'org_b', branchId: 'branch-1', familyAccountId: 'family-1' },
+    });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0, prepared: 0 });
+    expect(result.configurationErrors).toContain('ORGANIZATION_NOT_CONFIGURED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('applies the same consent-gated, once-a-week send to the selected account', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const only = { organizationId: 'org_a', branchId: 'branch-1', familyAccountId: 'family-1' };
+
+    const first = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: only,
+    });
+    const again = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider,
+      account: only,
+    });
+
+    expect(first).toMatchObject({ scanned: 1, prepared: 1 });
+    expect(again).toMatchObject({ scanned: 1, duplicate: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('narrows the due-account scan to the branch and account', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1, 10_000, {
+      branchId: 'branch-1',
+      familyAccountId: 'family-1',
+    });
+    const query = queryRaw.mock.calls[0]![0] as { sql: string; values: unknown[] };
+    expect(query.sql).toContain('acct."branchId" = ?');
+    expect(query.sql).toContain('acct."id" = ?');
+    expect(query.values).toEqual(expect.arrayContaining(['branch-1', 'family-1']));
+
+    queryRaw.mockClear();
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
+    expect((queryRaw.mock.calls[0]![0] as { sql: string }).sql).not.toContain('acct."id" = ?');
   });
 });

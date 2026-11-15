@@ -376,3 +376,27 @@ describe('normal sale disposition-bound physical arrangement', () => {
     });
   });
 });
+
+describe('DEV-73 pharmacist-approved prescription hand-off', () => {
+  async function bucketQueryValues(flag?: boolean) {
+    const db = fixture();
+    await allocateReservedForSale(db as never, scope, { ...input, requiredUnits: 1 }, 'pack', {
+      expiresAt: reservation.expiresAt,
+      allocations: [{ inventoryLotId: 'reserved', stockLocationId: 'shelf-a', units: 1 }],
+      ...(flag === undefined ? {} : { pharmacistApprovedRx: flag }),
+    });
+    const query = db.$queryRaw.mock.calls[0]![0] as { sql: string; values: unknown[] };
+    return query;
+  }
+
+  it('keeps prescription-only stock out of a reserved hand-off unless a pharmacist approved it', async () => {
+    const plain = await bucketQueryValues();
+    expect(plain.sql).toContain('AND medicine.rx');
+    expect(plain.sql).toContain('NOT medicine.restricted AND NOT medicine.controlled');
+    expect(plain.values).toContain(false);
+    expect(plain.values).not.toContain(true);
+    const approved = await bucketQueryValues(true);
+    expect(approved.values).toContain(true);
+    expect(approved.sql).toContain('NOT medicine.restricted AND NOT medicine.controlled');
+  });
+});

@@ -59,10 +59,16 @@ type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'au
 };
 
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-crm'))
+  if (ctx.session?.user.role !== 'ADMIN')
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Owner access and Pharmacy CRM are required.',
+      message: 'An owner account is required. Ask a workspace owner to open Marketing.',
+    });
+  if (!hasModule(ctx.entitlements, 'pharmacy-crm'))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message:
+        'The Pharmacy CRM license is not active. Ask your workspace administrator to enable it.',
     });
   const organization = await ctx.db.organization.findUnique({
     where: { id: ctx.entitlements.organizationId },
@@ -75,7 +81,7 @@ async function owner(ctx: MarketingAccessContext) {
   )
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'An active pharmacy workspace is required.',
+      message: 'An active pharmacy workspace is required. Contact your workspace administrator.',
     });
   ctx.audit.detail = { action: 'pharmacy_marketing', skipInput: true };
   return organization;
@@ -88,7 +94,10 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
     select: { id: true },
   });
   if (!branch)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'An authorized active branch is required.' });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'An active pharmacy branch is required. Activate a branch or ask for access to one.',
+    });
   return {
     organizationId: organization.id,
     branchId,
