@@ -1,8 +1,12 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ putUpload: vi.fn(), getUpload: vi.fn() }));
-vi.mock('@/lib/storage', () => ({ putUpload: m.putUpload, getUpload: m.getUpload }));
+const m = vi.hoisted(() => ({ putUpload: vi.fn(), getUpload: vi.fn(), deleteUpload: vi.fn() }));
+vi.mock('@/lib/storage', () => ({
+  putUpload: m.putUpload,
+  getUpload: m.getUpload,
+  deleteUpload: m.deleteUpload,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn() }));
 
 import { parseDelimitedText } from './migration/source-values';
@@ -10,6 +14,7 @@ import {
   basePackUnits,
   loadOwnerDataExportRows,
   parseSalesRange,
+  purgeExpiredOwnerDataExports,
   runPharmacyOwnerDataExportJob,
 } from './owner-data-export';
 import { OWNER_DATA_EXPORT_FILES, exportCsv } from './owner-data-export-format';
@@ -418,5 +423,43 @@ describe('runPharmacyOwnerDataExportJob', () => {
       )
     ).rejects.toThrow();
     expect(m.putUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('purgeExpiredOwnerDataExports', () => {
+  it('deletes only archives past their 24-hour link and marks each job purged', async () => {
+    const now = new Date('2026-11-15T10:00:00.000Z');
+    const findMany = vi
+      .fn()
+      .mockResolvedValue([
+        {
+          id: 'job-old',
+          organizationId: 'org-a',
+          result: { filename: 'owner-data-export-job-old.zip', rowCounts: { 'customers.csv': 2 } },
+        },
+      ]);
+    const update = vi.fn().mockResolvedValue({});
+    const purged = await purgeExpiredOwnerDataExports(
+      { platformJob: { findMany, update } } as never,
+      now
+    );
+    expect(purged).toBe(1);
+    const where = findMany.mock.calls[0]![0].where;
+    expect(where).toMatchObject({
+      type: 'PHARMACY_OWNER_DATA_EXPORT_V1',
+      status: 'SUCCEEDED',
+      finishedAt: { lt: new Date('2026-11-14T10:00:00.000Z') },
+      result: { path: ['filename'], string_starts_with: 'owner-data-export-' },
+    });
+    expect(m.deleteUpload).toHaveBeenCalledWith('org-a', 'owner-data-export-job-old.zip');
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'job-old' },
+      data: {
+        result: { filename: null, purgedAt: now.toISOString(), rowCounts: { 'customers.csv': 2 } },
+      },
+    });
+    expect(m.deleteUpload.mock.invocationCallOrder[0]).toBeLessThan(
+      update.mock.invocationCallOrder[0]!
+    );
   });
 });

@@ -16,7 +16,10 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
-import { runPharmacyOwnerDataExportJob } from '@/lib/pharmacy/owner-data-export';
+import {
+  purgeExpiredOwnerDataExports,
+  runPharmacyOwnerDataExportJob,
+} from '@/lib/pharmacy/owner-data-export';
 import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
@@ -963,6 +966,7 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
+  await withPlatformDb((db) => purgeExpiredOwnerDataExports(db));
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

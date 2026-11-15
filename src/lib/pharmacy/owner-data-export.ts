@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { PlatformJob } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
-import { getUpload, putUpload } from '@/lib/storage';
+import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   buildOwnerDataExportZip,
@@ -150,6 +150,47 @@ export async function listOwnerDataExports(
     })
   );
   return jobs.map((job) => ownerDataExportView(job, now));
+}
+
+const PURGE_BATCH = 50;
+
+/**
+ * Delete archives whose 24-hour link has lapsed. Runs from the platform worker
+ * on every pass. Clearing `result.filename` marks a job purged, so it is never
+ * selected again; the row counts and timestamps stay as the export's record.
+ * `deleteUpload` is idempotent, so a pass interrupted between the delete and the
+ * update simply repeats the delete next time.
+ */
+export async function purgeExpiredOwnerDataExports(
+  db: ScopedDb,
+  now: Date = new Date()
+): Promise<number> {
+  const expired = await db.platformJob.findMany({
+    where: {
+      type: OWNER_DATA_EXPORT_JOB_TYPE,
+      status: 'SUCCEEDED',
+      finishedAt: { lt: new Date(now.getTime() - OWNER_DATA_EXPORT_LINK_TTL_MS) },
+      result: { path: ['filename'], string_starts_with: 'owner-data-export-' },
+    },
+    orderBy: { finishedAt: 'asc' },
+    take: PURGE_BATCH,
+    select: { id: true, organizationId: true, result: true },
+  });
+  let purged = 0;
+  for (const job of expired) {
+    if (!job.organizationId) continue;
+    await deleteUpload(job.organizationId, ownerDataExportFilename(job.id));
+    const result = (job.result && typeof job.result === 'object' ? job.result : {}) as Record<
+      string,
+      unknown
+    >;
+    await db.platformJob.update({
+      where: { id: job.id },
+      data: { result: { ...result, filename: null, purgedAt: now.toISOString() } },
+    });
+    purged += 1;
+  }
+  return purged;
 }
 
 /** `10 units`: a counted label the migration importer's `readPackFactor` reads. */
