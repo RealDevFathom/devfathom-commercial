@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   medicines: vi.fn(),
   prescriptionLine: vi.fn(),
+  portalRequest: vi.fn(),
   objects: new Map<string, Buffer>(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -70,6 +71,7 @@ function context(
       prescription: { findFirst: mocks.find, create: mocks.create },
       prescriptionLine: { findFirst: mocks.prescriptionLine },
       medicine: { findMany: mocks.medicines },
+      pharmacyCustomerPortalRequest: { findFirst: mocks.portalRequest },
     },
     entitlements: { organizationId, modules: [], enabledModules },
     session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
@@ -753,6 +755,26 @@ describe('prescription capture and private delivery', () => {
     mocks.patient.mockResolvedValue(null);
     await expect(caller().readSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
       code: 'NOT_FOUND',
+    });
+  });
+
+  it('DEV-15: shows staff a photo only when it is on that patient’s customer-app order', async () => {
+    const receipt = await upload();
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mocks.portalRequest.mockResolvedValue({ id: 'portal-request-1' });
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).resolves.toHaveProperty('dataBase64');
+    expect(mocks.portalRequest).toHaveBeenLastCalledWith({
+      where: {
+        organizationId: 'org-a',
+        kind: 'RX_ORDER',
+        prescriptionFileRef: receipt.url,
+        customer: { patientId: 'patient-a' },
+      },
+      select: { id: true },
     });
   });
 

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { PharmacyCustomerOrderingConsole } from '@/components/pharmacy/customer-ordering-console';
+import { CustomerPortalPanel } from '@/components/pharmacy/customer-portal-panel';
 import { PageHeader } from '@/components/ui/page-header';
 
 export const metadata: Metadata = { title: 'Pharmacy orders' };
@@ -13,6 +14,7 @@ export default function PharmacyOrdersPage() {
         heading="Customer orders"
         description="One protected storefront for branch collection and staff-runner delivery. Every order remains a proposal until pharmacy staff accepts it."
       />
+      <CustomerPortalPanel />
       <PharmacyCustomerOrderingConsole />
     </main>
   );
