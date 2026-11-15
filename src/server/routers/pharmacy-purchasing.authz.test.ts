@@ -400,6 +400,7 @@ const CALLS = {
   requisitions: (c: Caller) => c.requisitions(),
   purchaseOrders: (c: Caller) => c.purchaseOrders(),
   receivedAgainstOrder: (c: Caller) => c.receivedAgainstOrder({ purchaseOrderId: 'po_a' }),
+  officialPriceAlerts: (c: Caller) => c.officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: (c: Caller) => c.goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: (c: Caller) => c.receivingExceptionQueue({ branchId: 'branch_a' }),
   lotsFromReceipt: (c: Caller) =>
@@ -482,6 +483,7 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   requisitions: PROCUREMENT,
   purchaseOrders: PROCUREMENT,
   receivedAgainstOrder: PROCUREMENT,
+  officialPriceAlerts: PROCUREMENT,
   goodsReceipts: PROCUREMENT,
   receivingExceptionQueue: PROCUREMENT,
   lotsFromReceipt: PROCUREMENT,

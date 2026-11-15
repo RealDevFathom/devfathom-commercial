@@ -5,7 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
 import { lockRecallAuthority, quarantinePart, releaseRecallBatches } from './inventory-operations';
-import { confirmPriceChanges, currentPackPrice, resolveNoticePack } from './pricing';
+import { confirmPriceChanges } from './pricing';
 
 export type DrapPriceNotice = {
   kind: 'PRICE';
@@ -165,15 +165,10 @@ export async function ingestDrapNotice(
   const medicineId = medicines[0]!.id;
 
   if (notice.kind === 'PRICE') {
-    const pack = await resolveNoticePack(
-      db,
-      scope.organizationId,
-      medicineId,
-      notice.presentation,
-      notice.packLevel,
-      notice.effectiveDate
-    );
-    const current = pack ? await currentPackPrice(db, scope.organizationId, pack.id) : null;
+    // DEV-693 owner decision: the price printed on the pack and the owner's own
+    // price stay authoritative, because shelf stock can predate a DRAP price
+    // order. A matching notice is information only: it raises an alert and never
+    // writes a pack price or drafts a price-change proposal.
     return db.pharmacyDrapIngest.create({
       data: {
         organizationId: scope.organizationId,
@@ -182,22 +177,18 @@ export async function ingestDrapNotice(
         kind: 'PRICE',
         priceNotice: JSON.parse(JSON.stringify(notice)),
         payloadHash: payloadHash(notice),
-        matchStatus: pack ? 'MATCHED' : 'NO_MATCH',
-        matchDetails: { medicineId, packLevelId: pack?.id ?? null },
+        matchStatus: 'MATCHED',
+        matchDetails: { medicineId },
         ingestedById: scope.actorId,
-        priceChanges: {
+        priceAlerts: {
           create: {
             medicineId,
-            // Legacy required column; new consumers use nullable regulatory policy.
-            currentPriceMinor: current?.mrpMinor ?? 0,
-            previousRegulatoryMrpMinor: current?.mrpMinor ?? null,
-            packLevelId: pack?.id ?? null,
             notifiedPriceMinor: notice.notifiedPriceMinor,
             effectiveDate: notice.effectiveDate,
           },
         },
       },
-      include: { priceChanges: true },
+      include: { priceAlerts: true },
     });
   }
 
@@ -384,4 +375,52 @@ export async function reverseRecallQuarantine(
     where: { organizationId_id: { organizationId: scope.organizationId, id: recall.id } },
     data: { status: 'CLOSED', closedById: scope.actorId, closedAt: new Date() },
   });
+}
+
+/**
+ * DEV-693: open (undismissed) official-price alerts for the organization,
+ * newest first. Optionally narrowed to the medicines on a goods-in screen.
+ */
+export async function listDrapPriceAlerts(
+  db: ScopedDb,
+  scope: ActorScope,
+  medicineIds?: readonly string[]
+) {
+  const alerts = await db.pharmacyDrapPriceAlert.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      dismissedAt: null,
+      ...(medicineIds ? { medicineId: { in: [...medicineIds] } } : {}),
+    },
+    include: {
+      medicine: { select: { productName: true } },
+      ingest: { select: { sourceReference: true, priceNotice: true } },
+    },
+    orderBy: [{ effectiveDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    take: 500,
+  });
+  return alerts.map((alert) => {
+    const notice = alert.ingest.priceNotice as { presentation?: string; packLevel?: string } | null;
+    return {
+      id: alert.id,
+      medicineId: alert.medicineId,
+      medicine: alert.medicine.productName,
+      sourceReference: alert.ingest.sourceReference,
+      presentation: notice?.presentation ?? null,
+      packLevel: notice?.packLevel ?? null,
+      notifiedPriceMinor: alert.notifiedPriceMinor,
+      effectiveDate: alert.effectiveDate,
+      createdAt: alert.createdAt,
+    };
+  });
+}
+
+/** Dismissal records who read the alert and when. It changes nothing else. */
+export async function dismissDrapPriceAlert(db: ScopedDb, scope: ActorScope, alertId: string) {
+  const { count } = await db.pharmacyDrapPriceAlert.updateMany({
+    where: { organizationId: scope.organizationId, id: alertId, dismissedAt: null },
+    data: { dismissedById: scope.actorId, dismissedAt: new Date() },
+  });
+  if (count !== 1) throw new PharmacyInventoryError('NOT_FOUND');
+  return { id: alertId };
 }

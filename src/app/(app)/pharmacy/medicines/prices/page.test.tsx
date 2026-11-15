@@ -6,11 +6,14 @@ vi.mock('@/lib/trpc', () => ({
       priceNotices: { useQuery: () => ({ isLoading: true }) },
       priceOverrides: { useQuery: () => ({ isLoading: true }) },
       confirmPrices: { useMutation: () => ({}) },
+      drapPriceAlerts: { useQuery: () => ({ isLoading: true }) },
+      dismissDrapPriceAlert: { useMutation: () => ({}) },
     },
   },
 }));
 import MedicinePricesPage from './page';
 import {
+  DrapPriceAlertsView,
   PriceNoticesView,
   PriceOverridesView,
   pricesCsv,
@@ -176,5 +179,43 @@ describe('corrected reports', () => {
     expect(screen.getByText(/Administrator access/)).toBeVisible();
     rerender(<PriceOverridesView data={[]} onRetry={base.onRetry} />);
     expect(screen.getByText('No branch overrides.')).toBeVisible();
+  });
+});
+
+describe('DEV-693 official price changes', () => {
+  const alert = {
+    id: 'alert-1',
+    medicineId: 'medicine',
+    medicine: 'Example tablet',
+    sourceReference: 'SRO 1092(I)/2023 / 012345',
+    presentation: 'Tablet 500 mg',
+    packLevel: 'BOX',
+    notifiedPriceMinor: 31500,
+    effectiveDate: new Date('2026-12-01'),
+    createdAt: new Date('2026-11-15'),
+  };
+  it('shows the official price and date for information and lets the owner dismiss it', () => {
+    const onDismiss = vi.fn();
+    render(<DrapPriceAlertsView alerts={[alert]} onRetry={vi.fn()} onDismiss={onDismiss} />);
+    const list = screen.getByRole('list', { name: 'Official price changes' });
+    expect(list).toHaveTextContent(/Official price changed as of 2026-12-01: Rs\s?315\.00/);
+    expect(screen.getByText(/nothing here changes a price/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Dismiss official price change for Example tablet' })
+    );
+    expect(onDismiss).toHaveBeenCalledWith('alert-1');
+  });
+  it('renders empty, error and permission states', () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(
+      <DrapPriceAlertsView alerts={[]} onRetry={onRetry} onDismiss={vi.fn()} />
+    );
+    expect(screen.getByText('No official price changes to review.')).toBeInTheDocument();
+    rerender(<DrapPriceAlertsView error onRetry={onRetry} onDismiss={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry official prices' }));
+    expect(onRetry).toHaveBeenCalled();
+    rerender(<DrapPriceAlertsView forbidden onRetry={onRetry} onDismiss={vi.fn()} />);
+    expect(screen.getByText(/safety access is required/)).toBeInTheDocument();
   });
 });

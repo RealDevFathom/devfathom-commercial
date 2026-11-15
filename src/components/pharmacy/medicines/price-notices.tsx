@@ -6,6 +6,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
+import type { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
+import { officialPriceText } from '@/lib/pharmacy/official-price';
 
 type PriceData = Awaited<ReturnType<typeof priceIntelligence>>;
 const money = (minor: number | null) =>
@@ -282,8 +284,8 @@ export function PriceNoticesView({
         )}
         {!data.rows.length && (
           <p role="status">
-            No DRAP price notices yet. Import regulator notices with a named presentation and BOX,
-            STRIP, or UNIT pack through the price notice ingestion service.
+            No DRAP price notices waiting for confirmation. New DRAP notices appear under Official
+            price changes for information and never change a price.
           </p>
         )}
         {!!mapped.length && (
@@ -486,6 +488,84 @@ export function PriceOverridesView({
   );
 }
 
+type PriceAlert = Awaited<ReturnType<typeof listDrapPriceAlerts>>[number];
+
+export function DrapPriceAlertsView({
+  alerts,
+  loading,
+  error,
+  forbidden,
+  pendingId,
+  mutationError,
+  onRetry,
+  onDismiss,
+}: {
+  alerts?: PriceAlert[];
+  loading?: boolean;
+  error?: boolean;
+  forbidden?: boolean;
+  pendingId?: string | null;
+  mutationError?: string;
+  onRetry: () => void;
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <SectionCard title="Official price changes" titleLevel={2}>
+      <p className="mb-4 text-sm text-text-muted">
+        DRAP has set a new MRP for these medicines. This is for information only: nothing here
+        changes a price. Keep selling at the price printed on the pack in hand and set prices
+        yourself.
+      </p>
+      {forbidden ? (
+        <p>Pharmacy safety access is required to see official price changes.</p>
+      ) : loading ? (
+        <p>Loading official price changes…</p>
+      ) : error || !alerts ? (
+        <div className="space-y-3">
+          <p role="alert">Could not load official price changes.</p>
+          <Button variant="outline" onClick={onRetry}>
+            Retry official prices
+          </Button>
+        </div>
+      ) : !alerts.length ? (
+        <p>No official price changes to review.</p>
+      ) : (
+        <ul className="divide-y divide-border-subtle" aria-label="Official price changes">
+          {alerts.map((alert) => (
+            <li
+              key={alert.id}
+              className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <p className="font-medium">{alert.medicine}</p>
+                <p className="tabular-nums">{officialPriceText(alert)}</p>
+                <p className="text-sm text-text-muted">
+                  {[alert.sourceReference, alert.presentation, alert.packLevel]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                disabled={!!pendingId}
+                aria-label={`Dismiss official price change for ${alert.medicine}`}
+                onClick={() => onDismiss(alert.id)}
+              >
+                {pendingId === alert.id ? 'Dismissing…' : 'Dismiss'}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {mutationError && (
+        <p role="alert" className="mt-3 text-destructive">
+          {mutationError}
+        </p>
+      )}
+    </SectionCard>
+  );
+}
+
 export function PriceNotices() {
   const query = trpc.pharmacyMedicine.priceNotices.useQuery();
   const mutation = trpc.pharmacyMedicine.confirmPrices.useMutation();
@@ -493,8 +573,29 @@ export function PriceNotices() {
     {},
     { retry: false, enabled: !!query.data }
   );
+  const alerts = trpc.pharmacyMedicine.drapPriceAlerts.useQuery(undefined, {
+    retry: false,
+    enabled: !!query.data,
+  });
+  const dismiss = trpc.pharmacyMedicine.dismissDrapPriceAlert.useMutation();
   return (
     <div className="min-w-0 space-y-6">
+      {query.data && (
+        <DrapPriceAlertsView
+          alerts={alerts.data}
+          loading={alerts.isLoading}
+          error={alerts.isError}
+          forbidden={
+            alerts.error?.data?.code === 'FORBIDDEN' || alerts.error?.data?.code === 'UNAUTHORIZED'
+          }
+          pendingId={dismiss.isPending ? (dismiss.variables?.alertId ?? null) : null}
+          mutationError={dismiss.error?.message}
+          onRetry={() => void alerts.refetch()}
+          onDismiss={(alertId) =>
+            dismiss.mutate({ alertId }, { onSettled: () => void alerts.refetch() })
+          }
+        />
+      )}
       <PriceNoticesView
         data={query.data}
         loading={query.isLoading}

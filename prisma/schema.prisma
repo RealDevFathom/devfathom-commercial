@@ -647,6 +647,7 @@ model Medicine {
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
   controlledRegisterEntries    PharmacyControlledRegisterEntry[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
+  drapPriceAlerts              PharmacyDrapPriceAlert[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
 
@@ -2318,6 +2319,7 @@ model PharmacyDrapIngest {
   createdAt         DateTime                         @default(now())
   recallNotice      PharmacyRecallNotice?            @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
   priceChanges      PharmacyPriceChangeProposal[]
+  priceAlerts       PharmacyDrapPriceAlert[]
   quarantineActions PharmacyRecallQuarantineAction[]
 
   @@unique([organizationId, id])
@@ -2346,6 +2348,27 @@ model PharmacyPriceChangeProposal {
   @@unique([organizationId, id])
   @@unique([organizationId, ingestId, medicineId])
   @@map("pharmacy_price_change_proposals")
+}
+
+/// DEV-693: a DRAP price notice that matches a catalogue medicine is information only.
+/// It never changes a price or drafts one; the owner reads it and dismisses it.
+model PharmacyDrapPriceAlert {
+  id                 String             @id @default(cuid())
+  organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingestId           String
+  medicineId         String
+  notifiedPriceMinor Int
+  effectiveDate      DateTime
+  dismissedById      String?
+  dismissedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  ingest             PharmacyDrapIngest @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
+  medicine           Medicine           @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, ingestId])
+  @@index([organizationId, medicineId, dismissedAt])
+  @@map("pharmacy_drap_price_alerts")
 }
 
 model PharmacyRecallQuarantineAction {

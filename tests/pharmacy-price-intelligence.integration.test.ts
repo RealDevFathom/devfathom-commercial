@@ -9,7 +9,6 @@ import {
   priceOverrides,
   setManualPackPrice,
 } from '@/lib/pharmacy/pricing';
-import { ingestDrapNotice } from '@/lib/pharmacy/drap-monitoring';
 const enabled = process.env.WHA1606_DATABASE_TEST === '1';
 const org = 'org_devfathom';
 let actorId: string;
@@ -90,18 +89,41 @@ describe.skipIf(!enabled)('WHA-1606 disposable database transaction/RLS evidence
         sellingPriceMinor: 18000,
         effectiveFrom: at,
       });
+      // DEV-693: new DRAP notices raise alerts only. These are proposals that
+      // earlier notices drafted; they stay confirmable and are seeded directly.
       for (const [reference, date] of [
         ['WHA1606-future', '2027-01-01'],
         ['WHA1606-pending', '2027-02-01'],
       ]) {
-        await ingestDrapNotice(tx, scope(), 'FILE', {
-          kind: 'PRICE',
-          sourceReference: `${reference}-${run}`,
-          drapRegistrationNumber: `WHA1606-REG-${run}`,
-          presentation: 'Tablet 500 mg',
-          packLevel: 'BOX',
-          notifiedPriceMinor: 30000,
-          effectiveDate: new Date(date),
+        await tx.pharmacyDrapIngest.create({
+          data: {
+            sourceReference: `${reference}-${run}`,
+            adapter: 'FILE',
+            kind: 'PRICE',
+            priceNotice: {
+              kind: 'PRICE',
+              sourceReference: `${reference}-${run}`,
+              drapRegistrationNumber: `WHA1606-REG-${run}`,
+              presentation: 'Tablet 500 mg',
+              packLevel: 'BOX',
+              notifiedPriceMinor: 30000,
+              effectiveDate: new Date(date!).toISOString(),
+            },
+            payloadHash: `WHA1606-${reference}-${run}`,
+            matchStatus: 'MATCHED',
+            matchDetails: { medicineId, packLevelId: packId },
+            ingestedById: actorId,
+            priceChanges: {
+              create: {
+                medicineId,
+                currentPriceMinor: 20000,
+                previousRegulatoryMrpMinor: 20000,
+                packLevelId: packId,
+                notifiedPriceMinor: 30000,
+                effectiveDate: new Date(date!),
+              },
+            },
+          },
         });
       }
       const proposals = await tx.pharmacyPriceChangeProposal.findMany({

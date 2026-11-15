@@ -4,7 +4,14 @@ import {
   priceOverrides,
   setManualPackPrice,
 } from '@/lib/pharmacy/pricing';
-import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-monitoring';
+import {
+  dismissDrapPriceAlert,
+  FileDrapNoticeSource,
+  ingestDrapSource,
+  listDrapPriceAlerts,
+} from '@/lib/pharmacy/drap-monitoring';
+import { CsvDrapNoticeSource, DrapSroCsvError } from '@/lib/pharmacy/drap-sro-csv';
+import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -319,10 +326,28 @@ export const pharmacyMedicineRouter = router({
       )
     ),
   ingestPriceNotices: capabilityProcedure('pharmacy:safety')
-    .input(z.object({ contents: z.string().min(2).max(1000000) }).strict())
+    .input(
+      z
+        .object({
+          contents: z.string().min(2).max(1000000),
+          // DEV-693: an SRO price schedule may be uploaded as CSV as well as JSON.
+          format: z.enum(['json', 'csv']).default('json'),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
-      const source = new FileDrapNoticeSource(input.contents);
-      const notices = await source.read();
+      const source =
+        input.format === 'csv'
+          ? new CsvDrapNoticeSource(input.contents)
+          : new FileDrapNoticeSource(input.contents);
+      let notices;
+      try {
+        notices = await source.read();
+      } catch (error) {
+        if (error instanceof DrapSroCsvError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
       if (!notices.length || notices.length > 100 || notices.some((n) => n.kind !== 'PRICE'))
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Supply 1–100 PRICE notices' });
       return ctx.db.$transaction((tx) =>
@@ -332,6 +357,39 @@ export const pharmacyMedicineRouter = router({
           source
         )
       );
+    }),
+  /** DEV-693: official DRAP price changes, for information only. Never a price write. */
+  drapPriceAlerts: capabilityProcedure('pharmacy:safety')
+    .input(
+      z
+        .object({ medicineIds: z.array(z.string().min(1)).min(1).max(500).optional() })
+        .strict()
+        .optional()
+    )
+    .query(({ ctx, input }) =>
+      listDrapPriceAlerts(
+        ctx.db,
+        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        input?.medicineIds
+      )
+    ),
+  dismissDrapPriceAlert: capabilityProcedure('pharmacy:safety')
+    .input(z.object({ alertId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await dismissDrapPriceAlert(
+          ctx.db,
+          { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+          input.alertId
+        );
+      } catch (error) {
+        if (error instanceof PharmacyInventoryError && error.reason === 'NOT_FOUND')
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'This alert was already dismissed or does not exist.',
+          });
+        throw error;
+      }
     }),
   setPackPrice: adminProcedure
     .input(

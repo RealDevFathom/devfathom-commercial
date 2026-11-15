@@ -18,6 +18,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { officialPriceText } from '@/lib/pharmacy/official-price';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
@@ -218,6 +219,23 @@ export default async function PharmacyReceivingPage({
   > = {};
   if (selectedOrder) {
     outstanding = await caller.receivedAgainstOrder({ purchaseOrderId: selectedOrder.id });
+  }
+
+  // DEV-693: official DRAP price changes for the medicines on this order, as a
+  // read-only hint. Only roles that may see prices get them; anyone else, or a
+  // read failure, simply sees no hint. Nothing here changes a price.
+  const officialPrices = new Map<string, string>();
+  if (selectedOrder?.lines.length) {
+    try {
+      const alerts = await caller.officialPriceAlerts({
+        medicineIds: [...new Set(selectedOrder.lines.map((line) => line.medicineId))],
+      });
+      for (const alert of alerts)
+        if (!officialPrices.has(alert.medicineId))
+          officialPrices.set(alert.medicineId, officialPriceText(alert));
+    } catch {
+      // No price permission or the alerts could not be read: receiving goes on unchanged.
+    }
   }
 
   /** The scan box resolves against the register, not against a guess. */
@@ -830,8 +848,16 @@ export default async function PharmacyReceivingPage({
                         />
                       ) : null;
                     const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
+                    const officialPrice = officialPrices.get(line.medicineId);
                     return (
                       <div className="space-y-3" key={line.id}>
+                        {officialPrice && (
+                          <p className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken px-4 py-2 text-sm text-text-body">
+                            <span className="font-medium">{line.medicine.productName}:</span>{' '}
+                            {officialPrice}. For information only: record the MRP printed on the
+                            pack in hand.
+                          </p>
+                        )}
                         <CaptureFieldset
                           defaultLocationId={defaultLocationId}
                           photoReader={

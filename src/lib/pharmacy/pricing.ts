@@ -259,7 +259,9 @@ export async function setManualPackPrice(
 export async function priceIntelligence(db: ScopedDb, scope: PriceScope) {
   const now = new Date();
   const notices = await db.pharmacyDrapIngest.findMany({
-    where: { organizationId: scope.organizationId, kind: 'PRICE' },
+    // DEV-693: a notice that raised an official-price alert is information only
+    // and is listed with the alerts, not in this confirm queue.
+    where: { organizationId: scope.organizationId, kind: 'PRICE', priceAlerts: { none: {} } },
     include: { priceChanges: { include: { medicine: { include: { aliases: true } } } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });

@@ -30,6 +30,7 @@ import {
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
 import {
   allocateCentralReceipt,
   centralDemand,
@@ -2319,6 +2320,30 @@ const purchasingRouter = router({
    * POSTED receipts only. The receiving bench pre-fills the outstanding balance
    * from this, so it never asks the operator to work out what is still owed.
    */
+  /**
+   * DEV-693: read-only official-price hints for the medicines being received.
+   * An official DRAP price is price data, so only a receiver who also holds the
+   * price-page grant (pharmacy:safety) gets any; everyone else gets no hints.
+   */
+  officialPriceAlerts: purchasing
+    .meta(PROCUREMENT)
+    .input(z.object({ medicineIds: z.array(z.string().min(1)).min(1).max(500) }).strict())
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId || !ctx.session || !hasModule(ctx.entitlements, 'pharmacy-procurement'))
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy procurement access required.',
+        });
+      const actor = subjectFromSession(ctx.session.user);
+      if (!(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db }))) return [];
+      return listDrapPriceAlerts(
+        ctx.db,
+        { organizationId, actorId: ctx.session.user.id },
+        input.medicineIds
+      );
+    }),
+
   receivedAgainstOrder: purchasing
     .meta(PROCUREMENT)
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
