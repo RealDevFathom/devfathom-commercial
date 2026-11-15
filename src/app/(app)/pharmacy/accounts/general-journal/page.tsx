@@ -268,7 +268,7 @@ export default async function GeneralJournalPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="General journal vouchers"
@@ -277,6 +277,6 @@ export default async function GeneralJournalPage({
       <BranchForm branchId={typeof query.branch === 'string' ? query.branch : undefined} />
       {state.kind === 'loaded' ? <Register state={state} /> : <Notice state={state} />}
       <Catalog />
-    </main>
+    </div>
   );
 }

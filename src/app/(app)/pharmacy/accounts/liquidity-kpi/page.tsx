@@ -308,7 +308,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Posted cash coverage"
@@ -316,6 +316,6 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
       />
       <ControlForm controls={formControls} />
       {state.kind === 'loaded' ? <Results state={state} /> : <Notice state={state} />}
-    </main>
+    </div>
   );
 }
