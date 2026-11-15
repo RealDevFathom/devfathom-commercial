@@ -387,17 +387,65 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
     );
   });
 
-  it('prorates an order line charge by the paid packs a receipt delivers, capped at the order', () => {
-    const charge = { orderLineAllocatedChargeMinor: 4_200, orderedPacks: 10 };
-    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPacks: 10 })).toBe(4_200);
-    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPacks: 4 })).toBe(1_680);
-    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPacks: 0 })).toBe(0);
-    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPacks: 15 })).toBe(4_200);
+  it('prorates an order line charge by the paid canonical units a delivery brings', () => {
+    const charge = {
+      orderLineAllocatedChargeMinor: 4_200,
+      orderedPaidCanonicalUnits: 100,
+      previouslyReceivedPaidCanonicalUnits: 0,
+    };
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 100 })).toBe(
+      4_200
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 40 })).toBe(
+      1_680
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 0 })).toBe(0);
     expect(
       reasonOf(() =>
-        receiptLineAllocatedChargeMinor({ ...charge, orderedPacks: 0, receivedPacks: 1 })
+        receiptLineAllocatedChargeMinor({
+          ...charge,
+          orderedPaidCanonicalUnits: 0,
+          receivedPaidCanonicalUnits: 1,
+        })
       )
     ).toBe('INVALID_QUANTITY');
+  });
+
+  it('never capitalises more than the whole allocation however a line is split or over-delivered', () => {
+    const charge = { orderLineAllocatedChargeMinor: 10_000, orderedPaidCanonicalUnits: 100 };
+    // One over-delivery carries the allocation once.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 0,
+        receivedPaidCanonicalUnits: 200,
+      })
+    ).toBe(10_000);
+    // Two full lots: the second finds the allocation already spent.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 100,
+        receivedPaidCanonicalUnits: 100,
+      })
+    ).toBe(0);
+    // Three uneven partial lots sum to the allocation exactly, with no rounding drift.
+    const thirds = [33, 33, 34].reduce<{ received: number; shares: number[] }>(
+      (acc, units) => ({
+        received: acc.received + units,
+        shares: [
+          ...acc.shares,
+          receiptLineAllocatedChargeMinor({
+            orderLineAllocatedChargeMinor: 1_001,
+            orderedPaidCanonicalUnits: 100,
+            previouslyReceivedPaidCanonicalUnits: acc.received,
+            receivedPaidCanonicalUnits: units,
+          }),
+        ],
+      }),
+      { received: 0, shares: [] }
+    );
+    expect(thirds.shares.reduce((sum, share) => sum + share, 0)).toBe(1_001);
   });
 });
 

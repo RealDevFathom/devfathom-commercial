@@ -1584,6 +1584,27 @@ const purchasingRouter = router({
               orderLineCharges.set(orderLine.id, costed.lines[index]!.allocatedChargeMinor)
             );
           }
+          // Paid units already booked against each charged order line by posted
+          // receipts, advanced lot by lot below, so a split or over-delivered
+          // line never capitalises its charge more than once.
+          const paidUnitsReceived = new Map<string, number>();
+          if (orderLineCharges.size > 0) {
+            for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
+              where: {
+                organizationId: scope.organizationId,
+                purchaseOrderLineId: { in: [...orderLineCharges.keys()] },
+                goodsReceipt: { status: 'POSTED' },
+              },
+              select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
+            })) {
+              if (!earlier.purchaseOrderLineId) continue;
+              paidUnitsReceived.set(
+                earlier.purchaseOrderLineId,
+                (paidUnitsReceived.get(earlier.purchaseOrderLineId) ?? 0) +
+                  earlier.receivedCanonicalUnits
+              );
+            }
+          }
 
           const lines = [];
           const seenSerials = new Set<string>();
@@ -1611,13 +1632,27 @@ const purchasingRouter = router({
               }
             }
 
-            const orderLineCharge = orderLine ? orderLineCharges.get(orderLine.id) : undefined;
             const quantities = receiptLineQuantities({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               rejectedCanonicalUnits: line.rejectedCanonicalUnits,
             });
+            const orderLineCharge = orderLine ? orderLineCharges.get(orderLine.id) : undefined;
+            let allocatedChargeMinor = 0;
+            if (orderLine && orderLineCharge !== undefined) {
+              const previouslyReceivedPaidCanonicalUnits = paidUnitsReceived.get(orderLine.id) ?? 0;
+              allocatedChargeMinor = receiptLineAllocatedChargeMinor({
+                orderLineAllocatedChargeMinor: orderLineCharge,
+                orderedPaidCanonicalUnits: orderLine.orderedPacks * orderLine.canonicalUnitsPerPack,
+                previouslyReceivedPaidCanonicalUnits,
+                receivedPaidCanonicalUnits: quantities.receivedCanonicalUnits,
+              });
+              paidUnitsReceived.set(
+                orderLine.id,
+                previouslyReceivedPaidCanonicalUnits + quantities.receivedCanonicalUnits
+              );
+            }
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
               batchNumber: line.batchNumber,
@@ -1699,14 +1734,7 @@ const purchasingRouter = router({
                 rebateBps: orderLine?.rebateBps ?? 0,
                 taxBps: line.taxBps,
                 taxCreditable: line.taxCreditable,
-                allocatedChargeMinor:
-                  orderLine && orderLineCharge !== undefined
-                    ? receiptLineAllocatedChargeMinor({
-                        orderLineAllocatedChargeMinor: orderLineCharge,
-                        orderedPacks: orderLine.orderedPacks,
-                        receivedPacks: line.receivedPacks,
-                      })
-                    : 0,
+                allocatedChargeMinor,
               }),
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,

@@ -319,24 +319,42 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
 
 /**
  * PUR-03: the share of an order line's allocated freight and other charges that
- * one receipt carries, prorated by the paid packs it delivers. An over-delivery
- * never carries more than the whole allocation, since the charge was agreed for
- * the ordered quantity.
+ * one delivery carries. It is prorated by paid canonical units, so a delivery in
+ * a different pack size than ordered still carries the share of what arrived,
+ * and it is cumulative: the charge already capitalised by earlier receipts and
+ * earlier lots of the same order line is subtracted, and the running total is
+ * capped at the ordered quantity. However the order line is split or
+ * over-delivered, its lots together never carry more than the whole allocation.
  */
 export function receiptLineAllocatedChargeMinor(input: {
   orderLineAllocatedChargeMinor: number;
-  orderedPacks: number;
-  receivedPacks: number;
+  /** Paid (non-bonus) canonical units the order line was placed for. */
+  orderedPaidCanonicalUnits: number;
+  /** Paid canonical units already received against the order line elsewhere. */
+  previouslyReceivedPaidCanonicalUnits: number;
+  /** Paid canonical units this delivery brings. */
+  receivedPaidCanonicalUnits: number;
 }): number {
-  const { orderLineAllocatedChargeMinor, orderedPacks, receivedPacks } = input;
+  const {
+    orderLineAllocatedChargeMinor,
+    orderedPaidCanonicalUnits,
+    previouslyReceivedPaidCanonicalUnits,
+    receivedPaidCanonicalUnits,
+  } = input;
   assertMoney(orderLineAllocatedChargeMinor);
-  assertUnits(receivedPacks);
-  if (!Number.isSafeInteger(orderedPacks) || orderedPacks <= 0) {
+  assertUnits(previouslyReceivedPaidCanonicalUnits);
+  assertUnits(receivedPaidCanonicalUnits);
+  if (!Number.isSafeInteger(orderedPaidCanonicalUnits) || orderedPaidCanonicalUnits <= 0) {
     throw new PharmacyReceivingError('INVALID_QUANTITY');
   }
-  return divideRoundHalfUp(
-    orderLineAllocatedChargeMinor * Math.min(receivedPacks, orderedPacks),
-    orderedPacks
+  const allocatedThrough = (units: number) =>
+    divideRoundHalfUp(
+      orderLineAllocatedChargeMinor * Math.min(units, orderedPaidCanonicalUnits),
+      orderedPaidCanonicalUnits
+    );
+  return (
+    allocatedThrough(previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits) -
+    allocatedThrough(previouslyReceivedPaidCanonicalUnits)
   );
 }
 
