@@ -21,6 +21,8 @@ function fixture(refunded = 475, priorPoints = 0) {
       findUnique: vi.fn().mockResolvedValue(null),
       findFirst: vi.fn().mockResolvedValue({ points: 9, netPaidMinor: 950 }),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: priorPoints } }),
+      // DEV-764: no restored points were ever expired at once; each lot's own expiry decides.
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn().mockImplementation(async ({ data }) => ({ id: 'reversal-a', ...data })),
     },
   };

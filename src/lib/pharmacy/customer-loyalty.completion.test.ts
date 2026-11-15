@@ -215,3 +215,23 @@ describe('DEV-764 points past expiry cannot be redeemed before the sweep', () =>
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-764 redemption reads the program under its lock, before the customer lock', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('takes the shared program lock, then reads the redemption value, then locks the customer', async () => {
+    const { db } = fixture();
+    await redeemSalePoints(db as never, scope, input);
+    const sql = (call: unknown[]) => (call[0] as { strings: string[] }).strings.join('');
+    const order = db.$queryRaw.mock.calls.map((call, index) => ({
+      text: sql(call),
+      at: db.$queryRaw.mock.invocationCallOrder[index]!,
+    }));
+    const programLock = order.find((q) => q.text.includes('pg_advisory_xact_lock_shared'));
+    const customerLock = order.find((q) => q.text.includes('pharmacy_customers'));
+    expect(programLock).toBeDefined();
+    expect(programLock!.at).toBeLessThan(
+      db.pharmacyLoyaltyProgramVersion.findFirst.mock.invocationCallOrder[0]!
+    );
+    expect(programLock!.at).toBeLessThan(customerLock!.at);
+  });
+});

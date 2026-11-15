@@ -335,3 +335,28 @@ describe('DEV-764 manager adjustment ceiling', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
+
+describe('DEV-764 adjustment reads the ceiling under the program lock', () => {
+  it('takes the shared program lock in the transaction before reading the ceiling and adjusting', async () => {
+    mocks.adjust.mockResolvedValue({
+      entry: { id: 'entry-c', points: 5, reason: 'Points missed on receipt 9' },
+      balanceBefore: 0,
+      balanceAfter: 5,
+      replayed: false,
+    });
+    await caller('ADMIN').adjustPoints({
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      points: 5,
+      reason: 'Points missed on receipt 9',
+      idempotencyKey: 'adjust-key-lock',
+    });
+    const lockIndex = mocks.queryRaw.mock.calls.findIndex((call) =>
+      (call[0] as { strings: string[] }).strings.join('').includes('pg_advisory_xact_lock_shared')
+    );
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    const lockAt = mocks.queryRaw.mock.invocationCallOrder[lockIndex]!;
+    expect(lockAt).toBeLessThan(mocks.findFirst.mock.invocationCallOrder[0]!);
+    expect(lockAt).toBeLessThan(mocks.adjust.mock.invocationCallOrder[0]!);
+  });
+});

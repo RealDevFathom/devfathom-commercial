@@ -63,6 +63,11 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
   const taken = new Map<string, Array<{ lot: Lot; used: number }>>();
   const stranded = new Map<string, number>();
   const expiredStranded = new Map<string, number>();
+  // Which lots each restoring entry's stranded points landed in, in order.
+  const strandedInto = new Map<string, Array<{ lotId: string; points: number }>>();
+  // Points expired out of each lot: its own expiry, plus the immediate expiry of points that
+  // came back into it after it was closed.
+  const expiredByLot = new Map<string, number>();
   for (const entry of [...entries].sort(chronological)) {
     if (entry.occurredAt.getTime() > at.getTime()) continue;
     if (isLot(entry)) {
@@ -76,6 +81,7 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
       if (lot) {
         closed.add(lot.id);
         lot.remaining = Math.max(0, lot.remaining + entry.points);
+        expiredByLot.set(lot.id, (expiredByLot.get(lot.id) ?? 0) + Math.max(0, -entry.points));
       } else if (entry.reversesEntryId) {
         // The immediate expiry of points that came back into a closed lot; settled below,
         // whatever its order against the restoring entry.
@@ -94,9 +100,14 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
         const back = Math.min(portion.used, give);
         portion.used -= back;
         give -= back;
-        if (closed.has(portion.lot.id))
+        if (closed.has(portion.lot.id)) {
           stranded.set(entry.id, (stranded.get(entry.id) ?? 0) + back);
-        else portion.lot.remaining += back;
+          if (back > 0)
+            strandedInto.set(entry.id, [
+              ...(strandedInto.get(entry.id) ?? []),
+              { lotId: portion.lot.id, points: back },
+            ]);
+        } else portion.lot.remaining += back;
       }
       continue;
     }
@@ -117,9 +128,17 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
     }
     if (entry.kind === 'REDEEM' && entry.tenderId) taken.set(entry.tenderId, portions);
   }
+  for (const [entryId, expired] of expiredStranded) {
+    let left = expired;
+    for (const landed of strandedInto.get(entryId) ?? []) {
+      const share = Math.min(landed.points, left);
+      left -= share;
+      expiredByLot.set(landed.lotId, (expiredByLot.get(landed.lotId) ?? 0) + share);
+    }
+  }
   for (const [entryId, points] of stranded)
     stranded.set(entryId, Math.max(0, points - (expiredStranded.get(entryId) ?? 0)));
-  return { lots, closed, stranded };
+  return { lots, closed, stranded, expiredByLot };
 }
 
 /**
@@ -152,6 +171,14 @@ export function strandedRestoredPoints(
   at: Date
 ) {
   return replayLots(entries, at).stranded.get(entryId) ?? 0;
+}
+
+/**
+ * DEV-764: points expired out of each lot, attributed to the lot they came from: the lot's own
+ * expiry plus the immediate expiry of points that came back into it after it was closed.
+ */
+export function expiredPointsByLot(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) {
+  return replayLots(entries, at).expiredByLot;
 }
 
 const ENTRY_FOR_EXPIRY = {
@@ -200,6 +227,27 @@ export async function pointsPastExpiry(db: ScopedDb, scope: CustomerAtBranch, at
   if (!due) return 0;
   const entries = await readEntriesForExpiry(db, scope, at);
   return planPharmacyLotExpiries(entries, at).reduce((sum, lot) => sum + lot.points, 0);
+}
+
+/**
+ * DEV-764: expiry attributed to each lot of one customer at one branch (see
+ * expiredPointsByLot), or null when no restored points were ever expired at once, in which
+ * case each lot's own EXPIRY entry is the whole story. The caller holds the customer lock.
+ */
+export async function readExpiredPointsByLot(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
+  const restoredThenExpired = await db.pharmacyLoyaltyPointsEntry.count({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: scope.customerId,
+      kind: 'EXPIRY',
+      reverses: {
+        is: { kind: { in: [...RESTORING_KINDS] as ('REFUND' | 'REDEMPTION_RELEASE')[] } },
+      },
+    },
+  });
+  if (!restoredThenExpired) return null;
+  return expiredPointsByLot(await readEntriesForExpiry(db, scope, at), at);
 }
 
 /**

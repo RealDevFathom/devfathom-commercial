@@ -225,6 +225,9 @@ export async function redeemSalePoints(
   );
   // #659: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  // DEV-764: lock order on every path is program, then customer. The redemption value is read
+  // under the program lock so an owner save cannot change it under this redemption.
+  const program = await lockedLoyaltyProgram(db, scope.organizationId);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
@@ -258,7 +261,6 @@ export async function redeemSalePoints(
     totalMinor - sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   // DEV-764: points redeem at the owner's current redemption value (PKR 1 before one is set),
   // and points already past their expiry date cannot be spent even before the sweep runs.
-  const program = await lockedLoyaltyProgram(db, scope.organizationId);
   const pastExpiry = await pointsPastExpiry(
     db,
     { organizationId: scope.organizationId, branchId: scope.branchId, customerId: sale.customerId },
