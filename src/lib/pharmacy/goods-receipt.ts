@@ -95,6 +95,9 @@ export type PostGoodsReceiptResult = {
  * Must run inside the caller's transaction.
  */
 const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+/** The eligible qualified person was chosen but typed the wrong PIN (#283). */
+const WITNESS_PIN_INCORRECT =
+  'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.';
 
 /**
  * PIN witness for a controlled purchase. A receipt with no controlled line
@@ -161,7 +164,7 @@ export async function verifyControlledPurchaseWitness(
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
     });
-    return { blocked: WITNESS_BLOCKED };
+    return { blocked: WITNESS_PIN_INCORRECT };
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
