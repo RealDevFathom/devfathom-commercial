@@ -101,7 +101,8 @@ export function saleUnitOptions(input: {
   assertPositiveInteger(input.unitsPerPack);
   const chain = chainFrom(input.packLevels, input.rootPackLevelId);
   // The receiving setup also supports a standalone pack counted directly in
-  // canonical units. It offers only that sealed pack, with no invented strip.
+  // canonical units. It offers that sealed pack and, when it holds more than
+  // one, the loose canonical unit — never an invented strip.
   // A leaf received within an existing hierarchy is already one canonical
   // unit; its unitsPerParent describes its parent, not the received pack.
   if (chain.length === 1) {
@@ -111,14 +112,11 @@ export function saleUnitOptions(input: {
     if (canonicalUnits !== input.unitsPerPack) {
       throw new PharmacyMedicineError('INVALID_CONVERSION');
     }
-    return [
-      {
-        kind: 'PACK',
-        packLevelId: pack.id,
-        levelLabel: pack.level,
-        canonicalUnitsPerSaleUnit: canonicalUnits,
-      },
-    ];
+    return lotSaleUnitOptions({
+      packLevelId: pack.id,
+      levelLabel: pack.level,
+      unitsPerPack: canonicalUnits,
+    });
   }
 
   // Cumulative canonical units, computed from the base unit upwards.
@@ -140,6 +138,54 @@ export function saleUnitOptions(input: {
     levelLabel: node.level,
     canonicalUnitsPerSaleUnit: canonical[index]!,
   }));
+}
+
+/**
+ * The sale units a lot can always be sold in from its own frozen conversion:
+ * the sealed pack and, when the pack holds more than one, the loose canonical
+ * unit. No strip is offered because a strip only exists in a pack hierarchy.
+ *
+ * Used for a standalone pack, and as the fallback when the pack table no
+ * longer agrees with the received lot: `unitsPerPack` is what the server
+ * prices from (MED-08), so both options remain prices the server will honour.
+ */
+export function lotSaleUnitOptions(input: {
+  packLevelId: string;
+  levelLabel: string;
+  unitsPerPack: number;
+}): SaleUnitOption[] {
+  assertPositiveInteger(input.unitsPerPack);
+  const pack: SaleUnitOption = {
+    kind: 'PACK',
+    packLevelId: input.packLevelId,
+    levelLabel: input.levelLabel,
+    canonicalUnitsPerSaleUnit: input.unitsPerPack,
+  };
+  if (input.unitsPerPack === 1) return [pack];
+  return [
+    pack,
+    {
+      kind: 'UNIT',
+      packLevelId: input.packLevelId,
+      levelLabel: 'UNIT',
+      canonicalUnitsPerSaleUnit: 1,
+    },
+  ];
+}
+
+/**
+ * The option the loose-unit chord (F5) selects: the `UNIT` option, or, for a
+ * lot received at the base level, the option that already sells exactly one
+ * canonical unit. `null` means no loose unit is sellable for this lot.
+ */
+export function looseSaleUnitOption<
+  T extends Pick<SaleUnitOption, 'kind' | 'canonicalUnitsPerSaleUnit'>,
+>(options: readonly T[]): T | null {
+  return (
+    options.find((option) => option.kind === 'UNIT') ??
+    options.find((option) => option.canonicalUnitsPerSaleUnit === 1) ??
+    null
+  );
 }
 
 export type SaleLinePreview = {

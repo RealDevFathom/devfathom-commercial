@@ -22,6 +22,7 @@ import {
 } from './inventory';
 import {
   previewSaleLine,
+  lotSaleUnitOptions,
   saleUnitOptions,
   type PackLevelNode,
   type SaleUnitKind,
@@ -401,17 +402,26 @@ export async function searchCounterCatalog(
 
     let saleUnits: SaleUnitOption[] = [];
     if (best) {
+      const levels = packLevelsByPresentation.get(presentationId) ?? [];
       try {
         saleUnits = saleUnitOptions({
-          packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+          packLevels: levels,
           rootPackLevelId: best.lot.packLevelId,
           unitsPerPack: best.lot.unitsPerPack,
         });
       } catch {
-        // A pack hierarchy that disagrees with the received lot cannot be
-        // priced. The row still reports stock, but offers no sale unit rather
-        // than quoting a price the server would refuse.
-        saleUnits = [];
+        // A pack hierarchy that disagrees with the received lot cannot derive a
+        // strip. The lot's own frozen units per pack is what the server prices
+        // from, so the sealed pack and the loose unit stay sellable.
+        try {
+          saleUnits = lotSaleUnitOptions({
+            packLevelId: best.lot.packLevelId,
+            levelLabel: levels.find((level) => level.id === best!.lot.packLevelId)?.level ?? 'PACK',
+            unitsPerPack: best.lot.unitsPerPack,
+          });
+        } catch {
+          saleUnits = [];
+        }
       }
     }
 
