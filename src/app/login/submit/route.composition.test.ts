@@ -99,6 +99,7 @@ describe('native login composition', () => {
     ['2fa_invalid', '2fa-invalid'],
     ['sso_required', 'sso-required'],
     ['suspended', 'suspended'],
+    ['rate_limited', 'rate-limited'],
     ['unknown', 'invalid'],
   ])('maps %s without leaking auth details', async (code, key) => {
     m.post.mockResolvedValue(
