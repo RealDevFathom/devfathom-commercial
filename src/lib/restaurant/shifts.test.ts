@@ -55,8 +55,16 @@ const staff = new Map<
   { id: string; status: 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED'; primaryBranchId: string | null }
 >();
 let shifts: Row[] = [];
+type Adjustment = {
+  shiftId: string;
+  kind: 'CLOCK_IN' | 'CLOCK_OUT' | 'BREAK_START' | 'BREAK_END';
+  breakId: string | null;
+};
+let adjustments: Adjustment[] = [];
 let sequence = 0;
 let beforeShiftUpdateMany: (() => void) | undefined;
+let whileAcquiringShiftLock: (() => void) | undefined;
+let shiftLocks: Array<{ sql: string; values: unknown[] }> = [];
 
 function matchesDate(value: Date, comparator: Comparator): boolean {
   const time = value.getTime();
@@ -67,9 +75,31 @@ function matchesDate(value: Date, comparator: Comparator): boolean {
   return true;
 }
 
+function matchesAdjustment(row: Adjustment, where: Record<string, unknown>): boolean {
+  return Object.entries(where).every(([field, condition]) => {
+    if (field === 'kind' && typeof condition === 'object' && condition !== null) {
+      return (condition as { in: string[] }).in.includes(row.kind);
+    }
+    return row[field as keyof Adjustment] === condition;
+  });
+}
+
+function shiftAdjustments(shiftId: string, where: Record<string, unknown> = {}): Adjustment[] {
+  return adjustments.filter((row) => row.shiftId === shiftId && matchesAdjustment(row, where));
+}
+
 function matches(row: Row, where: Record<string, unknown>): boolean {
   for (const [field, condition] of Object.entries(where)) {
     if (condition === undefined) continue;
+    if (field === 'adjustments') {
+      const relation = condition as {
+        some?: Record<string, unknown>;
+        none?: Record<string, unknown>;
+      };
+      if (relation.some && shiftAdjustments(row.id, relation.some).length === 0) return false;
+      if (relation.none && shiftAdjustments(row.id, relation.none).length > 0) return false;
+      continue;
+    }
     if (field === 'OR') {
       if (!(condition as Record<string, unknown>[]).some((clause) => matches(row, clause))) {
         return false;
@@ -117,6 +147,13 @@ function sortRows(rows: Row[], orderBy: unknown): Row[] {
 }
 
 const db = {
+  // Models `SELECT … FOR UPDATE`: the hook runs while the lock is contended,
+  // i.e. a transaction holding it commits before this one acquires it.
+  $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    shiftLocks.push({ sql: strings.join('?'), values });
+    whileAcquiringShiftLock?.();
+    return shifts.filter((row) => row.id === values[0]).map((row) => ({ id: row.id }));
+  },
   restaurantBranch: {
     findUnique: async ({ where }: { where: { id: string } }) => branches.get(where.id) ?? null,
   },
@@ -142,8 +179,23 @@ const db = {
         shifts.filter((row) => matches(row, where)),
         orderBy ?? { startAt: 'asc' }
       ),
-    findUnique: async ({ where }: { where: { id: string } }) =>
-      shifts.find((row) => row.id === where.id) ?? null,
+    findUnique: async ({
+      where,
+      select,
+    }: {
+      where: { id: string };
+      select?: { adjustments?: { where?: Record<string, unknown> } };
+    }) => {
+      const row = shifts.find((candidate) => candidate.id === where.id);
+      if (!row) return null;
+      if (!select?.adjustments) return row;
+      return {
+        ...row,
+        adjustments: shiftAdjustments(row.id, select.adjustments.where).map(({ kind }) => ({
+          kind,
+        })),
+      };
+    },
     create: async ({ data }: { data: Partial<Row> }) => {
       const row: Row = {
         id: `shift_${++sequence}`,
@@ -204,8 +256,11 @@ beforeEach(() => {
   branches.clear();
   staff.clear();
   shifts = [];
+  adjustments = [];
   sequence = 0;
   beforeShiftUpdateMany = undefined;
+  whileAcquiringShiftLock = undefined;
+  shiftLocks = [];
   branches.set(BRANCH, {
     id: BRANCH,
     timezone: 'UTC',
@@ -503,6 +558,84 @@ describe('cancelShift', () => {
 
     await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
       message: 'This shift cannot be cancelled while the employee is clocked in.',
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
+  });
+
+  it('rejects cancellation while a corrected clock-in has no clock-out', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    // The employee forgot to punch in; a manager recorded the clock-in as a
+    // correction, so timekeeping treats the shift as on the clock.
+    adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    await expect(
+      cancelShift(db, shift.id, { now: NOON }, { organizationId: 'org_1', expectedVersion: 1 })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_ATTENDANCE' });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
+  });
+
+  it('reads attendance only after acquiring the shift row lock', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    // A manager's clock-in correction holds the shift lock (it inserts a
+    // separate adjustment row) and commits while cancellation waits for it.
+    whileAcquiringShiftLock = () => {
+      adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null });
+      whileAcquiringShiftLock = undefined;
+    };
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shiftLocks).toEqual([{ sql: expect.stringMatching(/FOR UPDATE/), values: [shift.id] }]);
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
+  });
+
+  it('allows cancellation once a correction has closed the attendance', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: { clockedInAt: new Date('2026-08-20T09:05:00Z') },
+    });
+    adjustments.push({ shiftId: shift.id, kind: 'CLOCK_OUT', breakId: null });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).resolves.toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: NOON,
+    });
+  });
+
+  it('atomically rejects a clock-in correction racing with cancellation', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    beforeShiftUpdateMany = () => {
+      adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null });
+      beforeShiftUpdateMany = undefined;
+    };
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
       reason: 'ACTIVE_ATTENDANCE',
     });
     expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });

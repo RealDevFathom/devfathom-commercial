@@ -69,6 +69,11 @@ import {
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 import { acceptedKey, goodsReceiptMovementKeys, quarantineKey } from './goods-receipt-keys';
+import {
+  PharmacyFinanceError,
+  postGoodsReceiptEntry,
+  reversePostingForSource,
+} from './finance-postings';
 
 export type ReceivingScope = LedgerScope;
 
@@ -579,6 +584,16 @@ export async function postGoodsReceipt(
     data: { status: 'POSTED', postedAt: input.at },
   });
 
+  // FIN-01: the inventory the receipt just shelved and what is now owed for it
+  // are journalled in this same transaction, so GL inventory never trails the
+  // stock ledger. A receipt whose every unit was rejected without quarantine
+  // shelved nothing of value and has nothing to journal.
+  try {
+    await postGoodsReceiptEntry(db, scope, { goodsReceiptId: receipt.id, at: input.at });
+  } catch (error) {
+    if (!(error instanceof PharmacyFinanceError && error.reason === 'NOTHING_TO_POST')) throw error;
+  }
+
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
@@ -816,6 +831,20 @@ export async function reverseGoodsReceipt(
       reversalReason: input.reason,
     },
   });
+
+  // FIN-01 / §8A invariant 15: the receipt's journal entry is negated by a new
+  // linked entry, never edited. A receipt that journalled nothing (zero value,
+  // or posted before receipts were journalled) has nothing to negate.
+  try {
+    await reversePostingForSource(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reason: input.reason,
+      at: input.at,
+    });
+  } catch (error) {
+    if (!(error instanceof PharmacyFinanceError && error.reason === 'NOT_FOUND')) throw error;
+  }
 
   return {
     goodsReceiptId: receipt.id,

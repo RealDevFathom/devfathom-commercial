@@ -14,9 +14,16 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
+  const postInterbranchTransferLossEntry = vi.fn();
   const afterTenantTransaction = vi.fn<(work: () => void) => void>();
   const withTenantDb = vi.fn();
-  return { hasModule, postWriteOffEntry, afterTenantTransaction, withTenantDb };
+  return {
+    hasModule,
+    postWriteOffEntry,
+    postInterbranchTransferLossEntry,
+    afterTenantTransaction,
+    withTenantDb,
+  };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -39,6 +46,7 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postWriteOffEntry: mocks.postWriteOffEntry,
+  postInterbranchTransferLossEntry: mocks.postInterbranchTransferLossEntry,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -183,6 +191,7 @@ beforeEach(() => {
   mocks.withTenantDb.mockReset();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
+  mocks.postInterbranchTransferLossEntry.mockReset();
 });
 
 describe('pharmacy write-off accounting', () => {
@@ -221,6 +230,57 @@ describe('pharmacy write-off accounting', () => {
       db,
       { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
       { stockMovementId: 'movement_1', at: occurredAt }
+    );
+  });
+});
+
+describe('transfer short-close accounting (DEV-131)', () => {
+  it('journals the units written off out of transit in the same transaction', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.$queryRaw
+      .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
+      .mockResolvedValueOnce([
+        { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
+      ] as never);
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({
+      id: 'transfer_1',
+      status: 'DISPATCHED',
+      fromBranchId: 'branch_src',
+      toBranchId: 'branch_a',
+      lines: [
+        {
+          id: 'line_1',
+          sourceLotId: 'lot_src',
+          sourceStockLocationId: 'location_src',
+          destinationStockLocationId: 'location_1',
+          quantityUnits: 20,
+          receivedUnits: 0,
+        },
+      ],
+    });
+    const occurredAt = new Date('2026-11-02T09:00:00.000Z');
+    db.pharmacyStockMovement.create.mockResolvedValue({ id: 'loss_movement', occurredAt });
+
+    await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: 'transfer_1',
+      lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+      variance: { reason: 'Lost in transit', witnessId: 'user_b', evidenceRef: 'COURIER-1' },
+      idempotencyKeyPrefix: 'receive-1',
+    });
+
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'WRITE_OFF',
+        disposition: 'IN_TRANSIT',
+        quantityUnits: -20,
+      }),
+    });
+    expect(mocks.postInterbranchTransferLossEntry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
+      { transferLineId: 'line_1', stockMovementId: 'loss_movement', at: occurredAt }
     );
   });
 });
@@ -1632,6 +1692,44 @@ describe('manual quarantine resolution authorization', () => {
         reversedAt: null,
       },
       select: { quantityUnits: true, heldMovementId: true },
+    });
+  });
+
+  it('writes off a manual damaged hold with witnessed custody evidence', async () => {
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    await caller().writeOff({
+      branchId: input.branchId,
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      units: input.units,
+      reason: 'Crushed in delivery',
+      disposition: 'DAMAGED',
+      witnessId: 'witness',
+      evidenceRef: 'photo-damaged-1',
+      idempotencyKey: 'write-off-damaged-1',
+    });
+    expect(db.pharmacyStockBalance.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        disposition: 'DAMAGED',
+      },
+    });
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        kind: 'WRITE_OFF',
+        disposition: 'DAMAGED',
+        quantityUnits: -10,
+        actorId: 'user_a',
+      }),
+    });
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        witnessId: 'witness',
+        evidenceRef: 'photo-damaged-1',
+      }),
     });
   });
 

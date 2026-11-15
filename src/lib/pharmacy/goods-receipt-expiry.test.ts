@@ -7,6 +7,15 @@ vi.mock('./stock-ledger', async () => {
   return { ...actual, receiveLot };
 });
 
+const finance = vi.hoisted(() => ({
+  postGoodsReceiptEntry: vi.fn(),
+  reversePostingForSource: vi.fn(),
+}));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  ...finance,
+}));
+
 import { postGoodsReceipt } from './goods-receipt';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -132,6 +141,7 @@ function receiptDb(line: {
 }
 
 beforeEach(() => {
+  finance.postGoodsReceiptEntry.mockReset().mockResolvedValue({ id: 'entry' });
   receiveLot.mockReset().mockResolvedValue({
     lot: { id: 'lot' },
     movement: { id: 'move' },
@@ -157,6 +167,40 @@ describe('postGoodsReceipt expiry', () => {
       expect(receiveLot).toHaveBeenCalledWith(db, SCOPE, expect.any(Object));
     }
   );
+
+  it('journals the posted receipt in the same transaction (DEV-131)', async () => {
+    const { db } = receiptDb({ accepted: 10, rejected: 0, expiry: '2027-12-31' });
+    await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+    expect(finance.postGoodsReceiptEntry).toHaveBeenCalledWith(db, SCOPE, {
+      goodsReceiptId: 'gr',
+      at: AT,
+    });
+    // The adapter refuses a receipt that is not POSTED, so it must run after
+    // the status write.
+    const [statusWrite] = vi.mocked(db.pharmacyGoodsReceipt.update).mock.invocationCallOrder;
+    const [posting] = finance.postGoodsReceiptEntry.mock.invocationCallOrder;
+    expect(posting).toBeGreaterThan(statusWrite);
+  });
+
+  it('posts a receipt that shelved nothing of value without a journal entry', async () => {
+    const { PharmacyFinanceError } =
+      await vi.importActual<typeof import('./finance-postings')>('./finance-postings');
+    finance.postGoodsReceiptEntry.mockRejectedValue(new PharmacyFinanceError('NOTHING_TO_POST'));
+    const { db } = receiptDb({ accepted: 10, rejected: 0, expiry: '2027-12-31' });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).resolves.toMatchObject({ goodsReceiptId: 'gr' });
+  });
+
+  it('fails the whole receipt when its journal entry cannot be posted', async () => {
+    const { FinancePostingError } =
+      await vi.importActual<typeof import('./finance-postings')>('./finance-postings');
+    finance.postGoodsReceiptEntry.mockRejectedValue(new FinancePostingError('UNBALANCED'));
+    const { db } = receiptDb({ accepted: 10, rejected: 0, expiry: '2027-12-31' });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'UNBALANCED' });
+  });
 
   it('refuses to post an existing draft against an order that was never sent', async () => {
     const { db, batchFind } = receiptDb({
