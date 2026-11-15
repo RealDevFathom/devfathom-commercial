@@ -47,7 +47,7 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
   refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
   // DEV-725: a counter bill is only created on a device with an OPEN drawer.
-  readOpenPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-a' })),
+  lockOpenPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-a' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),

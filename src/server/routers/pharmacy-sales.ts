@@ -120,6 +120,7 @@ import {
   applyPharmacyTender,
   closePharmacyDrawer,
   cutPharmacyDailyClose,
+  lockOpenPharmacyDrawer,
   openPharmacyDrawer,
   readOpenPharmacyDrawer,
   PharmacySettlementError,
@@ -1140,8 +1141,8 @@ export const pharmacySalesRouter = router({
           // regulatory gate (which keeps its own refusal and audit), before the insert.
           return createSale(db, scope, input.quotation, async () => {
             if (input.quotation) return;
-            if (!(input.deviceId && (await readOpenPharmacyDrawer(db, scope, input.deviceId))))
-              throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+            if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
           });
         });
       } catch (error) {

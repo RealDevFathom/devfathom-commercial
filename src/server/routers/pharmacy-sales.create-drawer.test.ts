@@ -30,7 +30,7 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 
-function fixture(openDrawer: { id: string } | null) {
+function fixture(openDrawer: { id: string; businessDate: Date } | null) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {
@@ -65,6 +65,8 @@ function fixture(openDrawer: { id: string } | null) {
   return { db, caller: app.createCaller(context).pharmacySales };
 }
 
+const drawer = { id: 'drawer-1', businessDate: new Date('2026-11-15T00:00:00.000Z') };
+
 beforeEach(() => {
   vi.mocked(assertStoredPharmacyMayOperate).mockReset().mockResolvedValue(undefined);
 });
@@ -90,7 +92,7 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
   });
 
   it('refuses a counter bill that does not name its counter device', async () => {
-    const f = fixture({ id: 'drawer-1' });
+    const f = fixture(drawer);
     await expect(f.caller.create({ branchId: 'branch-1', quotation: false })).rejects.toMatchObject(
       { code: 'BAD_REQUEST' }
     );
@@ -101,7 +103,7 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
   });
 
   it('starts the bill once this device has an OPEN drawer', async () => {
-    const f = fixture({ id: 'drawer-1' });
+    const f = fixture(drawer);
     await expect(
       f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
     ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
@@ -113,6 +115,25 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
         status: 'OPEN',
       },
     });
+  });
+
+  it('re-checks the drawer under its business-day lock, so a close that wins the race refuses the bill', async () => {
+    const f = fixture(drawer);
+    // OPEN when first read; CLOSED once the day lock is held (the close committed first).
+    f.db.pharmacyDrawerSession.findFirst.mockResolvedValueOnce(drawer).mockResolvedValueOnce(null);
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    // The lock is the one drawer and day close take: org, branch and the drawer's business day.
+    const locks = f.db.$queryRaw.mock.calls
+      .map(([sql]) => sql as { strings?: readonly string[]; values?: unknown[] })
+      .filter((sql) => sql.strings?.join('?').includes('pg_advisory_xact_lock'));
+    expect(locks.map((sql) => sql.values)).toContainEqual(['org-1:branch-1:2026-11-15']);
+    expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenLastCalledWith({
+      where: { id: 'drawer-1', organizationId: 'org-1', branchId: 'branch-1', status: 'OPEN' },
+      select: { id: true },
+    });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
   });
 
   it('keeps quotations free of the drawer: they take no payment', async () => {

@@ -1803,6 +1803,18 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByRole('button', { name: 'Open drawer' })).toBeEnabled();
   });
 
+  it('treats a failed status refresh as an unknown drawer, even over older open data (DEV-725)', () => {
+    mocks.queries.drawerStatus = {
+      ...query({ openDrawer: { id: 'drawer-stale' } }),
+      isSuccess: false,
+      isError: true,
+    };
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check drawer again' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Bill status')).not.toHaveTextContent('Drawer open');
+  });
+
   it('re-reads the drawer when the server refuses a bill because it was closed elsewhere (DEV-725)', async () => {
     mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
     mocks.mutations.create!.mockRejectedValue(refused('BAD_REQUEST', 'DRAWER_NOT_OPEN'));

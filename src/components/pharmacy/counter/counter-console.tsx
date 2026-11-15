@@ -586,7 +586,9 @@ function ScopedPharmacyCounterConsole({
   // reports an OPEN drawer for this device, the opening-cash step replaces
   // scan/search, so no bill is built that cannot be charged. A failed status read
   // keeps the step, with a retry, rather than offering a bill the server refuses.
-  const drawerRequired = branchAuthorized && !openDrawerSession;
+  // A failed read is an unknown drawer, even when older data says it was open.
+  const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
+  const drawerRequired = branchAuthorized && !drawerOpen;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -1113,9 +1115,8 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const ensureSale = useCallback(async () => {
-    // Before the open-bill shortcut too: no line is added while the drawer is closed.
-    if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     if (saleId) return saleId;
+    if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
       .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
       .catch((error: unknown) => {
@@ -1164,6 +1165,8 @@ function ScopedPharmacyCounterConsole({
       setPending('addToCart');
       setNotice(null);
       try {
+        // No line is added while the drawer is closed, to a new bill or an open one.
+        if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
         const activeSaleId = await ensureSale();
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
@@ -2238,7 +2241,7 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-              {openDrawerSession ? (
+              {drawerOpen ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : drawerRequired && drawerQuery.isSuccess ? (
                 <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
@@ -2378,11 +2381,13 @@ function ScopedPharmacyCounterConsole({
                       .catch((error: unknown) =>
                         setNotice({ tone: 'warning', message: messageFrom(error) })
                       )
-                      // Either way the server now holds the truth about this device's drawer.
-                      .finally(() => {
-                        setPending(null);
-                        void utils.pharmacySales.drawerStatus.invalidate();
-                      });
+                      // Either way the server now holds the truth about this device's drawer;
+                      // stay busy until it is read back, so the step cannot be sent twice.
+                      .finally(() =>
+                        Promise.resolve(utils.pharmacySales.drawerStatus.invalidate())
+                          .catch(() => undefined)
+                          .finally(() => setPending(null))
+                      );
                   }}
                 />
               ) : (

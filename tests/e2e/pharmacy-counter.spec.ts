@@ -73,7 +73,10 @@ async function openCounter(page: Page, email?: string) {
   // The module is licensed by the seed, so the shell must render the counter
   // itself rather than the honest not-enabled panel.
   await expect(page.getByRole('heading', { name: 'This module is not enabled' })).toHaveCount(0);
-  await expect(page.getByLabel('Scan or search')).toBeFocused();
+  // DEV-725: a fresh context is a new counter device with no drawer, so the shift
+  // starts at the opening-cash step; scan/search follows once the drawer is open.
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeFocused();
+  await expect(page.getByLabel('Scan or search')).toHaveCount(0);
 }
 
 test('pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes', async ({
@@ -107,6 +110,8 @@ async function openDrawer(page: Page) {
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
   ).toBeVisible();
   await expect(page.getByText(/DRAWER_NOT_OPEN/)).toHaveCount(0);
+  // POS-01: focus then rests in the scan field for the whole bill.
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
 }
 
 async function search(page: Page, term: string) {
@@ -305,6 +310,7 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
 }) => {
   const rx = PHARMACY_E2E.medicines.rx;
   await openCounter(page);
+  await openDrawer(page);
 
   await search(page, 'Fathomcillin');
   await stageFirstResult(page, rx.name);
@@ -356,6 +362,7 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   page,
 }) => {
   await openCounter(page);
+  await openDrawer(page);
 
   const legend = page.getByRole('heading', { name: 'Workflow map' });
   await expect(legend).toBeVisible();
@@ -559,6 +566,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await signIn(page);
     await page.goto('/pharmacy/counter');
     await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+    await openDrawer(page);
     const makeBill = async () => {
       const scan = page.getByLabel('Scan or search');
       await scan.focus();
