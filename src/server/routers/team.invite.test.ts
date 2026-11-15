@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
-  can: vi.fn(async () => true),
+  can: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
 }));
 
 vi.mock('server-only', () => ({}));

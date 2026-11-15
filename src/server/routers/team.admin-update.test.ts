@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   count: vi.fn(),
   departmentFindFirst: vi.fn(),
-  can: vi.fn(async () => true),
+  can: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
 }));
 
 vi.mock('server-only', () => ({}));
