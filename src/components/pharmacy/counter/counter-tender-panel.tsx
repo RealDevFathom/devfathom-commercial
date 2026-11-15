@@ -995,7 +995,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             disabled={!editable}
                             onChange={() => setApprovalMethod('PASSWORD')}
                           />
-                          I am the owner or manager: re-enter my password
+                          I am the only owner or manager: re-enter my password
                         </Label>
                       ) : null}
                     </fieldset>

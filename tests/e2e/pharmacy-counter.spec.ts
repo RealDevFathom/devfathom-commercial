@@ -634,7 +634,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
     // The signed-in admin approves as themselves with a fresh password re-entry.
-    await page.getByLabel('I am the owner or manager: re-enter my password').check();
+    await page.getByLabel('I am the only owner or manager: re-enter my password').check();
     await page.getByLabel('Reason for exceeding the limit').fill('Regular family, paying Friday');
     await page
       .getByLabel('Your password (current account)')

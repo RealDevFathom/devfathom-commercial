@@ -630,7 +630,7 @@ describe('family Khata tender', () => {
     const take = screen.getByRole('button', { name: 'Take payment' });
     expect(take).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
+    fireEvent.click(screen.getByLabelText('I am the only owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Your password (current account)'), {
       target: { value: 'test-only-password' },
     });
@@ -666,7 +666,7 @@ describe('family Khata tender', () => {
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
+    fireEvent.click(screen.getByLabelText('I am the only owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
@@ -743,7 +743,7 @@ describe('family Khata tender', () => {
     await screen.findByRole('option', { name: 'Owner Ali (you)' });
     // Without a password transport the till offers only the PIN method.
     expect(
-      screen.queryByLabelText('I am the owner or manager: re-enter my password')
+      screen.queryByLabelText('I am the only owner or manager: re-enter my password')
     ).not.toBeInTheDocument();
     fireEvent.click(override);
     fireEvent.click(override);

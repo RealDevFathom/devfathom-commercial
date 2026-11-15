@@ -314,7 +314,14 @@ export async function applyKhataLimitDecision(
               selfApproved: pin.selfApproved,
               operatorUserId: scope.actorId,
             }
-          : { ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString() }),
+          : {
+              ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
+              // DEV-290: a charge override by password is the sole approver's own
+              // fresh re-authentication; the router refuses it when anyone else could approve.
+              ...(input.overrideReason !== undefined
+                ? { approvalPolicy: 'SOLE_APPROVER_PASSWORD_REAUTH', selfApproved: true }
+                : {}),
+            }),
         ownerAuthorizedAt: authorizedAt.toISOString(),
         ...(overrideReason ? { overrideReason } : {}),
       },

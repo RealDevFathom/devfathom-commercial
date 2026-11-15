@@ -1737,7 +1737,7 @@ it.each([404, 200])(
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
+    fireEvent.click(screen.getByLabelText('I am the only owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });

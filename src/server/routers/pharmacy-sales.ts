@@ -4,6 +4,7 @@ import {
   confirmCounterApproval,
   CounterApprovalDenied,
   fefoOverrideApprovalPolicy,
+  isSoleActiveApprover,
   listCounterApprovers,
   type CounterApproval,
   type CounterApprovalKind,
@@ -383,6 +384,8 @@ async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
   );
 }
+
+const SOLE_APPROVER_PASSWORD_REAUTH = 'SOLE_APPROVER_PASSWORD_REAUTH';
 
 function ledgerTender(input: z.infer<typeof tenderInput>) {
   // DEV-290: the approver's PIN is one-time evidence, never part of the idempotent payload.
@@ -837,13 +840,23 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
     });
 }
 
-async function mayApproveKhataOverLimit(ctx: TRPCContext): Promise<boolean> {
+/**
+ * DEV-290: the password route is the signed-in operator approving their own over-limit
+ * charge, so the second-person rule applies: it is allowed only for an owner or manager
+ * (or tenant ADMIN) who is genuinely the sole active owner/manager. Everyone else needs a
+ * different manager's or owner's PIN at the till.
+ */
+async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
   const user = ctx.session!.user;
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
-  if (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options)))
-    return true;
-  return can(subject, 'pharmacy:manage', undefined, options);
+  const approver =
+    (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options))) ||
+    (await can(subject, 'pharmacy:manage', undefined, options));
+  return (
+    approver &&
+    (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'))
+  );
 }
 
 export const pharmacySalesRouter = router({
@@ -1359,7 +1372,17 @@ export const pharmacySalesRouter = router({
         });
       const ownerAuthorized =
         input.ownerOverride === true &&
-        (pinApproval !== undefined || (await mayApproveKhataOverLimit(ctx)));
+        (pinApproval !== undefined || (await mayApproveKhataOverLimit(ctx, scope)));
+      if (input.ownerOverride === true && !pinApproval && ownerAuthorized)
+        annotateAudit(ctx, {
+          metadata: {
+            khataOverLimitApproval: {
+              approvedByUserId: scope.actorId,
+              approvalPolicy: SOLE_APPROVER_PASSWORD_REAUTH,
+              selfApproved: true,
+            },
+          },
+        });
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         if (pinApproval) await confirmCounterApproval(db, scope, 'KHATA_OVER_LIMIT', pinApproval);

@@ -254,6 +254,29 @@ export async function listCounterApprovers(
 }
 
 /**
+ * DEV-290: true when the actor is genuinely the only active member of the organization who
+ * holds the approval capability for `kind`, whether or not anyone else has a counter PIN.
+ * Approval routes that do not take a second person's PIN (the signed-in approver's fresh
+ * password re-authentication) allow self-approval only in this case.
+ */
+export async function isSoleActiveApprover(
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  now = new Date()
+): Promise<boolean> {
+  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
+  const others = (await db.user.findMany({
+    where: { organizationId: scope.organizationId, status: 'ACTIVE', id: { not: scope.actorId } },
+  })) as ActiveUser[];
+  for (const other of others) {
+    if (other.id === scope.actorId || other.organizationId !== scope.organizationId) continue;
+    if (await can(other, capability, undefined, { db, now })) return false;
+  }
+  return true;
+}
+
+/**
  * True when nobody else could approve: approval needs an active member with an active staff
  * profile and a live counter PIN, so only those members are checked for the capability.
  */

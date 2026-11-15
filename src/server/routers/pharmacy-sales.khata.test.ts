@@ -31,6 +31,8 @@ vi.mock('@/lib/pharmacy/counter-line-approval', async (original) => ({
   authorizeCounterApproval: vi.fn(),
   confirmCounterApproval: vi.fn(),
   listCounterApprovers: vi.fn(),
+  // Most fixtures model a solo owner/manager; the second-person tests override this.
+  isSoleActiveApprover: vi.fn(async () => true),
 }));
 vi.mock('@/lib/pharmacy/khata-repayment', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/khata-repayment')>()),
@@ -47,6 +49,7 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  isSoleActiveApprover,
   listCounterApprovers,
 } from '@/lib/pharmacy/counter-line-approval';
 import {
@@ -854,6 +857,63 @@ describe('Khata router trust and recovery boundary', () => {
         expect(applyPharmacyTender).not.toHaveBeenCalled();
       }
     );
+
+    describe('password route: second-person rule', () => {
+      const manager = [counter, { capability: 'pharmacy:manage', effect: 'ALLOW' }] as Permission[];
+
+      it('refuses a manager ringing the sale while another owner or manager exists', async () => {
+        vi.mocked(isSoleActiveApprover).mockResolvedValueOnce(false);
+        const f = fixture(manager, 'EMPLOYEE');
+        await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'OWNER_ACTION_REQUIRED',
+        });
+        expect(isSoleActiveApprover).toHaveBeenCalledWith(
+          f.db,
+          expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' }),
+          'KHATA_OVER_LIMIT'
+        );
+        expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+        expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+        expect(applyPharmacyTender).not.toHaveBeenCalled();
+      });
+
+      it('refuses a tenant ADMIN self-approving while another owner or manager exists', async () => {
+        vi.mocked(isSoleActiveApprover).mockResolvedValueOnce(false);
+        const f = fixture();
+        await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+          message: 'OWNER_ACTION_REQUIRED',
+        });
+        expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      });
+
+      it('lets the sole owner or manager self-approve, audited as self-approved', async () => {
+        vi.mocked(isSoleActiveApprover).mockResolvedValueOnce(true);
+        const f = fixture(manager, 'EMPLOYEE');
+        await f.caller().tender(overLimit);
+        expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            ownerActorId: 'owner-a',
+            reasons: expect.objectContaining({
+              ownerAuthorizedByUserId: 'owner-a',
+              ownerReauthenticatedAt: new Date(f.user.passwordAuthenticatedAt).toISOString(),
+              approvalPolicy: 'SOLE_APPROVER_PASSWORD_REAUTH',
+              selfApproved: true,
+              overrideReason: 'Paying on Friday',
+            }),
+          }),
+        });
+        expect(applyPharmacyTender).toHaveBeenCalledOnce();
+      });
+
+      it('does not consult the sole rule for a cashier, who is refused outright', async () => {
+        const f = fixture([counter], 'EMPLOYEE');
+        await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+          message: 'OWNER_ACTION_REQUIRED',
+        });
+        expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      });
+    });
 
     describe("manager or owner PIN at the cashier's till", () => {
       const managerPin = { staffProfileId: 'staff-manager', pin: '2468' };

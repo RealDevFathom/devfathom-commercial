@@ -3,6 +3,7 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  isSoleActiveApprover,
   listCounterApprovers,
 } from './counter-line-approval';
 import { can } from '@/lib/abac';
@@ -419,5 +420,33 @@ describe('DEV-290: listCounterApprovers', () => {
     await expect(listCounterApprovers(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toEqual([
       { id: 'staff-self', name: 'Owner Bilal', self: true },
     ]);
+  });
+});
+
+describe('DEV-290: isSoleActiveApprover', () => {
+  function usersDb(users: unknown[]) {
+    return { user: { findMany: vi.fn().mockResolvedValue(users) } };
+  }
+
+  it('is false while another active member holds pharmacy:manage, even without a PIN', async () => {
+    vi.mocked(can).mockImplementation(async (subject) => subject.id === 'manager');
+    const db = usersDb([manager]);
+    await expect(isSoleActiveApprover(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toBe(false);
+    expect(db.user.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org', status: 'ACTIVE', id: { not: 'cashier' } },
+    });
+    expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
+  });
+
+  it('is true when no other active member holds pharmacy:manage', async () => {
+    vi.mocked(can).mockResolvedValue(false);
+    const db = usersDb([{ ...actor, id: 'other-cashier' }]);
+    await expect(isSoleActiveApprover(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toBe(true);
+  });
+
+  it('ignores the actor and members of another organization', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const db = usersDb([actor, { ...manager, organizationId: 'elsewhere' }]);
+    await expect(isSoleActiveApprover(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toBe(true);
   });
 });
