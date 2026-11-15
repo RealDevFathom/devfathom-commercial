@@ -89,8 +89,40 @@ const CLOSEABLE_STATUSES: ReadonlySet<PurchaseOrderStatus> = new Set([
 ]);
 
 const ZERO = new Prisma.Decimal(0);
-const decimal = (value: Prisma.Decimal | string | number): Prisma.Decimal =>
-  value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+/** Exclusive bound of a DECIMAL(18,6) column: at most 12 integer digits. */
+const DECIMAL_18_6_LIMIT = new Prisma.Decimal(10).pow(12);
+
+/**
+ * Parse a purchasing quantity or cost into the DECIMAL(18,6) domain. NaN and
+ * ±Infinity are valid `Prisma.Decimal` values (and PostgreSQL `numeric` stores
+ * NaN past a `>= 0` CHECK), so they — like malformed text, excess scale/range and
+ * forbidden signs — must be refused before anything is written.
+ */
+function decimal(
+  value: Prisma.Decimal | string | number,
+  label: string,
+  domain: 'positive' | 'nonnegative' = 'nonnegative'
+): Prisma.Decimal {
+  let parsed: Prisma.Decimal;
+  try {
+    parsed = value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+  } catch {
+    throw new PurchasingError(`${label} must be a valid decimal.`, 'INVALID');
+  }
+  const valid =
+    parsed.isFinite() &&
+    parsed.decimalPlaces() <= 6 &&
+    parsed.abs().lessThan(DECIMAL_18_6_LIMIT) &&
+    (domain === 'positive' ? parsed.greaterThan(0) : parsed.greaterThanOrEqualTo(0));
+  if (!valid) {
+    throw new PurchasingError(
+      `${label} must be a finite ${domain === 'positive' ? 'positive' : 'non-negative'} decimal ` +
+        'with at most 12 integer digits and 6 decimal places.',
+      'INVALID'
+    );
+  }
+  return parsed;
+}
 
 // ── Suppliers ─────────────────────────────────────────────────────────────────
 
@@ -225,9 +257,9 @@ export async function createPurchaseOrder(db: ScopedDb, input: CreatePurchaseOrd
         ? {
             create: input.lines.map((line) => ({
               stockItemId: line.stockItemId,
-              orderedQuantity: decimal(line.orderedQuantity),
+              orderedQuantity: decimal(line.orderedQuantity, 'Ordered quantity'),
               unitId: line.unitId,
-              unitCost: decimal(line.unitCost),
+              unitCost: decimal(line.unitCost, 'Unit cost'),
             })),
           }
         : undefined,
@@ -247,9 +279,9 @@ export async function addPurchaseOrderLine(
     data: {
       purchaseOrderId: order.id,
       stockItemId: line.stockItemId,
-      orderedQuantity: decimal(line.orderedQuantity),
+      orderedQuantity: decimal(line.orderedQuantity, 'Ordered quantity'),
       unitId: line.unitId,
-      unitCost: decimal(line.unitCost),
+      unitCost: decimal(line.unitCost, 'Unit cost'),
     },
     select: { id: true },
   });
@@ -278,10 +310,10 @@ export async function updatePurchaseOrderLine(
     where: { id: lineId },
     data: {
       ...(patch.orderedQuantity !== undefined
-        ? { orderedQuantity: decimal(patch.orderedQuantity) }
+        ? { orderedQuantity: decimal(patch.orderedQuantity, 'Ordered quantity') }
         : {}),
       ...(patch.unitId !== undefined ? { unitId: patch.unitId } : {}),
-      ...(patch.unitCost !== undefined ? { unitCost: decimal(patch.unitCost) } : {}),
+      ...(patch.unitCost !== undefined ? { unitCost: decimal(patch.unitCost, 'Unit cost') } : {}),
     },
     select: { id: true },
   });
@@ -444,6 +476,16 @@ export async function receivePurchaseOrder(
   if (input.lines.length === 0) {
     throw new PurchasingError('A receipt requires at least one line.', 'EMPTY_RECEIPT');
   }
+  // Validate every quantity/cost before the transaction opens, so a rejected
+  // command leaves no receipt, movement, idempotency key or PO status change.
+  for (const line of input.lines) {
+    decimal(line.receivedQuantity, 'Received quantity');
+    if (line.unitCost != null) decimal(line.unitCost, 'Unit cost');
+    for (const discrepancy of line.discrepancies ?? []) {
+      decimal(discrepancy.expectedQuantity, 'Discrepancy expected quantity');
+      decimal(discrepancy.receivedQuantity, 'Discrepancy received quantity');
+    }
+  }
   const at = input.now ?? input.receivedAt ?? new Date();
   const key = input.actor?.idempotencyKey ?? null;
 
@@ -526,8 +568,9 @@ export async function receivePurchaseOrder(
       const poLine = poLineById.get(line.purchaseOrderLineId)!;
       const stockItemId = poLine.stockItemId;
       const unitId = line.unitId ?? poLine.unitId;
-      const unitCost = line.unitCost != null ? decimal(line.unitCost) : poLine.unitCost;
-      const receivedQuantity = decimal(line.receivedQuantity);
+      const unitCost =
+        line.unitCost != null ? decimal(line.unitCost, 'Unit cost') : poLine.unitCost;
+      const receivedQuantity = decimal(line.receivedQuantity, 'Received quantity');
 
       let batchId: string | null = null;
       if (line.batch) {
@@ -581,8 +624,8 @@ export async function receivePurchaseOrder(
           purchaseReceiptLineId: receiptLine.id,
           stockItemId,
           kind: discrepancy.kind,
-          expectedQuantity: decimal(discrepancy.expectedQuantity),
-          receivedQuantity: decimal(discrepancy.receivedQuantity),
+          expectedQuantity: decimal(discrepancy.expectedQuantity, 'Discrepancy expected quantity'),
+          receivedQuantity: decimal(discrepancy.receivedQuantity, 'Discrepancy received quantity'),
           note: discrepancy.note ?? null,
         });
         discrepancyIds.push(id);
@@ -676,17 +719,14 @@ export async function createSupplierReturn(
   }
   const at = input.now ?? input.occurredAt ?? new Date();
   const movements: StockMovementInput[] = input.lines.map((line) => {
-    const quantity = decimal(line.quantity);
-    if (quantity.isNegative() || quantity.isZero()) {
-      throw new PurchasingError('A return quantity must be positive.', 'INVALID');
-    }
+    const quantity = decimal(line.quantity, 'Return quantity', 'positive');
     return {
       stockItemId: line.stockItemId,
       locationId: input.locationId,
       reason: 'SUPPLIER_RETURN',
       quantity: quantity.negated(),
       unitId: line.unitId ?? null,
-      unitCost: line.unitCost != null ? decimal(line.unitCost) : null,
+      unitCost: line.unitCost != null ? decimal(line.unitCost, 'Unit cost') : null,
       occurredAt: at,
       batchId: line.batchId ?? null,
     };
