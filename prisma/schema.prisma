@@ -1023,6 +1023,13 @@ enum PharmacyDrapMatchStatus {
   NO_MATCH
 }
 
+/// DEV-692: every parsed DRAP recall alert waits for a person before any stock moves.
+enum PharmacyDrapReviewStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  DISMISSED
+}
+
 enum PharmacyPriceChangeStatus {
   PROPOSED
   CONFIRMED
@@ -1306,6 +1313,7 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
+  hostedReceipts            PharmacyHostedReceipt[]
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -1319,6 +1327,7 @@ model PharmacySale {
 model PharmacyCustomer {
   churnScores      PharmacyCustomerChurnScore[]
   whatsappMessages PharmacyMessageLog[]
+  hostedReceipts   PharmacyHostedReceipt[]
   id               String                       @id @default(cuid())
   organizationId   String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   patientId        String
@@ -2529,8 +2538,11 @@ model PharmacyRecallNotice {
   @@map("pharmacy_recall_notices")
 }
 
-/// ECO-01: immutable receipt of a regulator notice. `adapter` is deliberately
-/// limited to FILE or MANUAL until the licensed-feed owner decision is made.
+/// ECO-01: immutable receipt of a regulator notice. `adapter` is FILE, MANUAL
+/// or DRAP_WEB (DEV-692: the daily recall-alert page fetch, off unless enabled).
+/// A RECALL receipt is a draft: `reviewStatus` stays PENDING_REVIEW until a
+/// person confirms it (which opens the recall and quarantines stock) or
+/// dismisses it with a reason.
 model PharmacyDrapIngest {
   id                String                           @id @default(cuid())
   organizationId    String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -2539,9 +2551,14 @@ model PharmacyDrapIngest {
   kind              PharmacyDrapNoticeKind
   payloadHash       String
   priceNotice       Json?
+  recallPayload     Json?
   matchStatus       PharmacyDrapMatchStatus
   matchDetails      Json
   recallNoticeId    String?
+  reviewStatus      PharmacyDrapReviewStatus?
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
   ingestedById      String
   createdAt         DateTime                         @default(now())
   recallNotice      PharmacyRecallNotice?            @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
@@ -2552,7 +2569,23 @@ model PharmacyDrapIngest {
   @@unique([organizationId, id])
   @@unique([organizationId, sourceReference, kind])
   @@unique([organizationId, recallNoticeId])
+  @@index([organizationId, kind, reviewStatus])
   @@map("pharmacy_drap_ingests")
+}
+
+/// DEV-692: one row per organization and business day the DRAP recall-alert
+/// page was fetched and ingested, so the five-minute cron fetches once a day.
+model PharmacyDrapRecallFeedRun {
+  id             String       @id @default(cuid())
+  organizationId String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessDate   DateTime     @db.Date
+  alertsSeen     Int
+  draftsCreated  Int
+  completedAt    DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "pharmacy_drap_recall_feed_runs_organization_fkey")
+
+  @@unique([organizationId, businessDate])
+  @@map("pharmacy_drap_recall_feed_runs")
 }
 
 model PharmacyPriceChangeProposal {
@@ -5563,8 +5596,10 @@ enum RestaurantActivationAcknowledgementKind {
 
 model Organization {
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
+  pharmacyDrapRecallFeedRuns    PharmacyDrapRecallFeedRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]
   pharmacyMessageLogs           PharmacyMessageLog[]
+  pharmacyHostedReceipts        PharmacyHostedReceipt[]
   pharmacyWhatsAppAccountEvents PharmacyWhatsAppAccountEvent[]
   id                            String                         @id @default(cuid())
   slug                          String                         @unique
@@ -15408,6 +15443,33 @@ model PharmacyMessageLog {
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+/// DEV-16: a tokenized hosted receipt sent by WhatsApp on the customer's request.
+/// Only the SHA-256 of the 160-bit random token is stored. Links expire (30-90
+/// days, configured); the link holder sees the whole receipt (owner decision).
+/// `rxProtected` records, for audit, whether the sale had Rx lines.
+model PharmacyHostedReceipt {
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  saleId          String
+  customerId      String
+  tokenHash       String    @unique
+  rxProtected     Boolean
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sale         PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  customer     PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_hosted_receipts_org_id_key")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_hosted_receipts_sale_idx")
+  @@map("pharmacy_hosted_receipts")
 }
 
 /// DEV-22: append-only evidence of Meta `account_update` and

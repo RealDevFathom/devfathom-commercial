@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processPlatformJobs } from '@/lib/platform/jobs';
 import { processDueChurnScoring } from '@/lib/pharmacy/churn-scoring';
+import { processDueDrapRecallFeed } from '@/lib/pharmacy/drap-recall-feed-job';
 import { processDueOwnerDigests } from '@/lib/pharmacy/owner-digest';
 
 export const maxDuration = 300;
@@ -21,12 +22,14 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => ({}))) as { maxJobs?: unknown };
   const maxJobs =
     typeof input.maxJobs === 'number' && Number.isFinite(input.maxJobs) ? input.maxJobs : 25;
-  const [jobs, ownerDigests, churnScoring] = await Promise.all([
+  const [jobs, ownerDigests, churnScoring, drapRecallFeed] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
     processDueChurnScoring(new Date(), maxJobs),
+    // DEV-692: off unless PHARMACY_DRAP_RECALL_FEED_ENABLED=true; drafts only.
+    processDueDrapRecallFeed(new Date(), maxJobs),
   ]);
-  return NextResponse.json({ ...jobs, ownerDigests, churnScoring });
+  return NextResponse.json({ ...jobs, ownerDigests, churnScoring, drapRecallFeed });
 }
 
 export const GET = POST;

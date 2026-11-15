@@ -848,6 +848,9 @@ function ScopedPharmacyCounterConsole({
       retry: false,
     }
   );
+  const sendWhatsAppReceipt = trpc.pharmacySales.counterReceiptWhatsApp.useMutation({
+    retry: false,
+  });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) && canSettlePayments }
@@ -3795,6 +3798,27 @@ function ScopedPharmacyCounterConsole({
               : null
           }
           onSettlementPresented={receiptPresented}
+          onSendWhatsApp={async (receiptSaleId) => {
+            try {
+              const sent = await sendWhatsAppReceipt.mutateAsync({
+                branchId,
+                saleId: receiptSaleId,
+                customerRequested: true,
+              });
+              // Delivery runs after the request commits; never claim it was delivered.
+              return sent.outcome === 'DUPLICATE'
+                ? {
+                    ok: true,
+                    message: 'A WhatsApp receipt for this sale was already requested today.',
+                  }
+                : {
+                    ok: true,
+                    message: 'WhatsApp receipt queued. Delivery is not confirmed at the counter.',
+                  };
+            } catch (error) {
+              return { ok: false, message: messageFrom(error) };
+            }
+          }}
         />
       </CounterOverlay>
       <p className="sr-only" aria-live="polite">

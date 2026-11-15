@@ -517,6 +517,48 @@ it.each([true, false])(
   }
 );
 
+it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the customer asked', async () => {
+  const onSendWhatsApp = vi.fn(async () => ({
+    ok: true,
+    message: 'WhatsApp receipt queued. Delivery is not confirmed at the counter.',
+  }));
+  render(<CounterReceiptView {...props({ onSendWhatsApp })} />);
+
+  const send = screen.getByRole('button', { name: 'Send WhatsApp receipt' });
+  expect(send).toHaveProperty('disabled', true);
+  expect(
+    screen.getByText(/only the branch, receipt number, total, payment method and a secure link/i)
+  ).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /customer asked for a whatsapp receipt/i }));
+  await waitFor(() => expect(send).toHaveProperty('disabled', false));
+  fireEvent.click(send);
+
+  expect(onSendWhatsApp).toHaveBeenCalledExactlyOnceWith('sale-1');
+  expect(await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')).toBeTruthy();
+});
+
+it('DEV-16: surfaces a refused WhatsApp receipt and hides the control on an unsettled bill', async () => {
+  const onSendWhatsApp = vi.fn(async () => ({
+    ok: false,
+    message: 'This customer has not opted in to WhatsApp messages.',
+  }));
+  const { unmount } = render(<CounterReceiptView {...props({ onSendWhatsApp })} />);
+  fireEvent.click(screen.getByRole('checkbox', { name: /customer asked for a whatsapp receipt/i }));
+  const send = screen.getByRole('button', { name: 'Send WhatsApp receipt' });
+  await waitFor(() => expect(send).toHaveProperty('disabled', false));
+  fireEvent.click(send);
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'This customer has not opted in to WhatsApp messages.'
+  );
+  unmount();
+
+  const unsettled = props({ onSendWhatsApp });
+  unsettled.receipt!.receiptNumber = null;
+  render(<CounterReceiptView {...unsettled} />);
+  expect(screen.queryByRole('button', { name: 'Send WhatsApp receipt' })).toBeNull();
+});
+
 it('#727: shows the issued promotion name and saving under its line', () => {
   const input = props();
   Object.assign(input.receipt!.lines[0]!, {

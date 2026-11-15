@@ -1,6 +1,8 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
+import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
+import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
 import {
   authorizeCounterApproval,
   confirmCounterApproval,
@@ -447,6 +449,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
   void overLimitApproval;
   return { ...tender, type: tender.type === 'KHATA' ? ('CREDIT' as const) : tender.type };
 }
+
+const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string> = {
+  NOT_CONFIGURED: 'WhatsApp receipts are not set up for this pharmacy.',
+  LINK_HOST_NOT_CONFIGURED: 'Receipt links are not set up for this workspace.',
+  NOT_SETTLED: 'Only a settled receipt can be sent.',
+  NO_CUSTOMER: 'Link a customer to this sale before sending a WhatsApp receipt.',
+  NO_CONSENT: 'This customer has not opted in to WhatsApp messages.',
+  NO_PHONE: 'This customer has no valid WhatsApp number on file.',
+  NOT_NEUTRAL: 'The receipt message would name a medicine, so it was not sent.',
+};
 
 function fail(error: unknown): never {
   if (error instanceof LostSalesError)
@@ -3089,6 +3101,43 @@ export const pharmacySalesRouter = router({
             message: 'This bill is not settled, so it has no receipt to print.',
           });
         }
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-16: send the settled receipt to the customer's WhatsApp, only on the
+   * customer's request at the counter. The template carries the branch,
+   * receipt number, total, method and a tokenized hosted link — never an item.
+   */
+  counterReceiptWhatsApp: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).max(128),
+          customerRequested: z.literal(true),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        return await sendWhatsAppReceiptLink({
+          db: ctx.db,
+          scope,
+          saleId: input.saleId,
+          actorUserId: ctx.session.user.id,
+        });
+      } catch (error) {
+        if (error instanceof HostedReceiptError)
+          throw new TRPCError({
+            code:
+              error.reason === 'NOT_CONFIGURED' || error.reason === 'LINK_HOST_NOT_CONFIGURED'
+                ? 'PRECONDITION_FAILED'
+                : 'BAD_REQUEST',
+            message: HOSTED_RECEIPT_ERROR_MESSAGES[error.reason],
+          });
         fail(error);
       }
     }),
