@@ -5826,6 +5826,7 @@ model RestaurantTaxRateBucketSnapshot {
   evidenceVersion         Int                    @default(0)
   allocationKind          String?
   billLineId              String?
+  sourceOrderItemId       String?
   unitOrdinal             Int?
   createdAt               DateTime               @default(now())
 

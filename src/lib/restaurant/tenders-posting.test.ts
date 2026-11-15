@@ -809,3 +809,114 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.movements).toHaveLength(1);
   });
 });
+
+describe('DEV-773 fractional settlement tax evidence (no DB)', () => {
+  it('freezes per-tender tax for a taxed fractional bill and a full refund reverses it', async () => {
+    const f = fixture();
+    // Order net 20.00, 10% exclusive tax, cut into two equal fractional bills.
+    Object.assign(f.bill, {
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: 2,
+      subtotal: D('10'),
+      compTotal: D('0'),
+      grandTotal: D('10'),
+      lines: [],
+    });
+    f.linesByBill.set('bill', []);
+    Object.assign(f.raw, {
+      restaurantOrderItem: {
+        findMany: vi.fn(async () => [
+          { id: 'item', quantity: 1, unitPrice: D('20'), modifiers: [] },
+        ]),
+      },
+    });
+    const findBills = f.raw.restaurantBill.findMany.getMockImplementation()!;
+    f.raw.restaurantBill.findMany.mockImplementation(
+      async ({ where }: { where: Where & { splitKind?: string } }) =>
+        where.splitKind === 'FRACTIONAL'
+          ? ([
+              { id: 'bill', fractionNumerator: 1 },
+              { id: 'bill-2', fractionNumerator: 1 },
+            ] as never)
+          : findBills({ where })
+    );
+    const [profile] = await f.raw.restaurantTaxProfileVersion.findMany();
+    f.raw.restaurantTaxProfileVersion.findMany.mockResolvedValue([
+      { ...profile!, rules: profile!.rules.map((rule) => ({ ...rule, rate: D('0.10') })) },
+    ]);
+    const frozen: Array<{
+      id: string;
+      cents: bigint;
+      snapshotId: string;
+      rateBucketSnapshotId: string;
+      paymentCategory: string;
+      originalTenderId: string;
+      rateBucket: { billLineId: string | null; unitOrdinal: number | null };
+      refundAllocations: Array<{ cents: bigint }>;
+    }> = [];
+    vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
+      for (const [index, row] of (input.tenderTaxAllocations ?? []).entries()) {
+        frozen.push({
+          id: `allocation-${index}`,
+          cents: BigInt(row.cents),
+          snapshotId: 'snapshot',
+          rateBucketSnapshotId: `bucket-${index}`,
+          paymentCategory: row.paymentCategory,
+          originalTenderId: row.originalTenderId,
+          rateBucket: { billLineId: null, unitOrdinal: row.bucket.unitOrdinal ?? null },
+          refundAllocations: [],
+        });
+      }
+      f.bill.status = 'SETTLED';
+      return { receiptNumber: 1, alreadySettled: false } as never;
+    });
+    f.raw.restaurantTaxTenderAllocationSnapshot.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where: { originalTenderId: string };
+    }) => frozen.filter((row) => row.originalTenderId === where.originalTenderId)) as never);
+
+    const collected = await f.collect({ tender: { type: 'OTHER', amount: '11.00' } });
+    expect(collected.settled).toBe(true);
+    const settlement = vi.mocked(finalizeBillSettlement).mock.calls[0]![1];
+    expect(settlement.taxTotal.toFixed(2)).toBe('1.00');
+    expect(settlement.lines.flatMap((line) => line.buckets)).toHaveLength(1);
+    expect(settlement.tenderTaxAllocations).toEqual([
+      {
+        originalTenderId: collected.tenderId,
+        paymentCategory: 'OTHER',
+        bucket: {
+          allocationKind: 'FRACTIONAL_MERCHANDISE',
+          sourceOrderItemId: 'item',
+          unitOrdinal: 0,
+          ruleVersionId: 'rule-OTHER',
+          paymentCategory: 'OTHER',
+        },
+        cents: 100,
+      },
+    ]);
+
+    await refundTender(f.db, {
+      originalTenderId: collected.tenderId,
+      amount: '11.00',
+      reason: 'Synthetic full refund',
+      approvingStaffProfileId: 'manager',
+      actor: { ...actor, idempotencyKey: 'refund-fractional' },
+      branchId: 'branch',
+      now: NOW,
+    });
+    const refund = f.raw.restaurantRefund.create.mock.calls[0] as unknown as [
+      { data: { amount: Prisma.Decimal; taxRefundAmount: Prisma.Decimal } },
+    ];
+    expect(refund[0].data.amount.toFixed(2)).toBe('11.00');
+    expect(refund[0].data.taxRefundAmount.toFixed(2)).toBe('1.00');
+    expect(f.raw.restaurantTaxRefundAllocation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        originalTenderId: collected.tenderId,
+        originalTenderAllocationId: 'allocation-0',
+        cents: BigInt(100),
+      }),
+    });
+  });
+});
