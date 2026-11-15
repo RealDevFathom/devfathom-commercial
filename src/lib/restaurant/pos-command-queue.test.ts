@@ -752,6 +752,23 @@ describe('review before a stale submission (criterion 5)', () => {
         }),
       ]).drafts[0];
 
+    const modifierDraftSnapshot = (
+      quotedModifiers: Array<{ optionId: string; priceDelta: string }>
+    ) =>
+      seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              quotedModifiers,
+            },
+          ],
+        }),
+      ]);
+
     it('passes when every selected modifier still has the quoted delta', () => {
       const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
       expect(reviewAgainstCatalog(draft, withModifiers('50.00'))).toBeNull();
@@ -861,6 +878,61 @@ describe('review before a stale submission (criterion 5)', () => {
       );
       expect(accepted.drafts[0].commands[1]).toEqual(legacy.drafts[0].commands[1]);
       expect(markDraftsForCatalogReview(accepted, withModifiers('50.00')).flagged).toBe(1);
+    });
+
+    it('shows every changed line before replay instead of accepting unseen changes', () => {
+      const snapshot = seeded([
+        draftInput({
+          lines: [
+            { menuItemId: 'mi-1', quantity: 1, quotedUnitPrice: '400.00' },
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+            },
+          ],
+        }),
+      ]);
+      const current = withModifiers('80.00');
+      const flagged = markDraftsForCatalogReview(snapshot, current).snapshot;
+      const draftId = flagged.drafts[0].draftId;
+      expect(flagged.drafts[0].review).toMatchObject({
+        reason: 'PRICE_CHANGED',
+        atCommandId: 'c2',
+      });
+
+      // Accepting the base-price change shown for the first line surfaces the
+      // modifier change on the second line; nothing replays yet.
+      const first = resolveReviewedDraft(flagged, draftId, 'REPLAY', current.version, current);
+      expect(first.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(first.drafts[0].review).toMatchObject({ reason: 'PRICE_CHANGED', atCommandId: 'c3' });
+      expect(nextReplayCommand(first, DEVICE, OPERATOR).status).toBe('IDLE');
+
+      const second = resolveReviewedDraft(first, draftId, 'REPLAY', current.version, current);
+      expect(second.drafts[0].status).toBe('QUEUED');
+      expect(markDraftsForCatalogReview(second, current).flagged).toBe(0);
+    });
+
+    it('shows a line change hidden behind an accepted closed-channel review', () => {
+      const snapshot = modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const closed = { ...withModifiers('80.00'), channelOpen: false };
+      const flagged = markDraftsForCatalogReview(snapshot, closed).snapshot;
+      expect(flagged.drafts[0].review?.reason).toBe('CHANNEL_CLOSED');
+
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        closed.version,
+        closed
+      );
+      expect(accepted.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(accepted.drafts[0].review).toMatchObject({
+        reason: 'PRICE_CHANGED',
+        atCommandId: 'c2',
+      });
     });
 
     describe('a review raised while a command is in flight', () => {

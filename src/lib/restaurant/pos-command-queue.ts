@@ -678,8 +678,20 @@ export function reviewAgainstCatalog(
     };
   }
 
+  // A newer catalog version alone is not a conflict: the draft is re-validated line
+  // by line, so an unrelated publication change must not nag the operator.
+  return reviewLines(draft, catalog, null);
+}
+
+/** The first unsent line that no longer matches the catalog, skipping an accepted one. */
+function reviewLines(
+  draft: PosQueuedDraft,
+  catalog: PosCatalogSnapshot,
+  acceptedCommandId: string | null
+): PosDraftReview | null {
   for (const command of draft.commands) {
     if (command.kind !== 'ADD_ITEM' || command.status === 'ACKNOWLEDGED') continue;
+    if (command.commandId === acceptedCommandId) continue;
     const item = findCatalogItem(catalog, command.body.menuItemId);
     if (!item || !item.available) {
       return {
@@ -700,9 +712,6 @@ export function reviewAgainstCatalog(
     const modifierReview = reviewModifiers(command.commandId, command.body, item);
     if (modifierReview) return modifierReview;
   }
-
-  // A newer catalog version alone is not a conflict: the draft is re-validated line
-  // by line above, so an unrelated publication change must not nag the operator.
   return null;
 }
 
@@ -768,20 +777,29 @@ export function markDraftsForCatalogReview(
   return { snapshot: { ...snapshot, drafts }, flagged };
 }
 
-/**
- * Record the current catalog's prices as the accepted quote of every unsent line, so
- * a later refresh flags only changes made after the operator's review. Skipped when
- * the catalog belongs to another channel or publication: it proves nothing about
- * this draft's menu, and the old quote keeps the draft under review.
- */
-function rebaselineQuotes(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): PosQueuedDraft {
+/** A draft is only comparable with a catalog of the channel and publication it was composed on. */
+function draftMatchesCatalog(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): boolean {
   const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
-  if (!open || open.body.channel !== catalog.channel) return draft;
-  if (open.body.publicationId && open.body.publicationId !== catalog.publicationId) return draft;
+  if (!open || open.body.channel !== catalog.channel) return false;
+  return !open.body.publicationId || open.body.publicationId === catalog.publicationId;
+}
+
+/**
+ * Record the current catalog's prices as the accepted quote of the one line whose
+ * review the operator was shown, so a later refresh flags only changes made after
+ * that review. Other lines keep their quotes: accepting one conflict never accepts
+ * a change the operator has not seen.
+ */
+function rebaselineLine(
+  draft: PosQueuedDraft,
+  catalog: PosCatalogSnapshot,
+  commandId: string | null
+): PosQueuedDraft {
   return {
     ...draft,
     commands: draft.commands.map((command) => {
-      if (command.kind !== 'ADD_ITEM' || command.status === 'ACKNOWLEDGED') return command;
+      if (command.kind !== 'ADD_ITEM' || command.commandId !== commandId) return command;
+      if (command.status === 'ACKNOWLEDGED') return command;
       const item = findCatalogItem(catalog, command.body.menuItemId);
       if (!item) return command;
       const selected = command.body.modifierOptionIds ?? [];
@@ -815,11 +833,18 @@ export function resolveReviewedDraft(
     'COMPOSER_UNVERIFIED'
   )
     return snapshot;
-  return mapDraft(snapshot, draftId, (draft) => ({
-    ...(catalog ? rebaselineQuotes(draft, catalog) : draft),
-    status: 'QUEUED',
-    review: null,
-    // Re-baselined: the operator accepted the current catalog for this draft.
-    catalogVersion,
-  }));
+  return mapDraft(snapshot, draftId, (draft) => {
+    // Without a catalog of this draft's own menu nothing can be re-checked or
+    // re-baselined: send it as composed, and the server prices every line.
+    if (!catalog || !draftMatchesCatalog(draft, catalog)) {
+      return { ...draft, status: 'QUEUED', review: null, catalogVersion };
+    }
+    const accepted = draft.review?.atCommandId ?? null;
+    const rebased = rebaselineLine(draft, catalog, accepted);
+    // Any other changed line is shown next instead of replaying unseen. The channel
+    // state is not re-checked: a closed channel is what an unscoped review shows.
+    const next = reviewLines(rebased, catalog, accepted);
+    if (next) return { ...rebased, status: 'NEEDS_REVIEW', review: next };
+    return { ...rebased, status: 'QUEUED', review: null, catalogVersion };
+  });
 }
