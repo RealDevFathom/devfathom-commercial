@@ -2150,6 +2150,20 @@ function ScopedPharmacyCounterConsole({
       className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
       data-counter-console=""
     >
+      <nav aria-label="Counter shortcuts" className="contents">
+        {[
+          ['#counter-search', 'Skip to scan or search'],
+          ['#counter-bill-total', 'Skip to bill total'],
+        ].map(([href, label]) => (
+          <a
+            key={href}
+            href={href}
+            className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:z-50 focus-visible:m-2 focus-visible:inline-flex focus-visible:min-h-11 focus-visible:items-center focus-visible:rounded-md focus-visible:bg-surface-raised focus-visible:px-4 focus-visible:text-sm focus-visible:font-semibold focus-visible:text-text-strong focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            {label}
+          </a>
+        ))}
+      </nav>
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
@@ -2202,7 +2216,7 @@ function ScopedPharmacyCounterConsole({
               <StatusPill
                 status={saleId ? 'open' : 'idle'}
                 tone={cart?.receiptNumber ? 'success' : 'neutral'}
-                className="font-mono text-[10px] uppercase"
+                className="font-mono text-xs uppercase"
                 label={
                   cart?.receiptNumber
                     ? `Receipt ${cart.receiptNumber}`
@@ -2218,7 +2232,7 @@ function ScopedPharmacyCounterConsole({
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                   disabled={busy || !drawerStatusKnown}
                   onClick={() => {
                     setPending('drawer');
@@ -2450,7 +2464,7 @@ function ScopedPharmacyCounterConsole({
               >
                 <div className="grid items-center gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto]">
                   <div className="min-w-0">
-                    <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
+                    <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
                       Next line
                     </h2>
                     <p className="mt-1 text-sm font-semibold text-text-strong">
@@ -2717,7 +2731,7 @@ function ScopedPharmacyCounterConsole({
                 onClick={() => void runTransition('hold')}
               >
                 Hold{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.holdSale)}
                 </kbd>
               </Button>
@@ -2728,7 +2742,7 @@ function ScopedPharmacyCounterConsole({
                 onClick={() => void runTransition('resume')}
               >
                 Resume{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.resumeSale)}
                 </kbd>
               </Button>
@@ -2959,7 +2973,7 @@ function ScopedPharmacyCounterConsole({
             <Button
               type="button"
               variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
               disabled={busy || !patient || !saleId}
               onClick={() => void attachCustomer()}
             >
@@ -2995,11 +3009,11 @@ function ScopedPharmacyCounterConsole({
                   disabled={busy || balanceMinor === null || balanceMinor <= 0}
                   onChange={(event) => setRedeemPoints(Number(event.target.value))}
                   placeholder="Points"
-                  className="h-8"
+                  className="h-11"
                 />
                 <Button
                   type="button"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                   disabled={busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0}
                   onClick={() => void redeemCustomerPoints()}
                 >

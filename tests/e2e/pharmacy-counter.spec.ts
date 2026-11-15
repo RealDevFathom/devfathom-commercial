@@ -350,6 +350,19 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   });
 });
 
+test('a11y — the counter page has no serious or critical axe violations and exposes skip links', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await expect(page.getByRole('link', { name: 'Skip to bill total' })).toHaveCount(1);
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(
+    accessibility.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  ).toEqual([]);
+});
+
 test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an honest placeholder', async ({
   page,
 }) => {

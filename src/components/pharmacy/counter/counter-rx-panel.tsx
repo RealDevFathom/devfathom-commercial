@@ -585,7 +585,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
       >
         <section aria-label="Safety blocks" className="space-y-3">
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+          <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
             Safety blocks
           </h4>
           {blocks.length === 0 ? (
@@ -618,7 +618,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             aria-label="Counselling and notices"
             className="space-y-3 border-t border-border-subtle pt-5"
           >
-            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Counselling and notices
             </h4>
             {advice.length > 0 ? (
@@ -671,7 +671,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           aria-label="Patient and prescriptions"
           className="space-y-3 border-t border-border-subtle pt-5"
         >
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+          <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
             Patient
           </h4>
 
