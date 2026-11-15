@@ -24,7 +24,7 @@ Verification workflow:
 2. DevFathom shows `_devfathom-verification.<host>` and its exact TXT value;
 3. the worker resolves TXT records;
 4. mismatches remain `FAILED` with an actionable reason;
-5. a verified record is attached to the approved Azure deployment;
+5. a verified record is attached to the approved AWS deployment;
 6. only `VERIFIED` domains resolve to the tenant.
 
 Retry is explicit and auditable. Manual status control exists for operational recovery. Unverified domains never route tenant traffic.
@@ -39,7 +39,7 @@ shadow the control plane or the shared application.
 
 ## Dedicated domains
 
-Support and host resolution use the ready deployment URL when available. Dedicated Azure domain attachment is **BLOCKED** until that deployment path is implemented and verified; it must use the same DNS proof.
+Support and host resolution use the ready deployment URL when available. Dedicated AWS domain attachment is **BLOCKED** until that deployment path is implemented and verified; it must use the same DNS proof.
 
 ## Email delivery
 

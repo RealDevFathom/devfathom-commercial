@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
+import { normalizeRegulatoryProvince } from './regulatory-profile-form';
 
 export type BranchOperationDenialReason =
   | 'ORGANIZATION_NOT_ACTIVE'
@@ -70,9 +71,7 @@ export type RegulatoryProfileBindingFields = {
   jurisdictionRuleSetId?: string | null;
 };
 
-export function normalizeRegulatoryProvince(value: string): string {
-  return value.trim().toUpperCase().replace(/^PK-/, '');
-}
+export { normalizeRegulatoryProvince };
 
 export function normalizeRegulatoryPremises(value: unknown): string {
   if (typeof value !== 'string') return '';

@@ -117,13 +117,26 @@ export function brandHoverColor(hex: string): string {
   return contrastRatio(toward, label) >= 4.5 ? toward : away;
 }
 
-export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {
+/**
+ * In the dark theme the Studio `--primary` family is a light neutral that reads
+ * on dark surfaces. A tenant colour set inline would beat it and render
+ * primary-coloured text/links near-invisible (1.21:1), so the dark theme keeps
+ * its own `--primary` tokens and only the sidebar chrome takes the tenant colour.
+ */
+export function tenantBrandTokens(
+  brand: TenantBrand,
+  theme: 'light' | 'dark' = 'light'
+): Record<string, string> {
   return {
-    ...(brand.primaryColor
+    ...(brand.primaryColor && theme !== 'dark'
       ? {
           '--primary': brand.primaryColor,
           '--primary-hover': brandHoverColor(brand.primaryColor),
           '--primary-foreground': contrastColor(brand.primaryColor),
+        }
+      : {}),
+    ...(brand.primaryColor
+      ? {
           '--sidebar': brand.primaryColor,
           '--sidebar-foreground': contrastColor(brand.primaryColor),
           '--sidebar-accent': brand.primaryColor,

@@ -192,6 +192,9 @@ type TransactionData = {
   category: string | null;
   description: string;
   date: Date;
+  // DEV-166: set when an invoice payment posted this income; it changes only
+  // through that payment, so the row offers no edit or delete.
+  paymentId?: string | null;
   project: { id: string; name: string } | null;
   client: { id: string; name: string } | null;
 };
@@ -437,6 +440,7 @@ const TransactionRow = memo(function TransactionRow({
           {t.category ? categoryLabels[t.category] || t.category : ''}
           {t.project ? ` · ${t.project.name}` : ''}
           {t.client ? ` · ${t.client.name}` : ''}
+          {t.paymentId ? ' · Invoice payment' : ''}
         </p>
       </div>
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
@@ -450,25 +454,29 @@ const TransactionRow = memo(function TransactionRow({
       >
         {t.type === 'INCOME' ? '+' : '-'}${Number(t.amount).toLocaleString()}
       </span>
-      <button
-        onClick={() => {
-          setEDesc(t.description);
-          setEAmount(String(Number(t.amount)));
-          setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
-          setECategory(t.category || '');
-          setIsEditing(true);
-        }}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
-        title="Edit"
-      >
-        <Pencil className="h-3.5 w-3.5" />
-      </button>
-      <button
-        onClick={() => deleteTransaction.mutate({ id: t.id })}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      {!t.paymentId && (
+        <>
+          <button
+            onClick={() => {
+              setEDesc(t.description);
+              setEAmount(String(Number(t.amount)));
+              setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
+              setECategory(t.category || '');
+              setIsEditing(true);
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
+            title="Edit"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => deleteTransaction.mutate({ id: t.id })}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </>
+      )}
     </div>
   );
 });

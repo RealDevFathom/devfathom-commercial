@@ -1,6 +1,8 @@
 import 'server-only';
 import { growthReceiptMoney } from './growth-evidence';
-import { readPharmacyMarketingReport } from './marketing-report';
+import { readPharmacyMarketingReportWindow } from './marketing-report';
+import { localCalendarDays, localDayStart, shiftDay } from './marketing-dates';
+import { workspaceToday } from '@/lib/timezone';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -60,16 +62,22 @@ export type GrowthReviewRow = {
   campaignId: string | null;
   createdAt: Date;
 };
-export function growthPeriods(from: Date, cutoff: Date, now = new Date()) {
+export function growthPeriods(from: Date, cutoff: Date, now = new Date(), timeZone?: string) {
   const duration = cutoff.getTime() - from.getTime();
-  if (!Number.isFinite(duration) || duration < 86400000 || duration > 90 * 86400000 || cutoff > now)
+  // Local-midnight bounds count calendar days, so a day or range crossing a daylight-saving
+  // change is still the one to ninety days the owner chose; other bounds keep elapsed time.
+  const days = timeZone ? localCalendarDays(from, cutoff, timeZone) : null;
+  const bounded =
+    days === null ? duration >= 86400000 && duration <= 90 * 86400000 : days >= 1 && days <= 90;
+  if (!Number.isFinite(duration) || !bounded || cutoff > now)
     throw new MarketingWorkflowError('Use a completed period of one to ninety days.');
+  const comparisonFrom =
+    days === null
+      ? new Date(from.getTime() - duration)
+      : localDayStart(shiftDay(workspaceToday(timeZone, from), -days), timeZone!);
   return {
     current: { from: from.toISOString(), cutoff: cutoff.toISOString() },
-    comparison: {
-      from: new Date(from.getTime() - duration).toISOString(),
-      cutoff: from.toISOString(),
-    },
+    comparison: { from: comparisonFrom.toISOString(), cutoff: from.toISOString() },
   };
 }
 /** Aggregate only. Exact signed Finance amounts; no customer/item/clinical fields leave this function. */
@@ -80,7 +88,7 @@ export async function buildPharmacyGrowthInput(
   cutoff: Date,
   now = new Date()
 ): Promise<GrowthInput> {
-  const periods = growthPeriods(from, cutoff, now);
+  const periods = growthPeriods(from, cutoff, now, scope.timezone);
   const facts: GrowthInput['facts'] = [];
   for (const [label, p] of [
     ['CURRENT', periods.current],
@@ -145,13 +153,21 @@ export async function buildPharmacyGrowthInput(
         coverage: 'COMPLETE',
         freshAt: now.toISOString(),
       });
-    // Report's date interface is UTC-day bounded; never silently widen sub-day periods.
-    if (p.from.endsWith('T00:00:00.000Z') && p.cutoff.endsWith('T00:00:00.000Z')) {
-      const report = await readPharmacyMarketingReport(db, scope.organizationId, {
-        branchIds: [scope.branchId],
-        from: p.from.slice(0, 10),
-        to: new Date(new Date(p.cutoff).getTime() - 86400000).toISOString().slice(0, 10),
-      });
+    // Whole UTC or workspace-local days read the report over exactly this window; never
+    // silently widen sub-day periods.
+    if (
+      (p.from.endsWith('T00:00:00.000Z') && p.cutoff.endsWith('T00:00:00.000Z')) ||
+      localCalendarDays(new Date(p.from), new Date(p.cutoff), scope.timezone) !== null
+    ) {
+      const report = await readPharmacyMarketingReportWindow(
+        db,
+        scope.organizationId,
+        [scope.branchId],
+        {
+          gte: new Date(p.from),
+          lt: new Date(p.cutoff),
+        }
+      );
       const cohorts = await db.$queryRaw<Array<{ delivered: number }>>(Prisma.sql`
         SELECT COUNT(DISTINCT c."customerId")::integer AS delivered
         FROM pharmacy_campaign_captures c

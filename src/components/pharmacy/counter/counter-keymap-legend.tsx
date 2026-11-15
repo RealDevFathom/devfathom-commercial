@@ -7,12 +7,15 @@ import {
   COUNTER_ACTIONS,
   COUNTER_KEYMAP_PRESETS,
   formatBinding,
+  resolveCounterKeymap,
   type CounterKeymapPresetKey,
   type ResolvedCounterKeymap,
 } from '@/lib/pharmacy/counter-keymap';
 
 export type CounterKeymapLegendProps = {
   keymap: ResolvedCounterKeymap;
+  /** Owner/admin preview only; staff see confirmed presets. */
+  allowUnconfirmed?: boolean;
   saving?: boolean;
   disabled?: boolean;
   error?: string | null;
@@ -23,17 +26,21 @@ export type CounterKeymapLegendProps = {
  * POS-01 — the workflow map, on screen.
  *
  * A keyboard-first counter has to be learnable without a manual, so the chords
- * are visible rather than hidden behind a help key. An unconfirmed preset says
- * so in place: the Legacy Speed map is a Phase 0 proposal, and a cashier who
- * memorises it should know it may change.
+ * are visible rather than hidden behind a help key. Unconfirmed presets are
+ * available only in owner/admin preview, with their caveat intact.
  */
 export function CounterKeymapLegend({
-  keymap,
+  keymap: suppliedKeymap,
+  allowUnconfirmed = false,
   saving = false,
   disabled = false,
   error = null,
   onPresetChange,
 }: CounterKeymapLegendProps) {
+  const keymap =
+    suppliedKeymap.preset.confirmed || allowUnconfirmed
+      ? suppliedKeymap
+      : resolveCounterKeymap({ preset: 'devfathom' });
   const overridden = new Set(keymap.overriddenActions);
   return (
     <div className="space-y-2">
@@ -48,11 +55,13 @@ export function CounterKeymapLegend({
           onChange={(event) => onPresetChange(event.target.value as CounterKeymapPresetKey)}
           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
         >
-          {Object.values(COUNTER_KEYMAP_PRESETS).map((preset) => (
-            <option key={preset.key} value={preset.key}>
-              {preset.label}
-            </option>
-          ))}
+          {Object.values(COUNTER_KEYMAP_PRESETS)
+            .filter((preset) => preset.confirmed || allowUnconfirmed)
+            .map((preset) => (
+              <option key={preset.key} value={preset.key}>
+                {preset.label}
+              </option>
+            ))}
         </select>
         <p className="text-sm text-text-muted">{keymap.preset.description}</p>
         {!keymap.preset.confirmed ? (

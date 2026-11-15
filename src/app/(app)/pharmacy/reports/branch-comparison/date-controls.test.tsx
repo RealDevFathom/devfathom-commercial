@@ -8,6 +8,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: { createCaller: () => ({ branchComparison }) },
 }));
 
+import { createTRPCContext } from '@/server/trpc';
 import BranchComparisonPage from './page';
 
 beforeEach(() => {
@@ -67,6 +68,19 @@ describe('branch comparison date controls', () => {
     expect(screen.getByLabelText('From')).toHaveValue('2026-11-02');
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-02');
     expect(branchComparison).toHaveBeenCalledWith({ from: '2026-11-02', to: '2026-11-02' });
+  });
+
+  it('defaults to the Karachi business day after midnight PKT, not the UTC day', async () => {
+    vi.mocked(createTRPCContext).mockResolvedValueOnce({
+      organization: { id: 'org-a', currency: 'PKR', timezone: 'Asia/Karachi' },
+      entitlements: { organizationId: 'org-a' },
+    } as never);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 PKT on 15 November is still 14 November in UTC.
+    vi.setSystemTime(new Date('2026-11-14T20:30:00Z'));
+    render(await BranchComparisonPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByLabelText('From')).toHaveValue('2026-11-15');
+    expect(branchComparison).toHaveBeenCalledWith({ from: '2026-11-15', to: '2026-11-15' });
   });
 
   it('keeps rejected dates editable and associates the server error with both controls', async () => {

@@ -341,3 +341,14 @@ it('limits the license ledger to workspace modules and explicit grants', () => {
   expect(within(ledger).queryByText('Restaurant Core')).not.toBeInTheDocument();
   expect(within(ledger).queryByText('HR')).not.toBeInTheDocument();
 });
+
+it('lets domain and SCIM controls fit narrow screens', () => {
+  render(<OrganizationAdminContent />);
+  const domainForm = screen.getByPlaceholderText('hub.example.com').closest('form');
+  const scimForm = screen.getByPlaceholderText('Directory sync').closest('form');
+  expect(domainForm).toHaveClass(
+    'grid-cols-[minmax(0,1fr)]',
+    'sm:grid-cols-[minmax(0,1fr)_120px_auto]'
+  );
+  expect(scimForm).toHaveClass('flex-col', 'sm:flex-row');
+});
