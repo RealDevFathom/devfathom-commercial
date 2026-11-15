@@ -284,6 +284,7 @@ function PreferenceRow({
 }
 
 function AppearanceSection() {
+  const { vertical } = useEntitlements();
   const { theme, setTheme } = useTheme();
   const { density, type, accent, layout, icons, setPreference } = usePreferences();
   // Best-effort, non-blocking mirror to the user record so prefs follow the
@@ -365,23 +366,25 @@ function AppearanceSection() {
           />
         </PreferenceRow>
 
-        <PreferenceRow
-          label="Navigation layout"
-          description="A left side rail or a top navigation bar."
-        >
-          <SegmentedControl<Layout>
-            aria-label="Navigation layout"
-            value={layout}
-            options={[
-              { value: 'rail', label: 'Side rail' },
-              { value: 'top', label: 'Top nav' },
-            ]}
-            onChange={(v) => {
-              setPreference('layout', v);
-              persist.mutate({ layout: v });
-            }}
-          />
-        </PreferenceRow>
+        {vertical !== 'PHARMACY' && (
+          <PreferenceRow
+            label="Navigation layout"
+            description="A left side rail or a top navigation bar."
+          >
+            <SegmentedControl<Layout>
+              aria-label="Navigation layout"
+              value={layout}
+              options={[
+                { value: 'rail', label: 'Side rail' },
+                { value: 'top', label: 'Top nav' },
+              ]}
+              onChange={(v) => {
+                setPreference('layout', v);
+                persist.mutate({ layout: v });
+              }}
+            />
+          </PreferenceRow>
+        )}
 
         <PreferenceRow label="Nav icons" description="Numbered indices or architectural icons.">
           <SegmentedControl<Icons>
@@ -823,7 +826,8 @@ function PasswordSection() {
 // specific brands are checked first. Falls back to a trimmed raw UA so a row
 // never renders blank.
 function parseUserAgent(ua: string | null): string {
-  if (!ua) return 'Unknown device';
+  ua = ua?.trim() ?? '';
+  if (!ua) return 'Successful sign-in';
   const browser = /Edg\//.test(ua)
     ? 'Edge'
     : /OPR\/|Opera/.test(ua)
@@ -886,9 +890,9 @@ function RecentSignInsSection() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {parseUserAgent(s.userAgent)}
                   </p>
-                  <p className="text-[11px] font-mono text-muted-foreground">
-                    {s.ip ?? 'Unknown IP'}
-                  </p>
+                  {s.ip?.trim() && (
+                    <p className="text-[11px] font-mono text-muted-foreground">{s.ip.trim()}</p>
+                  )}
                 </div>
                 <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">
                   {formatDeliveryTime(s.createdAt)}

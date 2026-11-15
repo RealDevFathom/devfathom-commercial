@@ -1,7 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ role: 'USER', profileSave: vi.fn(), passwordSave: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  role: 'USER',
+  vertical: 'PHARMACY',
+  signIns: [] as { id: string; ip: string | null; userAgent: string | null; createdAt: string }[],
+  profileSave: vi.fn(),
+  passwordSave: vi.fn(),
+}));
 vi.mock('next-auth/react', () => ({
   useSession: () => ({
     data: {
@@ -25,7 +31,7 @@ vi.mock('@/components/preferences-provider', () => ({
   }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ vertical: 'PHARMACY', modules: [], enabledModules: [] }),
+  useEntitlements: () => ({ vertical: mocks.vertical, modules: [], enabledModules: [] }),
 }));
 vi.mock('@/lib/trpc', () => {
   const endpoint = (path = ''): unknown =>
@@ -37,7 +43,9 @@ vi.mock('@/lib/trpc', () => {
             data:
               path === 'team.getById'
                 ? { name: 'Pharmacy owner', skills: [], phone: null, bio: null }
-                : undefined,
+                : path === 'team.mySignIns'
+                  ? mocks.signIns
+                  : undefined,
             isLoading: false,
             isError: false,
           });
@@ -60,6 +68,8 @@ import { SettingsContent } from './settings-content';
 
 beforeEach(() => {
   mocks.role = 'USER';
+  mocks.vertical = 'PHARMACY';
+  mocks.signIns = [];
   vi.clearAllMocks();
 });
 describe('the complete settings workspace', () => {
@@ -103,4 +113,35 @@ describe('the complete settings workspace', () => {
     expect(screen.getAllByText(/currently unavailable for this organization/)).toHaveLength(2);
     expect(screen.queryByText('Receipt designer and layout settings')).not.toBeInTheDocument();
   });
+});
+
+it('hides the inapplicable navigation layout preference for pharmacy', () => {
+  render(<SettingsContent />);
+  expect(screen.queryByRole('radiogroup', { name: 'Navigation layout' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Side rail')).not.toBeInTheDocument();
+  expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeVisible();
+});
+
+it('preserves navigation preferences for other verticals', () => {
+  mocks.vertical = 'AGENCY';
+  render(<SettingsContent />);
+  expect(screen.getByRole('radiogroup', { name: 'Navigation layout' })).toBeVisible();
+});
+
+it('shows recorded sign-in metadata and omits absent IP/device placeholders', () => {
+  mocks.signIns = [
+    {
+      id: 'known',
+      ip: '192.0.2.1',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0',
+      createdAt: '2026-11-14T12:00:00Z',
+    },
+    { id: 'missing', ip: null, userAgent: null, createdAt: '2026-11-14T11:00:00Z' },
+    { id: 'blank', ip: ' ', userAgent: ' ', createdAt: '2026-11-14T10:00:00Z' },
+  ];
+  render(<SettingsContent />);
+  expect(screen.getByText('192.0.2.1')).toBeVisible();
+  expect(screen.getByText('Chrome on Windows')).toBeVisible();
+  expect(screen.queryByText(/Unknown IP|Unknown device/)).not.toBeInTheDocument();
+  expect(screen.getAllByText('Successful sign-in')).toHaveLength(2);
 });
