@@ -9,6 +9,8 @@ import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ProfitAndLossReport } from './report';
+import { formatUtcInstant } from '@/lib/utc-instant';
+import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 export const metadata: Metadata = { title: 'Profit and loss · Pharmacy accounts' };
 const scalar = (value: string | string[] | undefined) =>
@@ -115,10 +117,10 @@ export default async function ProfitAndLossPage({
       {result && (
         <SectionCard title="Posted profit and loss">
           <p className="break-words text-sm text-text-muted">
-            Branch {result.scope.branchId}. UTC [{result.from.toISOString()},{' '}
-            {result.to.toISOString()}). Source: {result.source}. Coverage: posted entries only;
-            completeness and cost coverage unknown. Amounts use each recorded currency. Retrieved{' '}
-            {result.freshness.retrievedAt.toISOString()}.
+            {formatUtcInstant(result.from)} to {formatUtcInstant(result.to)} (end exclusive).
+            Source: {plainReportSource(result.source) ?? 'posted accounts'}. Coverage: posted
+            entries only; completeness and cost coverage unknown. Amounts use each recorded
+            currency. Retrieved {formatUtcInstant(result.freshness.retrievedAt)}.
           </p>
           <ProfitAndLossReport statements={result.profitAndLoss} />
         </SectionCard>

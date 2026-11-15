@@ -583,9 +583,7 @@ describe('CateringConsole', () => {
       for (const amount of ['9007199254740993.1234', '170.1234', '999.8766'])
         expect(screen.getByText(`${label} ${amount}`)).toBeInTheDocument();
       expect(screen.getByText(`Transport · ${label} 30.1234`)).toBeInTheDocument();
-      expect(screen.getByLabelText('Recipe')).toHaveTextContent(
-        `${label} 4.1234/portion`
-      );
+      expect(screen.getByLabelText('Recipe')).toHaveTextContent(`${label} 4.1234/portion`);
       expect(
         screen.getByRole('option', {
           name: 'Invalid legacy recipe · Cost unavailable: Recipe cycle detected.',
@@ -1076,7 +1074,9 @@ describe('Persisted catering evidence', () => {
     expect(
       screen.queryByLabelText(/device secret|session token|actor id/i)
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/Order revision 1 · Quote reference/)).toHaveTextContent('2026-10-01');
+    const approval = screen.getByText(/Order revision 1 · Quote reference/);
+    expect(approval).toHaveTextContent('1 Oct 2026');
+    expect(approval).not.toHaveTextContent(/\d{4}-\d{2}-\d{2}T/);
   });
   it('caps canonical quantity and preserves replay key across failed disposition retry', async () => {
     mocks.disposition.mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce({});

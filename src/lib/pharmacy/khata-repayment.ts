@@ -12,6 +12,7 @@ import {
   settleFamilyKhata,
   type FamilyKhataScope,
 } from './family-khata';
+import { earnKhataCollectionPoints } from './loyalty-khata-earn';
 import {
   PharmacySettlementError,
   recordPharmacyCashMovement,
@@ -221,12 +222,17 @@ export async function recordKhataRepayment(
   }
 
   const recordedAt = new Date();
-  await settleFamilyKhata(db, scope, {
+  // The only place a counter repayment settles khata debt; the receipt posted below does
+  // not settle it again.
+  const settlement = await settleFamilyKhata(db, scope, {
     familyAccountId: account.id,
     amountMinor: input.amountMinor,
     occurredAt: recordedAt,
     note: drawerReason,
   });
+  // DEV-746: khata sales earn loyalty points when their debt is paid. Earned once, here,
+  // from the payments just written; a retried submit replays above and never reaches this.
+  await earnKhataCollectionPoints(db, scope, settlement.allocations);
   await postBookkeepingTransaction(db, scope, {
     reference: identity.receiptReference,
     kind: 'CUSTOMER_RECEIPT',
