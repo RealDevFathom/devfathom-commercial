@@ -6,6 +6,7 @@ import { parseDelimitedText, readExpiryDate, readMoneyMinor } from './migration/
 import {
   OWNER_DATA_EXPORT_FILES,
   buildOwnerDataExportZip,
+  countExportRows,
   exportCsv,
   exportReadme,
   exportRowCounts,
@@ -141,7 +142,7 @@ describe('owner data export format', () => {
         salesFrom: null,
         salesTo: null,
       },
-      SEEDED
+      countExportRows(SEEDED)
     );
     for (const spec of Object.values(OWNER_DATA_EXPORT_FILES)) {
       expect(readme).toContain(`## ${spec.name}`);
@@ -177,6 +178,6 @@ describe('owner data export format', () => {
     ]) {
       expect(text).toContain(name);
     }
-    expect(exportRowCounts(SEEDED)['customers.csv']).toBe(3);
+    expect(exportRowCounts(countExportRows(SEEDED))['customers.csv']).toBe(3);
   });
 });
