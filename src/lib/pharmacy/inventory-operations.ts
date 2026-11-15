@@ -160,7 +160,7 @@ async function removalArrangement(
   stockLocationId: string,
   units: number,
   unitsPerPack: number,
-  disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE'
+  disposition: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' = 'AVAILABLE'
 ) {
   const balance =
     disposition === 'QUARANTINE'
@@ -324,7 +324,8 @@ export async function writeOff(
     reason: string;
     evidenceRef: string;
     idempotencyKey: string;
-    disposition?: 'AVAILABLE' | 'QUARANTINE';
+    /** QUARANTINE and DAMAGED retire stock held by `quarantinePart`. */
+    disposition?: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED';
   }
 ) {
   assertPositive(input.units);

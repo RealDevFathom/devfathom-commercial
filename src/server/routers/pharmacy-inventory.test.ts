@@ -1635,6 +1635,44 @@ describe('manual quarantine resolution authorization', () => {
     });
   });
 
+  it('writes off a manual damaged hold with witnessed custody evidence', async () => {
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    await caller().writeOff({
+      branchId: input.branchId,
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      units: input.units,
+      reason: 'Crushed in delivery',
+      disposition: 'DAMAGED',
+      witnessId: 'witness',
+      evidenceRef: 'photo-damaged-1',
+      idempotencyKey: 'write-off-damaged-1',
+    });
+    expect(db.pharmacyStockBalance.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        disposition: 'DAMAGED',
+      },
+    });
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        kind: 'WRITE_OFF',
+        disposition: 'DAMAGED',
+        quantityUnits: -10,
+        actorId: 'user_a',
+      }),
+    });
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        witnessId: 'witness',
+        evidenceRef: 'photo-damaged-1',
+      }),
+    });
+  });
+
   it.each(['release', 'write-off'])(
     'refuses regulatory stock through inventory-only %s before posting movements',
     async (operation) => {
