@@ -20,16 +20,39 @@ export type DrapPriceNotice = {
 export type DrapRecallNotice = {
   kind: 'RECALL';
   sourceReference: string;
+  /** Empty when the alert names no registration number: it is queued as NO_MATCH. */
   drapRegistrationNumber: string;
   batchNumbers?: readonly string[];
   reason: string;
+  /** Evidence a reviewer reads before confirming (DEV-692 web adapter). */
+  productName?: string;
+  alertNumber?: string;
+  sourceUrl?: string;
+  documentUrl?: string;
+  publishedAt?: string;
+  /**
+   * True when the source names batches that could not be read (e.g. a PDF
+   * table). Such an alert is never a confirmable medicine-wide recall.
+   */
+  batchNumbersUnresolved?: boolean;
 };
+
+const RECALL_EVIDENCE_FIELDS = [
+  'productName',
+  'alertNumber',
+  'sourceUrl',
+  'documentUrl',
+  'publishedAt',
+] as const;
 
 export type DrapNotice = DrapPriceNotice | DrapRecallNotice;
 
-/** ECO-01 extension seam. Only these two adapters are intentionally shipped. */
+/**
+ * ECO-01 extension seam. DRAP_WEB is the DEV-692 recall-alert page adapter
+ * (`drap-recall-feed.ts`); it is off unless operations enable it.
+ */
 export interface DrapNoticeSource {
-  readonly adapter: 'FILE' | 'MANUAL';
+  readonly adapter: 'FILE' | 'MANUAL' | 'DRAP_WEB';
   read(): Promise<readonly DrapNotice[]>;
 }
 
@@ -94,12 +117,25 @@ function parseNotice(value: unknown): DrapNotice {
         !notice.batchNumbers.every((item) => typeof item === 'string')))
   )
     throw new PharmacyInventoryError('INVALID_STATE');
+  const evidence: Partial<Record<(typeof RECALL_EVIDENCE_FIELDS)[number], string>> = {};
+  for (const field of RECALL_EVIDENCE_FIELDS) {
+    if (notice[field] === undefined) continue;
+    if (typeof notice[field] !== 'string') throw new PharmacyInventoryError('INVALID_STATE');
+    evidence[field] = notice[field];
+  }
+  if (
+    notice.batchNumbersUnresolved !== undefined &&
+    typeof notice.batchNumbersUnresolved !== 'boolean'
+  )
+    throw new PharmacyInventoryError('INVALID_STATE');
   return {
     kind: 'RECALL',
     sourceReference: notice.sourceReference,
     drapRegistrationNumber: notice.drapRegistrationNumber,
     batchNumbers: notice.batchNumbers as string[] | undefined,
     reason: notice.reason,
+    ...evidence,
+    ...(notice.batchNumbersUnresolved ? { batchNumbersUnresolved: true } : {}),
   };
 }
 
@@ -140,13 +176,13 @@ export async function ingestDrapNotice(
     return previous;
   }
 
-  const medicines = await db.medicine.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      drapRegistrationNumber: notice.drapRegistrationNumber,
-    },
-    select: { id: true },
-  });
+  const registration = notice.drapRegistrationNumber.trim();
+  const medicines = registration
+    ? await db.medicine.findMany({
+        where: { organizationId: scope.organizationId, drapRegistrationNumber: registration },
+        select: { id: true },
+      })
+    : [];
   if (medicines.length !== 1) {
     return db.pharmacyDrapIngest.create({
       data: {
@@ -154,7 +190,9 @@ export async function ingestDrapNotice(
         sourceReference: notice.sourceReference,
         adapter,
         kind: notice.kind,
-        ...(notice.kind === 'PRICE' ? { priceNotice: JSON.parse(JSON.stringify(notice)) } : {}),
+        ...(notice.kind === 'PRICE'
+          ? { priceNotice: JSON.parse(JSON.stringify(notice)) }
+          : recallDraft(notice)),
         payloadHash: payloadHash(notice),
         matchStatus: medicines.length ? 'AMBIGUOUS' : 'NO_MATCH',
         matchDetails: { candidateMedicineIds: medicines.map(({ id }) => id) },
@@ -200,21 +238,35 @@ export async function ingestDrapNotice(
     },
     select: { id: true, batchNumber: true },
   });
-  if (
-    !batches.length ||
-    (notice.batchNumbers?.length && batches.length !== new Set(notice.batchNumbers).size)
-  ) {
-    return db.pharmacyDrapIngest.create({
+  const draft = (matchStatus: 'MATCHED' | 'AMBIGUOUS' | 'NO_MATCH', matchDetails: object) =>
+    db.pharmacyDrapIngest.create({
       data: {
         organizationId: scope.organizationId,
         sourceReference: notice.sourceReference,
         adapter,
         kind: 'RECALL',
+        ...recallDraft(notice),
         payloadHash: payloadHash(notice),
-        matchStatus: batches.length ? 'AMBIGUOUS' : 'NO_MATCH',
-        matchDetails: { medicineId, candidateBatches: batches },
+        matchStatus,
+        matchDetails,
         ingestedById: scope.actorId,
       },
+    });
+  // Batches the alert names but the parser could not read: a person resolves
+  // it (manual recall), it never becomes a confirmable medicine-wide draft.
+  if (notice.batchNumbersUnresolved && !notice.batchNumbers?.length)
+    return draft('AMBIGUOUS', {
+      medicineId,
+      candidateBatches: batches,
+      batchNumbersUnresolved: true,
+    });
+  if (
+    !batches.length ||
+    (notice.batchNumbers?.length && batches.length !== new Set(notice.batchNumbers).size)
+  ) {
+    return draft(batches.length ? 'AMBIGUOUS' : 'NO_MATCH', {
+      medicineId,
+      candidateBatches: batches,
     });
   }
   // Existing recall roots accept one batch or one medicine. A batch list is a
@@ -224,49 +276,123 @@ export async function ingestDrapNotice(
     const allCount = await db.pharmacyManufacturingBatch.count({
       where: { organizationId: scope.organizationId, medicineId },
     });
-    if (allCount !== batches.length) {
-      return db.pharmacyDrapIngest.create({
-        data: {
-          organizationId: scope.organizationId,
-          sourceReference: notice.sourceReference,
-          adapter,
-          kind: 'RECALL',
-          payloadHash: payloadHash(notice),
-          matchStatus: 'AMBIGUOUS',
-          matchDetails: { medicineId, candidateBatches: batches },
-          ingestedById: scope.actorId,
-        },
-      });
-    }
+    if (allCount !== batches.length)
+      return draft('AMBIGUOUS', { medicineId, candidateBatches: batches });
   }
+  // DEV-692: a match is only a draft. Nothing is recalled or quarantined until
+  // a person confirms it with `confirmDrapRecall`.
+  return draft('MATCHED', {
+    medicineId,
+    batchIds: batches.map(({ id }) => id),
+    batches,
+    recallScope: batches.length === 1 ? 'BATCH' : 'MEDICINE',
+    batchesNamed: !!notice.batchNumbers?.length,
+  });
+}
 
-  const batchId = batches.length === 1 ? batches[0]!.id : undefined;
+function recallDraft(notice: DrapRecallNotice) {
+  return {
+    recallPayload: JSON.parse(JSON.stringify(notice)),
+    reviewStatus: 'PENDING_REVIEW' as const,
+  };
+}
+
+function matchedBatchIds(matchDetails: unknown): {
+  medicineId: string;
+  batchIds: string[];
+  batchesNamed: boolean;
+} {
+  const details = (matchDetails ?? {}) as {
+    medicineId?: unknown;
+    batchIds?: unknown;
+    batchesNamed?: unknown;
+  };
+  if (
+    typeof details.medicineId !== 'string' ||
+    !Array.isArray(details.batchIds) ||
+    !details.batchIds.length ||
+    !details.batchIds.every((id) => typeof id === 'string')
+  )
+    throw new PharmacyInventoryError('INVALID_STATE');
+  return {
+    medicineId: details.medicineId,
+    batchIds: details.batchIds as string[],
+    // Absent on drafts filed before this flag: treat them as naming batches, the narrower reading.
+    batchesNamed: details.batchesNamed !== false,
+  };
+}
+
+async function pendingRecallDraft(db: ScopedDb, organizationId: string, ingestId: string) {
+  const ingest = await db.pharmacyDrapIngest.findFirst({
+    where: { organizationId, id: ingestId, kind: 'RECALL' },
+  });
+  if (!ingest) throw new PharmacyInventoryError('NOT_FOUND');
+  if (ingest.reviewStatus !== 'PENDING_REVIEW') throw new PharmacyInventoryError('INVALID_STATE');
+  return ingest;
+}
+
+/**
+ * DEV-692: a person confirms a MATCHED recall draft. Only now is the recall
+ * notice opened, the matched batches marked RECALLED and their available stock
+ * moved to quarantine. Every step is in the caller's transaction and is
+ * serialized by the recall-authority lock.
+ */
+export async function confirmDrapRecall(
+  db: ScopedDb,
+  scope: ActorScope,
+  ingestId: string,
+  note?: string
+) {
+  await lockRecallAuthority(db, scope.organizationId);
+  const ingest = await pendingRecallDraft(db, scope.organizationId, ingestId);
+  if (ingest.matchStatus !== 'MATCHED') throw new PharmacyInventoryError('INVALID_STATE');
+  const { medicineId, batchIds, batchesNamed } = matchedBatchIds(ingest.matchDetails);
+  const payload = (ingest.recallPayload ?? {}) as { reason?: unknown };
+  const reason =
+    typeof payload.reason === 'string' && payload.reason.trim()
+      ? payload.reason
+      : `DRAP recall ${ingest.sourceReference}`;
+  // Re-read the medicine's batches now. An alert that names no batch recalls
+  // every batch, including stock received after the alert. An alert that names
+  // batches is medicine-scope only while those are still all the batches: if
+  // another batch has arrived, confirming would broaden it, so it is refused.
+  const medicineScope = batchIds.length > 1;
+  const current = await db.pharmacyManufacturingBatch.findMany({
+    where: { organizationId: scope.organizationId, medicineId },
+    select: { id: true },
+  });
+  const currentIds = new Set(current.map(({ id }) => id));
+  if (!batchIds.every((id) => currentIds.has(id)))
+    throw new PharmacyInventoryError('INVALID_STATE');
+  if (medicineScope && batchesNamed && current.length !== batchIds.length)
+    throw new PharmacyInventoryError('INVALID_STATE');
+  const batches = medicineScope ? current : current.filter(({ id }) => id === batchIds[0]);
+
+  const batchId = medicineScope ? undefined : batches[0]!.id;
   const recall = await db.pharmacyRecallNotice.create({
     data: {
       organizationId: scope.organizationId,
       batchId,
       medicineId: batchId ? undefined : medicineId,
-      reference: notice.sourceReference,
-      reason: notice.reason,
+      reference: ingest.sourceReference,
+      reason,
       createdById: scope.actorId,
     },
   });
-  const ingest = await db.pharmacyDrapIngest.create({
+  const claimed = await db.pharmacyDrapIngest.updateMany({
+    where: { organizationId: scope.organizationId, id: ingest.id, reviewStatus: 'PENDING_REVIEW' },
     data: {
-      organizationId: scope.organizationId,
-      sourceReference: notice.sourceReference,
-      adapter,
-      kind: 'RECALL',
-      payloadHash: payloadHash(notice),
-      matchStatus: 'MATCHED',
-      matchDetails: { medicineId, batchIds: batches.map(({ id }) => id) },
       recallNoticeId: recall.id,
-      ingestedById: scope.actorId,
+      reviewStatus: 'CONFIRMED',
+      reviewedById: scope.actorId,
+      reviewedAt: new Date(),
+      reviewNote: note?.trim() || null,
     },
   });
+  if (claimed.count !== 1) throw new PharmacyInventoryError('INVALID_STATE');
   await db.pharmacyManufacturingBatch.updateMany({
     where: { organizationId: scope.organizationId, id: { in: batches.map(({ id }) => id) } },
-    data: { state: 'RECALLED', stateReason: notice.reason, stateChangedAt: new Date() },
+    data: { state: 'RECALLED', stateReason: reason, stateChangedAt: new Date() },
   });
   const balances = await db.pharmacyStockBalance.findMany({
     where: {
@@ -284,7 +410,7 @@ export async function ingestDrapNotice(
         inventoryLotId: balance.inventoryLotId,
         stockLocationId: balance.stockLocationId,
         units: balance.onHandUnits,
-        reason: `DRAP recall ${notice.sourceReference}: ${notice.reason}`,
+        reason: `DRAP recall ${ingest.sourceReference}: ${reason}`,
         idempotencyKeyPrefix: `drap:${ingest.id}:${balance.inventoryLotId}:${balance.stockLocationId}`,
       }
     );
@@ -302,7 +428,136 @@ export async function ingestDrapNotice(
       },
     });
   }
-  return ingest;
+  return db.pharmacyDrapIngest.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: ingest.id },
+  });
+}
+
+/** DEV-692: a person closes a recall draft without touching stock, with a reason. */
+export async function dismissDrapRecall(
+  db: ScopedDb,
+  scope: ActorScope,
+  ingestId: string,
+  reason: string
+) {
+  if (!reason.trim()) throw new PharmacyInventoryError('INVALID_STATE');
+  await lockRecallAuthority(db, scope.organizationId);
+  const ingest = await pendingRecallDraft(db, scope.organizationId, ingestId);
+  const claimed = await db.pharmacyDrapIngest.updateMany({
+    where: { organizationId: scope.organizationId, id: ingest.id, reviewStatus: 'PENDING_REVIEW' },
+    data: {
+      reviewStatus: 'DISMISSED',
+      reviewedById: scope.actorId,
+      reviewedAt: new Date(),
+      reviewNote: reason.trim(),
+    },
+  });
+  if (claimed.count !== 1) throw new PharmacyInventoryError('INVALID_STATE');
+  return db.pharmacyDrapIngest.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: ingest.id },
+  });
+}
+
+/**
+ * DEV-692 review queue: pending recall drafts first, then the most recent
+ * decisions. Counts (stock units) come from the database, not the parser.
+ */
+export async function drapRecallReviewQueue(db: ScopedDb, scope: ActorScope) {
+  const [pending, decided] = await Promise.all([
+    db.pharmacyDrapIngest.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        kind: 'RECALL',
+        reviewStatus: 'PENDING_REVIEW',
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    }),
+    db.pharmacyDrapIngest.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        kind: 'RECALL',
+        reviewStatus: { in: ['CONFIRMED', 'DISMISSED'] },
+      },
+      orderBy: { reviewedAt: 'desc' },
+      take: 20,
+    }),
+  ]);
+  const medicineIds = new Set<string>();
+  const batchIds = new Set<string>();
+  for (const row of pending) {
+    const details = (row.matchDetails ?? {}) as {
+      medicineId?: unknown;
+      batchIds?: unknown;
+      candidateMedicineIds?: unknown;
+    };
+    if (typeof details.medicineId === 'string') medicineIds.add(details.medicineId);
+    if (Array.isArray(details.candidateMedicineIds))
+      for (const id of details.candidateMedicineIds)
+        if (typeof id === 'string') medicineIds.add(id);
+    if (row.matchStatus === 'MATCHED' && Array.isArray(details.batchIds))
+      for (const id of details.batchIds) if (typeof id === 'string') batchIds.add(id);
+  }
+  const [medicines, stock] = await Promise.all([
+    medicineIds.size
+      ? db.medicine.findMany({
+          where: { organizationId: scope.organizationId, id: { in: [...medicineIds] } },
+          select: { id: true, productName: true, brandName: true, drapRegistrationNumber: true },
+        })
+      : [],
+    batchIds.size
+      ? db.$queryRaw<Array<{ batchId: string; units: number }>>(
+          Prisma.sql`SELECT l."manufacturingBatchId" AS "batchId", COALESCE(SUM(b."onHandUnits"),0)::int AS units FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l."organizationId"=b."organizationId" AND l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b.disposition='AVAILABLE' AND b."onHandUnits">0 AND l."manufacturingBatchId" IN (${Prisma.join([...batchIds])}) GROUP BY l."manufacturingBatchId"`
+        )
+      : [],
+  ]);
+  const medicineById = new Map(medicines.map((m) => [m.id, m]));
+  const unitsByBatch = new Map(stock.map((row) => [row.batchId, Number(row.units)]));
+  const view = (row: (typeof pending)[number]) => {
+    const payload = (row.recallPayload ?? {}) as Partial<DrapRecallNotice>;
+    const details = (row.matchDetails ?? {}) as {
+      medicineId?: string;
+      batchIds?: string[];
+      batches?: Array<{ id: string; batchNumber: string }>;
+      candidateMedicineIds?: string[];
+      candidateBatches?: Array<{ id: string; batchNumber: string }>;
+    };
+    const matchedBatches = row.matchStatus === 'MATCHED' ? (details.batches ?? []) : [];
+    return {
+      id: row.id,
+      sourceReference: row.sourceReference,
+      adapter: row.adapter,
+      matchStatus: row.matchStatus,
+      reviewStatus: row.reviewStatus,
+      reviewNote: row.reviewNote,
+      reviewedAt: row.reviewedAt,
+      recallNoticeId: row.recallNoticeId,
+      createdAt: row.createdAt,
+      alert: {
+        registrationNumber: payload.drapRegistrationNumber ?? '',
+        batchNumbers: payload.batchNumbers ?? [],
+        batchNumbersUnresolved: payload.batchNumbersUnresolved === true,
+        reason: payload.reason ?? '',
+        productName: payload.productName ?? null,
+        alertNumber: payload.alertNumber ?? null,
+        sourceUrl: payload.sourceUrl ?? null,
+        documentUrl: payload.documentUrl ?? null,
+        publishedAt: payload.publishedAt ?? null,
+      },
+      medicine: details.medicineId ? (medicineById.get(details.medicineId) ?? null) : null,
+      candidateMedicines: (details.candidateMedicineIds ?? []).flatMap((id) =>
+        medicineById.has(id) ? [medicineById.get(id)!] : []
+      ),
+      batches: matchedBatches.map((batch) => ({
+        ...batch,
+        availableUnits: unitsByBatch.get(batch.id) ?? 0,
+      })),
+      candidateBatches: details.candidateBatches ?? [],
+      recallScope:
+        row.matchStatus === 'MATCHED' ? (matchedBatches.length === 1 ? 'BATCH' : 'MEDICINE') : null,
+    };
+  };
+  return { pending: pending.map(view), decided: decided.map(view) };
 }
 
 /** DEV-693: refused like every DRAP confirmation; kept so old callers get the reason. */
