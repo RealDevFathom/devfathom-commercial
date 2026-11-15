@@ -249,6 +249,15 @@ Active state must be unambiguous through fill/position and text, not color alone
 items use a smooth shared pill; mobile items use the grouped drawer grammar. Preserve keyboard
 focus and `aria-current`.
 
+A workspace whose destinations no longer fit one row groups them into a handful of task menus
+(the pharmacy workspace: Sell, Dispense, Stock, Buy, Reports, Accounts, Settings, More). Each menu
+is a disclosure button in the same pill grammar, with plain labels and 16px icons, never numeric
+prefixes; a menu holding one destination renders as that destination. The menu holding the
+current page wears the active pill, and the page's own link carries `aria-current`. The bar wraps
+rather than scrolls, menus close on Escape, outside press and navigation, and the mobile drawer
+uses the same menus as its section headings. Exactly one destination is current on every route:
+the longest route an entry claims, including routes an entry adopts (`activePrefixes`).
+
 ## 7. Page recipes
 
 ### Dashboard

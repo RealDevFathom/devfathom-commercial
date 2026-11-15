@@ -36,6 +36,15 @@ import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-contr
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import {
+  backInStockQueue,
+  backInStockReference,
+  DAY_MS,
+  readBackInStockPolicy,
+  restockRequestCutoff,
+  selectRecoveryLine,
+  type BackInStockPolicy,
+} from './back-in-stock';
 import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
@@ -1538,12 +1547,20 @@ export async function addRestockInterest(
   });
 }
 
+/** DEM-03 restock tables enforce exactly one branch through FORCE RLS. */
+async function activateRestockBranch(db: ScopedDb, scope: Pick<LedgerScope, 'branchId'>) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
+  );
+}
+
 export async function captureSafeRestockArrival(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { inventoryLotId: string; at?: Date }
+  input: { inventoryLotId: string; at?: Date; policy?: BackInStockPolicy }
 ) {
   const at = input.at ?? new Date();
+  const policy = input.policy ?? readBackInStockPolicy();
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -1566,18 +1583,22 @@ export async function captureSafeRestockArrival(
   )
     throw new PharmacySaleError('UNSAFE_STOCK');
 
+  await activateRestockBranch(db, scope);
   const interests = await db.pharmacyRestockInterest.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       status: 'OPEN',
+      // DEV-79: a waiting request expires; it is never notified after the window.
+      createdAt: { gt: restockRequestCutoff(at, policy) },
       demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
     },
     include: { patient: { select: { phone: true } } },
-    orderBy: { createdAt: 'asc' },
+    // DEV-79: first-in, first-out; the id breaks ties so every run orders alike.
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const captured = [];
-  for (const interest of interests) {
+  for (const interest of backInStockQueue(interests, at, policy).queue) {
     let reservation = null;
     if (interest.reserveOnArrival) {
       reservation = await db.pharmacyRestockReservation.create({
@@ -1604,8 +1625,12 @@ export async function captureSafeRestockArrival(
       },
       orderBy: { version: 'desc' },
     });
-    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone)
-      throw new PharmacySaleError('CONSENT_REQUIRED');
+    // A withdrawn consent or missing number skips this customer only: the
+    // request stays OPEN and unnotified, and the rest of the queue is served.
+    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone) {
+      captured.push({ interestId: interest.id, reservation, notification: null });
+      continue;
+    }
     const notification = await db.pharmacyRestockNotification.create({
       data: {
         organizationId: scope.organizationId,
@@ -1718,12 +1743,158 @@ export async function recoverRestockInterest(
   });
 }
 
+/** How far back notified requests are re-examined for a recovering sale. */
+const RECOVERY_LOOKBACK_DAYS = 90;
+
+/**
+ * DEV-79: links notified back-in-stock requests to the completed sale that
+ * recovered them, through the same attribution as `recoverRestockInterest`
+ * (`recoveredSaleId` / `recoveredSaleLineId`). A request is recovered by a
+ * receipted sale of the requested SKU at the branch completed after its notice
+ * was sent and within the policy's recovery window, preferring the customer
+ * who asked.
+ * Each sale line recovers at most one request. Safe to run repeatedly.
+ */
+export async function linkRestockRecoveries(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { now?: Date; policy?: BackInStockPolicy } = {}
+) {
+  const now = input.now ?? new Date();
+  const policy = input.policy ?? readBackInStockPolicy();
+  await activateRestockBranch(db, scope);
+  const interests = await db.pharmacyRestockInterest.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'NOTIFIED',
+      orderLineId: null,
+      demandEvent: { requestedMedicineId: { not: null } },
+    },
+    select: {
+      id: true,
+      patientId: true,
+      demandEvent: { select: { requestedMedicineId: true } },
+      notifications: {
+        where: {
+          status: 'CAPTURED',
+          queuedAt: { gt: new Date(now.getTime() - RECOVERY_LOOKBACK_DAYS * DAY_MS) },
+        },
+        select: { id: true },
+      },
+    },
+  });
+  // A queued notice is not a delivered one. The window opens only when the
+  // provider accepted the back-in-stock message, at the time it was sent;
+  // withheld, failed or never-sent notices recover nothing.
+  const noticeKeys = interests.flatMap((interest) =>
+    interest.notifications.map((notice) => `back-in-stock:${notice.id}`)
+  );
+  const sent = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { dedupeKey: true, createdAt: true },
+      })
+    : [];
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
+  const pending = interests
+    .map((interest) => ({
+      id: interest.id,
+      patientId: interest.patientId,
+      medicineId: interest.demandEvent.requestedMedicineId,
+      notifiedAt: interest.notifications
+        .map((notice) => sentAt.get(`back-in-stock:${notice.id}`))
+        .filter((at): at is Date => at instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime())[0],
+    }))
+    .filter(
+      (interest): interest is typeof interest & { medicineId: string; notifiedAt: Date } =>
+        !!interest.medicineId && !!interest.notifiedAt
+    )
+    .sort(
+      (a, b) =>
+        a.notifiedAt.getTime() - b.notifiedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
+  if (!pending.length) return [];
+
+  const earliest = pending[0]!.notifiedAt;
+  const latestClose = new Date(
+    Math.max(...pending.map((interest) => interest.notifiedAt.getTime())) +
+      policy.recoveryWindowDays * DAY_MS
+  );
+  const lines = await db.pharmacySaleLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      medicineId: { in: [...new Set(pending.map((interest) => interest.medicineId))] },
+      sale: {
+        status: 'COMPLETED',
+        receiptNumber: { not: null },
+        completedAt: { gt: earliest, lte: latestClose },
+      },
+    },
+    select: {
+      id: true,
+      saleId: true,
+      medicineId: true,
+      sale: { select: { completedAt: true, customer: { select: { patientId: true } } } },
+    },
+  });
+  const used = new Set(
+    (
+      await db.pharmacyRestockInterest.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          recoveredSaleLineId: { in: lines.map((line) => line.id) },
+        },
+        select: { recoveredSaleLineId: true },
+      })
+    ).map((row) => row.recoveredSaleLineId)
+  );
+  const candidates = lines
+    .filter((line) => line.sale.completedAt && !used.has(line.id))
+    .map((line) => ({
+      saleLineId: line.id,
+      saleId: line.saleId,
+      medicineId: line.medicineId,
+      patientId: line.sale.customer?.patientId ?? null,
+      completedAt: line.sale.completedAt!,
+    }));
+
+  const linked = [];
+  for (const interest of pending) {
+    const line = selectRecoveryLine(
+      interest,
+      candidates.filter((candidate) => !used.has(candidate.saleLineId)),
+      policy
+    );
+    if (!line) continue;
+    used.add(line.saleLineId);
+    const recovered = await recoverRestockInterest(db, scope, {
+      interestId: interest.id,
+      saleLineId: line.saleLineId,
+    });
+    linked.push({
+      interestId: interest.id,
+      saleId: line.saleId,
+      saleLineId: line.saleLineId,
+      recoveredAt: recovered.recoveredAt,
+    });
+  }
+  return linked;
+}
+
 export async function restockRecoveryReport(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   campaignKey?: string
 ) {
-  return db.pharmacyRestockInterest.findMany({
+  const rows = await db.pharmacyRestockInterest.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -1743,4 +1914,6 @@ export async function restockRecoveryReport(
     },
     orderBy: { createdAt: 'desc' },
   });
+  // DEV-79: the counter finds a request by the reference its notice carried.
+  return rows.map((row) => ({ ...row, reference: backInStockReference(row.id) }));
 }
