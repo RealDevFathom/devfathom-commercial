@@ -37,7 +37,8 @@ function makeContext() {
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([main, other]) },
       pharmacyStockBalance: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      // A colleague without a PIN is still assigned, so nobody is solo by default.
+      user: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(1) },
     },
   };
 }
@@ -82,4 +83,27 @@ it('DEV-660: reads no stock directly when the gated transfer board refuses', asy
     'Branch is outside your scope.'
   );
   expect(ctx.db.pharmacyStockBalance.findMany).not.toHaveBeenCalled();
+});
+
+it('DEV-628: offers as shortfall witness only colleagues assigned to this branch with a PIN', async () => {
+  render(await Page({ searchParams: Promise.resolve({ branch: main.id }) }));
+
+  expect(ctx.db.user.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        id: { not: 'user_a' },
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: 'org_a', branchId: main.id, active: true },
+        },
+        restaurantStaffProfiles: {
+          some: {
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+          },
+        },
+      }),
+    })
+  );
 });

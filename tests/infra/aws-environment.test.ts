@@ -84,6 +84,7 @@ type Container = {
   Name: string;
   Environment: Array<{ Name: string; Value: unknown }>;
   Secrets?: unknown;
+  Command?: unknown[];
 };
 
 const templatePath = fileURLToPath(new URL('../../infra/aws/environment.yaml', import.meta.url));
@@ -543,5 +544,183 @@ describe('AWS environment: web task role least privilege', () => {
       }
     }
     expect(JSON.stringify(template.Resources.WebTaskRole)).not.toMatch(/aws-marketplace|kms:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DEV-835 (scan finding F13): the web workload must never reach the database
+// admin URL, the credential the migration task uses to deploy the schema.
+// ---------------------------------------------------------------------------
+
+const ADMIN_URL_SECRET = 'DatabaseAdminUrlSecret';
+const ENVIRONMENTS = ['staging', 'production'] as const;
+// Parameter sets the template accepts; seed and bootstrap are staging- and production-only.
+const DEPLOYMENTS: Parameters[] = [
+  ...ENVIRONMENTS.map((EnvironmentName) => ({ EnvironmentName, MigrationMode: 'migrate' })),
+  { EnvironmentName: 'staging', MigrationMode: 'seed' },
+  { EnvironmentName: 'production', MigrationMode: 'bootstrap' },
+  {
+    EnvironmentName: 'staging',
+    AnthropicApiKeySecretId: 'team/anthropic',
+    OpenAiApiKeySecretId: 'devfathom/staging/openai-api-key',
+    AiSecretsRegion: 'ap-southeast-1',
+  },
+];
+
+const secretResources = () =>
+  Object.entries(template.Resources).filter(
+    ([, resource]) => resource.Type === 'AWS::SecretsManager::Secret'
+  );
+
+function secretName(logicalId: string, parameters: Parameters): string {
+  return String(render(template.Resources[logicalId].Properties?.Name, parametersWith(parameters)));
+}
+
+// IAM wildcards: `*` is any run of characters, `?` exactly one.
+const globMatches = (pattern: string, value: string, ignoreCase = false) =>
+  new RegExp(
+    `^${pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.')}$`,
+    ignoreCase ? 'i' : ''
+  ).test(value);
+
+const readsSecrets = (statement: Statement) =>
+  statement.Effect === 'Allow' &&
+  actionsOf(statement).some((action) => globMatches(action, 'secretsmanager:GetSecretValue', true));
+
+// Whether any statement of the role lets it read the named secret resource,
+// whether through the resource itself or a wildcard ARN that matches it.
+function roleCanRead(role: string, secret: string, parameters: Parameters): boolean {
+  const arn = `arn:aws:secretsmanager:${parametersWith(parameters)['AWS::Region']}:${ACCOUNT}:secret:${secretName(secret, parameters)}-AbCdEf`;
+  return statementsOf(role, parameters)
+    .filter(readsSecrets)
+    .flatMap(resourcesOf)
+    .some((resource) => resource === `<${secret}>` || globMatches(String(resource), arn));
+}
+
+function rolesOf(taskDefinition: string): { execution: string; task: string } {
+  const properties = template.Resources[taskDefinition].Properties as Record<
+    string,
+    { GetAtt: string }
+  >;
+  return {
+    execution: properties.ExecutionRoleArn.GetAtt.replace(/\.Arn$/, ''),
+    task: properties.TaskRoleArn.GetAtt.replace(/\.Arn$/, ''),
+  };
+}
+
+function containerSecrets(taskDefinition: string, parameters: Parameters) {
+  return (
+    (container(taskDefinition, parameters).Secrets ?? []) as Array<{
+      Name: string;
+      ValueFrom: string;
+    }>
+  ).map(({ Name, ValueFrom }) => ({ Name, secret: ValueFrom.replace(/^<(\w+)>:value::$/, '$1') }));
+}
+
+describe('AWS environment: the web workload cannot read the migration credential (F13)', () => {
+  const web = rolesOf('WebTaskDefinition');
+  const migrate = rolesOf('MigrateTaskDefinition');
+
+  it('gives the web and migration tasks different execution and task roles', () => {
+    expect(new Set([web.execution, web.task, migrate.execution, migrate.task]).size).toBe(4);
+  });
+
+  it.each(DEPLOYMENTS)(
+    'keeps the database admin URL from every web principal (%o)',
+    (parameters) => {
+      expect(roleCanRead(web.execution, ADMIN_URL_SECRET, parameters)).toBe(false);
+      expect(roleCanRead(web.task, ADMIN_URL_SECRET, parameters)).toBe(false);
+      expect(
+        containerSecrets('WebTaskDefinition', parameters).map(({ secret }) => secret)
+      ).not.toContain(ADMIN_URL_SECRET);
+      // The web database URL is the app role's, never the admin's.
+      expect(containerSecrets('WebTaskDefinition', parameters)).toContainEqual({
+        Name: 'DATABASE_URL',
+        secret: 'DatabaseAppUrlSecret',
+      });
+    }
+  );
+
+  it.each(DEPLOYMENTS)('lets the migration task deploy the schema with it (%o)', (parameters) => {
+    expect(roleCanRead(migrate.execution, ADMIN_URL_SECRET, parameters)).toBe(true);
+    expect(containerSecrets('MigrateTaskDefinition', parameters)).toContainEqual({
+      Name: 'DATABASE_URL',
+      secret: ADMIN_URL_SECRET,
+    });
+    const [command] = container('MigrateTaskDefinition', parameters).Command?.slice(-1) ?? [];
+    expect(String(command)).toContain('bunx prisma migrate deploy');
+  });
+
+  it('lets no other role read it, and only the migration task uses the role that can', () => {
+    for (const parameters of DEPLOYMENTS) {
+      const readers = Object.entries(template.Resources)
+        .filter(([, resource]) => resource.Type === 'AWS::IAM::Role')
+        .filter(([role]) => roleCanRead(role, ADMIN_URL_SECRET, parameters))
+        .map(([role]) => role);
+      expect(readers).toEqual([migrate.execution]);
+    }
+    const usingMigrationRole = Object.entries(template.Resources)
+      .filter(([, resource]) => resource.Type === 'AWS::ECS::TaskDefinition')
+      .filter(([name]) => Object.values(rolesOf(name)).includes(migrate.execution))
+      .map(([name]) => name);
+    expect(usingMigrationRole).toEqual(['MigrateTaskDefinition']);
+  });
+
+  it('gives the web roles no way to borrow another principal or start the migration task', () => {
+    for (const role of [web.execution, web.task]) {
+      const actions = statementsOf(role).flatMap(actionsOf);
+      expect(actions.filter((action) => /^(iam|sts|ecs|lambda):|^\*$/i.test(action))).toEqual([]);
+      const managed =
+        (template.Resources[role].Properties?.ManagedPolicyArns as string[] | undefined) ?? [];
+      expect(managed).toEqual(
+        role === web.execution
+          ? ['arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy']
+          : []
+      );
+    }
+  });
+
+  it.each(DEPLOYMENTS)(
+    'lets the web execution role read exactly the secrets the web container receives (%o)',
+    (parameters) => {
+      const received = containerSecrets('WebTaskDefinition', parameters).map(
+        ({ secret }) => secret
+      );
+      const readable = secretResources()
+        .map(([logicalId]) => logicalId)
+        .filter((logicalId) => roleCanRead(web.execution, logicalId, parameters));
+      expect(readable.sort()).toEqual([...new Set(received)].sort());
+      for (const password of [
+        'AdminPasswordSecret',
+        'PlatformAdminPasswordSecret',
+        'SeedPasswordSecret',
+      ]) {
+        expect(readable).not.toContain(password);
+      }
+    }
+  );
+
+  it('refuses this stack’s own secrets as an AI key secret id, so the web task role cannot reach them', () => {
+    for (const parameter of ['AnthropicApiKeySecretId', 'OpenAiApiKeySecretId']) {
+      const pattern = new RegExp(template.Parameters[parameter].AllowedPattern ?? '');
+      for (const EnvironmentName of ENVIRONMENTS) {
+        for (const [logicalId] of secretResources()) {
+          expect(pattern.test(secretName(logicalId, { EnvironmentName })), logicalId).toBe(false);
+        }
+        expect(pattern.test(`devfathom/${EnvironmentName}/database-admin-url`)).toBe(false);
+        expect(pattern.test(`devfathom/${EnvironmentName}/anthropic-api-key/extra`)).toBe(false);
+        expect(pattern.test(`devfathom/${EnvironmentName}/anthropic-api-key`)).toBe(true);
+        expect(pattern.test(`devfathom/${EnvironmentName}/openai-api-key`)).toBe(true);
+      }
+      for (const accepted of ['', 'team/anthropic', 'team/openai', 'shared/devfathom/keys']) {
+        expect(pattern.test(accepted), accepted).toBe(true);
+      }
+      for (const refused of ['team/*', 'team/anthropic?', 'has space']) {
+        expect(pattern.test(refused), refused).toBe(false);
+      }
+    }
   });
 });
