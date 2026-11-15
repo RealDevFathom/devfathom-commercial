@@ -19,6 +19,7 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
+import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -40,6 +41,18 @@ const departmentKey = z
   .max(80)
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
 const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+
+/** DEV-848: SCIM token columns safe to return; `tokenHash` never leaves the server. */
+const SCIM_TOKEN_FIELDS = {
+  id: true,
+  organizationId: true,
+  name: true,
+  prefix: true,
+  expiresAt: true,
+  lastUsedAt: true,
+  revokedAt: true,
+  createdAt: true,
+} as const;
 
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
@@ -153,6 +166,12 @@ export const organizationAdminRouter = router({
       // The router caches the opt-in for up to 30 seconds per server.
       return { organizationId: saved.id, aiDeepStrategyEnabled: saved.aiDeepStrategyEnabled };
     }),
+
+  // DEV-837: read-only count of files the download route now refuses
+  // (tombstoned bindings, references to unregistered objects), by record type.
+  uploadRegistryReport: adminProcedure
+    .input(z.void())
+    .query(({ ctx }) => readUploadRegistryReport(ctx.db)),
 
   departments: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);
@@ -831,6 +850,7 @@ export const organizationAdminRouter = router({
           tokenHash: createHash('sha256').update(token).digest('hex'),
           expiresAt: input.expiresAt,
         },
+        select: SCIM_TOKEN_FIELDS,
       });
       annotateAudit(ctx, {
         targetType: 'OrganizationScimToken',
@@ -839,7 +859,7 @@ export const organizationAdminRouter = router({
         description: 'Created SCIM provisioning token',
         metadata: { prefix: saved.prefix, expiresAt: saved.expiresAt },
       });
-      return { ...saved, tokenHash: undefined, token };
+      return { ...saved, token };
     }),
 
   revokeScimToken: adminProcedure
@@ -848,11 +868,13 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const token = await ctx.db.organizationScimToken.findFirst({
         where: { id: input.id, organizationId: id },
+        select: { id: true },
       });
       if (!token) throw new TRPCError({ code: 'NOT_FOUND', message: 'Token not found.' });
       const saved = await ctx.db.organizationScimToken.update({
         where: { id: token.id },
         data: { revokedAt: new Date() },
+        select: SCIM_TOKEN_FIELDS,
       });
       annotateAudit(ctx, {
         targetType: 'OrganizationScimToken',

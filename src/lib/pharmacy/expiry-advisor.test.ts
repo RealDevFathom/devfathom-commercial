@@ -63,3 +63,16 @@ describe('expiry and return advisor', () => {
     });
   });
 });
+
+describe('no-expiry lots (QA-3)', () => {
+  it('never prints the 9998-12-31 storage marker as an expiry or a return window', () => {
+    const [advice] = adviseExpiryLots(
+      [fact({ expiresAt: new Date('9998-12-31T19:00:00.000Z'), returnWindowDays: 45 })],
+      at
+    );
+    expect(advice.explanation).toContain('expiry: none');
+    expect(advice.explanation).toContain('supplier return window: none, the item has no expiry');
+    expect(advice.explanation).not.toContain('9998');
+    expect(advice.proposalAllowed).toBe(false);
+  });
+});

@@ -14,6 +14,8 @@
 import { csvCell } from '@/lib/csv';
 import { buildZip } from '@/lib/zip';
 
+import { isNoExpiryDate } from './product-class';
+
 export type ExportCell = string | number | boolean | Date | null | undefined;
 export type ExportRow = Record<string, ExportCell>;
 
@@ -66,7 +68,10 @@ export const OWNER_DATA_EXPORT_FILES = {
       },
       { header: 'pack_level', description: 'Pack level and presentation the lot was received in.' },
       { header: 'batch', description: 'Manufacturer batch number.' },
-      { header: 'expiry', description: 'Expiry date (YYYY-MM-DD).' },
+      {
+        header: 'expiry',
+        description: 'Expiry date (YYYY-MM-DD); blank when the item has no expiry.',
+      },
       { header: 'mrp', description: `Printed MRP per pack. ${MONEY}` },
       { header: 'cost', description: `Landed cost per base unit. ${MONEY}` },
       { header: 'quantity', description: 'Units on hand at this location (base units).' },
@@ -212,7 +217,10 @@ export const OWNER_DATA_EXPORT_FILES = {
       { header: 'medicine_name', description: 'Medicine product name.' },
       { header: 'pack_level_id', description: 'Pack level id (medicines.csv code).' },
       { header: 'received_batch', description: 'Manufacturer batch number.' },
-      { header: 'printed_expiry', description: 'Printed expiry (YYYY-MM-DD).' },
+      {
+        header: 'printed_expiry',
+        description: 'Printed expiry (YYYY-MM-DD); blank when the item has no expiry.',
+      },
       { header: 'printed_mrp', description: `Printed MRP per pack. ${MONEY}` },
       { header: 'received_packs', description: 'Packs received.' },
       { header: 'bonus_packs', description: 'Bonus packs received.' },
@@ -272,6 +280,8 @@ export type OwnerDataExportMeta = {
   generatedAt: Date;
   salesFrom: Date | null;
   salesTo: Date | null;
+  /** Organization zone the picked sales dates are read in (UTC when absent). */
+  timeZone?: string;
 };
 
 /** Paisa to a rupee string with exactly two decimals, by integer arithmetic. */
@@ -285,6 +295,14 @@ export function formatMinor(minor: number | null | undefined): string {
 
 export function formatDateOnly(value: Date | null | undefined): string {
   return value ? value.toISOString().slice(0, 10) : '';
+}
+
+/**
+ * QA-3 — a lot expiry as an export cell: blank for a non-drug item stored on
+ * the no-expiry marker, never 9998-12-31 as if it were a real date.
+ */
+export function formatExpiryDateOnly(value: Date | null | undefined): string {
+  return isNoExpiryDate(value) ? '' : formatDateOnly(value);
 }
 
 function cellText(value: ExportCell): string {
@@ -355,7 +373,7 @@ export function exportReadme(meta: OwnerDataExportMeta, counts: OwnerDataExportC
   return [
     `# DevFathom data export — ${meta.organizationName.replace(/[\r\n]+/g, ' ')}`,
     '',
-    `Generated ${meta.generatedAt.toISOString()}. Sales cover ${range}.`,
+    `Generated ${meta.generatedAt.toISOString()}. Sales cover ${range}${meta.salesFrom || meta.salesTo ? ` (dates read in ${meta.timeZone ?? 'UTC'})` : ''}.`,
     '',
     'Every file is UTF-8 CSV with a header row. Ids are stable, so files join on them.',
     'A cell that a spreadsheet would read as a formula starts with an apostrophe.',

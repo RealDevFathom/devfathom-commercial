@@ -565,6 +565,28 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
       });
       await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
 
+      // Two-step relabel: currency first (amount dropped), then the extracted
+      // figure resubmitted as PKR while the line already says PKR.
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        currency: 'PKR',
+      });
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        priceAmount: foreignLine.extractedPriceAmount!.toString(),
+        currency: 'PKR',
+      });
+      const twoStep = await dbA.restaurantMenuImportLine.findUniqueOrThrow({
+        where: { id: foreignLine.id },
+      });
+      expect(twoStep.reviewedCurrency).toBe('PKR');
+      expect(twoStep.reviewedPriceAmount).toBeNull();
+      await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+
       // Sequential review: confirm the amount in the foreign currency, then change
       // only the currency (omitted amount, and the editor's prepopulated amount).
       // Neither turns the foreign figure into a local price.

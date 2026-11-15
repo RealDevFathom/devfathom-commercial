@@ -74,6 +74,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   COAUTH_REQUIRED: 'This action needs a second authorised pharmacist to countersign.',
   INVALID_UNITS: 'That quantity is not a whole number of units.',
   INVALID_QUANTITY: 'Enter a whole quantity of at least one.',
+  // DEV-830: the chosen pack, strip or loose unit does not match the stored pack setup.
+  INVALID_SALE_UNIT:
+    'That unit does not match how this item is packed. Search for it again and choose the unit from the list.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
@@ -124,6 +127,11 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  // DEV-821: cash goes only into a till the signed-in user runs.
+  DRAWER_NOT_YOURS:
+    'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',
+  CASHIER_NOT_ASSIGNED:
+    'That person is not an active member of this branch. Choose a cashier assigned to this branch.',
   SALE_REDEEMED_BY_OTHER_CUSTOMER:
     'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
   PATIENT_AMBIGUOUS:

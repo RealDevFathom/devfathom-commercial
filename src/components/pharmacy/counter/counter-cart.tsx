@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
-import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
 
 export type CounterCartPanelProps = {
   cart: CounterCart | null;
@@ -188,7 +188,7 @@ export function CounterCartPanel({
                           <span className="font-semibold text-text-strong">
                             Batch {allocation.batchNumber}
                           </span>
-                          <span>Exp {formatReceiptDate(allocation.expiresAt)}</span>
+                          <span>{formatShortExpiry(allocation.expiresAt)}</span>
                         </div>
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                           {allocation.stockLocationCode ? (
@@ -423,7 +423,7 @@ export function CounterLotOverride({
                   }
                 />
                 <span>Batch {lot.batchNumber}</span>
-                <span>Exp {formatReceiptDate(lot.expiresAt)}</span>
+                <span>{formatShortExpiry(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
                 {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}
                 {blocked ? (

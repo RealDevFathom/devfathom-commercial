@@ -42,6 +42,8 @@ function fixture(
         },
         permissionOverrides: [],
       }),
+      // DEV-821: the name of the cashier who runs an open till.
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     pharmacyBranch: {
       findMany: vi.fn(
@@ -146,23 +148,24 @@ describe('pharmacySales.openDrawer', () => {
 });
 
 describe('pharmacySales.drawerStatus', () => {
-  it('reports the open drawer for this device', async () => {
+  it('reports the open drawer for this device and who runs it', async () => {
     const f = fixture({ openDrawer: { id: 'drawer-open' } });
-    f.db.pharmacyDrawerSession.findFirst.mockResolvedValue({
+    const drawer = {
       id: 'drawer-open',
       businessDate: input.businessDate,
       openedAt: new Date('2026-10-20T04:05:00.000Z'),
       openingFloatMinor: 500,
-    });
+      openedByActorId: 'manager-1',
+      operatingCashierId: 'actor-1',
+    };
+    f.db.pharmacyDrawerSession.findFirst.mockResolvedValue(drawer);
+    f.db.user.findFirst.mockResolvedValue({ name: 'Asha' });
     await expect(
       f.caller.drawerStatus({ branchId: 'branch-1', deviceId: 'counter-device' })
     ).resolves.toEqual({
-      openDrawer: {
-        id: 'drawer-open',
-        businessDate: input.businessDate,
-        openedAt: new Date('2026-10-20T04:05:00.000Z'),
-        openingFloatMinor: 500,
-      },
+      openDrawer: drawer,
+      // DEV-821: a manager opened the till for this cashier, who runs it.
+      operatingCashier: { name: 'Asha', isYou: true },
     });
     expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -174,12 +177,32 @@ describe('pharmacySales.drawerStatus', () => {
         },
       })
     );
+    expect(f.db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'actor-1', organizationId: 'org-1' },
+      select: { name: true },
+    });
+  });
+
+  it('says when another cashier runs the till', async () => {
+    const f = fixture();
+    f.db.pharmacyDrawerSession.findFirst.mockResolvedValue({
+      id: 'drawer-open',
+      businessDate: input.businessDate,
+      openedAt: new Date('2026-10-20T04:05:00.000Z'),
+      openingFloatMinor: 0,
+      openedByActorId: 'cashier-2',
+      operatingCashierId: null,
+    });
+    f.db.user.findFirst.mockResolvedValue({ name: 'Bilal' });
+    await expect(
+      f.caller.drawerStatus({ branchId: 'branch-1', deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ operatingCashier: { name: 'Bilal', isYou: false } });
   });
 
   it('reports no drawer when none is open', async () => {
     const f = fixture();
     await expect(
       f.caller.drawerStatus({ branchId: 'branch-1', deviceId: 'counter-device' })
-    ).resolves.toEqual({ openDrawer: null });
+    ).resolves.toEqual({ openDrawer: null, operatingCashier: null });
   });
 });

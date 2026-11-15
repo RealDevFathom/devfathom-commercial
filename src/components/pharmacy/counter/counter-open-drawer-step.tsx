@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { parseAmountMinor } from './counter-tender-panel';
+import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-drawer-operator';
 
 export type CounterOpenDrawerStepProps = {
   /** Status not yet known, a write in flight, or no authorized branch. */
@@ -17,8 +18,21 @@ export type CounterOpenDrawerStepProps = {
   /** A drawer status read is in flight. */
   checking?: boolean;
   onRetry?: () => void;
-  onOpen: (openingFloatMinor: number) => void;
+  /**
+   * DEV-821: the branch cashiers a manager or owner may hand the till to as it
+   * opens. Omitted for a cashier, who always runs the drawer they open.
+   */
+  cashiers?: readonly CounterCashier[];
+  /** The signed-in user, the default cashier for the till. */
+  currentUserId?: string;
+  /** `operatingCashierId` is sent only when someone other than the opener runs the till. */
+  onOpen: (openingFloatMinor: number, operatingCashierId?: string) => void;
+  /** DEV-508: where and when this drawer opens, so the cashier can check before confirming. */
+  context?: { branch: string | null; counter: string | null; businessDay: string };
 };
+
+/** DEV-508: common opening floats. Choosing one only fills the field; Open drawer confirms. */
+export const OPENING_FLOAT_QUICK_AMOUNTS = ['0', '1000', '2000', '5000'] as const;
 
 /**
  * DEV-725: the first step of a shift. Until this counter device has an OPEN
@@ -32,10 +46,15 @@ export function CounterOpenDrawerStep({
   deviceUnavailable = false,
   checking = false,
   onRetry,
+  cashiers,
+  currentUserId,
   onOpen,
+  context,
 }: CounterOpenDrawerStepProps) {
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [cashierId, setCashierId] = useState(currentUserId ?? '');
+  const chooseCashier = Boolean(cashiers?.length);
   const openingFloatMinor = parseAmountMinor(openingCash);
   const invalid = submitted && openingFloatMinor === null;
 
@@ -47,7 +66,10 @@ export function CounterOpenDrawerStep({
         event.preventDefault();
         setSubmitted(true);
         if (disabled || openingFloatMinor === null) return;
-        onOpen(openingFloatMinor);
+        onOpen(
+          openingFloatMinor,
+          chooseCashier && cashierId && cashierId !== currentUserId ? cashierId : undefined
+        );
       }}
     >
       <div className="space-y-1">
@@ -59,6 +81,27 @@ export function CounterOpenDrawerStep({
           open.
         </p>
       </div>
+      {context ? (
+        <dl
+          aria-label="Drawer details"
+          className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"
+        >
+          {(
+            [
+              ['Branch', context.branch],
+              ['Counter', context.counter],
+              ['Business day', context.businessDay],
+            ] as const
+          ).map(([term, value]) =>
+            value ? (
+              <div key={term} className="min-w-0">
+                <dt className="text-xs text-text-muted">{term}</dt>
+                <dd className="truncate text-text-strong">{value}</dd>
+              </div>
+            ) : null
+          )}
+        </dl>
+      ) : null}
       {deviceUnavailable ? (
         <p
           role="alert"
@@ -105,10 +148,54 @@ export function CounterOpenDrawerStep({
             className="h-11 font-mono tabular-nums"
           />
         </div>
+        {chooseCashier ? (
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Label htmlFor="counter-drawer-cashier">Who runs this till</Label>
+            <select
+              id="counter-drawer-cashier"
+              className={COUNTER_NATIVE_SELECT_CLASS}
+              value={cashierId}
+              disabled={disabled}
+              onChange={(event) => setCashierId(event.target.value)}
+            >
+              {currentUserId && !cashiers!.some((cashier) => cashier.id === currentUserId) ? (
+                <option value={currentUserId}>You</option>
+              ) : null}
+              {cashiers!.map((cashier) => (
+                <option key={cashier.id} value={cashier.id}>
+                  {cashier.id === currentUserId ? `${cashier.name} (you)` : cashier.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <Button type="submit" className="h-11" disabled={disabled}>
           Open drawer
         </Button>
       </div>
+      <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
+        {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
+          <Button
+            key={amount}
+            type="button"
+            variant="outline"
+            className="h-11 font-mono tabular-nums"
+            aria-pressed={openingCash === amount}
+            disabled={disabled}
+            onClick={() => setOpeningCash(amount)}
+          >
+            {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-text-muted">
+        An opening cash above 0 needs a manager or owner. Enter 0 when the drawer is empty.
+      </p>
+      {chooseCashier ? (
+        <p className="text-sm text-text-muted">
+          Only the cashier who runs the till, or a manager or owner, can take cash into it.
+        </p>
+      ) : null}
       {invalid ? (
         <p id="counter-opening-cash-error" role="alert" className="text-sm text-destructive">
           Enter the opening cash, for example 5000 or 0 for an empty drawer.

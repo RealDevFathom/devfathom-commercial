@@ -109,6 +109,8 @@ function fixture(
     user: { findUnique: vi.fn(async () => member) },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
+      // DEV-821: the drawer-manager decision's branch assignment.
+      findFirst: vi.fn(async () => ({ branchId: 'branch-a' })),
     },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }),
@@ -1402,7 +1404,11 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await expect(f.caller().recordKhataPayment(payment)).resolves.toEqual(slip);
     expect(f.db.$transaction).toHaveBeenCalledTimes(1);
     expect(f.db.$queryRaw).toHaveBeenCalled();
-    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment);
+    // DEV-821: a counter-only user may pay only into a till they run.
+    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment, {
+      kind: 'COUNTER',
+      actorIsManager: false,
+    });
   });
 
   // DEV-821: a client-sent device only reaches a drawer through the caller's own
@@ -1474,6 +1480,77 @@ describe('K4 counter khata repayment (DEV-731)', () => {
       f.caller().recordKhataPayment({ ...payment, tender: 'KHATA' as never })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(recordKhataRepayment).not.toHaveBeenCalled();
+  });
+});
+
+// DEV-821: whether the actor may use any open till of the branch is the counter's
+// drawer-manager decision, where an explicit DENY wins; no request input can set it.
+describe('DEV-821 the drawer operator decision', () => {
+  const cash = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    deviceId: 'device-a',
+    businessDate: new Date('2026-10-02'),
+    type: 'CASH' as const,
+    amountMinor: 100,
+    cashReceivedMinor: 100,
+    idempotencyKey: 'cash-a',
+  };
+  const repayment = {
+    branchId: 'branch-a',
+    familyAccountId: 'family-a',
+    amountMinor: 500,
+    tender: 'CASH' as const,
+    deviceId: 'device-a',
+    businessDate: new Date('2026-10-02'),
+    idempotencyKey: 'khata-payment:2',
+  };
+  const operatorOf = () => vi.mocked(applyPharmacyTender).mock.calls[0]![4];
+
+  it("passes 'not a manager' for a cashier's cash tender", async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'EMPLOYEE');
+    await f.caller().tender(cash);
+    expect(operatorOf()).toEqual({
+      requireCurrentBusinessDate: true,
+      drawerOperator: { kind: 'COUNTER', actorIsManager: false },
+    });
+  });
+
+  it('passes manager for a manager or owner on the branch', async () => {
+    const f = fixture(managingAdmin(), 'EMPLOYEE');
+    await f.caller().tender(cash);
+    expect(operatorOf()).toMatchObject({ drawerOperator: { kind: 'COUNTER', actorIsManager: true } });
+  });
+
+  it('lets an explicit DENY on the manager family win over a manager ALLOW', async () => {
+    const f = fixture(managingAdmin(), 'ADMIN', [{ capability: 'pharmacy.manage', effect: 'DENY' }]);
+    await f.caller().tender(cash);
+    expect(operatorOf()).toMatchObject({
+      drawerOperator: { kind: 'COUNTER', actorIsManager: false },
+    });
+  });
+
+  it('decides a khata cash repayment the same way', async () => {
+    vi.mocked(recordKhataRepayment).mockResolvedValue({} as never);
+    const f = fixture(managingAdmin(), 'EMPLOYEE');
+    await f.caller().recordKhataPayment(repayment);
+    expect(vi.mocked(recordKhataRepayment).mock.calls[0]![3]).toEqual({
+      kind: 'COUNTER',
+      actorIsManager: true,
+    });
+  });
+
+  it('refuses a request that tries to supply the drawer operator itself', async () => {
+    const f = fixture(managingAdmin());
+    const replay = { drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' } };
+    await expect(f.caller().tender({ ...cash, ...replay } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      f.caller().recordKhataPayment({ ...repayment, ...replay } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(recordKhataRepayment).not.toHaveBeenCalled();
   });
 });

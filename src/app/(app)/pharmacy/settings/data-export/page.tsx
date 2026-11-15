@@ -89,7 +89,7 @@ export default async function PharmacyDataExportPage() {
             hours. Requesting and downloading both ask for your own PIN, and every visit to this
             page, request and download is recorded in the audit log.
           </p>
-          <OwnerDataExportConsole initial={initial} />
+          <OwnerDataExportConsole initial={initial} timeZone={ctx.organization?.timezone} />
         </div>
       </SectionCard>
     </div>

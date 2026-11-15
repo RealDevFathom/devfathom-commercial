@@ -66,8 +66,14 @@ function fixture(options: { prior?: Record<string, unknown>; closed?: boolean } 
         ];
       }),
     },
+    // DEV-821: the paying cashier runs this till.
     pharmacyDrawerSession: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', businessDate }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'drawer_1',
+        businessDate,
+        openedByActorId: 'cashier_1',
+        operatingCashierId: 'cashier_1',
+      }),
     },
     pharmacyDailyClose: {
       findFirst: vi.fn().mockResolvedValue(options.closed ? { id: 'close_1' } : null),
@@ -98,7 +104,6 @@ describe('K4 counter khata repayment (DEV-731)', () => {
         businessDate,
         status: 'OPEN',
       },
-      select: { id: true },
     });
     expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -179,11 +184,32 @@ describe('K4 counter khata repayment (DEV-731)', () => {
 
   // DEV-821: the device id is client-sent. It only ever resolves the open drawer of that
   // device on the caller's own branch (the router has already required an active branch
-  // assignment with counter access), whoever opened the till.
+  // assignment with counter access), and only a till the caller runs, unless a manager.
   describe('drawer resolution from the client-sent device (DEV-821)', () => {
     const tills = [
-      { id: 'drawer_1', branchId: 'branch_k', deviceId: 'device_1', openedByActorId: 'manager_1' },
-      { id: 'drawer_9', branchId: 'branch_other', deviceId: 'device_9', openedByActorId: 'x' },
+      // A manager opened this till with a float and named cashier_1 to run it.
+      {
+        id: 'drawer_1',
+        branchId: 'branch_k',
+        deviceId: 'device_1',
+        openedByActorId: 'manager_1',
+        operatingCashierId: 'cashier_1',
+      },
+      // A colleague's till on the same branch.
+      {
+        id: 'drawer_2',
+        branchId: 'branch_k',
+        deviceId: 'device_2',
+        openedByActorId: 'cashier_2',
+        operatingCashierId: 'cashier_2',
+      },
+      {
+        id: 'drawer_9',
+        branchId: 'branch_other',
+        deviceId: 'device_9',
+        openedByActorId: 'x',
+        operatingCashierId: 'x',
+      },
     ];
     function withTills() {
       const db = fixture();
@@ -197,13 +223,38 @@ describe('K4 counter khata repayment (DEV-731)', () => {
               where.organizationId === 'org_k' &&
               (where.status === undefined || where.status === 'OPEN')
           );
-          return till ? { id: till.id, businessDate } : null;
+          return till ? { ...till, businessDate } : null;
         }
       );
       return db;
     }
 
-    it('lets a cashier take cash on a till a manager opened', async () => {
+    it("refuses cash into a colleague's till on the same branch before writing", async () => {
+      const db = withTills();
+      await expect(
+        recordKhataRepayment(db as never, scope, { ...cashInput, deviceId: 'device_2' })
+      ).rejects.toMatchObject({ reason: 'DRAWER_NOT_YOURS' });
+      expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+    });
+
+    it("lets a manager or owner take cash on a colleague's till", async () => {
+      const db = withTills();
+      await expect(
+        recordKhataRepayment(
+          db as never,
+          scope,
+          { ...cashInput, deviceId: 'device_2' },
+          { kind: 'COUNTER', actorIsManager: true }
+        )
+      ).resolves.toMatchObject({ replayed: false });
+      expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ drawerSessionId: 'drawer_2', actorId: 'cashier_1' }),
+      });
+    });
+
+    it('lets a cashier take cash on a till a manager opened for them', async () => {
       const db = withTills();
       await expect(recordKhataRepayment(db as never, scope, cashInput)).resolves.toMatchObject({
         replayed: false,

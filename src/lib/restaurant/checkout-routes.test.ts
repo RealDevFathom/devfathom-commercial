@@ -385,3 +385,28 @@ describe('refund error responses', () => {
     expect(await response.json()).toEqual({ error: 'Only a settled bill can be refunded.' });
   });
 });
+
+describe('tenderBody manual card confirmation', () => {
+  it('accepts an approval code and reference, and refuses a possible full card number', async () => {
+    const { tenderBody } = await import('./checkout-routes');
+    const base = { billId: 'bill-1', tender: { type: 'CARD', amount: '10.00' } };
+    const ok = tenderBody.safeParse({
+      ...base,
+      tender: { ...base.tender, manualConfirmation: { approvalCode: 'AB12CD', reference: '4242' } },
+    });
+    expect(ok.success).toBe(true);
+    const pan = tenderBody.safeParse({
+      ...base,
+      tender: {
+        ...base.tender,
+        manualConfirmation: { approvalCode: 'AB12CD', reference: '4111111111111111' },
+      },
+    });
+    expect(pan.success).toBe(false);
+    const noCode = tenderBody.safeParse({
+      ...base,
+      tender: { ...base.tender, manualConfirmation: { reference: '4242' } },
+    });
+    expect(noCode.success).toBe(false);
+  });
+});

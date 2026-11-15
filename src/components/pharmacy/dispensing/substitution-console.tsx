@@ -59,15 +59,27 @@ export function SubstitutionConsole() {
                   setNotice('');
                 }}
               >
-                <option value="">Select patient and medicine</option>
+                <option value="">
+                  {workspace.data.canViewPatients
+                    ? 'Select patient and medicine'
+                    : 'Select medicine'}
+                </option>
                 {workspace.data.lines.map((entry) => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.line.prescription.patient.displayName} ·{' '}
+                    {entry.line.prescription.patient
+                      ? `${entry.line.prescription.patient.displayName} · `
+                      : ''}
                     {entry.line.medicine.productName} · {entry.line.presentation.presentation}
                   </option>
                 ))}
               </select>
             </Field>
+            {workspace.data.canViewPatients ? null : (
+              <p className="mt-2 text-sm text-text-muted">
+                Patient names are hidden. Viewing patient records needs the prescriptions
+                permission.
+              </p>
+            )}
           </div>
           {item && !workspace.data.canRecord ? (
             <WorkspaceState title="Review only">

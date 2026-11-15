@@ -20,7 +20,11 @@ import {
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { officialPriceText } from '@/lib/pharmacy/official-price';
-import { isNonDrugRetail, receivingLotArrived } from '@/lib/pharmacy/product-class';
+import {
+  formatLotExpiry,
+  isNonDrugRetail,
+  receivingLotArrived,
+} from '@/lib/pharmacy/product-class';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
@@ -1741,9 +1745,13 @@ function ReceiptDetail({
             <p className="mt-1 text-xs text-text-muted">
               Batch {line.batchNumber}
               {line.serialNumber ? ` · serial ${line.serialNumber}` : ''}
-              {line.gtin ? ` · GTIN ${line.gtin}` : ''} · expires {dateOnly(line.printedExpiry)} (
-              {line.expiryPrecision.toLowerCase()} precision) · MRP {money(line.printedMrpMinor)} ·{' '}
-              {line.receivedPacks} {line.packLevel.level}
+              {line.gtin ? ` · GTIN ${line.gtin}` : ''} ·{' '}
+              {formatLotExpiry(
+                line.printedExpiry,
+                (value) =>
+                  `expires ${dateOnly(value)} (${line.expiryPrecision.toLowerCase()} precision)`
+              )}{' '}
+              · MRP {money(line.printedMrpMinor)} · {line.receivedPacks} {line.packLevel.level}
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
               {line.canonicalUnitsPerPack} ={' '}
               {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}

@@ -32,6 +32,7 @@ const BRANCH = 'branch-1';
 let db: {
   user: { findUnique: ReturnType<typeof vi.fn> };
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findFirst: ReturnType<typeof vi.fn> };
   $transaction: ReturnType<typeof vi.fn>;
   $queryRaw: ReturnType<typeof vi.fn>;
 };
@@ -64,6 +65,8 @@ beforeEach(() => {
   db = {
     user: { findUnique: vi.fn() },
     pharmacyBranch: { findMany: vi.fn().mockResolvedValue([{ id: BRANCH }]) },
+    // DEV-845: this staff member is assigned to the branch.
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment-1' }) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
   };

@@ -83,6 +83,9 @@ export type PaymentOperation = {
   tipAmount?: Prisma.Decimal | string | number;
   operationRef: string;
   priorRef?: string | null;
+  /** The caller has established the MOCK may approve here (a demo organization). In a
+   * production build the MOCK refuses SALE/AUTH unless this is true. */
+  allowMock?: boolean;
 };
 
 /** The append-only event a provider operation produces. The caller writes it via
@@ -156,9 +159,43 @@ function centsComponent(amount: Prisma.Decimal): number {
   return amount.times(100).mod(100).abs().toNumber();
 }
 
-function declineCodeFor(capability: PaymentCapability, amount: Prisma.Decimal): string | null {
+/** The decline code the MOCK returns for any funds-authorizing operation in production. */
+export const MOCK_IN_PRODUCTION_CODE = 'MOCK_PROVIDER_IN_PRODUCTION';
+
+/**
+ * Fail closed. The MOCK provider is a test/demo stand-in: in a production build it
+ * must never approve a card sale (no money moved), and the scripted cent-code
+ * declines are not applied to real amounts. A SALE/AUTH in production is refused
+ * unless the caller passes `allowMock` (a demo organization); every real
+ * organization uses the cashier-confirmed MANUAL card tender instead.
+ */
+function declineCodeFor(
+  capability: PaymentCapability,
+  amount: Prisma.Decimal,
+  allowMock: boolean
+): string | null {
   if (!AUTHORIZING.has(capability)) return null;
+  if (process.env.NODE_ENV === 'production' && !allowMock) return MOCK_IN_PRODUCTION_CODE;
   return DECLINE_CODES[centsComponent(amount)] ?? null;
+}
+
+const APPROVED_STATUSES: ReadonlySet<PaymentStatus> = new Set(['AUTHORIZED', 'CAPTURED']);
+
+/**
+ * A card sale counts as approved ONLY on an explicit approved outcome: `approved`
+ * is literally true, no decline code is present, and the status is an approved
+ * one. A missing, unknown or unrecognised value is treated as declined.
+ */
+export function isExplicitApproval(
+  outcome: { approved?: unknown; declineCode?: unknown; status?: unknown } | null | undefined
+): boolean {
+  return (
+    !!outcome &&
+    outcome.approved === true &&
+    (outcome.declineCode === null || outcome.declineCode === undefined) &&
+    typeof outcome.status === 'string' &&
+    APPROVED_STATUSES.has(outcome.status as PaymentStatus)
+  );
 }
 
 /** A deterministic provider reference: SHA-256 over the capability + the caller's
@@ -191,7 +228,7 @@ function mockExecute(operation: PaymentOperation): PaymentOutcome {
 
   const amount = money(operation.amount);
   const tipAmount = operation.tipAmount === undefined ? ZERO : money(operation.tipAmount);
-  const declineCode = declineCodeFor(operation.capability, amount);
+  const declineCode = declineCodeFor(operation.capability, amount, operation.allowMock === true);
   const approved = declineCode === null;
   const providerRef = mockReference(operation.capability, operation.operationRef);
   const status = approved ? APPROVED_STATUS[operation.capability] : 'DECLINED';

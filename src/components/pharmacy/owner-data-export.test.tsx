@@ -83,3 +83,16 @@ describe('OwnerDataExportConsole PIN (DEV-783)', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 });
+
+describe('OwnerDataExportConsole time zone (DEV-802)', () => {
+  it('shows request times and the picked-date zone in the organization time zone', () => {
+    render(
+      <OwnerDataExportConsole
+        timeZone="Asia/Karachi"
+        initial={[{ ...READY, status: 'QUEUED', requestedAt: '2026-11-03T13:24:00.000Z' } as never]}
+      />
+    );
+    expect(screen.getByText('3 Nov 2026, 6:24 PM PKT')).toBeTruthy();
+    expect(screen.getByText(/read in your workspace timezone \(PKT\)/)).toBeTruthy();
+  });
+});

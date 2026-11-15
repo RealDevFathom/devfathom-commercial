@@ -21,6 +21,8 @@ function fixture(refunded = 475, priorPoints = 0) {
       findUnique: vi.fn().mockResolvedValue(null),
       findFirst: vi.fn().mockResolvedValue({ points: 9, netPaidMinor: 950 }),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: priorPoints } }),
+      // DEV-764: no restored points were ever expired at once; each lot's own expiry decides.
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn().mockImplementation(async ({ data }) => ({ id: 'reversal-a', ...data })),
     },
   };
@@ -218,5 +220,94 @@ describe('DEV-746 versioned earn reversal', () => {
         where: expect.objectContaining({ originalTender: { type: { not: 'LOYALTY' } } }),
       })
     );
+  });
+});
+
+describe('DEV-764 refund after the earned lot expired', () => {
+  it('never takes back points that already expired from the lot', async () => {
+    const db = fixture(950);
+    // 9 points earned (legacy PKR 1 curve on PKR 9.50); 4 of them already expired.
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({
+      points: 9,
+      netPaidMinor: 950,
+      closedBy: [{ points: -4 }],
+    });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ kind: 'EARN_REVERSAL', points: -5 });
+    expect(db.pharmacyLoyaltyPointsEntry.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: { closedBy: { where: { kind: 'EXPIRY' }, select: { points: true } } },
+      })
+    );
+  });
+
+  it('takes nothing more when the whole refundable part already expired', async () => {
+    const db = fixture(475);
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({
+      points: 9,
+      netPaidMinor: 950,
+      closedBy: [{ points: -9 }],
+    });
+    await expect(reverseRefundedEarnedPoints(db as never, scope, 'refund-a')).resolves.toBeNull();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-764 khata refund after a collection lot expired', () => {
+  // 100 points for every PKR 1,000 collected.
+  const step = {
+    id: 'program-2',
+    version: 2,
+    earnMode: 'POINTS_PER_SPEND_STEP',
+    earnPoints: 100,
+    perSpendMinor: 100_000,
+  };
+  function khata(lots: Array<{ expired: number }>) {
+    const db = fixture();
+    db.pharmacyRefund.findFirst.mockResolvedValue({
+      id: 'refund-a',
+      saleId: 'sale-a',
+      originalTenderId: 'tender-a',
+      sale: { customerId: 'customer-a' },
+      originalTender: {
+        type: 'CREDIT',
+        amountMinor: 200_000,
+        saleId: 'sale-a',
+        branchId: scope.branchId,
+      },
+    });
+    // PKR 2,000 khata paid in two PKR 1,000 collections, 100 points each; PKR 1,000 refunded.
+    db.pharmacyRefund.aggregate.mockResolvedValue({ _sum: { amountMinor: 100_000 } });
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue(null as never);
+    return Object.assign(db, {
+      pharmacyLoyaltyPointsEntry: {
+        ...db.pharmacyLoyaltyPointsEntry,
+        findMany: vi.fn().mockResolvedValue(
+          lots.map((lot, index) => ({
+            points: 100,
+            netPaidMinor: 100_000,
+            earnStartMinor: index * 100_000,
+            programVersionId: 'program-2',
+            programVersion: step,
+            closedBy: lot.expired ? [{ points: -lot.expired }] : [],
+          }))
+        ),
+      },
+    });
+  }
+
+  it('still takes back the refunded collection when it is the kept lot that expired', async () => {
+    const db = khata([{ expired: 100 }, { expired: 0 }]);
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ kind: 'EARN_REVERSAL', points: -100 });
+  });
+
+  it('does not take again what already expired from the refunded collection itself', async () => {
+    const db = khata([{ expired: 0 }, { expired: 40 }]);
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ kind: 'EARN_REVERSAL', points: -60 });
   });
 });

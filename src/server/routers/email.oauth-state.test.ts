@@ -84,6 +84,20 @@ function fakeDb(organizationId: string) {
               row.expiresAt > where.expiresAt.gt
           ) ?? null
       ),
+      // Mirrors the tenant RLS policy: a scoped client only ever sees its own
+      // organization's rows.
+      deleteMany: vi.fn(
+        async ({ where }: { where: { organizationId?: string; expiresAt: { lt: Date } } }) => {
+          const before = states.length;
+          states = states.filter(
+            (row) =>
+              row.organizationId !== organizationId ||
+              (where.organizationId !== undefined && row.organizationId !== where.organizationId) ||
+              !(row.expiresAt < where.expiresAt.lt)
+          );
+          return { count: before - states.length };
+        }
+      ),
       updateMany: vi.fn(async ({ where }: { where: { id: string; usedAt: null } }) => {
         const row = states.find((entry) => entry.id === where.id && entry.usedAt === null);
         if (!row) return { count: 0 };
@@ -234,5 +248,27 @@ describe('email OAuth connect state (F11)', () => {
 
     expect(mocks.exchangeCode).not.toHaveBeenCalled();
     expect(mailboxCreate).not.toHaveBeenCalled();
+  });
+
+  it('removes expired connect states when a new connect starts, and only those (DEV-849)', async () => {
+    const live = await caller(attacker).connectStart({ provider: 'GMAIL' });
+    await caller(victim).connectStart({ provider: 'OUTLOOK' });
+    await caller({ ...victim, organizationId: 'org_b' }).connectStart({ provider: 'GMAIL' });
+    states[1]!.expiresAt = new Date(Date.now() - 1000); // victim, org_a: expired
+    states[2]!.expiresAt = new Date(Date.now() - 1000); // victim, org_b: expired
+
+    await caller(victim).connectStart({ provider: 'GMAIL' });
+
+    // The expired org_a row is gone; another tenant's row is not touched, and
+    // the unexpired state still completes its own connect.
+    expect(states.map((row) => [row.organizationId, row.userId, row.provider])).toEqual([
+      ['org_a', attacker.id, 'GMAIL'],
+      ['org_b', victim.id, 'GMAIL'],
+      ['org_a', victim.id, 'GMAIL'],
+    ]);
+    expect(states[1]!.expiresAt.getTime()).toBeLessThan(Date.now());
+    await expect(
+      caller(attacker).connectCallback({ provider: 'GMAIL', code: 'code', state: live.state })
+    ).resolves.toMatchObject({ mailboxId: 'mb_1' });
   });
 });

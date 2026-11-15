@@ -45,8 +45,11 @@ import {
   MarketingWorkflowError,
   previewMarketingCampaign,
   reviewMarketingCampaign,
+  WhatsAppComplianceError,
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
+import { recordWhatsAppComplianceBlock } from '@/lib/pharmacy/whatsapp/compliance-log';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
 import {
   marketingSendPolicyInput,
   readMarketingSendPolicy,
@@ -124,6 +127,33 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
   };
 }
 
+/**
+ * The blocked work rolls back with the request transaction, and a nested `$transaction`
+ * reuses it, so the block log is written in a fresh tenant transaction once it ends.
+ */
+function logComplianceBlock(ctx: TRPCContext, branchId: string, error: WhatsAppComplianceError) {
+  const organizationId = ctx.entitlements.organizationId;
+  const actorId = ctx.session?.user.id ?? null;
+  afterTenantTransaction(() => {
+    void withTenantDb(
+      organizationId,
+      (db) =>
+        recordWhatsAppComplianceBlock(db, {
+          organizationId,
+          branchId,
+          actorId,
+          subject: error.subject,
+          subjectId: error.subjectId,
+          result: error.result,
+        }),
+      { maxWait: 1_000, timeout: 5_000, skipDrain: true }
+    ).catch(() => {
+      // The refusal still stands; never surface log persistence errors to the caller.
+      console.error('PHARMACY_WHATSAPP_COMPLIANCE_LOG_FAILED', { subject: error.subject });
+    });
+  });
+}
+
 async function execute<T>(
   ctx: TRPCContext,
   branchId: string,
@@ -136,6 +166,7 @@ async function execute<T>(
     await prepare?.(resolved);
     return await ctx.db.$transaction((db) => fn(db as ScopedDb, resolved));
   } catch (error) {
+    if (error instanceof WhatsAppComplianceError) logComplianceBlock(ctx, branchId, error);
     if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
       throw new TRPCError({
         code: 'BAD_REQUEST',
@@ -184,6 +215,20 @@ async function growthExecute<T>(
   branchId: string,
   fn: (db: ScopedDb, resolved: MarketingScope) => Promise<T>
 ) {
+  try {
+    return await growthTransaction(ctx, branchId, fn);
+  } catch (error) {
+    if (!(error instanceof WhatsAppComplianceError)) throw error;
+    logComplianceBlock(ctx, branchId, error);
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  }
+}
+
+function growthTransaction<T>(
+  ctx: TRPCContext,
+  branchId: string,
+  fn: (db: ScopedDb, resolved: MarketingScope) => Promise<T>
+) {
   return ctx.db.$transaction(async (db) => {
     const entitlements = await resolveOrganizationEntitlements(ctx.entitlements.organizationId, db);
     const resolved = await scope({ ...ctx, db, entitlements }, branchId);
@@ -222,6 +267,7 @@ async function growthExecute<T>(
     try {
       return await fn(db as ScopedDb, resolved);
     } catch (error) {
+      if (error instanceof WhatsAppComplianceError) throw error;
       if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
         throw new TRPCError({
           code: 'BAD_REQUEST',

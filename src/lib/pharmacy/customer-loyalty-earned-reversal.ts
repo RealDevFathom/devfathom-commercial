@@ -5,8 +5,41 @@ import { Prisma } from '@/generated/prisma/client';
 import { earnedPointsFor, pointsForNetPaid } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockCustomerConsent } from './consent-writer';
+import { readExpiredPointsByLot } from './loyalty-expiry';
 import { khataEarnRetained } from './loyalty-khata-earn';
 import type { LedgerScope } from './stock-ledger';
+
+/**
+ * DEV-764: points of an earned lot that already expired are gone from the balance. A refund
+ * reverses the earn, but never takes those points a second time. Only the part of a lot the
+ * refund reverses counts: expiry on a lot (or part of a lot) the refund leaves in place does
+ * not reduce what is taken back.
+ */
+const EXPIRED_FROM_LOT = {
+  closedBy: { where: { kind: 'EXPIRY' as const }, select: { points: true } },
+};
+type LotWithExpiry = { id?: string; closedBy?: ReadonlyArray<{ points: number }> };
+/**
+ * Points expired out of a lot. `byLot` (from the ledger replay) also counts points a refund or
+ * void returned into the lot after it was closed and that were then expired at once, so the
+ * answer does not depend on when the sweep ran. Without such entries the lot's own expiry is
+ * the whole story.
+ */
+function expiredFrom(lot: LotWithExpiry, byLot: ReadonlyMap<string, number> | null) {
+  if (byLot && lot.id !== undefined) return byLot.get(lot.id) ?? 0;
+  return (lot.closedBy ?? []).reduce((total, row) => total + Math.max(0, -row.points), 0);
+}
+/** Points to take back from lots, each reversing `reversed[i]` of its points. */
+function reversalAfterExpiry(
+  lots: readonly LotWithExpiry[],
+  reversed: readonly number[],
+  byLot: ReadonlyMap<string, number> | null
+) {
+  return lots.reduce((sum, lot, index) => {
+    const take = Math.max(0, reversed[index] ?? 0);
+    return sum + take - Math.min(take, expiredFrom(lot, byLot));
+  }, 0);
+}
 
 /** Internal refund transaction only. No provider calls or stock-return accrual. */
 export async function reverseRefundedEarnedPoints(
@@ -54,6 +87,7 @@ export async function reverseRefundedEarnedPoints(
   };
   const earn = await db.pharmacyLoyaltyPointsEntry.findFirst({
     where: { ...binding, kind: 'EARN' },
+    include: EXPIRED_FROM_LOT,
   });
   // DEV-746: a versioned sale never earned on its CREDIT tender; that money earns, and is
   // reversed, per collection. Sales from before versioning keep their original reversal.
@@ -96,7 +130,12 @@ export async function reverseRefundedEarnedPoints(
     }),
   ]);
   const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
-  const target = earn.points - pointsFor(netPaidMinor);
+  const byLot = await readExpiredPointsByLot(
+    db,
+    { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
+    new Date()
+  );
+  const target = reversalAfterExpiry([earn], [earn.points - pointsFor(netPaidMinor)], byLot);
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -127,7 +166,7 @@ async function reverseKhataEarnedPoints(
 ) {
   const earns = await db.pharmacyLoyaltyPointsEntry.findMany({
     where: { ...binding, tenderId: refund.originalTenderId, kind: 'KHATA_EARN' },
-    include: { programVersion: true },
+    include: { programVersion: true, ...EXPIRED_FROM_LOT },
     orderBy: [{ earnStartMinor: 'asc' }, { id: 'asc' }],
   });
   if (!earns.length) return null;
@@ -163,7 +202,21 @@ async function reverseKhataEarnedPoints(
     })),
     capMinor
   );
-  const points = -(totals.earnedPoints - totals.retainedPoints) - (reversed._sum.points ?? 0);
+  const byLot = await readExpiredPointsByLot(
+    db,
+    {
+      organizationId: binding.organizationId,
+      branchId: binding.branchId,
+      customerId: binding.customerId,
+    },
+    new Date()
+  );
+  const target = reversalAfterExpiry(
+    earns,
+    earns.map((earn, index) => earn.points - (totals.retainedByEarn[index] ?? 0)),
+    byLot
+  );
+  const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {

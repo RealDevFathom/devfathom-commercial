@@ -13,6 +13,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
 import {
   formatWorkspaceDateTime,
   workspaceDateRange,
@@ -23,6 +24,7 @@ import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
+import { LostSalesRecovery } from './lost-sales-recovery';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
@@ -188,9 +190,12 @@ export default async function PharmacyReportsPage({
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
   let expiryAdviceError = false;
-  let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
+  let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> = null;
+  // Pack scans record no supplier, so the reader returns null instead of unfiltered flags.
+  let authenticationNotFilterable = false;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
+  let lostSales: Awaited<ReturnType<typeof caller.lostSalesRecovery>> | null = null;
   let demand: Awaited<
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
@@ -211,6 +216,7 @@ export default async function PharmacyReportsPage({
       expiryResult,
       authenticationResult,
       marketingResult,
+      lostSalesResult,
     ] = await Promise.allSettled([
       caller.commandCentre(reportFilters),
       caller.digestOverview(),
@@ -220,8 +226,14 @@ export default async function PharmacyReportsPage({
       Promise.resolve().then(() =>
         caller.marketing({ ...(branch ? { branchId: branch } : {}), from, to })
       ),
+      Promise.resolve().then(() =>
+        catalog.permissions.financial
+          ? caller.lostSalesRecovery({ ...(branch ? { branchId: branch } : {}), from, to })
+          : null
+      ),
     ]);
     if (marketingResult.status === 'fulfilled') marketing = marketingResult.value;
+    if (lostSalesResult.status === 'fulfilled') lostSales = lostSalesResult.value;
     if (reportResult.status === 'fulfilled') result = reportResult.value;
     else reportError = true;
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
@@ -236,22 +248,41 @@ export default async function PharmacyReportsPage({
         console.error('[pharmacy-reports] Expiry advice failed', expiryResult.reason);
       }
     }
-    if (authenticationResult.status === 'fulfilled')
+    if (authenticationResult.status === 'fulfilled') {
       authenticationFlags = authenticationResult.value;
+      authenticationNotFilterable = authenticationResult.value === null;
+    }
   }
   const demandScopeValid =
     !invalidRange &&
     ![query.branch, query.from, query.to].some(Array.isArray) &&
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
-  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+  // DEV-845: observed demand is a manager or owner report. Hide the section for
+  // anyone else rather than showing them the procedure's refusal as an error.
+  let demandVisible =
+    !!user &&
+    (await can(subjectFromSession(user), 'pharmacy:manage', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }));
+  if (
+    demandVisible &&
+    demandScopeValid &&
+    branch &&
+    branchResult.branches.some((item) => item.id === branch)
+  ) {
     try {
       // Event timestamps: bound the selected business dates on the workspace clock.
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
         branchId: branch,
         ...workspaceDateRange(from, to, timeZone),
       });
-    } catch {
-      demandError = true;
+    } catch (error) {
+      // A counter DENY or a branch outside the manager's assignment is a refusal, not a failure.
+      if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code))
+        demandVisible = false;
+      else demandError = true;
     }
   }
   // DEV-14: owner-adjustable assumptions; the server validates the bounds again.
@@ -388,18 +419,33 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
-  const cards = metrics
+  // DEV-733: abnormal refund ratio / cash variance get an amber review flag (label + text, not
+  // colour alone); a variance with no final close is shown as unavailable, never as 0.00.
+  const kpiFlags = metrics ? pharmacyReportKpiFlags(metrics) : {};
+  const varianceNotComputed =
+    metrics != null && metrics.salesMinor != null && metrics.cashVarianceMinor == null;
+  const cards: Array<{
+    label: string;
+    figure: string | number;
+    flag?: { detail: string };
+    note?: string;
+  }> = metrics
     ? [
-        ['Sales', money(metrics.salesMinor)],
-        ['Gross margin', money(metrics.marginMinor)],
-        ['Cash', money(metrics.cashMinor)],
-        ['Cash variance', money(metrics.cashVarianceMinor)],
-        ['Refunds', money(metrics.refundsMinor)],
+        { label: 'Sales', figure: money(metrics.salesMinor) },
+        { label: 'Gross margin', figure: money(metrics.marginMinor) },
+        { label: 'Cash', figure: money(metrics.cashMinor) },
+        {
+          label: 'Cash variance',
+          figure: money(metrics.cashVarianceMinor),
+          flag: kpiFlags.cashVarianceMinor,
+          note: varianceNotComputed ? 'Not computed · no final day close in period' : undefined,
+        },
+        { label: 'Refunds', figure: money(metrics.refundsMinor), flag: kpiFlags.refundsMinor },
         // DEV-729: null means stock signals were never worked out for this scope, not zero.
-        ['Open stock signals', metrics.openStockSignals ?? 'Not calculated yet'],
-        ['Recommended orders', metrics.recommendedOrders ?? 'Not calculated yet'],
-        ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
-        ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
+        { label: 'Open stock signals', figure: metrics.openStockSignals ?? 'Not calculated yet' },
+        { label: 'Recommended orders', figure: metrics.recommendedOrders ?? 'Not calculated yet' },
+        { label: 'Expiry ≤30d', figure: money(metrics.expiryValueMinor30) },
+        { label: 'Expiry ≤90d', figure: money(metrics.expiryValueMinor90) },
       ]
     : [];
   return (
@@ -531,13 +577,20 @@ export default async function PharmacyReportsPage({
         branch={branch}
         financial={catalog.permissions.financial}
       />
-      <ObservedDemand
-        timeZone={timeZone}
-        report={demand}
-        failed={demandError}
-        selected={!!branch}
+      <LostSalesRecovery
+        report={lostSales}
+        money={money}
         financial={catalog.permissions.financial}
       />
+      {demandVisible ? (
+        <ObservedDemand
+          timeZone={timeZone}
+          report={demand}
+          failed={demandError}
+          selected={!!branch}
+          financial={catalog.permissions.financial}
+        />
+      ) : null}
       <StaffingSuggestions
         timeZone={timeZone}
         report={staffing}
@@ -635,22 +688,35 @@ export default async function PharmacyReportsPage({
               splits days at midnight UTC, so its totals can differ for the same dates. It may
               differ from sales grouped by business date. Missing journal evidence is unavailable;
               posted totals do not establish complete source or cost coverage. Supplier, ingredient
-              and batch filters do not apply to these KPI totals, the daily work pack or observed
-              demand. Those panels use branch/date scope only; current snapshots use branch scope
-              only.
+              and batch filters narrow sales, gross margin, stock signals, recommended orders and
+              expiry exposure to the matching stock lots and products. Cash, cash variance and
+              refunds cannot be traced to a supplier, ingredient or batch, so they show — while one
+              is selected. The daily work pack and observed demand use branch/date scope only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(([label, figure]) => (
+              {cards.map(({ label, figure, flag, note }) => (
                 <Stat
                   key={label}
                   label={label}
                   value={figure}
                   className="min-w-0"
-                  valueClassName="break-words"
+                  valueClassName={flag ? 'break-words text-warning' : 'break-words'}
+                  data-flagged={flag ? 'true' : undefined}
                   sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
+                    <span className="flex flex-col gap-1">
+                      {flag ? (
+                        <>
+                          <StatusPill status="Review" tone="warning" />
+                          <span className="text-warning">{flag.detail}</span>
+                        </>
+                      ) : null}
+                      <span>
+                        {note ??
+                          (branch
+                            ? 'Selected branch · ledger source'
+                            : 'All available branches · ledger source')}
+                      </span>
+                    </span>
                   }
                 />
               ))}
@@ -679,7 +745,8 @@ export default async function PharmacyReportsPage({
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
                 Ranked by projected stock value left at expiry, using only each branch&apos;s recent
                 completed dispensing and sales. Draft proposals do not reserve, move, quarantine,
-                write off, or return stock; a human must review and submit them.
+                write off, or return stock; a human must review and submit them. Supplier,
+                ingredient and batch filters narrow the lots listed.
               </p>
               {advisorMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
@@ -987,7 +1054,8 @@ export default async function PharmacyReportsPage({
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
                 Receiving and dispensing scans compare GTIN, batch, expiry, and serial evidence with
                 this workspace. An unverifiable pack is never labelled counterfeit and never blocks
-                a sale by itself. Recalled batches remain blocked by the recall path.
+                a sale by itself. Recalled batches remain blocked by the recall path. Ingredient and
+                batch filters narrow flags to scans matched to that medicine or batch.
               </p>
               {authenticationMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
@@ -1054,6 +1122,11 @@ export default async function PharmacyReportsPage({
                 </p>
               )}
             </SectionCard>
+          ) : authenticationNotFilterable ? (
+            <ReportNotice
+              title="Pack authentication flags"
+              detail="Pack scans record the medicine and batch they matched, not the supplier, so these flags cannot be filtered by supplier. Clear the supplier filter to review them."
+            />
           ) : null}
           <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">

@@ -1036,6 +1036,8 @@ enum PharmacyDrapReviewStatus {
 enum PharmacyPriceChangeStatus {
   PROPOSED
   CONFIRMED
+  /// DEV-803: drafted from a DRAP notice but can never be confirmed; never applied.
+  NOT_APPLIED
 }
 
 enum PharmacySupplierClaimStatus {
@@ -1186,6 +1188,12 @@ enum PharmacyLoyaltyEntryKind {
   REDEEM
   REFUND
   KHATA_EARN
+  /// DEV-764: owner or manager correction with a written reason.
+  ADJUSTMENT
+  /// DEV-764: closes one earned lot after the program's expiry period.
+  EXPIRY
+  /// DEV-764: points of a redemption tender returned when its sale is voided.
+  REDEMPTION_RELEASE
 }
 
 enum PharmacyLoyaltyEarnMode {
@@ -1466,17 +1474,27 @@ model PharmacyKhataLimitDecision {
 }
 
 /// DEV-746: owner-set earning rule. Append-only and dated: a new rate is a new version, so
-/// points already earned keep the rule they were priced with. Redemption value is fixed in code.
+/// points already earned keep the rule they were priced with.
+/// DEV-764: each version also carries the redemption value, the expiry period and whether
+/// khata purchases earn once paid off.
 model PharmacyLoyaltyProgramVersion {
-  id             String                  @id @default(cuid())
-  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  version        Int
-  earnMode       PharmacyLoyaltyEarnMode
-  earnPoints     Int
-  perSpendMinor  Int
-  effectiveFrom  DateTime                @default(now())
-  actorId        String
-  createdAt      DateTime                @default(now())
+  id                       String                  @id @default(cuid())
+  organizationId           String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  version                  Int
+  earnMode                 PharmacyLoyaltyEarnMode
+  earnPoints               Int
+  perSpendMinor            Int
+  /// Money one point redeems for. Versions from before DEV-764 redeem at 100 (PKR 1).
+  redemptionValueMinor     Int                     @default(100)
+  /// Days an earned point lasts; null means points never expire.
+  expiryDays               Int?
+  /// Owner switch: whether khata purchases earn points when the customer pays them off.
+  khataEarns               Boolean                 @default(true)
+  /// Largest manual points adjustment a manager may make; larger ones need the owner.
+  managerAdjustLimitPoints Int                     @default(500)
+  effectiveFrom            DateTime                @default(now())
+  actorId                  String
+  createdAt                DateTime                @default(now())
 
   entries PharmacyLoyaltyPointsEntry[]
 
@@ -1488,30 +1506,39 @@ model PharmacyLoyaltyProgramVersion {
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
 /// sale and idempotency constraints make settlement replay safe.
 model PharmacyLoyaltyPointsEntry {
-  id              String                   @id @default(cuid())
-  organizationId  String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  customerId      String
-  saleId          String
-  tenderId        String?
-  refundId        String?
-  kind            PharmacyLoyaltyEntryKind
-  points          Int
-  requestedPoints Int?
-  netPaidMinor    Int?
+  id               String                   @id @default(cuid())
+  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  customerId       String
+  /// Null only for ADJUSTMENT and EXPIRY entries (DEV-764); every other kind has its sale.
+  saleId           String?
+  tenderId         String?
+  refundId         String?
+  kind             PharmacyLoyaltyEntryKind
+  points           Int
+  requestedPoints  Int?
+  netPaidMinor     Int?
   /// DEV-746: the earn rule this entry was priced with; null on entries from before versioning.
   programVersionId String?
   /// KHATA_EARN only: money already collected against the same khata charge before this entry.
   earnStartMinor   Int?
-  actorId         String
-  idempotencyKey  String
-  occurredAt      DateTime                 @default(now())
+  /// DEV-764: ADJUSTMENT only, the owner's or manager's written reason.
+  reason           String?
+  /// DEV-764: when an earned lot expires; null means it never does.
+  expiresAt        DateTime?
+  /// DEV-764: EXPIRY only, the earned lot it closes.
+  reversesEntryId  String?
+  actorId          String
+  idempotencyKey   String
+  occurredAt       DateTime                 @default(now())
 
   programVersion PharmacyLoyaltyProgramVersion? @relation(fields: [organizationId, programVersionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_points_entries_program_version_fkey")
-  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  sale     PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  tender   PharmacyTender?  @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
-  refund   PharmacyRefund?  @relation(fields: [organizationId, refundId], references: [organizationId, id], onDelete: Restrict)
+  customer       PharmacyCustomer               @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  sale           PharmacySale?                  @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  reverses       PharmacyLoyaltyPointsEntry?    @relation("PharmacyLoyaltyLotClosure", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_points_entries_reverses_fkey")
+  closedBy       PharmacyLoyaltyPointsEntry[]   @relation("PharmacyLoyaltyLotClosure")
+  tender         PharmacyTender?                @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
+  refund         PharmacyRefund?                @relation(fields: [organizationId, refundId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
@@ -1603,16 +1630,39 @@ model PharmacyDrawerSession {
   countedCashMinor    Int?
   controlledCountHook Json?
   openedByActorId     String
+  /// DEV-821: the cashier who runs this till. Cash may go into the drawer only from
+  /// this user or a manager/owner. Null only on drawers opened before DEV-821, which
+  /// read as their opener.
+  operatingCashierId  String?
   closedByActorId     String?
   openedAt            DateTime                    @default(now())
   closedAt            DateTime?
   movements           PharmacyDrawerMovement[]
   tenders             PharmacyTender[]
+  handovers           PharmacyDrawerHandover[]
   visibilityAnchor    PharmacyBranch              @relation("PharmacyDrawerSessionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_sessions_visibility_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
   @@map("pharmacy_drawer_sessions")
+}
+
+/// DEV-821: append-only record of a manager or owner handing an open till to another
+/// cashier. The close reports read it to tell whose shift each cash movement fell in.
+model PharmacyDrawerHandover {
+  id              String                @id @default(cuid())
+  organizationId  String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  drawerSessionId String
+  fromCashierId   String
+  toCashierId     String
+  actorId         String
+  reason          String
+  createdAt       DateTime              @default(now())
+  drawerSession   PharmacyDrawerSession @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, drawerSessionId, createdAt])
+  @@map("pharmacy_drawer_handovers")
 }
 
 model PharmacyDrawerMovement {
@@ -7999,6 +8049,7 @@ enum RestaurantTenderType {
 enum RestaurantPaymentProvider {
   MOCK
   TERMINAL
+  MANUAL
 }
 
 enum RestaurantTerminalProviderMode {
@@ -9591,6 +9642,11 @@ model RestaurantSopEvidence {
   sizeBytes              Int
   storageRef             String?
   uploaderStaffProfileId String?
+  /// DEV-837: true only when a server capture route wrote these bytes to tenant
+  /// storage itself and computed `contentHash` from them. Caller-asserted
+  /// metadata (the `attachEvidence` procedure) is stored with false and never
+  /// satisfies a photo/signature requirement or governs who may read a file.
+  serverCaptured         Boolean  @default(false)
   capturedAt             DateTime @default(now())
   createdAt              DateTime @default(now())
 
@@ -16746,4 +16802,45 @@ model PharmacySeasonalWindow {
   @@unique([organizationId, id], map: "pharmacy_seasonal_windows_org_id_key")
   @@index([organizationId, branchId, startDate], map: "pharmacy_seasonal_windows_org_branch_start_idx")
   @@map("pharmacy_seasonal_windows")
+}
+
+/// DEV-837 (F15/F17): the server's record of every object written by
+/// `/api/upload`. The uploader is recorded at upload time and never taken from
+/// a client. The first authorized attach binds the object to the record it was
+/// uploaded for (`ownerType`/`ownerId`); the binding is write-once (a database
+/// trigger refuses changes) and has no foreign key, so it outlives a deleted
+/// owner as a tombstone and the object is then denied, never served
+/// tenant-wide. Rows are never deleted (no DELETE policy). `uploadedById` is
+/// null for files registered from references that predate this table.
+model UploadedFile {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  uploadedById   String?
+  ownerType      String?
+  ownerId        String?
+  boundAt        DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([organizationId, name], map: "uploaded_files_org_name_key")
+  @@index([organizationId])
+  @@map("uploaded_files")
+}
+
+/// DEV-837: every project file, task attachment and contract that referenced a
+/// file before `uploaded_files` existed (grandfathered by the migration). A
+/// file shared by several records keeps every one of these, so reading is
+/// allowed when ANY binding allows it and each record can re-save it
+/// unchanged. Written only by the migration; read-only to the application.
+model UploadedFileLegacyBinding {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  ownerType      String
+  ownerId        String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, name, ownerType, ownerId], map: "uploaded_file_legacy_bindings_owner_key")
+  @@index([organizationId, name], map: "uploaded_file_legacy_bindings_name_idx")
+  @@map("uploaded_file_legacy_bindings")
 }

@@ -55,6 +55,26 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
+  it('reports cash variance as unavailable, not zero, when the period has no final close (DEV-733)', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    expect(result.metrics.cashVarianceMinor).toBeNull();
+    const sql = (queryRaw.mock.calls[0]?.[0] as { strings: readonly string[] }).strings.join('?');
+    expect(sql).toContain('(SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c');
+    expect(sql).not.toContain('COALESCE((SELECT SUM(c."cashVarianceMinor")');
+  });
+
   it('counts pharmacist coverage only during the qualified person validity window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
@@ -388,6 +408,132 @@ describe('PH-RPT aggregate corrections', () => {
         to: '2026-01-01',
       })
     ).toThrow('Too many');
+  });
+});
+
+describe('DEV-256 supplier, ingredient and batch report filters', () => {
+  type Sql = { sql: string; values: unknown[] };
+  function run(filters: { supplierId?: string; ingredientId?: string; batchId?: string }) {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const counts = {
+      pharmacyRecallNotice: { count: vi.fn().mockResolvedValue(4) },
+      pharmacySupplierClaim: { count: vi.fn().mockResolvedValue(5) },
+      pharmacyReceivingException: { count: vi.fn().mockResolvedValue(6) },
+      branchRegulatoryProfile: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const result = readPharmacyOwnerCommandCentre({ $queryRaw: queryRaw, ...counts } as never, {
+      branchIds: ['branch_1'],
+      from: '2026-09-04',
+      to: '2026-09-04',
+      ...filters,
+    });
+    const query = (needle: string) =>
+      queryRaw.mock.calls
+        .map(([sql]) => sql as Sql)
+        .find((sql) => sql.sql.includes(needle));
+    return { result, queryRaw, counts, query };
+  }
+
+  it('narrows sales, margin, stock, claims and receiving reads to the selected batch and supplier', async () => {
+    const { result, counts, query } = run({ supplierId: 'sup_1', batchId: 'batch_1' });
+    const report = await result;
+
+    const money = query('AS "salesMinor"')!;
+    // Batch and supplier resolve through the lots each sale line drew from.
+    expect(money.sql).toContain('"pharmacy_sale_line_allocations" a');
+    expect(money.sql).toContain('lot."manufacturingBatchId"=');
+    expect(money.sql).toContain('dim_receipt."supplierId"=');
+    expect(money.sql).toContain('FROM "finance_journal_lines" line');
+    // Both the allocation read and the journal margin carry the batch and supplier.
+    expect(money.values.filter((value) => value === 'batch_1')).toHaveLength(2);
+    expect(money.values.filter((value) => value === 'sup_1').length).toBeGreaterThanOrEqual(2);
+    expect(money.sql).not.toContain('"pharmacy_tenders"');
+
+    for (const needle of [
+      'FROM "pharmacy_stock_signals" s',
+      'FROM "pharmacy_stock_balances" bal',
+      'FROM "pharmacy_supplier_claims" c',
+      'FROM "pharmacy_receiving_exceptions" x',
+    ]) {
+      const read = query(needle)!;
+      expect(read, needle).toBeDefined();
+      expect(read.values, needle).toContain('batch_1');
+      expect(read.values, needle).toContain('sup_1');
+    }
+    expect(counts.pharmacySupplierClaim.count).not.toHaveBeenCalled();
+    expect(counts.pharmacyReceivingException.count).not.toHaveBeenCalled();
+    expect(query('"pharmacy_unfulfilled_demand_events"')).toBeUndefined();
+    expect(query('"pharmacy_fiscal_documents"')).toBeUndefined();
+    expect(query('"pharmacy_khata_events"')).toBeUndefined();
+
+    // Metrics that cannot be traced to a supplier or batch read unknown, never the unfiltered total.
+    expect(report.metrics).toMatchObject({
+      cashMinor: null,
+      refundsMinor: null,
+      cashVarianceMinor: null,
+      lostDemandEvents: null,
+      openRecalls: null,
+      pharmacistCoverage: null,
+      agingFiscalDocuments: null,
+      rejectedFiscalDocuments: null,
+      khataAgingMinor: null,
+      openClaims: 0,
+      openReceivingExceptions: 0,
+    });
+  });
+
+  it('narrows product-level reads to medicines containing the selected ingredient', async () => {
+    const { result, counts, query } = run({ ingredientId: 'ing_1' });
+    const report = await result;
+
+    const money = query('AS "salesMinor"')!;
+    expect(money.sql).not.toContain('"pharmacy_sale_line_allocations"');
+    expect(money.sql).toContain('dim_ingredient."medicineId"=l."medicineId"');
+    expect(money.sql).toContain('dim_ingredient."medicineId"=line."productId"');
+    expect(money.values.filter((value) => value === 'ing_1')).toHaveLength(2);
+
+    expect(query('FROM "pharmacy_unfulfilled_demand_events"')!.values).toContain('ing_1');
+    expect(query('FROM "pharmacy_recall_notices" r')!.values).toContain('ing_1');
+    expect(query('FROM "pharmacy_stock_signals" s')!.sql).toContain(
+      'dim_ingredient."medicineId"=s."medicineId"'
+    );
+    expect(query('FROM "pharmacy_stock_balances" bal')!.values).toContain('ing_1');
+    expect(counts.pharmacyRecallNotice.count).not.toHaveBeenCalled();
+    expect(report.metrics.lostDemandEvents).toBe(0);
+    expect(report.metrics.openRecalls).toBe(0);
+    expect(report.metrics.cashMinor).toBeNull();
+  });
+
+  it('counts batch-specific and medicine-wide recalls for the selected batch', async () => {
+    const { result, query } = run({ batchId: 'batch_1' });
+    const report = await result;
+
+    const recalls = query('FROM "pharmacy_recall_notices" r')!;
+    // A medicine-wide notice recalls every batch of that medicine (createRecall).
+    expect(recalls.sql).toContain('r."batchId"=');
+    expect(recalls.sql).toContain('recalled."medicineId"=r."medicineId"');
+    expect(recalls.values.filter((value) => value === 'batch_1')).toHaveLength(2);
+    expect(report.metrics.openRecalls).toBe(0);
+  });
+
+  it('keeps the unfiltered branch and date reads when no dimension is selected', async () => {
+    const { result, counts, query } = run({});
+    const report = await result;
+
+    const money = query('AS "salesMinor"')!;
+    expect(money.sql).not.toContain('dim_');
+    expect(money.sql).toContain('"pharmacy_tenders"');
+    expect(counts.pharmacySupplierClaim.count).toHaveBeenCalled();
+    expect(counts.pharmacyRecallNotice.count).toHaveBeenCalled();
+    expect(report.metrics).toMatchObject({
+      cashMinor: 0,
+      lostDemandEvents: 0,
+      openRecalls: 4,
+      openClaims: 5,
+      openReceivingExceptions: 6,
+      pharmacistCoverage: 1,
+      khataAgingMinor: 0,
+    });
   });
 });
 

@@ -1462,6 +1462,21 @@ describe('describePharmacySopRecords', () => {
       branchId: 'pb_main',
       manufacturingBatchId: 'batch_qa',
     });
+    // QA-3: a non-drug batch stocked without an expiry, on the storage marker.
+    tables.batches.push({
+      id: 'batch_retail',
+      organizationId: ORG,
+      batchNumber: 'RETAIL-NOEXP',
+      expiresAt: at('9998-12-31T19:00:00Z'),
+      state: 'ACTIVE',
+      medicine: { productName: 'Baby lotion' },
+    });
+    tables.lots.push({
+      id: 'lot_retail',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      manufacturingBatchId: 'batch_retail',
+    });
     tables.recalls.push({
       id: 'recall_qa',
       organizationId: ORG,
@@ -1482,6 +1497,7 @@ describe('describePharmacySopRecords', () => {
         { recordType: 'GOODS_RECEIPT', recordId: 'grn_qa' },
         { recordType: 'GOODS_RECEIPT', recordId: 'grn_plain' },
         { recordType: 'MANUFACTURING_BATCH', recordId: 'batch_qa' },
+        { recordType: 'MANUFACTURING_BATCH', recordId: 'batch_retail' },
         { recordType: 'MANUFACTURING_BATCH', recordId: 'batch_elsewhere' },
         { recordType: 'RECALL_NOTICE', recordId: 'recall_qa' },
         { recordType: 'RECALL_NOTICE', recordId: 'recall_b' },
@@ -1512,6 +1528,10 @@ describe('describePharmacySopRecords', () => {
       label: 'Batch LOT-1 · Insulin',
       value: 'Expires 2027-01-31',
       statusLabel: 'Quarantined',
+    });
+    expect(detail('MANUFACTURING_BATCH', 'batch_retail')).toMatchObject({
+      label: 'Batch RETAIL-NOEXP · Baby lotion',
+      value: 'No expiry',
     });
     expect(detail('RECALL_NOTICE', 'recall_qa')).toMatchObject({
       label: 'Recall DRAP-77 · Labelling error',

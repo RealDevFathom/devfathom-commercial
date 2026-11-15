@@ -141,7 +141,9 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
         channels: { capture: { enabled: true }, whatsapp: { enabled: false, configured: false } },
       }),
       updateDigestSetting: async () => ({}),
-      packAuthenticationFlags: async () => [],
+      // Mirrors the reader: pack scans record no supplier, so a supplier filter reads null.
+      packAuthenticationFlags: async (input: { supplierId?: string }) =>
+        input.supplierId ? null : [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
         permissions: { operational: true, financial: true, owner: true },
@@ -391,6 +393,10 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
+    // DEV-256: a filter that cannot apply is explained, never shown as unfiltered flags.
+    expect(screen.getByText('Pack authentication flags')).toBeVisible();
+    expect(screen.getByText(/these flags cannot be filtered by supplier/)).toBeVisible();
+    expect(screen.queryByText('No pack authentication flags match these branches.')).toBeNull();
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('sales');
     expect(screen.getByText('Source:').parentElement).not.toHaveTextContent('pharmacy_sales');
     expect(screen.getByText('Access:').parentElement).toHaveTextContent('Financial reports');
@@ -520,6 +526,54 @@ describe('pharmacy report catalog filters', () => {
     }
   );
 
+  // DEV-845: observed demand is a manager or owner report; others never see an error for it.
+  it.each([{ branch: 'b1' }, {}])(
+    'hides observed demand from a reports viewer without the manager capability (%o)',
+    async (searchParams) => {
+      actor.role = 'EMPLOYEE';
+      demandAggregate.mockClear();
+      reportAccess.can.mockImplementation(
+        async (...args: unknown[]) => args[1] !== 'pharmacy:manage'
+      );
+
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve(searchParams) }));
+
+      expect(reportAccess.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_1' }),
+        'pharmacy:manage',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(demandAggregate).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'Observed unmet demand' })).toBeNull();
+      expect(screen.queryByText(/Demand unavailable/)).toBeNull();
+      expect(screen.queryByText(/Choose one authorized branch to view recorded/)).toBeNull();
+    }
+  );
+
+  it('hides observed demand when the demand report refuses the viewer', async () => {
+    demandAggregate.mockClear();
+    demandAggregate.mockRejectedValueOnce(
+      new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' })
+    );
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+    expect(demandAggregate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('heading', { name: 'Observed unmet demand' })).toBeNull();
+    expect(screen.queryByText(/Demand unavailable/)).toBeNull();
+  });
+
+  it('shows observed demand to a manager, and a real failure as an alert', async () => {
+    demandAggregate.mockClear();
+    demandAggregate.mockRejectedValueOnce(new Error('Database unavailable'));
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+    expect(screen.getByRole('heading', { name: 'Observed unmet demand' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/Demand unavailable/);
+  });
+
   it('links signals without staff attribution to the supported audit search filter', async () => {
     signalStaff.userId = undefined;
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
@@ -549,5 +603,70 @@ describe('pharmacy report catalog filters', () => {
       expect(link.className).toContain('border');
       expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
     }
+  });
+
+  describe('KPI review flags and unavailable values (DEV-733)', () => {
+    const kpi = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="stat"]')).find(
+        (stat) => stat.querySelector('.eyebrow')?.textContent === label
+      )!;
+    const withMetrics = (metrics: Record<string, number | null>) =>
+      commandCentre.mockResolvedValueOnce({
+        freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
+        metrics: {
+          salesMinor: 212_197,
+          marginMinor: 2500,
+          cashMinor: 6000,
+          cashVarianceMinor: 0,
+          refundsMinor: 0,
+          openStockSignals: 1,
+          recommendedOrders: 1,
+          expiryValueMinor30: 0,
+          expiryValueMinor90: 0,
+          ...metrics,
+        },
+      } as never);
+
+    it('flags an abnormal refund ratio and a cash variance in amber with a visible label', async () => {
+      withMetrics({ refundsMinor: 82_797, cashVarianceMinor: -400 });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+      const refunds = kpi('Refunds');
+      expect(refunds).toHaveAttribute('data-flagged', 'true');
+      expect(refunds.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(within(refunds).getByText('Review')).toBeVisible();
+      expect(
+        within(refunds).getByText(
+          'Refunds are 39.02% of sales, at or above the 10.00% review threshold.'
+        )
+      ).toBeVisible();
+
+      const variance = kpi('Cash variance');
+      expect(variance).toHaveAttribute('data-flagged', 'true');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR -4.00');
+      expect(variance.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(within(variance).getByText('Review')).toBeVisible();
+    });
+
+    it('leaves normal figures unflagged', async () => {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      for (const label of ['Refunds', 'Cash variance', 'Sales']) {
+        expect(kpi(label)).not.toHaveAttribute('data-flagged');
+        expect(kpi(label).querySelector('.stat-figure')).not.toHaveClass('text-warning');
+      }
+    });
+
+    it('shows a cash variance with no final close as not computed, never 0.00', async () => {
+      withMetrics({ cashVarianceMinor: null });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+      const variance = kpi('Cash variance');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('—');
+      expect(variance).not.toHaveTextContent('0.00');
+      expect(
+        within(variance).getByText('Not computed · no final day close in period')
+      ).toBeVisible();
+      expect(variance).not.toHaveAttribute('data-flagged');
+    });
   });
 });

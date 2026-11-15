@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -45,6 +46,16 @@ import {
 } from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
+import {
+  backInStockQueue,
+  backInStockReference,
+  DAY_MS,
+  readBackInStockPolicy,
+  restockRequestCutoff,
+  selectRecoveryLine,
+  type BackInStockPolicy,
+} from './back-in-stock';
 import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
@@ -167,6 +178,7 @@ export class PharmacySaleError extends Error {
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
+      | 'INVALID_SALE_UNIT'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
@@ -306,6 +318,64 @@ type AddSaleLineInput = {
 };
 
 /**
+ * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
+ * presentation and pack hierarchy, never from the request. The pack level must belong
+ * to the line's presentation and that presentation to its medicine. A loose UNIT is one
+ * canonical unit. A PACK or STRIP holds exactly what its stored level holds, or what a
+ * lot of this medicine at this branch was received as at that level (the counter's
+ * DEV-717 fallback). Anything else is refused before quota, stock or price is touched.
+ */
+export async function assertSaleUnitConversion(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: Pick<
+    AddSaleLineInput,
+    'medicineId' | 'presentationId' | 'packLevelId' | 'saleUnit' | 'canonicalUnitsPerSaleUnit'
+  >,
+  at = new Date()
+): Promise<void> {
+  const packLevels = await db.packLevel.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      presentationId: input.presentationId,
+      presentation: { organizationId: scope.organizationId, medicineId: input.medicineId },
+    },
+    select: {
+      id: true,
+      level: true,
+      parentPackLevelId: true,
+      unitsPerParent: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+      versionGroupId: true,
+    },
+  });
+  if (!packLevels.some((level) => level.id === input.packLevelId))
+    throw new PharmacySaleError('INVALID_SALE_UNIT');
+  if (input.saleUnit === 'UNIT') {
+    if (input.canonicalUnitsPerSaleUnit !== 1) throw new PharmacySaleError('INVALID_SALE_UNIT');
+    return;
+  }
+  if (
+    packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
+      input.canonicalUnitsPerSaleUnit
+    )
+  )
+    return;
+  const received = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      packLevelId: input.packLevelId,
+      unitsPerPack: input.canonicalUnitsPerSaleUnit,
+      batch: { medicineId: input.medicineId },
+    },
+    select: { id: true },
+  });
+  if (!received) throw new PharmacySaleError('INVALID_SALE_UNIT');
+}
+
+/**
  * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
  * reserved customer orders keep the price they quoted, so they never opt in.
  */
@@ -313,9 +383,20 @@ export async function addSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
-  options: { applyCounterPromotions?: boolean } = {}
+  options: {
+    applyCounterPromotions?: boolean;
+    /** DEV-830: offline replay checks the sale unit against the setup at the signed sale time. */
+    saleUnitAt?: Date;
+  } = {}
 ) {
-  return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
+  return addSaleLineWithAllocation(
+    db,
+    scope,
+    input,
+    undefined,
+    options.applyCounterPromotions,
+    options.saleUnitAt
+  );
 }
 
 /** Internal customer-order path; never accepted by the counter's public input schema.
@@ -424,7 +505,8 @@ async function addSaleLineWithAllocation(
   scope: LedgerScope,
   input: AddSaleLineInput,
   reservation?: ReservedSaleAllocation,
-  applyCounterPromotions = false
+  applyCounterPromotions = false,
+  saleUnitAt?: Date
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -470,6 +552,9 @@ async function addSaleLineWithAllocation(
       requiresQualifiedPerson: true,
       requiresPharmacistPresence: true,
     });
+  // DEV-830 (F05): reserved customer-order and refill lines carry a multiplier the server
+  // derived from the stored lot when it reserved them; every other line is checked here.
+  if (!reservation) await assertSaleUnitConversion(db, scope, input, saleUnitAt);
   // DEV-92: a scanned serial names exactly one sealed pack of one lot.
   let pack: ResolvedSerializedPack | null = null;
   let override = input.override;
@@ -696,7 +781,9 @@ export async function changeSaleStatus(
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
   authority: SaleTransitionAuthority,
   reason?: string,
-  controlledWitness?: ControlledRestorationPin
+  controlledWitness?: ControlledRestorationPin,
+  /** DEV-508: structured detail kept on the status event, e.g. a void's reason code. */
+  eventPayload?: Prisma.InputJsonValue
 ) {
   const sale = await saleInScope(db, scope, saleId);
   // DEV-821: fails closed. A void releases the bill's stock, so a missing or
@@ -741,8 +828,15 @@ export async function changeSaleStatus(
     // the refund path's own manager/owner gate. Read after the claim: the sale
     // row is locked, so a tender that committed earlier is seen here and a later
     // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    // DEV-764: a points tender is not money taken: the void releases it below instead, so it
+    // never needs a money refund (or refund authority) first.
     const tenders = await db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId,
+        type: { not: 'LOYALTY' },
+      },
       select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
     });
     const unrefundedMinor = tenders.reduce(
@@ -753,6 +847,7 @@ export async function changeSaleStatus(
       0
     );
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
+    await releaseVoidedSaleRedemptions(db, scope, saleId);
     // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
     // claimed above, so this runs once per void.
     const voucherUses = new Map<string, number>();
@@ -807,7 +902,7 @@ export async function changeSaleStatus(
     await releaseSoldPackSerials(db, scope, saleId);
   }
 
-  await event(db, scope, saleId, kind, reason);
+  await event(db, scope, saleId, kind, reason, eventPayload);
   return saleInScope(db, scope, saleId);
 }
 
@@ -1541,6 +1636,16 @@ export async function demandAggregate(
   };
 }
 
+/** Campaign-key prefixes owned by server lifecycles (refill cycles, customer orders). */
+export const RESERVED_RESTOCK_CAMPAIGN_PREFIXES = ['refill-cycle:', 'order:'] as const;
+
+export function isReservedRestockCampaignKey(campaignKey: string | null | undefined) {
+  const key = campaignKey?.trim().toLowerCase();
+  return Boolean(
+    key && RESERVED_RESTOCK_CAMPAIGN_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
 export async function addRestockInterest(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1555,6 +1660,9 @@ export async function addRestockInterest(
 ) {
   if (!Number.isSafeInteger(input.quantityUnits) || input.quantityUnits <= 0)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-845: refill-cycle and order holds are settled only by their own lifecycle;
+  // a counter interest may not borrow their keys.
+  if (isReservedRestockCampaignKey(input.campaignKey)) throw new PharmacySaleError('INVALID_STATE');
   const demand = await db.unfulfilledDemandEvent.findFirst({
     where: {
       id: input.demandEventId,
@@ -1595,12 +1703,20 @@ export async function addRestockInterest(
   });
 }
 
+/** DEM-03 restock tables enforce exactly one branch through FORCE RLS. */
+async function activateRestockBranch(db: ScopedDb, scope: Pick<LedgerScope, 'branchId'>) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
+  );
+}
+
 export async function captureSafeRestockArrival(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { inventoryLotId: string; at?: Date }
+  input: { inventoryLotId: string; at?: Date; policy?: BackInStockPolicy }
 ) {
   const at = input.at ?? new Date();
+  const policy = input.policy ?? readBackInStockPolicy();
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -1623,18 +1739,22 @@ export async function captureSafeRestockArrival(
   )
     throw new PharmacySaleError('UNSAFE_STOCK');
 
+  await activateRestockBranch(db, scope);
   const interests = await db.pharmacyRestockInterest.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       status: 'OPEN',
+      // DEV-79: a waiting request expires; it is never notified after the window.
+      createdAt: { gt: restockRequestCutoff(at, policy) },
       demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
     },
     include: { patient: { select: { phone: true } } },
-    orderBy: { createdAt: 'asc' },
+    // DEV-79: first-in, first-out; the id breaks ties so every run orders alike.
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const captured = [];
-  for (const interest of interests) {
+  for (const interest of backInStockQueue(interests, at, policy).queue) {
     let reservation = null;
     if (interest.reserveOnArrival) {
       reservation = await db.pharmacyRestockReservation.create({
@@ -1661,8 +1781,12 @@ export async function captureSafeRestockArrival(
       },
       orderBy: { version: 'desc' },
     });
-    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone)
-      throw new PharmacySaleError('CONSENT_REQUIRED');
+    // A withdrawn consent or missing number skips this customer only: the
+    // request stays OPEN and unnotified, and the rest of the queue is served.
+    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone) {
+      captured.push({ interestId: interest.id, reservation, notification: null });
+      continue;
+    }
     const notification = await db.pharmacyRestockNotification.create({
       data: {
         organizationId: scope.organizationId,
@@ -1674,12 +1798,18 @@ export async function captureSafeRestockArrival(
         inventoryLotId: lot.id,
         idempotencyKey: `restock:${interest.id}:${lot.id}`,
       },
+      // DEV-845: `destination` is the customer's phone; the sender reads it on the server.
+      select: { id: true, status: true },
     });
     await db.pharmacyRestockInterest.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
       data: { status: 'NOTIFIED' },
     });
-    captured.push({ interestId: interest.id, reservation, notification });
+    captured.push({
+      interestId: interest.id,
+      reservation,
+      notification: { id: notification.id, status: notification.status, hasContact: true },
+    });
   }
   return captured;
 }
@@ -1775,12 +1905,158 @@ export async function recoverRestockInterest(
   });
 }
 
+/** How far back notified requests are re-examined for a recovering sale. */
+const RECOVERY_LOOKBACK_DAYS = 90;
+
+/**
+ * DEV-79: links notified back-in-stock requests to the completed sale that
+ * recovered them, through the same attribution as `recoverRestockInterest`
+ * (`recoveredSaleId` / `recoveredSaleLineId`). A request is recovered by a
+ * receipted sale of the requested SKU at the branch completed after its notice
+ * was sent and within the policy's recovery window, preferring the customer
+ * who asked.
+ * Each sale line recovers at most one request. Safe to run repeatedly.
+ */
+export async function linkRestockRecoveries(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { now?: Date; policy?: BackInStockPolicy } = {}
+) {
+  const now = input.now ?? new Date();
+  const policy = input.policy ?? readBackInStockPolicy();
+  await activateRestockBranch(db, scope);
+  const interests = await db.pharmacyRestockInterest.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'NOTIFIED',
+      orderLineId: null,
+      demandEvent: { requestedMedicineId: { not: null } },
+    },
+    select: {
+      id: true,
+      patientId: true,
+      demandEvent: { select: { requestedMedicineId: true } },
+      notifications: {
+        where: {
+          status: 'CAPTURED',
+          queuedAt: { gt: new Date(now.getTime() - RECOVERY_LOOKBACK_DAYS * DAY_MS) },
+        },
+        select: { id: true },
+      },
+    },
+  });
+  // A queued notice is not a delivered one. The window opens only when the
+  // provider accepted the back-in-stock message, at the time it was sent;
+  // withheld, failed or never-sent notices recover nothing.
+  const noticeKeys = interests.flatMap((interest) =>
+    interest.notifications.map((notice) => `back-in-stock:${notice.id}`)
+  );
+  const sent = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { dedupeKey: true, createdAt: true },
+      })
+    : [];
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
+  const pending = interests
+    .map((interest) => ({
+      id: interest.id,
+      patientId: interest.patientId,
+      medicineId: interest.demandEvent.requestedMedicineId,
+      notifiedAt: interest.notifications
+        .map((notice) => sentAt.get(`back-in-stock:${notice.id}`))
+        .filter((at): at is Date => at instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime())[0],
+    }))
+    .filter(
+      (interest): interest is typeof interest & { medicineId: string; notifiedAt: Date } =>
+        !!interest.medicineId && !!interest.notifiedAt
+    )
+    .sort(
+      (a, b) =>
+        a.notifiedAt.getTime() - b.notifiedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
+  if (!pending.length) return [];
+
+  const earliest = pending[0]!.notifiedAt;
+  const latestClose = new Date(
+    Math.max(...pending.map((interest) => interest.notifiedAt.getTime())) +
+      policy.recoveryWindowDays * DAY_MS
+  );
+  const lines = await db.pharmacySaleLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      medicineId: { in: [...new Set(pending.map((interest) => interest.medicineId))] },
+      sale: {
+        status: 'COMPLETED',
+        receiptNumber: { not: null },
+        completedAt: { gt: earliest, lte: latestClose },
+      },
+    },
+    select: {
+      id: true,
+      saleId: true,
+      medicineId: true,
+      sale: { select: { completedAt: true, customer: { select: { patientId: true } } } },
+    },
+  });
+  const used = new Set(
+    (
+      await db.pharmacyRestockInterest.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          recoveredSaleLineId: { in: lines.map((line) => line.id) },
+        },
+        select: { recoveredSaleLineId: true },
+      })
+    ).map((row) => row.recoveredSaleLineId)
+  );
+  const candidates = lines
+    .filter((line) => line.sale.completedAt && !used.has(line.id))
+    .map((line) => ({
+      saleLineId: line.id,
+      saleId: line.saleId,
+      medicineId: line.medicineId,
+      patientId: line.sale.customer?.patientId ?? null,
+      completedAt: line.sale.completedAt!,
+    }));
+
+  const linked = [];
+  for (const interest of pending) {
+    const line = selectRecoveryLine(
+      interest,
+      candidates.filter((candidate) => !used.has(candidate.saleLineId)),
+      policy
+    );
+    if (!line) continue;
+    used.add(line.saleLineId);
+    const recovered = await recoverRestockInterest(db, scope, {
+      interestId: interest.id,
+      saleLineId: line.saleLineId,
+    });
+    linked.push({
+      interestId: interest.id,
+      saleId: line.saleId,
+      saleLineId: line.saleLineId,
+      recoveredAt: recovered.recoveredAt,
+    });
+  }
+  return linked;
+}
+
 export async function restockRecoveryReport(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   campaignKey?: string
 ) {
-  return db.pharmacyRestockInterest.findMany({
+  const rows = await db.pharmacyRestockInterest.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -1800,4 +2076,6 @@ export async function restockRecoveryReport(
     },
     orderBy: { createdAt: 'desc' },
   });
+  // DEV-79: the counter finds a request by the reference its notice carried.
+  return rows.map((row) => ({ ...row, reference: backInStockReference(row.id) }));
 }

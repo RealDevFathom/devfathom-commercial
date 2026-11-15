@@ -44,6 +44,31 @@ export function drawerOpenedLabel(
   return drawer.openedBy ? `Opened ${time} by ${drawer.openedBy}` : `Opened ${time}`;
 }
 
+const DRAWER_MOVEMENT_LABELS: Record<string, string> = {
+  CASH_SALE: 'Cash sale',
+  CASH_REFUND: 'Cash refund',
+  PAID_IN: 'Paid in',
+  PAID_OUT: 'Paid out',
+};
+
+/**
+ * DEV-821: one cash movement made by someone other than the cashier running the
+ * till, as the close lists it: "14:05 · Cash sale · by Bilal Ahmed". The time is
+ * read in the workspace's zone, as the drawer's opening time is.
+ */
+export function otherOperatorMovementLabel(
+  movement: { kind: string; createdAt: Date | string; actor: string | null },
+  timeZone: string
+): string {
+  const time = new Date(movement.createdAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: workspaceTimezone(timeZone),
+  });
+  const kind = DRAWER_MOVEMENT_LABELS[movement.kind] ?? 'Cash movement';
+  return `${time} · ${kind} · by ${movement.actor ?? 'a former team member'}`;
+}
+
 export function cashMinor(value: string): number | null {
   if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
   const [whole, fraction = ''] = value.split('.');
@@ -73,6 +98,9 @@ const serverReady = () => false;
 // business day to open on. An unknown branch or malformed day falls back to defaults.
 export type DayCloseInitial = { branch?: string; date?: string };
 
+const DAY_CLOSE_PERMISSION_DETAIL =
+  'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
+
 export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -96,12 +124,12 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
+    !user ||
     !(isAdmin || closeGranted) ||
-    user?.organizationId !== entitlements.organizationId ||
+    user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
-    let detail =
-      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
+    let detail = DAY_CLOSE_PERMISSION_DETAIL;
     if (status === 'loading') {
       detail = 'Checking day-close access…';
     } else if (status !== 'authenticated') {
@@ -157,7 +185,12 @@ function DayCloseBranches({
 }) {
   // Read the tab's draft only after hydration, including when queries were prefetched.
   const hydrated = useSyncExternalStore(subscribeToNothing, clientReady, serverReady);
-  const branches = trpc.pharmacySales.counterBranches.useQuery();
+  // DEV-505: the server decides which branches this member may close (an
+  // administrator or day-close holder: every branch; a Manager: only their
+  // assigned branches), so the picker never offers a branch the close refuses.
+  const branches = trpc.pharmacySales.dayCloseBranches.useQuery(undefined, {
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+  });
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(
     initial?.date && DAY.test(initial.date) ? initial.date : null
@@ -170,6 +203,13 @@ function DayCloseBranches({
   const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
   const branchId = selected || linked || branches.data?.branches[0]?.id || '';
   const currency = branches.data?.currency;
+  if (branches.error?.data?.code === 'FORBIDDEN') {
+    return (
+      <SectionCard title="Day close unavailable">
+        <p role="status">{DAY_CLOSE_PERMISSION_DETAIL}</p>
+      </SectionCard>
+    );
+  }
   return (
     <div className="space-y-6">
       <PageHeader
@@ -462,6 +502,29 @@ function DayCloseForm({
                 <p className="text-sm">
                   Expected: {currency} {formatMinor(d.expectedMinor)}
                 </p>
+                {d.operatingCashier && d.operatingCashier !== d.openedBy ? (
+                  <p className="text-sm text-text-muted">Run by {d.operatingCashier}</p>
+                ) : null}
+                {/* DEV-821: cash moved into or out of this till by anyone but its cashier. */}
+                {d.otherOperatorMovements?.length ? (
+                  <div
+                    role="note"
+                    aria-label={`Drawer ${i + 1}: cash moved by someone other than its cashier`}
+                    className="space-y-1 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-text-body"
+                  >
+                    <p className="font-semibold text-text-strong">
+                      Cash moved by someone other than the till&apos;s cashier
+                    </p>
+                    <ul className="space-y-0.5">
+                      {d.otherOperatorMovements.map((m) => (
+                        <li key={m.id} className="font-mono tabular-nums">
+                          {otherOperatorMovementLabel(m, data.timezone)} · {currency}{' '}
+                          {formatMinor(m.amountMinor)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {d.status === 'OPEN' ? (
                   <label className="grid gap-2">
                     Counted cash for drawer {i + 1} ({currency})

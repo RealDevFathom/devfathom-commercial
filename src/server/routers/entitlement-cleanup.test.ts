@@ -120,7 +120,10 @@ describe('entitlement-independent inspection and cleanup routes', () => {
     await expect(caller.apiTokens.list()).resolves.toEqual([token]);
     await expect(caller.apiTokens.usage()).resolves.toEqual({});
     await expect(caller.apiTokens.revoke({ id: token.id })).resolves.toEqual(token);
-    expect(db.apiToken.delete).toHaveBeenCalledWith({ where: { id: token.id } });
+    expect(db.apiToken.delete).toHaveBeenCalledWith({
+      where: { id: token.id },
+      select: expect.not.objectContaining({ tokenHash: expect.anything() }),
+    });
     expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
       expect.objectContaining({ path: 'apiTokens.list', type: 'query' })
     );

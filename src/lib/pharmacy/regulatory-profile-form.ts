@@ -55,6 +55,24 @@ export function provinceName(code: string): string {
   );
 }
 
+/** QA-3: the audit action written when an owner or admin sets a branch's province. */
+export const BRANCH_PROVINCE_SET_ACTION = 'pharmacy.branch.province.set';
+
+/**
+ * QA-3 — the province a branch operates in, as the owner or admin sets it.
+ * Only a known Pakistani province or territory is accepted, stored by its code.
+ */
+export const branchProvinceInput = z
+  .object({
+    branchId: z.string().trim().min(1, 'Choose a branch.').max(128),
+    provinceCode: z.enum(Object.keys(PAKISTAN_PROVINCES) as [string, ...string[]], {
+      message: 'Choose the province this branch operates in.',
+    }),
+  })
+  .strict();
+
+export type BranchProvinceInput = z.infer<typeof branchProvinceInput>;
+
 /**
  * What the operator reads when their branch's province has no published rules
  * (#977): said plainly, instead of offering another province's rules — a
