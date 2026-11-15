@@ -1277,10 +1277,12 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        // Approvals run before the sale transaction opens: PIN checks use their own connection,
+        // so concurrent sales never hold a sale connection while waiting for a second one.
+        const scope = await scopeFor(ctx, input.branchId);
+        const lineInput = await approvedLineInput(ctx, txDb(ctx.db), scope, input);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
-          const lineInput = await approvedLineInput(ctx, db, scope, input);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
