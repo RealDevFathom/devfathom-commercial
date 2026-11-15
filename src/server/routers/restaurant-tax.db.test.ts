@@ -149,7 +149,8 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
   });
 
   it('atomically replaces an open profile through preset activation', async () => {
-    const replacementFrom = '2032-01-01T00:00:00.000Z';
+    // Activation accepts an ISO business date; it starts at Karachi midnight.
+    const replacementFrom = '2032-01-01';
     const successor = await withTenantDb(organizationId, (db) =>
       caller(db).activate({
         ...input,
@@ -174,7 +175,7 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
       expect(profiles[1]).toMatchObject({
         id: successor.id,
         presetId: input.profileId,
-        effectiveFrom: new Date(replacementFrom),
+        effectiveFrom: new Date('2031-12-31T19:00:00.000Z'),
         effectiveTo: null,
       });
       expect(profiles[1].rules.every((rule) => rule.effectiveTo === null)).toBe(true);
