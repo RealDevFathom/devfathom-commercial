@@ -39,6 +39,14 @@ describe('purchasingOutcome', () => {
     ).resolves.toMatchObject({ message: DUPLICATE, outcome: 'rejected' });
   });
 
+  it('explains a pack conversion mismatch as a definite rejection (DEV-201)', async () => {
+    await expect(fail(new Error('PACK_CONVERSION_MISMATCH'), true)).resolves.toMatchObject({
+      message: expect.stringContaining("do not match the medicine's pack setup"),
+      field: 'packLevelId',
+      outcome: 'rejected',
+    });
+  });
+
   it('keeps an unknown failure locked when the write may have committed', async () => {
     await expect(fail(new Error('CROSS_TENANT_REFERENCE'), true)).resolves.toMatchObject({
       outcome: 'unknown',
