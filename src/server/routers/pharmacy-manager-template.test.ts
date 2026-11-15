@@ -25,7 +25,7 @@ vi.mock('@/lib/pharmacy/day-close', async (original) => ({
 vi.mock('@/lib/pharmacy/reports', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/reports')>()),
   readPharmacyOwnerCommandCentre: vi.fn(async () => ({
-    metrics: { salesMinor: 100, marginMinor: 50, openStockSignals: 2 },
+    metrics: { salesMinor: 100, marginMinor: 50, openStockSignals: 2, safetyQueue: 7 },
   })),
 }));
 
@@ -202,6 +202,8 @@ describe('DEV-505 Manager template: reports', () => {
     );
     expect(result.metrics).toMatchObject({ salesMinor: null, marginMinor: null });
     expect(result.metrics.openStockSignals).toBe(2);
+    // The safety queue is organization-wide, so it is withheld from a branch reader.
+    expect(result.metrics.safetyQueue).toBeNull();
     await expect(
       caller.pharmacyReports.commandCentre({
         branchId: OTHER,
@@ -247,7 +249,11 @@ describe('DEV-505 Manager template: reports', () => {
 
   it('keeps organization-wide reports for an Auditor', async () => {
     const { caller } = fixture({ roleRules: template('auditor'), assigned: [] });
-    await caller.pharmacyReports.commandCentre({ from: '2026-11-08', to: '2026-11-14' });
+    const result = await caller.pharmacyReports.commandCentre({
+      from: '2026-11-08',
+      to: '2026-11-14',
+    });
+    expect(result.metrics.safetyQueue).toBe(7);
     expect(readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ branchIds: [ASSIGNED, OTHER] })

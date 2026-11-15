@@ -792,22 +792,26 @@ export const pharmacyReportsRouter = router({
         undefined,
         { db: ctx.db }
       );
+      const metrics = financial
+        ? result.metrics
+        : {
+            ...result.metrics,
+            salesMinor: null,
+            marginMinor: null,
+            cashMinor: null,
+            cashVarianceMinor: null,
+            refundsMinor: null,
+            accountsPayableMinor: null,
+            accountsReceivableMinor: null,
+            khataAgingMinor: null,
+          };
       return {
         ...result,
         permissions: { operational: true, financial },
-        metrics: financial
-          ? result.metrics
-          : {
-              ...result.metrics,
-              salesMinor: null,
-              marginMinor: null,
-              cashMinor: null,
-              cashVarianceMinor: null,
-              refundsMinor: null,
-              accountsPayableMinor: null,
-              accountsReceivableMinor: null,
-              khataAgingMinor: null,
-            },
+        // DEV-505: the safety queue is counted across the whole organization, so a
+        // branch-scoped reader (a Manager) is not shown other branches' activity.
+        metrics:
+          ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
       };
     } catch (error) {
       throw new TRPCError({
