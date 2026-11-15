@@ -162,6 +162,14 @@ import {
 
 import { assertInOrganization } from '../org-refs';
 import {
+  LOST_SALE_OUTCOMES,
+  LostSalesError,
+  lostSalesSummary,
+  setDemandOutcome,
+  settleLostSales,
+  updateLostSalesSettings,
+} from '@/lib/pharmacy/lost-sales';
+import {
   adminProcedure,
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -227,6 +235,13 @@ const demandReason = z.enum([
   'SEARCH_FAILURE',
   'SERVICE_FAILURE',
 ]);
+const lostSaleOutcome = z.enum(LOST_SALE_OUTCOMES);
+/** DEV-81: optional notify-when-back phone; digits with an optional leading +. */
+const notifyPhone = z
+  .string()
+  .trim()
+  .max(20)
+  .regex(/^\+?[\d\s-]{10,19}$/);
 const txDb = (tx: unknown) => tx as ScopedDb;
 
 async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
@@ -397,6 +412,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof LostSalesError)
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CONSENT_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
   if (error instanceof BranchOperationDeniedError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
@@ -2200,12 +2225,99 @@ export const pharmacySalesRouter = router({
           estimatedMarginMinor: z.number().int().optional(),
           customerId: z.string().min(1).optional(),
           consentRecorded: z.boolean().optional(),
+          // DEV-81 lost-sales capture. Price, visit and loss are server-derived.
+          terminalId: z.string().trim().min(1).max(128).optional(),
+          requestedQty: z.number().int().positive().optional(),
+          outcome: lostSaleOutcome.optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: notifyPhone.optional(),
+          freeText: z.string().trim().max(500).optional(),
+          matchedProductId: z.string().min(1).optional(),
+          matchConfidence: z.number().min(0).max(1).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await captureDemand(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const { branchId: branch, ...demand } = input;
+        return await captureDemand(ctx.db, await scopeFor(ctx, branch), demand);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: one tap on a counter outcome chip. Optional; never gates tender. */
+  setDemandOutcome: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          demandId: z.string().min(1),
+          outcome: lostSaleOutcome,
+          substituteProductId: z.string().min(1).optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: notifyPhone.optional(),
+          freeText: z.string().trim().max(500).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { branchId: branch, ...outcome } = input;
+        return await setDemandOutcome(ctx.db, await scopeFor(ctx, branch), outcome);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates. */
+  settleLostSales: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await settleLostSales(ctx.db, await scopeFor(ctx, input.branchId));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /** DEV-81: estimated lost sales by visit; a manager or owner view. */
+  lostSalesSummary: protectedProcedure
+    .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
+    .query(async ({ ctx, input }) =>
+      lostSalesSummary(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.from,
+        input.to
+      )
+    ),
+  /**
+   * DEV-81: the branch's estimate parameters. The 0.43 default is an
+   * illustrative grocery-study figure, so a manager or owner (a solo owner
+   * holds `pharmacy:manage`) may tune it; every change is audited.
+   */
+  updateLostSalesSettings: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          unknownLossProbability: z.number().min(0).max(1).optional(),
+          measuredRateMinEvents: z.number().int().min(1).max(100_000).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+      try {
+        const { branchId: branch, ...settings } = input;
+        const result = await updateLostSalesSettings(ctx.db, scope, settings);
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          action: 'lost_sales_settings_updated',
+          targetType: 'PharmacyBranch',
+          targetId: branch,
+          description: 'Lost-sales estimate parameters changed.',
+          metadata: { branchId: branch, ...settings },
+        });
+        return result;
       } catch (error) {
         fail(error);
       }
