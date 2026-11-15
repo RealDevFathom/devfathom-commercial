@@ -156,6 +156,14 @@ export function runStockTransaction<T>(
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
 }
 
+function isFiniteDecimal(value: Prisma.Decimal | string | number): boolean {
+  try {
+    return new Prisma.Decimal(value).isFinite();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Append one or more stock movements to the ledger atomically and (optionally)
  * idempotently. Quantities are converted to each item's canonical unit; the
@@ -173,6 +181,19 @@ export async function postStockMovements(
       'postStockMovements requires at least one movement.',
       'EMPTY_MOVEMENTS'
     );
+  }
+  for (const movement of input.movements) {
+    // NaN/±Infinity are valid Decimals and PostgreSQL numeric stores NaN, so a
+    // non-finite value would permanently poison every derived balance.
+    if (
+      !isFiniteDecimal(movement.quantity) ||
+      (movement.unitCost != null && !isFiniteDecimal(movement.unitCost))
+    ) {
+      throw new StockLedgerError(
+        'Stock movement quantities and unit costs must be finite decimals.',
+        'INVALID'
+      );
+    }
   }
   const at = input.now ?? new Date();
   const key = input.actor?.idempotencyKey ?? null;
