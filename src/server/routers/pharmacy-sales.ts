@@ -264,6 +264,18 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
+ * DEV-817: a demand-event response never carries the customer's notify-when-back
+ * phone. The counter only learns whether a contact is on file; the notification
+ * sender reads the number on the server.
+ */
+function redactDemandContact<T extends { notifyPhone?: string | null }>(
+  row: T
+): Omit<T, 'notifyPhone'> & { hasNotifyContact: boolean } {
+  const { notifyPhone, ...rest } = row;
+  return { ...rest, hasNotifyContact: Boolean(notifyPhone) };
+}
+
+/**
  * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
  * (for the purchasing view) or a manager/owner may read brand margins.
  */
@@ -2352,7 +2364,9 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...demand } = input;
-        return await captureDemand(ctx.db, await scopeFor(ctx, branch), demand);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return redactDemandContact(await captureDemand(ctx.db, scope, demand));
       } catch (error) {
         fail(error);
       }
@@ -2382,7 +2396,7 @@ export const pharmacySalesRouter = router({
       try {
         const { branchId: branch, ...outcome } = input;
         const scope = await requireCounterReceiptAccess(ctx, branch, true);
-        return await setDemandOutcome(ctx.db, scope, outcome);
+        return redactDemandContact(await setDemandOutcome(ctx.db, scope, outcome));
       } catch (error) {
         fail(error);
       }
@@ -2638,13 +2652,14 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        // DEV-817: the counter's gate, before any demand row is written.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => {
           const event = await captureDemand(txDb(tx), scope, {
             ...input,
             reason: 'SUBSTITUTE_DECLINED',
           });
-          return declineSubstitute(txDb(tx), scope, event.id);
+          return redactDemandContact(await declineSubstitute(txDb(tx), scope, event.id));
         });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
@@ -2707,11 +2722,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await recoverDemandWithAlternate(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.demandId,
-          input.saleLineId
+        // DEV-817: the counter's gate, before the demand row is read.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return redactDemandContact(
+          await recoverDemandWithAlternate(ctx.db, scope, input.demandId, input.saleLineId)
         );
       } catch (error) {
         fail(error);
@@ -2719,8 +2733,14 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
+    // DEV-817: a branch report with estimated value and margin; manager or owner only.
     .query(async ({ ctx, input }) =>
-      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
+      demandAggregate(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.from,
+        input.to
+      )
     ),
   addRestockInterest: protectedProcedure
     .input(
@@ -2738,8 +2758,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          addRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2749,8 +2771,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          captureSafeRestockArrival(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2760,8 +2784,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, interestId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          optOutRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input.interestId)
+          optOutRestockInterest(txDb(tx), scope, input.interestId)
         );
       } catch (error) {
         fail(error);
@@ -2773,8 +2799,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // DEV-817: restock interests hang off demand events; the counter's gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          recoverRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recoverRestockInterest(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -2784,8 +2812,13 @@ export const pharmacySalesRouter = router({
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
     )
+    // DEV-817: a branch report over demand events; manager or owner only.
     .query(async ({ ctx, input }) =>
-      restockRecoveryReport(ctx.db, await scopeFor(ctx, input.branchId), input.campaignKey)
+      restockRecoveryReport(
+        ctx.db,
+        await requireDrawerManagerAccess(ctx, input.branchId),
+        input.campaignKey
+      )
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────

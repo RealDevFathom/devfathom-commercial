@@ -311,14 +311,15 @@ export function notifyCapture(input: { notifyOptIn?: boolean; notifyPhone?: stri
 }
 
 /**
- * What a chip tap returns. DEV-817: never the customer's notify-when-back
- * phone; the counter only needs to know the tap was saved.
+ * What a chip tap returns. DEV-817: the router redacts the phone to a
+ * has-contact flag before it leaves the server.
  */
 const DEMAND_OUTCOME_RESULT = {
   id: true,
   outcome: true,
   substituteProductId: true,
   notifyOptIn: true,
+  notifyPhone: true,
   lossProbability: true,
   estLossPkrMinor: true,
 } as const;
