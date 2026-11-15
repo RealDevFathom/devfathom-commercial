@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { cutPharmacyDailyClose, requirePharmacyDayOpen } from './settlement';
+import {
+  cutPharmacyDailyClose,
+  requirePharmacyDayOpen,
+  requirePharmacyTodayOpenForTrading,
+} from './settlement';
 import { closePharmacyDay, readPharmacyClose, reopenPharmacyDayForTrading } from './day-close';
 
 /**
@@ -179,5 +183,37 @@ describe('reopening a closed business day for trading', () => {
       where: { organizationId: 'org', closeId: 'close-1' },
       select: { id: true },
     });
+  });
+});
+
+describe('the counter refuses a bill or line on a closed day', () => {
+  it("reads today's close in the workspace zone and refuses while it stands", async () => {
+    const { db, scoped } = fixture({ id: 'close-1', sequence: 1, reopen: null });
+    await expect(
+      requirePharmacyTodayOpenForTrading(scoped, scope, lateEvening)
+    ).rejects.toMatchObject({ reason: 'DAY_CLOSED' });
+    expect(db.pharmacyDailyClose.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org', branchId: 'branch', businessDate: date },
+      })
+    );
+  });
+
+  it('admits a bill or line once the latest close is reopened', async () => {
+    const { scoped } = fixture({ id: 'close-1', sequence: 1, reopen: { id: 'reopen-1' } });
+    await expect(
+      requirePharmacyTodayOpenForTrading(scoped, scope, lateEvening)
+    ).resolves.toBeUndefined();
+  });
+
+  it('checks the new day after midnight in the workspace zone', async () => {
+    const { db, scoped } = fixture(null);
+    // 00:30 in Karachi on 2026-11-03.
+    await requirePharmacyTodayOpenForTrading(scoped, scope, new Date('2026-11-02T19:30:00Z'));
+    expect(db.pharmacyDailyClose.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ businessDate: new Date('2026-11-03T00:00:00Z') }),
+      })
+    );
   });
 });

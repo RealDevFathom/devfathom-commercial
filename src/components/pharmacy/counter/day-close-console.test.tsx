@@ -528,7 +528,7 @@ describe('day-close console', () => {
       screen.getByText(/The owner can reopen today for trading with a reason/)
     ).toHaveTextContent(/re-record this close report with a reason, but that alone never reopens the day/);
   });
-  it('lets the owner reopen today for trading with a reason (DEV-631)', () => {
+  it('lets the owner reopen today for trading with a reason and their PIN (DEV-631)', () => {
     mocks.close = {
       id: 'c1',
       sequence: 1,
@@ -546,6 +546,13 @@ describe('day-close console', () => {
     fireEvent.change(within(form).getByLabelText('Reason for reopening'), {
       target: { value: 'Closed early by mistake' },
     });
+    // A reason alone is not enough: the owner re-enters their own PIN for this action.
+    expect(submit).toBeDisabled();
+    const pin = within(form).getByLabelText('Your owner PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    fireEvent.change(pin, { target: { value: '12' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(pin, { target: { value: '4321' } });
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
     const today = workspaceToday(WORKSPACE_ZONE);
@@ -554,9 +561,31 @@ describe('day-close console', () => {
         branchId: 'b',
         businessDate: new Date(`${today}T00:00:00.000Z`),
         reason: 'Closed early by mistake',
+        ownerPin: '4321',
       },
-      expect.objectContaining({ onSuccess: expect.any(Function) })
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onSettled: expect.any(Function),
+      })
     );
+  });
+  it('offers no reopen to a closer who is not the owner (DEV-631)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/The owner can reopen today for trading/)).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Reopen today for trading' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reopen day for trading' })).toBeNull();
   });
   it('offers no reopen for a past business day', () => {
     mocks.close = {

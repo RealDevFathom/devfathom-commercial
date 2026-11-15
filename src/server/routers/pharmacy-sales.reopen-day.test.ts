@@ -21,12 +21,20 @@ vi.mock('@/lib/abac', async () => ({
   // Delegated staff can hold admin access too; reopening stays the owner's.
   can: vi.fn(async () => true),
 }));
+vi.mock('@/lib/pharmacy/day-reopen-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/day-reopen-authorization')>()),
+  authenticateDayReopenPin: vi.fn(async () => ({ verified: true })),
+}));
 vi.mock('@/lib/pharmacy/day-close', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/day-close')>()),
   reopenPharmacyDayForTrading: vi.fn(async () => ({ id: 'reopen-1', closeId: 'close-1' })),
 }));
 
 import { reopenPharmacyDayForTrading } from '@/lib/pharmacy/day-close';
+import {
+  authenticateDayReopenPin,
+  DAY_REOPEN_PIN_BLOCKED,
+} from '@/lib/pharmacy/day-reopen-authorization';
 import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -75,21 +83,40 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
   return { db, caller };
 }
 
+const ownerPin = '4321';
+
 beforeEach(() => {
+  vi.mocked(authenticateDayReopenPin).mockClear().mockResolvedValue({ verified: true });
   vi.mocked(reopenPharmacyDayForTrading).mockClear();
   vi.mocked(annotateAudit).mockClear();
 });
 
 describe('pharmacySales.reopenDay', () => {
-  it('lets the owner reopen the day with a reason, scoped and audited', async () => {
+  it('lets the owner reopen the day with a reason and a fresh PIN, scoped and audited', async () => {
     const { caller } = fixture();
     await expect(
-      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Closed early by mistake' })
+      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Closed early by mistake', ownerPin })
     ).resolves.toEqual({ id: 'reopen-1', closeId: 'close-1' });
+    // The owner's own PIN, re-checked for this action before the reopen is written.
+    expect(authenticateDayReopenPin).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'org-1',
+      actorId: 'user-1',
+      pin: ownerPin,
+    });
+    expect(vi.mocked(authenticateDayReopenPin).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(reopenPharmacyDayForTrading).mock.invocationCallOrder[0]!
+    );
+    // The PIN never reaches the domain write.
     expect(reopenPharmacyDayForTrading).toHaveBeenCalledWith(
       expect.anything(),
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'user-1' },
-      { branchId: BRANCH, businessDate, reason: 'Closed early by mistake' }
+      { businessDate, reason: 'Closed early by mistake' }
+    );
+    expect(annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: { policy: 'PHARMACY_DAY_REOPEN_OWNER_PIN', pinVerified: true },
+      })
     );
     expect(annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
@@ -101,23 +128,42 @@ describe('pharmacySales.reopenDay', () => {
     );
   });
 
-  it('refuses delegated staff holding admin access before any write', async () => {
+  it('refuses delegated staff holding admin access before any PIN check or write', async () => {
     const { caller } = fixture('EMPLOYEE');
     await expect(
-      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Late sale' })
+      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Late sale', ownerPin })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Owner access required.' });
+    expect(authenticateDayReopenPin).not.toHaveBeenCalled();
     expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
   });
 
+  it('refuses a wrong or locked-out owner PIN and reopens nothing', async () => {
+    vi.mocked(authenticateDayReopenPin).mockResolvedValue({ blocked: DAY_REOPEN_PIN_BLOCKED });
+    const { caller } = fixture();
+    await expect(
+      caller.reopenDay({ branchId: BRANCH, businessDate, reason: 'Late sale', ownerPin: '0000' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: DAY_REOPEN_PIN_BLOCKED });
+    expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
+    expect(annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: { policy: 'PHARMACY_DAY_REOPEN_OWNER_PIN', pinVerified: false },
+      })
+    );
+  });
+
   it.each([
-    ['an empty reason', { branchId: BRANCH, businessDate, reason: '   ' }],
+    ['an empty reason', { branchId: BRANCH, businessDate, reason: '   ', ownerPin }],
+    ['a missing owner PIN', { branchId: BRANCH, businessDate, reason: 'Why' }],
+    ['a malformed owner PIN', { branchId: BRANCH, businessDate, reason: 'Why', ownerPin: '12' }],
     [
       'a business date carrying a time',
-      { branchId: BRANCH, businessDate: new Date('2026-11-02T10:00:00Z'), reason: 'Why' },
+      { branchId: BRANCH, businessDate: new Date('2026-11-02T10:00:00Z'), reason: 'Why', ownerPin },
     ],
   ])('rejects %s', async (_name, input) => {
     const { caller } = fixture();
-    await expect(caller.reopenDay(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(caller.reopenDay(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(authenticateDayReopenPin).not.toHaveBeenCalled();
     expect(reopenPharmacyDayForTrading).not.toHaveBeenCalled();
   });
 });

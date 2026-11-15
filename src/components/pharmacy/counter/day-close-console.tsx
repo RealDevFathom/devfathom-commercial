@@ -191,7 +191,6 @@ function DayCloseBranches({
           key={`${branchId}:${date}`}
           branchId={branchId}
           date={date}
-          today={today}
           currency={currency}
           ownerView={ownerView}
         />
@@ -203,14 +202,11 @@ function DayCloseBranches({
 function DayCloseForm({
   branchId,
   date,
-  today,
   currency,
   ownerView,
 }: {
   branchId: string;
   date: string;
-  /** Today in the workspace's zone: the only day the owner can reopen for trading. */
-  today: string;
   currency: string;
   ownerView: boolean;
 }) {
@@ -219,6 +215,7 @@ function DayCloseForm({
   const close = trpc.pharmacySales.closeDay.useMutation();
   const reopen = trpc.pharmacySales.reopenDay.useMutation();
   const [reopenReason, setReopenReason] = useState('');
+  const [reopenPin, setReopenPin] = useState('');
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [note, setNote] = useState('');
   const [confirmed, setConfirmed] = useState(false);
@@ -244,6 +241,10 @@ function DayCloseForm({
   // form offers the next close, which supersedes it.
   const reopened = close.data ? null : (data.close?.reopen ?? null);
   const report = close.data ?? (reopened ? null : data.close);
+  // Only today's business day can be reopened. Read from the clock on every render, not
+  // memoized, so a page left open past midnight never offers yesterday's reopen.
+  const isToday = date === workspaceToday(data.timezone);
+  const reopenPinValid = /^\d{4,8}$/.test(reopenPin);
   // A close cut after a reopen records the variance note, not a re-cut reason.
   const followsReopen = close.data ? Boolean(data.close?.reopen) : Boolean(data.closeFollowsReopen);
   const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
@@ -351,8 +352,8 @@ function DayCloseForm({
               Day closed. New tenders and drawer changes for this business date are blocked.
             </p>
             <p>
-              {date === today
-                ? 'The owner can reopen today for trading with a reason; the next close then supersedes this report.'
+              {isToday
+                ? 'The owner can reopen today for trading with a reason and their PIN; the next close then supersedes this report.'
                 : "Only today's business day can be reopened for trading. Record anything late on an open business day."}{' '}
               Someone with day-close permission can re-record this close report with a reason, but
               that alone never reopens the day.
@@ -396,16 +397,18 @@ function DayCloseForm({
               Print Z-report
             </Button>
             <p role="status">{printMessage}</p>
-            {date === today && (
+            {isToday && ownerView && (
               <form
                 className="grid gap-3 rounded-md border border-border-subtle p-4"
                 aria-label="Reopen today for trading"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!reopenReason.trim() || busy) return;
+                  if (!reopenReason.trim() || !reopenPinValid || busy) return;
                   reopen.mutate(
-                    { ...input, reason: reopenReason },
+                    { ...input, reason: reopenReason, ownerPin: reopenPin },
                     {
+                      // The PIN is never kept after an attempt, accepted or refused.
+                      onSettled: () => setReopenPin(''),
                       onSuccess: () => {
                         close.reset();
                         setReopenReason('');
@@ -434,13 +437,31 @@ function DayCloseForm({
                     onChange={(e) => setReopenReason(e.target.value)}
                   />
                 </label>
+                <label className="grid gap-2">
+                  Your owner PIN
+                  <Input
+                    className="min-h-11"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={8}
+                    value={reopenPin}
+                    disabled={busy}
+                    aria-invalid={reopenPin !== '' && !reopenPinValid}
+                    aria-describedby="day-reopen-pin-help"
+                    onChange={(e) => setReopenPin(e.target.value.replace(/\D/g, ''))}
+                  />
+                </label>
+                <p id="day-reopen-pin-help" className="-mt-1 text-sm text-text-muted">
+                  Re-enter your 4 to 8 digit staff PIN to confirm this reopen.
+                </p>
                 {reopen.error && <p role="alert">{counterErrorMessage(reopen.error)}</p>}
                 <div>
                   <Button
                     className="min-h-11"
                     type="submit"
                     variant="outline"
-                    disabled={busy || !reopenReason.trim()}
+                    disabled={busy || !reopenReason.trim() || !reopenPinValid}
                   >
                     {reopen.isPending ? 'Reopening…' : 'Reopen day for trading'}
                   </Button>

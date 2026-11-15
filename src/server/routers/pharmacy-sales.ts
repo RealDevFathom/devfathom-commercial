@@ -149,6 +149,7 @@ import {
   openPharmacyDrawer,
   pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
+  requirePharmacyTodayOpenForTrading,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   recordPharmacyCashMovement,
@@ -161,6 +162,10 @@ import {
   REFUND_FORBIDDEN,
   REFUND_PIN_POLICY,
 } from '@/lib/pharmacy/refund-authorization';
+import {
+  authenticateDayReopenPin,
+  DAY_REOPEN_PIN_POLICY,
+} from '@/lib/pharmacy/day-reopen-authorization';
 
 import { assertInOrganization } from '../org-refs';
 import {
@@ -1069,7 +1074,13 @@ export const pharmacySalesRouter = router({
   reopenDay: adminProcedure
     .input(
       z
-        .object({ branchId, businessDate: closeDate, reason: z.string().trim().min(1).max(1000) })
+        .object({
+          branchId,
+          businessDate: closeDate,
+          reason: z.string().trim().min(1).max(1000),
+          // The owner's own staff PIN, re-entered for this reopen (redacted from audit input).
+          ownerPin: z.string().regex(/^\d{4,8}$/),
+        })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
@@ -1078,13 +1089,29 @@ export const pharmacySalesRouter = router({
       await requireCloseAccess(ctx, input.branchId);
       try {
         const scope = await scopeFor(ctx, input.branchId);
+        // Fresh re-authentication, in its own transaction so a refusal keeps its strike.
+        const pin = await authenticateDayReopenPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: input.ownerPin,
+        });
+        annotateAudit(ctx, {
+          metadata: { policy: DAY_REOPEN_PIN_POLICY, pinVerified: 'verified' in pin },
+        });
+        if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
         const reopen = await ctx.db.$transaction(async (tx) =>
-          reopenPharmacyDayForTrading(txDb(tx), scope, input)
+          reopenPharmacyDayForTrading(txDb(tx), scope, {
+            businessDate: input.businessDate,
+            reason: input.reason,
+          })
         );
         annotateAudit(ctx, {
           targetType: 'PharmacyDailyClose',
           targetId: reopen.closeId,
-          metadata: { reopenId: reopen.id, businessDate: input.businessDate.toISOString().slice(0, 10) },
+          metadata: {
+            reopenId: reopen.id,
+            businessDate: input.businessDate.toISOString().slice(0, 10),
+          },
         });
         return reopen;
       } catch (error) {
@@ -1542,6 +1569,8 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
             if (input.quotation) return;
+            // DEV-631: no counter bill is opened while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
             await lockOpenPharmacyDrawer(db, scope, input.deviceId);
           });
@@ -1644,6 +1673,8 @@ export const pharmacySalesRouter = router({
         );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          // DEV-631: no line reserves stock while today's business day is closed.
+          await requirePharmacyTodayOpenForTrading(db, scope);
           for (const { kind, approval } of approvals)
             await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({

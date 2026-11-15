@@ -288,6 +288,27 @@ export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, d
 }
 
 /**
+ * DEV-631: a counter bill is not opened, and no line reserves stock, while today's
+ * business day (in the workspace zone) is closed for trading. A read, not the day
+ * lock: money stays guarded by `requirePharmacyDayOpen` under that lock, a new bill
+ * also needs an OPEN drawer (which a close closes, under the same lock), and a line
+ * that races a close is no different from a bill already open when the day closed.
+ */
+export async function requirePharmacyTodayOpenForTrading(
+  db: ScopedDb,
+  scope: LedgerScope,
+  now: Date = new Date()
+) {
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const today = new Date(`${workspaceToday(organization?.timezone, now)}T00:00:00.000Z`);
+  if (await pharmacyDayClosedForTrading(db, scope, today))
+    throw new PharmacySettlementError('DAY_CLOSED');
+}
+
+/**
  * DEV-630: an online money write (drawer open, tender, refund) books on the branch's
  * current business day: today in the workspace zone, the day the counter stamps and the
  * close opens on. A client-sent future or earlier date is refused, so cash cannot be
