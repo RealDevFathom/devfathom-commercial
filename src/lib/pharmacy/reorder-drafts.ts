@@ -22,7 +22,9 @@ export const REORDER_DEFAULT_COVER_DAYS = 14;
 /** Used only when neither the last order line nor a past delivery records a lead time. */
 export const REORDER_DEFAULT_LEAD_TIME_DAYS = 7;
 export const REORDER_MAX_PACKS = 100_000;
-const MAX_FACT_ROWS = 5_000;
+/** Most medicines one reorder plan (and so one supplier draft) can hold. */
+export const REORDER_MAX_DRAFT_LINES = 5_000;
+const MAX_FACT_ROWS = REORDER_MAX_DRAFT_LINES;
 
 export type ReorderPolicy = {
   /** Sales history the daily rate is measured over. */

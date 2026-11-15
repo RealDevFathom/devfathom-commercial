@@ -33,6 +33,8 @@ export class PharmacyInventoryError extends Error {
       | 'COAUTH_REQUIRED'
       | 'COLD_CHAIN_STORAGE_REQUIRED'
       | 'VARIANCE_REASON_REQUIRED'
+      | 'UNSALEABLE_DESTINATION'
+      | 'IDEMPOTENCY_CONFLICT'
   ) {
     super(reason);
   }

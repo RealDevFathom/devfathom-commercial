@@ -3,12 +3,14 @@ import 'server-only';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { CounterReceipt } from './counter-receipt';
 import type { DispensingLabelSource } from './dispensing-label';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
 
 /** Read-only label provenance. Never translate directions or substitute a licence. */
 export async function readDispensingLabelSources(
   db: ScopedDb,
   { organizationId, branchId }: { organizationId: string; branchId: string },
-  receipt: CounterReceipt
+  receipt: CounterReceipt,
+  timeZone?: string | null
 ): Promise<DispensingLabelSource[]> {
   const scope = { organizationId, branchId };
   if (receipt.receiptNumber === null || !receipt.completedAt) return [];
@@ -17,8 +19,8 @@ export async function readDispensingLabelSources(
     db.branchRegulatoryProfile.findFirst({
       where: {
         ...scope,
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        // DEV-298: a sale on a profile's start day uses it from local midnight.
+        ...regulatoryProfileInForceWhere(at, timeZone),
       },
       orderBy: { version: 'desc' },
       select: { licenceNumber: true, qualifiedPersonRegistration: true },
