@@ -55,6 +55,7 @@ describe('CounterUnitToggle (POS-03)', () => {
       unitsPerPack: 10,
     });
     const props = {
+      onHandUnits: 500,
       selected: 'UNIT' as SaleUnitKind | null,
       quantity: '1',
       preview: null,
