@@ -256,4 +256,101 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     expect(assertStoredPharmacyMayOperate).not.toHaveBeenCalled();
     expect(db.pharmacySale.updateMany).toHaveBeenCalledOnce();
   });
+
+  // DEV-86: a regulated line added inside presence hours cannot be paid for after they close.
+  const regulatedSale = (medicine: { rx: boolean; restricted: boolean; controlled: boolean }) => ({
+    id: 'sale-a',
+    status: 'OPEN',
+    customerId: 'customer-a',
+    lines: [{ medicine: { id: 'medicine-a', ...medicine } }],
+    tenders: [],
+  });
+  const presenceGate = {
+    name: 'pharmacy.sale.tender_regulated',
+    requiresQualifiedPerson: true,
+    requiresPharmacistPresence: true,
+  };
+
+  it.each([
+    ['prescription-only', { rx: true, restricted: false, controlled: false }],
+    ['restricted', { rx: false, restricted: true, controlled: false }],
+    ['controlled', { rx: false, restricted: false, controlled: true }],
+  ])(
+    'applyPharmacyTender refuses a sale with a %s line outside pharmacist-presence hours',
+    async (_kind, medicine) => {
+      vi.mocked(assertStoredPharmacyMayOperate)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(absent);
+      let payloadHash = '';
+      const db = {
+        $executeRaw: vi.fn(async (sql: { values: unknown[] }) => {
+          payloadHash = String(sql.values[5]);
+          return 1;
+        }),
+        pharmacyMoneyIdempotencyKey: {
+          findUnique: vi.fn(async () => ({
+            commandType: 'tender',
+            payloadHash,
+            resultPayload: null,
+          })),
+        },
+        $queryRaw: vi.fn(async () => []),
+        pharmacyDailyClose: { findFirst: vi.fn(async () => null) },
+        pharmacySale: { findFirst: vi.fn(async () => regulatedSale(medicine)) },
+        pharmacyTender: { create: vi.fn() },
+      };
+
+      await expect(
+        applyPharmacyTender(db as never, scope, {
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'CASH',
+          amountMinor: 100,
+          idempotencyKey: 'tender-a',
+        })
+      ).rejects.toBe(absent);
+      expect(assertStoredPharmacyMayOperate).toHaveBeenLastCalledWith(
+        db,
+        'org-a',
+        'branch-a',
+        presenceGate
+      );
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('redeemSalePoints refuses a sale with an Rx line outside pharmacist-presence hours', async () => {
+    vi.mocked(assertStoredPharmacyMayOperate)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(absent);
+    const db = {
+      $queryRaw: vi.fn(async () => []),
+      pharmacyLoyaltyPointsEntry: { findUnique: vi.fn(async () => null), create: vi.fn() },
+      pharmacySale: {
+        findFirst: vi.fn(async () =>
+          regulatedSale({ rx: true, restricted: false, controlled: false })
+        ),
+      },
+      pharmacyTender: { create: vi.fn() },
+    };
+
+    await expect(
+      redeemSalePoints(db as never, scope, {
+        saleId: 'sale-a',
+        points: 2,
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        idempotencyKey: 'redeem-a',
+      })
+    ).rejects.toBe(absent);
+    expect(assertStoredPharmacyMayOperate).toHaveBeenLastCalledWith(
+      db,
+      'org-a',
+      'branch-a',
+      presenceGate
+    );
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
 });
