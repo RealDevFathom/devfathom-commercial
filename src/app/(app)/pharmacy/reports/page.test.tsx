@@ -338,6 +338,18 @@ describe('pharmacy report catalog filters', () => {
     }
   );
 
+  it('defaults to the only branch and puts the period summary before the explanatory copy', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('combobox', { name: /^Branch$/ })).toHaveValue('b1');
+    const heading = screen.getByRole('heading', { name: 'Selected period at a glance' });
+    const stat = screen.getByText('Sales');
+    const prose = screen.getByText(/Report period:/);
+    expect(
+      stat.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(heading).toBeVisible();
+  });
+
   it('links signals without staff attribution to the supported audit search filter', async () => {
     signalStaff.userId = undefined;
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
