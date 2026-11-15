@@ -16,6 +16,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
   const [amount, setAmount] = useState('');
   const [deviceId, setDeviceId] = useState('');
   const [location, setLocation] = useState('');
+  const [managerPin, setManagerPin] = useState('');
   const [requestKey, setRequestKey] = useState('');
   const [notice, setNotice] = useState('');
   const moneyAction = ['COLLECT', 'REMIT', 'CASH_RETURN'].includes(action);
@@ -34,6 +35,9 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
         onSubmit={async (event) => {
           event.preventDefault();
           setNotice('');
+          // DEV-647: the PIN is single-use and never kept in the form after submitting.
+          const pin = action === 'PHYSICAL_RETURN' ? managerPin : '';
+          setManagerPin('');
           try {
             const result = await command.mutateAsync({
               branchId,
@@ -48,6 +52,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
               ...(action === 'PHYSICAL_RETURN' && location
                 ? { quarantineLocationId: location }
                 : {}),
+              ...(pin ? { managerPin: pin } : {}),
             });
             setNotice(
               `${result.replayed ? 'Already recorded' : 'Recorded'}; collected ${result.totals.collectedMinor}, remitted ${result.totals.remittedMinor}, cash still with runner ${result.totals.custodyMinor} minor units.`
@@ -126,6 +131,19 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
           <Label className="grid gap-1">
             Quarantine location ID (sold goods)
             <Input value={location} onChange={(event) => setLocation(event.target.value)} />
+          </Label>
+        ) : null}
+        {action === 'PHYSICAL_RETURN' ? (
+          <Label className="grid gap-1">
+            Manager or owner PIN (required when paid cash is refunded)
+            <Input
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              value={managerPin}
+              onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
+            />
           </Label>
         ) : null}
         <Button type="submit" disabled={command.isPending}>

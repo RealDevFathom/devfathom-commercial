@@ -45,6 +45,7 @@ import {
   type CounterReceiptPresentationResult,
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
+import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
@@ -573,12 +574,13 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
+  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
   const deviceUnavailable = useHydrated() && deviceId === null;
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
-    { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
+    { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
@@ -1025,16 +1027,9 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.select();
   }, []);
 
-  // DEV-725: a ready bill on a device with no OPEN drawer is not offered for
-  // payment; recovery of an earlier attempt (any other bill state) stays open.
-  const payBlockedByDrawer = drawerRequired && billState === 'ready';
   const openPayment = useCallback(() => {
-    if (payBlockedByDrawer) {
-      setNotice({ tone: 'warning', message: messageFrom(new Error('DRAWER_NOT_OPEN')) });
-      return;
-    }
     setPaymentOpen(true);
-  }, [payBlockedByDrawer]);
+  }, []);
 
   const startNextBill = useCallback(() => {
     if (busy || attemptRef.current) return;
@@ -1063,6 +1058,14 @@ function ScopedPharmacyCounterConsole({
     if (!paymentOpen) return;
     tenderRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [paymentOpen]);
+
+  // DEV-714: the tender panel holds cash while the drawer reads closed, so a
+  // cached "closed" (e.g. the drawer was opened in another tab on this device)
+  // is re-read from the server each time payment opens.
+  const refetchDrawer = drawerQuery.refetch;
+  useEffect(() => {
+    if (paymentOpen && drawerQueryEnabled) void refetchDrawer();
+  }, [paymentOpen, drawerQueryEnabled, refetchDrawer]);
 
   const runSearch = useCallback(
     async (submittedQuery?: string) => {
@@ -2259,6 +2262,13 @@ function ScopedPharmacyCounterConsole({
               deviceId={counterDeviceId}
               businessDate={todayBusinessDate}
             />
+            <CounterKhataPaymentPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={todayBusinessDate}
+            />
             <Link
               className={buttonVariants({
                 variant: 'outline',
@@ -2713,7 +2723,7 @@ function ScopedPharmacyCounterConsole({
             ) : (
               <Button
                 className="h-14 w-full justify-between"
-                disabled={billState !== 'ready' || blocked || busy || drawerRequired}
+                disabled={billState !== 'ready' || blocked || busy}
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -2726,9 +2736,7 @@ function ScopedPharmacyCounterConsole({
             <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
               {blocked
                 ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
-                : payBlockedByDrawer
-                  ? 'Open the cash drawer above before taking payment.'
-                  : unknownTender
+                : unknownTender
                   ? 'Payment locked until its outcome is checked. Review payment status before taking more money.'
                   : storageError
                     ? 'Browser recovery is unavailable. Review payment status before continuing.'
@@ -2799,7 +2807,7 @@ function ScopedPharmacyCounterConsole({
         </Button>
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
-          disabled={billState !== 'ready' || blocked || busy || drawerRequired}
+          disabled={billState !== 'ready' || blocked || busy}
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
@@ -2830,8 +2838,7 @@ function ScopedPharmacyCounterConsole({
             Automatically open print dialog after payment
           </Label>
           <p id="counter-auto-print-help" className="text-xs text-text-muted">
-            This counter session only. Requires a newly settled bill and issued receipt. Physical
-            printing is not confirmed.
+            Opens the print window after each payment on this computer.
           </p>
         </div>
         {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
@@ -2850,6 +2857,7 @@ function ScopedPharmacyCounterConsole({
           ref={tenderRef}
           confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
+          drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
           manualSettingsLoading={manualSettings.isLoading}
           manualSettingsError={manualSettings.isError}
           onReloadManualSettings={() => void manualSettings.refetch()}

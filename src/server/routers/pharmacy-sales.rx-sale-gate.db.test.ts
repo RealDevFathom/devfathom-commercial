@@ -163,13 +163,14 @@ const payInPoints = (userId: string, sale: { saleId: string; netMinor: number })
 
 /**
  * addLine, a full cash tender, and a loyalty-funded completion are each refused, and nothing is
- * paid. `tenderRefusal` is the gate's own refusal unless the user holds an explicit DENY: with
+ * paid. `counterRefusal` is the gate's own refusal unless the user holds an explicit DENY: with
  * the central precedence fix (6b120a50) the counter-access check refuses that user first, which
- * is still a 403 that pays nothing.
+ * is still a 403 that pays nothing. DEV-607: bill creation and addLine use that same
+ * counter-access check, so it refuses such a user there too, before any stock is allocated.
  */
 async function expectRefusedEverywhere(
   userId: string,
-  tenderRefusal: { code: string; message?: string } = DENIED
+  counterRefusal: { code: string; message?: string } = DENIED
 ) {
   await expect(
     act(userId, async (api) =>
@@ -177,9 +178,9 @@ async function expectRefusedEverywhere(
         rxLine((await api.create({ branchId: ids.branch, deviceId: counterDevice() })).id)
       )
     )
-  ).rejects.toMatchObject(DENIED);
+  ).rejects.toMatchObject(counterRefusal);
   const tendered = await pharmacistSale();
-  await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
+  await expect(payInCash(userId, tendered)).rejects.toMatchObject(counterRefusal);
   const redeemed = await pharmacistSale({ customer: true });
   await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
   for (const sale of [tendered, redeemed])

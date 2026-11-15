@@ -33,10 +33,25 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 function fixture(openDrawer: { id: string; businessDate: Date } | null) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    // DEV-607: create takes the counter gate (member, pharmacy:counter, branch assignment).
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
     },
     pharmacyDrawerSession: { findFirst: vi.fn().mockResolvedValue(openDrawer) },
     pharmacySale: {

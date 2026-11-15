@@ -590,7 +590,11 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       await expect(page.getByText('Loyalty customer linked to this bill.')).toBeVisible();
     };
     await makeBill();
-    await page.getByLabel('Tender', { exact: true }).selectOption('KHATA');
+    await pressControl(
+      page
+        .getByRole('group', { name: 'Tender', exact: true })
+        .getByRole('button', { name: 'Khata', exact: true })
+    );
     await page.getByLabel('Family Khata account').selectOption(familyId);
     await page.getByLabel('Amount', { exact: true }).fill('1.00');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
