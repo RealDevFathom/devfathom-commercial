@@ -157,6 +157,52 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
   });
 
+  // DEV-86: an Rx, restricted or controlled line is refused outside pharmacist-presence hours.
+  const absent = new BranchOperationDeniedError('PHARMACIST_NOT_PRESENT');
+  const openLineDb = (medicine: { rx: boolean; restricted: boolean; controlled: boolean }) => {
+    const db = lineDb();
+    db.pharmacySale.findFirst.mockResolvedValue({ id: 'sale-a', status: 'OPEN', lines: [] });
+    db.pharmacySale.updateMany.mockResolvedValue({ count: 1 });
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine-a', ...medicine });
+    return db;
+  };
+
+  it.each([
+    ['prescription-only', { rx: true, restricted: false, controlled: false }],
+    ['restricted', { rx: false, restricted: true, controlled: false }],
+    ['controlled', { rx: false, restricted: false, controlled: true }],
+  ])(
+    'addSaleLine refuses a %s line outside pharmacist-presence hours before allocating stock',
+    async (_kind, medicine) => {
+      vi.mocked(assertStoredPharmacyMayOperate)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(absent);
+      const db = openLineDb(medicine);
+
+      await expect(addSaleLine(db as never, scope, lineInput)).rejects.toBe(absent);
+      expect(assertStoredPharmacyMayOperate).toHaveBeenLastCalledWith(db, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.dispense_regulated',
+        requiresQualifiedPerson: true,
+        requiresPharmacistPresence: true,
+      });
+      expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
+      expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+      expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('addSaleLine does not apply pharmacist-presence hours to an OTC line', async () => {
+    vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValue(undefined);
+    const db = openLineDb({ rx: false, restricted: false, controlled: false });
+
+    // Stock allocation is not mocked here; only the gate calls before it matter.
+    await addSaleLine(db as never, scope, lineInput).catch(() => undefined);
+    expect(assertStoredPharmacyMayOperate).toHaveBeenCalledOnce();
+    expect(assertStoredPharmacyMayOperate).toHaveBeenCalledWith(db, 'org-a', 'branch-a', {
+      name: 'pharmacy.sale.dispense',
+    });
+  });
+
   it('addReservedSaleLine (customer orders) refuses on an expired licence too', async () => {
     vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(lapsed);
     const db = lineDb();
