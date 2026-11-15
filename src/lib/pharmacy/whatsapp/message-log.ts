@@ -16,7 +16,8 @@ export type MessageLogKind =
   | 'ORDER_FALLBACK'
   | 'OPT_OUT'
   | 'OPT_IN'
-  | 'CONSENT_ACK';
+  | 'CONSENT_ACK'
+  | 'RECEIPT_LINK';
 
 export type MessageLogEntry = {
   organizationId: string;
