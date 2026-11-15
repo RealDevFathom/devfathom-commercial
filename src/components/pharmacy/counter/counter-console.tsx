@@ -2801,6 +2801,7 @@ function ScopedPharmacyCounterConsole({
           ref={tenderRef}
           confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
+          drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
           manualSettingsLoading={manualSettings.isLoading}
           manualSettingsError={manualSettings.isError}
           onReloadManualSettings={() => void manualSettings.refetch()}

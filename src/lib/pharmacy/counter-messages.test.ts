@@ -20,7 +20,7 @@ import { PharmacySettlementError } from './settlement';
 describe('counterErrorMessage', () => {
   it('maps the drawer reason that leaked to the counter', () => {
     expect(counterErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(
-      'Open the cash drawer for this counter before taking a payment.'
+      'Open the cash drawer for this counter before taking cash. Other tenders do not need the drawer.'
     );
   });
 
