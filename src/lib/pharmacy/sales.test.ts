@@ -341,6 +341,8 @@ describe('DEV-819 voucher uses on a voided bill', () => {
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
       pharmacyTender: { findMany: async () => [] },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: async () => ({ count: 0 }) },
     };
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Wrong bill');
