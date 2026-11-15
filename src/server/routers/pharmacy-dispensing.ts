@@ -50,6 +50,9 @@ export const pharmacyDispensingRouter = router({
   // Pharmacy Safety holder (the same pair the rail offers it to). Only a
   // dispensing pharmacist may record evidence (`recordSubstitution`), so the
   // read says which of the two this caller is.
+  // QA-7: patient records are a separate permission. Patient names are read and
+  // returned only for a caller holding `pharmacy:prescriptions` (the patient-
+  // record permission `readPatient` enforces); everyone else gets `patient: null`.
   substitutionWorkspace: auditedProtectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session!.user;
     const subject = subjectFromSession(user);
@@ -65,20 +68,41 @@ export const pharmacyDispensingRouter = router({
         message: 'You do not have permission for this action.',
       });
     }
-    return {
-      canRecord,
-      lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
-        orderBy: { requestedAt: 'desc' },
-        include: {
-          line: {
-            include: {
-              medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
-              presentation: true,
-              prescription: { include: { patient: true } },
-            },
+    const canViewPatients = await can(subject, 'pharmacy:prescriptions', undefined, options);
+    const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      orderBy: { requestedAt: 'desc' },
+      include: {
+        line: {
+          include: {
+            medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
+            presentation: true,
+            prescription: true,
           },
         },
-      }),
+      },
+    });
+    const patientIds = [...new Set(items.map((item) => item.line.prescription.patientId))];
+    const patients =
+      canViewPatients && patientIds.length > 0
+        ? await ctx.db.pharmacyPatient.findMany({
+            where: { id: { in: patientIds } },
+            select: { id: true, displayName: true },
+          })
+        : [];
+    const patientById = new Map(patients.map((patient) => [patient.id, patient]));
+    return {
+      canRecord,
+      canViewPatients,
+      lines: items.map((item) => ({
+        ...item,
+        line: {
+          ...item.line,
+          prescription: {
+            ...item.line.prescription,
+            patient: patientById.get(item.line.prescription.patientId) ?? null,
+          },
+        },
+      })),
     };
   }),
   enqueueReview: dispense
