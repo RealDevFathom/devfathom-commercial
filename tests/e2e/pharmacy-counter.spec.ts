@@ -741,46 +741,45 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   // New browser context has its own device sequence; choose its receipt explicitly.
   if (device) await pressControl(matches.filter({ hasText: device }));
   else await pressControl(matches.first());
-  await dialog.getByLabel('Sold line').selectOption({ index: 1 });
+  // DEV-501: a one-line return and refund is one form and one confirm. The only line and
+  // the only (cash) tender are preselected; quantity is in the unit sold (strips) plus loose
+  // units, and the refund is prefilled from the returned quantity.
+  const half = (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2);
+  await expect(dialog.getByLabel('Sold line')).not.toHaveValue('');
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
-  await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await dialog.getByLabel('Return quantity (strips)').fill('0');
+  await dialog.getByLabel('Plus loose units').fill('5');
   await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
   await dialog
-    .getByLabel('Inspection and integrity decision')
+    .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
-  const confirm = dialog.getByLabel('I confirm the quantity, inspection and stock disposition.');
-  await confirm.focus();
-  await confirm.press('Space');
-  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
-  await dialog.getByLabel('Original tender').selectOption({ index: 1 });
-  await dialog
-    .getByLabel('Refund amount (PKR)')
-    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
-  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
+  await expect(dialog.getByLabel('Refund to')).not.toHaveValue('');
+  await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(half);
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
+  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText(
+    `Return recorded and refunded: PKR ${half}`
+  );
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'CASH refund:'
   );
   // The remaining physical units have no verifiable lot. Keep separate quarantine custody.
   await dialog.getByLabel('Returned lot / batch').selectOption('');
-  await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await dialog.getByLabel('Return quantity (strips)').fill('0');
+  await dialog.getByLabel('Plus loose units').fill('5');
   await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
   await dialog
-    .getByLabel('Inspection and integrity decision')
+    .getByLabel('Inspection and integrity decision (optional)')
     .fill('Batch marking unreadable; pharmacist verification required');
-  await confirm.focus();
-  await confirm.press('Space');
-  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
+  await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(
+    (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) - Number(half)).toFixed(2)
+  );
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
+  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Return recorded and refunded');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'pharmacist verification pending'
   );
-  await dialog
-    .getByLabel('Refund amount (PKR)')
-    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
-  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
-  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   const popupPromise = page.waitForEvent('popup');
   await pressControl(dialog.getByRole('button', { name: 'Reprint receipt with refunds' }));
   const popup = await popupPromise;
