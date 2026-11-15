@@ -125,20 +125,23 @@ export type RetentionPurgeResult = {
  * the append-only prescription and register guards admit a DELETE; the
  * database re-checks the window and legal holds itself. A record the database
  * still refuses (a legal hold, or a retained row that references it) is rolled
- * back to its savepoint and reported, never forced.
+ * back to its savepoint and reported, never forced. At most
+ * `maxPurgesPerClass` records of each class are removed per run.
  */
 export async function purgeExpiredPharmacyRecords(
   db: RetentionPurgeDb,
-  options: { maxPurges?: number; maxScanned?: number } = {}
+  options: { maxPurgesPerClass?: number; maxScanned?: number } = {}
 ): Promise<RetentionPurgeResult> {
-  const maxPurges = options.maxPurges ?? 200;
+  // Each class has its own budget, so a steady audit backlog never starves the
+  // register, prescription or fiscal classes.
+  const maxPurges = options.maxPurgesPerClass ?? 50;
   const maxScanned = options.maxScanned ?? 1_000;
   const result: RetentionPurgeResult = {
     purged: { AUDIT: 0, CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 0 },
     retained: [],
   };
-  let purgedTotal = 0;
   for (const recordClass of PURGE_ORDER) {
+    let purgedTotal = 0;
     const source = SOURCES[recordClass];
     let scanned = 0;
     let cursor: { anchor: Date; id: string } | null = null;

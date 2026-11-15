@@ -878,6 +878,30 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
   });
 }
 
+/**
+ * DEV-96: purge pharmacy records past their rule-set retention window, bounded
+ * per run. Isolated from job processing: a purge that fails or times out is
+ * logged and never stops stale recovery or claims.
+ */
+async function runPharmacyRetentionPurge(): Promise<void> {
+  try {
+    const result = await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), {
+      timeout: 120_000,
+    });
+    if (Object.values(result.purged).some(Boolean) || result.retained.length > 0) {
+      // Record classes, ids and database refusal reasons only; never record contents.
+      console.info('PHARMACY_RETENTION_PURGE', {
+        purged: result.purged,
+        retained: result.retained,
+      });
+    }
+  } catch (error) {
+    console.error('PHARMACY_RETENTION_PURGE_FAILED', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -890,8 +914,7 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
-  // DEV-96: pharmacy records past their rule-set retention window, bounded per run.
-  await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), { timeout: 120_000 });
+  await runPharmacyRetentionPurge();
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

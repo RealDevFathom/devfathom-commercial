@@ -94,7 +94,7 @@ describe('DEV-96 retention purge', () => {
     ]);
   });
 
-  it('stops at the per-run purge bound', async () => {
+  it('bounds each class separately so an audit backlog cannot starve later classes', async () => {
     const { db } = fakeDb({
       audit_logs: [
         { id: 'a', organizationId: 'org-a' },
@@ -102,7 +102,7 @@ describe('DEV-96 retention purge', () => {
       ],
       pharmacy_sales: [{ id: 's', organizationId: 'org-a' }],
     });
-    const result = await purgeExpiredPharmacyRecords(db, { maxPurges: 1 });
-    expect(result.purged).toEqual({ AUDIT: 1, CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 0 });
+    const result = await purgeExpiredPharmacyRecords(db, { maxPurgesPerClass: 1 });
+    expect(result.purged).toEqual({ AUDIT: 1, CONTROLLED_REGISTER: 0, PRESCRIPTION: 0, FISCAL: 1 });
   });
 });

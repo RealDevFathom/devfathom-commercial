@@ -112,6 +112,27 @@ describe('composed platform worker boundaries', () => {
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
   });
 
+  it('keeps recovering and claiming jobs when the retention purge fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    queue(job('SUSPEND'));
+    const query = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql: { text?: string }) => {
+      if (String(sql?.text ?? '').includes('pharmacy_retention_days(')) {
+        throw new Error('retention purge timed out');
+      }
+      return query(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({
+      recovered: 2,
+      claimed: 1,
+      succeeded: 1,
+    });
+    expect(error).toHaveBeenCalledWith('PHARMACY_RETENTION_PURGE_FAILED', {
+      message: 'retention purge timed out',
+    });
+    error.mockRestore();
+  });
+
   it('propagates enqueue failure before stale recovery or any claim', async () => {
     const error = new Error('camera enqueue unavailable');
     m.createMany.mockRejectedValue(error);
