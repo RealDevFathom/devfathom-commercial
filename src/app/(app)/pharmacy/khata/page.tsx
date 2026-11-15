@@ -44,7 +44,11 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
   },
   'reminder-no-consent': {
     tone: 'alert',
-    text: 'No reminder sent: the payer has not consented to reminders, has no valid number, or it is outside 8 am to 10 pm.',
+    text: 'No reminder sent: the payer has not consented to reminders or has no valid number.',
+  },
+  'reminder-quiet-hours': {
+    tone: 'alert',
+    text: 'No reminder sent: reminders go out only between 8 am and 10 pm. Try again during those hours.',
   },
   'reminder-not-configured': {
     tone: 'alert',

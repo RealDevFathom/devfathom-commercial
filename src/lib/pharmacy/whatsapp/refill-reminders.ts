@@ -89,6 +89,8 @@ export type RefillReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  /** Due but held back: it is outside 8 am to 10 pm in the workspace timezone. */
+  skippedQuietHours: number;
   notDue: number;
   /** DEV-87 SMS fallback outcomes (no WhatsApp consent or permanent failure). */
   sms: SmsFallbackCounts;
@@ -124,6 +126,7 @@ export async function processDueWhatsAppRefillReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
     sms: emptySmsFallbackCounts(),
   };
@@ -265,7 +268,7 @@ async function deliverRefillReminder(
         hourCycle: 'h23',
       }).format(now)
     );
-    if (hour >= 22 || hour < 8) return null;
+    if (hour >= 22 || hour < 8) return { kind: 'quiet-hours' as const };
     await lockPatientConsent(db, item.organizationId, item.patientId);
     const [customer, consent] = await Promise.all([
       db.pharmacyCustomer.findFirst({
@@ -328,6 +331,10 @@ async function deliverRefillReminder(
   });
   if (!recipient) {
     result.skippedNoConsent += 1;
+    return;
+  }
+  if (recipient.kind === 'quiet-hours') {
+    result.skippedQuietHours += 1;
     return;
   }
   const smsFallback = (customerId: string) =>
@@ -426,6 +433,7 @@ export async function processDueSubscriptionRefillReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
     sms: emptySmsFallbackCounts(),
   };
