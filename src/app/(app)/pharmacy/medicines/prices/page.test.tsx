@@ -93,9 +93,31 @@ describe('price intelligence page states', () => {
     expect(
       within(notices).getAllByText(/^Official price changed as of 2027-01-01: Rs\s?300\.00$/)
     ).toHaveLength(2);
-    expect(within(notices).getByText('Information only')).toBeVisible();
+    expect(within(notices).getByText('Never applied')).toBeVisible();
     expect(within(notices).getByText('Applied earlier')).toBeVisible();
     expect(screen.getByText(/never change a price/)).toBeVisible();
+  });
+  it('DEV-803: tells the owner which pending proposals were never applied', () => {
+    render(
+      <PriceNoticesView
+        {...base}
+        data={{
+          ...data,
+          rows: [
+            { ...row, id: 'pending', reference: 'SRO-PENDING', status: 'PROPOSED' },
+            { ...row, id: 'ended', reference: 'SRO-ENDED', status: 'NOT_APPLIED' },
+            { ...row, id: 'done', reference: 'SRO-DONE', status: 'CONFIRMED' },
+          ],
+        }}
+      />
+    );
+    const list = screen.getByRole('list', { name: 'Price proposals never applied' });
+    expect(screen.getByText('Never applied (2)')).toBeVisible();
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(list).getByText(/SRO-PENDING/)).toBeVisible();
+    expect(within(list).getByText(/SRO-ENDED/)).toBeVisible();
+    expect(within(list).queryByText(/SRO-DONE/)).toBeNull();
+    expect(screen.getByText(/no price changed/)).toBeVisible();
   });
   it('exports UTF-8 aliases, formula-safe identifiers and blank unknown prices', () => {
     const csv = pricesCsv(data);

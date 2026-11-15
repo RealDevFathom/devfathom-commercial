@@ -1033,6 +1033,8 @@ enum PharmacyDrapReviewStatus {
 enum PharmacyPriceChangeStatus {
   PROPOSED
   CONFIRMED
+  /// DEV-803: drafted from a DRAP notice but can never be confirmed; never applied.
+  NOT_APPLIED
 }
 
 enum PharmacySupplierClaimStatus {

@@ -31,6 +31,9 @@ const POLICY_SOURCE_LABELS: Readonly<Record<string, string>> = {
 /** 'drap' → 'DRAP notice'; an unknown source reads generically, never as the stored code. */
 export const policySourceLabel = (source: string) => POLICY_SOURCE_LABELS[source] ?? 'Other source';
 
+/** DEV-803: a proposal that was pending and can no longer be confirmed was never applied. */
+const isNeverApplied = (status: string) => status === 'PROPOSED' || status === 'NOT_APPLIED';
+
 export function pricesCsv(data: PriceData) {
   const header = [
     'Medicine',
@@ -108,6 +111,7 @@ export function PriceNoticesView({
       </SectionCard>
     );
   const mapping = data.rows.filter((r) => r.status === 'NEEDS_MAPPING');
+  const neverApplied = data.rows.filter((r) => isNeverApplied(r.status));
   const mapped = data.rows.filter((r) => r.status !== 'NEEDS_MAPPING');
   const exportCsv = () => {
     const url = URL.createObjectURL(
@@ -121,6 +125,28 @@ export function PriceNoticesView({
   };
   return (
     <div className="min-w-0 space-y-6">
+      {!!neverApplied.length && (
+        <SectionCard title={`Never applied (${neverApplied.length})`} titleLevel={2}>
+          <div role="status">
+            <p className="mb-3 text-sm text-text-muted">
+              These DRAP price proposals were still pending and can no longer be confirmed. They
+              were never applied: no price changed. Set the pack price yourself from the MRP printed
+              on the pack if you need it.
+            </p>
+            <ul className="divide-y divide-border-subtle" aria-label="Price proposals never applied">
+              {neverApplied.map((r) => (
+                <li key={r.id} className="py-2">
+                  <span className="font-medium">{r.medicine}</span>
+                  <span className="text-text-muted">
+                    {' '}
+                    · {r.reference} · {r.presentation} / {r.packLevel}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </SectionCard>
+      )}
       <SectionCard title="Current organization pack prices" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
           One row per currently priced pack, including manual policies. Future prices remain
@@ -265,8 +291,20 @@ export function PriceNoticesView({
                     <td className="p-3">
                       {/* Confirmed before DEV-693: kept as history, never re-applied. */}
                       <StatusPill
-                        status={r.status === 'CONFIRMED' ? 'confirmed' : 'info'}
-                        label={r.status === 'CONFIRMED' ? 'Applied earlier' : 'Information only'}
+                        status={
+                          r.status === 'CONFIRMED'
+                            ? 'confirmed'
+                            : isNeverApplied(r.status)
+                              ? 'review'
+                              : 'info'
+                        }
+                        label={
+                          r.status === 'CONFIRMED'
+                            ? 'Applied earlier'
+                            : isNeverApplied(r.status)
+                              ? 'Never applied'
+                              : 'Information only'
+                        }
                       />
                     </td>
                   </tr>
