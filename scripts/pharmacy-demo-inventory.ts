@@ -541,10 +541,9 @@ export async function executePreparedInventoryReceipt(
   // PUR-03: the stamped cost includes the order line's rebate and its share of
   // the order's freight and other charges, so re-derive it from the same terms.
   const { orderReceiptCostTerms } = await import('../src/lib/pharmacy/goods-receipt');
-  const orderCostTerms = (await orderReceiptCostTerms(tx, facts.organizationId, order)).termsFor(
-    line.purchaseOrderLineId,
-    quantities.receivedCanonicalUnits
-  );
+  const orderCostTerms = (
+    await orderReceiptCostTerms(tx, facts.organizationId, order, receipt.id)
+  ).termsFor(line.purchaseOrderLineId, quantities.receivedCanonicalUnits);
   const unitCostMinor = receiptLineUnitCostMinor({ ...line, ...orderCostTerms });
   if (
     quantities.receivedCanonicalUnits !== line.receivedCanonicalUnits ||

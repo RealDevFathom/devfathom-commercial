@@ -196,15 +196,17 @@ export async function lockReceivablePurchaseOrder(
  * with. The order's freight and other charges are allocated across its lines
  * exactly as the order's landed cost shows them, and `termsFor` hands each
  * delivered lot its order line's rebate and its share of that line's charge.
- * The share is cumulative from the paid units already posted against the line
- * and advances lot by lot, so a split or over-delivered line never capitalises
- * its charge more than once. Drafting a receipt and re-verifying a prepared
+ * The share is cumulative from the paid units already drafted or posted against
+ * the line and advances lot by lot, so a split, over-delivered or concurrently
+ * drafted line never capitalises its charge more than once. Drafting a receipt and re-verifying a prepared
  * draft both cost through here, so they always agree.
  */
 export async function orderReceiptCostTerms(
   db: ScopedDb,
   organizationId: string,
-  order: { id: string; freightMinor: number; otherChargesMinor: number }
+  order: { id: string; freightMinor: number; otherChargesMinor: number },
+  /** A draft being re-verified: its own lines are the ones being costed. */
+  excludeGoodsReceiptId?: string
 ) {
   const orderLines = new Map(
     (
@@ -241,11 +243,15 @@ export async function orderReceiptCostTerms(
 
   const paidUnitsReceived = new Map<string, number>();
   if (charges.size > 0) {
+    // Drafts count too: each stamps its cost when it is created, under the
+    // order's row lock, and posting copies that cost to the lot. Two drafts
+    // open at once must not both take the same share of the charge.
     for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
       where: {
         organizationId,
         purchaseOrderLineId: { in: [...charges.keys()] },
-        goodsReceipt: { status: 'POSTED' },
+        goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
+        ...(excludeGoodsReceiptId ? { goodsReceiptId: { not: excludeGoodsReceiptId } } : {}),
       },
       select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
     })) {
