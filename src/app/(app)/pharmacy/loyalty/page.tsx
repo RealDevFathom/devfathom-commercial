@@ -4,11 +4,11 @@ import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
+import { LoyaltyCustomerSearch } from './customer-search';
 
 export const metadata = { title: 'Loyalty points · Pharmacy' };
 const linkClass =
@@ -115,57 +115,73 @@ export default async function LoyaltyPage({
   return (
     <main className="min-w-0 space-y-6">
       {header}
-      <SectionCard title="Find customer" titleLevel={2}>
-        <form action="/pharmacy/loyalty" method="get" className="flex flex-wrap items-end gap-3">
-          <label className="grid w-full gap-2 text-sm sm:w-auto">
-            Branch
-            <select
-              name="branchId"
-              defaultValue={branchId}
-              className="min-h-11 max-w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
-            >
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="grid w-full gap-2 text-sm sm:w-auto">
-            Customer name
-            <Input name="query" defaultValue={query} maxLength={100} className="min-h-11" />
-          </label>
-          <Button type="submit" className="min-h-11">
-            Search
-          </Button>
-        </form>
+      <SectionCard title="Customers" titleLevel={2}>
+        <LoyaltyCustomerSearch branches={branches} branchId={branchId} query={query} />
         <p className="mt-3 text-sm text-text-muted">
           Retail customers across this workspace. Points shown only for {branchName}. Clinical
-          records are excluded.
+          records are excluded. Select a customer to see their points history.
         </p>
-        <ul className="mt-3 divide-y divide-border-subtle">
-          {customers.map((c) => (
-            <li key={c.id}>
-              <Link
-                aria-current={c.id === customerId ? 'true' : undefined}
-                className={`${linkClass} max-w-full break-words aria-[current=true]:font-semibold`}
-                href={href(c.id)}
-              >
-                {c.displayName}
-                {c.phoneLast4 ? ` · ending ${c.phoneLast4}` : ''}
-                {c.id === customerId ? ' · Selected' : ''}
-              </Link>
-            </li>
-          ))}
-        </ul>
+        {customers.length > 0 && (
+          <div
+            className="mt-4 overflow-x-auto"
+            role="region"
+            aria-label="Loyalty customers"
+            tabIndex={0}
+          >
+            <table className="w-full text-sm">
+              <caption className="sr-only">
+                {query ? `Customers matching ${query}` : 'Loyalty customers'} at {branchName}
+              </caption>
+              <thead className="font-mono text-xs uppercase">
+                <tr>
+                  {['Customer', 'Phone', 'Loyalty no.', 'Points'].map((t) => (
+                    <th
+                      key={t}
+                      scope="col"
+                      className={`p-3 ${t === 'Points' ? 'text-right' : 'text-left'}`}
+                    >
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {customers.map((c) => (
+                  <tr
+                    key={c.id}
+                    className={`border-t border-border-subtle hover:bg-surface-sunken ${c.id === customerId ? 'bg-surface-sunken' : ''}`}
+                  >
+                    <td className="p-3">
+                      <Link
+                        aria-current={c.id === customerId ? 'true' : undefined}
+                        className={`${linkClass} max-w-full break-words aria-[current=true]:font-semibold`}
+                        href={href(c.id)}
+                      >
+                        {c.displayName}
+                        {c.id === customerId ? ' · Selected' : ''}
+                      </Link>
+                    </td>
+                    <td className="whitespace-nowrap p-3">
+                      {c.phoneLast4 ? `ending ${c.phoneLast4}` : 'Not recorded'}
+                    </td>
+                    <td className="break-all p-3 font-mono text-xs">{c.id}</td>
+                    <td className="p-3 text-right font-mono tabular-nums">{c.pointsBalance}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {hasMore && (
           <p role="status" className="mt-3 text-sm">
-            Showing the first 50 matches. Refine the customer name to find another account.
+            Showing the first 50 matches. Refine the name, phone or loyalty number to find another
+            account.
           </p>
         )}
         {!customers.length && (
           <p role="status" className="mt-3 text-sm">
-            No matching customers. Try another name, or link a consenting customer at the counter.
+            No matching customers. Try another name, phone or loyalty number, or link a consenting
+            customer at the counter.
           </p>
         )}
       </SectionCard>
@@ -304,11 +320,7 @@ export default async function LoyaltyPage({
             </p>
           )}
         </SectionCard>
-      ) : (
-        <SectionCard title="Choose an account" titleLevel={2}>
-          <p>Select a customer above to view their branch balance and points history.</p>
-        </SectionCard>
-      )}
+      ) : null}
       <Link className={linkClass} href="/pharmacy/counter">
         Open counter
       </Link>

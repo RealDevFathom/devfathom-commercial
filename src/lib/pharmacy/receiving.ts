@@ -252,20 +252,25 @@ export type ReceiptLineCostInput = {
   canonicalUnitsPerPack: number;
   invoicedPricePerPackMinor: number;
   discountBps?: number;
+  /** The ordered line's supplier rebate off the discounted net (PUR-03). */
+  rebateBps?: number;
   taxBps?: number;
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
   /**
-   * This line's share of the freight the supplier billed on the invoice.
+   * This line's share of the charges carried into its lots: the freight the
+   * supplier billed on the invoice (DEV-77) or, when the invoice bills none,
+   * its share of the purchase order's freight and other charges (DEV-161).
    * Money only: it is spread over the same received + bonus units.
    */
   allocatedChargeMinor?: number;
 };
 
 /**
- * The money one receipt line puts into stock before any receipt-level charge:
- * invoiced packs less discount, plus a non-creditable tax. Bonus packs never
- * appear here — they are quantity only.
+ * The money one receipt line puts into stock before any charge, in the same
+ * order as the purchase order's landed cost: invoiced packs less discount,
+ * less the order-line rebate, plus a non-creditable tax on what remains.
+ * Bonus packs never appear here — they are quantity only.
  */
 function receiptLineCost(input: ReceiptLineCostInput): {
   costMinor: number;
@@ -277,6 +282,7 @@ function receiptLineCost(input: ReceiptLineCostInput): {
     canonicalUnitsPerPack,
     invoicedPricePerPackMinor,
     discountBps = 0,
+    rebateBps = 0,
     taxBps = 0,
     taxCreditable = false,
   } = input;
@@ -288,6 +294,9 @@ function receiptLineCost(input: ReceiptLineCostInput): {
     !Number.isSafeInteger(discountBps) ||
     discountBps < 0 ||
     discountBps > BPS ||
+    !Number.isSafeInteger(rebateBps) ||
+    rebateBps < 0 ||
+    rebateBps > BPS ||
     !Number.isSafeInteger(taxBps) ||
     taxBps < 0 ||
     taxBps > BPS
@@ -308,8 +317,9 @@ function receiptLineCost(input: ReceiptLineCostInput): {
   const grossMinor = receivedPacks * invoicedPricePerPackMinor;
   assertMoney(grossMinor);
   const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
-  const taxMinor = divideRoundHalfUp(netMinor * taxBps, BPS);
-  return { costMinor: netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits };
+  const taxableMinor = netMinor - divideRoundHalfUp(netMinor * rebateBps, BPS);
+  const taxMinor = divideRoundHalfUp(taxableMinor * taxBps, BPS);
+  return { costMinor: taxableMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits };
 }
 
 /**
@@ -318,7 +328,7 @@ function receiptLineCost(input: ReceiptLineCostInput): {
  *
  * Bonus packs appear only in the divisor, so free goods always lower the unit
  * cost and never add money — a 10+1 scheme costs paid/11 per unit, and an
- * all-bonus line costs nothing per unit beyond any freight it carries.
+ * all-bonus line costs nothing per unit beyond any charge it carries.
  */
 export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
   const allocatedChargeMinor = input.allocatedChargeMinor ?? 0;
@@ -344,6 +354,11 @@ export type ReceiptLandedCost = {
  * every line's money — invoice net, non-creditable tax and freight share — is
  * divided over its received AND bonus units. A receipt with no freight costs
  * exactly as it always did.
+ *
+ * DEV-161: a line may also carry `allocatedChargeMinor` of its own — its share
+ * of the purchase order's freight and other charges — which is added to its
+ * invoice-freight share. The caller passes an order share only when the
+ * receipt bills no freight of its own, so the two never overlap.
  */
 export function receiptLandedCosts(input: {
   lines: readonly ReceiptLineCostInput[];
@@ -356,8 +371,52 @@ export function receiptLandedCosts(input: {
   const shares = allocateByWeight(freightMinor, costs);
   return input.lines.map((line, index) => ({
     allocatedFreightMinor: shares[index]!,
-    unitCostMinor: receiptLineUnitCostMinor({ ...line, allocatedChargeMinor: shares[index]! }),
+    unitCostMinor: receiptLineUnitCostMinor({
+      ...line,
+      allocatedChargeMinor: shares[index]! + (line.allocatedChargeMinor ?? 0),
+    }),
   }));
+}
+
+/**
+ * PUR-03: the share of an order line's allocated freight and other charges that
+ * one delivery carries. It is prorated by paid canonical units, so a delivery in
+ * a different pack size than ordered still carries the share of what arrived,
+ * and it is cumulative: the charge already capitalised by earlier receipts and
+ * earlier lots of the same order line is subtracted, and the running total is
+ * capped at the ordered quantity. However the order line is split or
+ * over-delivered, its lots together never carry more than the whole allocation.
+ */
+export function receiptLineAllocatedChargeMinor(input: {
+  orderLineAllocatedChargeMinor: number;
+  /** Paid (non-bonus) canonical units the order line was placed for. */
+  orderedPaidCanonicalUnits: number;
+  /** Paid canonical units already received against the order line elsewhere. */
+  previouslyReceivedPaidCanonicalUnits: number;
+  /** Paid canonical units this delivery brings. */
+  receivedPaidCanonicalUnits: number;
+}): number {
+  const {
+    orderLineAllocatedChargeMinor,
+    orderedPaidCanonicalUnits,
+    previouslyReceivedPaidCanonicalUnits,
+    receivedPaidCanonicalUnits,
+  } = input;
+  assertMoney(orderLineAllocatedChargeMinor);
+  assertUnits(previouslyReceivedPaidCanonicalUnits);
+  assertUnits(receivedPaidCanonicalUnits);
+  if (!Number.isSafeInteger(orderedPaidCanonicalUnits) || orderedPaidCanonicalUnits <= 0) {
+    throw new PharmacyReceivingError('INVALID_QUANTITY');
+  }
+  const allocatedThrough = (units: number) =>
+    divideRoundHalfUp(
+      orderLineAllocatedChargeMinor * Math.min(units, orderedPaidCanonicalUnits),
+      orderedPaidCanonicalUnits
+    );
+  return (
+    allocatedThrough(previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits) -
+    allocatedThrough(previouslyReceivedPaidCanonicalUnits)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -665,7 +724,7 @@ export function matchReceiptLine(input: {
 // DEV-691 — the draft debit note a three-way match proposes
 // ---------------------------------------------------------------------------
 
-export type ReceiptDebitNoteReason = 'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE' | 'WRONG_ITEM';
+export type ReceiptDebitNoteReason = 'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE';
 
 export type ReceiptDebitNoteLineDraft = {
   reason: ReceiptDebitNoteReason;
@@ -679,12 +738,7 @@ export type ReceiptDebitNoteLineDraft = {
 };
 
 /** The exception kinds a receipt debit note can claim against. */
-const CLAIMABLE_KINDS: readonly ReceivingExceptionKind[] = [
-  'BILLED_SHORTAGE',
-  'BATCH_CONFLICT',
-  'EXPIRY_CONFLICT',
-  'PRICE_CONFLICT',
-];
+const CLAIMABLE_KINDS: readonly ReceivingExceptionKind[] = ['BILLED_SHORTAGE', 'PRICE_CONFLICT'];
 
 /** The billed money for `packs` at `pricePerPackMinor`, rounded as receiving rounds it. */
 function billedAmountMinor(
@@ -705,14 +759,14 @@ function billedAmountMinor(
  * estimated, and the result is a proposal a person confirms or discards.
  *
  * - Packs billed but not delivered are claimed in full at the invoiced price.
- * - Packs that arrived with a batch or expiry the bill (or the order) does not
- *   accept are claimed in full: they are the wrong items.
- * - Otherwise, packs invoiced above the ordered price are claimed for the
- *   difference only.
+ * - Packs invoiced above the ordered price are claimed for the difference only,
+ *   and never for more packs than the bill charged for.
  *
- * Rejected (damaged) units are not claimed here: they leave through a purchase
- * return, which raises its own debit note, and claiming them twice would
- * overstate what the supplier owes. Nothing here ever changes a price.
+ * A wrong batch or expiry is raised as an exception for a person to settle but
+ * proposes no money: accepted packs stay in stock, and goods that go back leave
+ * through a purchase return, which raises its own debit note. Rejected
+ * (damaged) units are not claimed here for the same reason; claiming them twice
+ * would overstate what the supplier owes. Nothing here ever changes a price.
  */
 export function receiptDebitNoteLines(input: {
   exceptions: readonly MatchException[];
@@ -753,40 +807,23 @@ export function receiptDebitNoteLines(input: {
   // what was billed, so a bill for fewer packs than arrived limits it.
   const claimablePacks =
     line.billedPacks != null ? Math.min(line.receivedPacks, line.billedPacks) : line.receivedPacks;
-  const wrong = byKind.get('BATCH_CONFLICT') ?? byKind.get('EXPIRY_CONFLICT');
-  if (wrong && claimablePacks > 0) {
+  const price = byKind.get('PRICE_CONFLICT');
+  if (
+    price &&
+    price.expectedMinor != null &&
+    price.observedMinor != null &&
+    price.observedMinor > price.expectedMinor &&
+    claimablePacks > 0
+  ) {
+    const overPerPack = price.observedMinor - price.expectedMinor;
     drafts.push({
-      reason: 'WRONG_ITEM',
-      sourceKind: wrong.kind,
-      detail: `${claimablePacks} packs do not match the bill or order: ${wrong.detail}`,
+      reason: 'PRICE_OVERCHARGE',
+      sourceKind: 'PRICE_CONFLICT',
+      detail: `${claimablePacks} packs invoiced ${overPerPack} above the ordered price per pack.`,
       packs: claimablePacks,
-      pricePerPackMinor: line.invoicedPricePerPackMinor,
-      amountMinor: billedAmountMinor(
-        claimablePacks,
-        line.invoicedPricePerPackMinor,
-        line.discountBps,
-        line.taxBps
-      ),
+      pricePerPackMinor: overPerPack,
+      amountMinor: billedAmountMinor(claimablePacks, overPerPack, line.discountBps, line.taxBps),
     });
-  } else {
-    const price = byKind.get('PRICE_CONFLICT');
-    if (
-      price &&
-      price.expectedMinor != null &&
-      price.observedMinor != null &&
-      price.observedMinor > price.expectedMinor &&
-      claimablePacks > 0
-    ) {
-      const overPerPack = price.observedMinor - price.expectedMinor;
-      drafts.push({
-        reason: 'PRICE_OVERCHARGE',
-        sourceKind: 'PRICE_CONFLICT',
-        detail: `${claimablePacks} packs invoiced ${overPerPack} above the ordered price per pack.`,
-        packs: claimablePacks,
-        pricePerPackMinor: overPerPack,
-        amountMinor: billedAmountMinor(claimablePacks, overPerPack, line.discountBps, line.taxBps),
-      });
-    }
   }
 
   return drafts.filter((draft) => draft.amountMinor > 0);

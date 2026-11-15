@@ -51,12 +51,14 @@ import {
   matchReceiptLine,
   PharmacyReceivingError,
   receiptDebitNoteLines,
+  receiptLineAllocatedChargeMinor,
+  receiptLineUnitCostMinor,
   type MatchException,
   type OrderedTerms,
   type ReceiptDebitNoteLineDraft,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { assertSupplierEligible } from './purchasing';
+import { assertSupplierEligible, landedCost } from './purchasing';
 import {
   readSupplierCompliancePolicy,
   recordSupplierComplianceSkip,
@@ -99,6 +101,9 @@ export type PostGoodsReceiptResult = {
  * Must run inside the caller's transaction.
  */
 const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+/** The eligible qualified person was chosen but typed the wrong PIN (#283). */
+const WITNESS_PIN_INCORRECT =
+  'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.';
 
 /**
  * PIN witness for a controlled purchase. A receipt with no controlled line
@@ -165,7 +170,7 @@ export async function verifyControlledPurchaseWitness(
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
     });
-    return { blocked: WITNESS_BLOCKED };
+    return { blocked: WITNESS_PIN_INCORRECT };
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
@@ -200,6 +205,109 @@ export async function lockReceivablePurchaseOrder(
   return order;
 }
 
+/**
+ * PUR-03: the order terms a goods receipt against a purchase order is costed
+ * with. The order's freight and other charges are allocated across its lines
+ * exactly as the order's landed cost shows them, and `termsFor` hands each
+ * delivered lot its order line's rebate and its share of that line's charge.
+ * The share is cumulative from the paid units already posted against the line
+ * and advances lot by lot, so a split or over-delivered line never capitalises
+ * its charge more than once. Drafting prices a receipt through here as a
+ * preview and keeps the share on the line; posting settles the share again
+ * under the order's row lock, so receipts drafted side by side, or a draft
+ * that never posts, cannot double-count or strand a charge.
+ */
+export async function orderReceiptCostTerms(
+  db: ScopedDb,
+  organizationId: string,
+  order: { id: string; freightMinor: number; otherChargesMinor: number }
+) {
+  const orderLines = new Map(
+    (
+      await db.pharmacyPurchaseOrderLine.findMany({
+        where: { purchaseOrderId: order.id },
+        orderBy: { lineNumber: 'asc' },
+        select: {
+          id: true,
+          medicineId: true,
+          packLevelId: true,
+          orderedPacks: true,
+          bonusPacks: true,
+          canonicalUnitsPerPack: true,
+          listPricePerPackMinor: true,
+          discountBps: true,
+          rebateBps: true,
+          taxBps: true,
+          taxCreditable: true,
+        },
+      })
+    ).map((line) => [line.id, line] as const)
+  );
+
+  const charges = new Map<string, number>();
+  if (orderLines.size > 0 && order.freightMinor + order.otherChargesMinor > 0) {
+    const lines = [...orderLines.values()];
+    const costed = landedCost({
+      lines,
+      freightMinor: order.freightMinor,
+      otherChargesMinor: order.otherChargesMinor,
+    });
+    lines.forEach((line, index) => charges.set(line.id, costed.lines[index]!.allocatedChargeMinor));
+  }
+
+  const paidUnitsReceived = new Map<string, number>();
+  if (charges.size > 0) {
+    // Only posted receipts have put their share into stock. A draft's stamped
+    // cost is a preview: postGoodsReceipt settles it under the order's lock.
+    for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
+      where: {
+        organizationId,
+        purchaseOrderLineId: { in: [...charges.keys()] },
+        goodsReceipt: { status: 'POSTED' },
+      },
+      select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
+    })) {
+      if (!earlier.purchaseOrderLineId) continue;
+      paidUnitsReceived.set(
+        earlier.purchaseOrderLineId,
+        (paidUnitsReceived.get(earlier.purchaseOrderLineId) ?? 0) + earlier.receivedCanonicalUnits
+      );
+    }
+  }
+
+  return {
+    orderLines,
+    /**
+     * The rebate and allocated charge for one lot of `receivedPaidCanonicalUnits`
+     * paid units against `orderLineId`. A lot with no order line carries neither:
+     * the order's charges were allocated over its ordered lines only.
+     */
+    termsFor(
+      orderLineId: string | null | undefined,
+      receivedPaidCanonicalUnits: number
+    ): { rebateBps: number; allocatedChargeMinor: number } {
+      const orderLine = orderLineId ? orderLines.get(orderLineId) : undefined;
+      if (!orderLine) return { rebateBps: 0, allocatedChargeMinor: 0 };
+      const charge = charges.get(orderLine.id);
+      if (charge === undefined) return { rebateBps: orderLine.rebateBps, allocatedChargeMinor: 0 };
+      const previouslyReceivedPaidCanonicalUnits = paidUnitsReceived.get(orderLine.id) ?? 0;
+      paidUnitsReceived.set(
+        orderLine.id,
+        previouslyReceivedPaidCanonicalUnits + receivedPaidCanonicalUnits
+      );
+      return {
+        rebateBps: orderLine.rebateBps,
+        allocatedChargeMinor: receiptLineAllocatedChargeMinor({
+          orderLineAllocatedChargeMinor: charge,
+          orderedPaidCanonicalUnits: orderLine.orderedPacks * orderLine.canonicalUnitsPerPack,
+          previouslyReceivedPaidCanonicalUnits,
+          receivedPaidCanonicalUnits,
+        }),
+      };
+    },
+  };
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
@@ -226,6 +334,8 @@ export async function postGoodsReceipt(
     branchId: string | null;
     supplierId: string;
     status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+    freightMinor: number;
+    otherChargesMinor: number;
   } | null = null;
   if (receipt.purchaseOrderId) {
     const [lockedOrder] = await db.$queryRaw<
@@ -234,8 +344,10 @@ export async function postGoodsReceipt(
         branchId: string | null;
         supplierId: string;
         status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+        freightMinor: number;
+        otherChargesMinor: number;
       }>
-    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+    >`SELECT id, "branchId", "supplierId", status, "freightMinor", "otherChargesMinor" FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
     purchaseOrder = lockedOrder ?? null;
     if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
     if (purchaseOrder.supplierId !== receipt.supplierId) {
@@ -323,11 +435,50 @@ export async function postGoodsReceipt(
     });
   }
 
+  // PUR-03: the landed cost is settled here, under the order's row lock, from
+  // the receipts that have actually posted, so each order line's freight and
+  // other charges reach stock exactly once in posting order.
+  const orderCostTerms = purchaseOrder
+    ? await orderReceiptCostTerms(db, scope.organizationId, purchaseOrder)
+    : null;
+
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
   const debitNoteLines: Array<ReceiptDebitNoteLineDraft & { receivingExceptionId: string }> = [];
 
   for (const line of receipt.lines) {
+    // The draft's stamped cost already holds the order-line rebate and its
+    // order-charge share as they stood at drafting, plus anything else the
+    // receipt itself charged. Only the order-charge share can have moved since,
+    // so the cost is adjusted by that difference and everything else in it is
+    // kept exactly as stamped.
+    let unitCostMinor = line.unitCostMinor;
+    const orderLineTerms = orderCostTerms?.termsFor(
+      line.purchaseOrderLineId,
+      line.receivedCanonicalUnits
+    );
+    // A receipt that bills its own invoice freight (DEV-77) takes no share of
+    // the order's charges, as when it was drafted; its units still count.
+    const orderTerms = orderLineTerms && {
+      rebateBps: orderLineTerms.rebateBps,
+      allocatedChargeMinor: receipt.freightMinor > 0 ? 0 : orderLineTerms.allocatedChargeMinor,
+    };
+    if (orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor) {
+      const costed = (allocatedChargeMinor: number) =>
+        receiptLineUnitCostMinor({
+          receivedPacks: line.receivedPacks,
+          bonusPacks: line.bonusPacks,
+          canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+          invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+          discountBps: line.discountBps,
+          rebateBps: orderTerms.rebateBps,
+          taxBps: line.taxBps,
+          taxCreditable: line.taxCreditable,
+          allocatedChargeMinor,
+        });
+      unitCostMinor +=
+        costed(orderTerms.allocatedChargeMinor) - costed(line.allocatedOrderChargeMinor);
+    }
     const batch = await resolveManufacturingBatch(db, scope, {
       medicineId: line.medicineId,
       batchNumber: line.batchNumber,
@@ -345,7 +496,7 @@ export async function postGoodsReceipt(
       // invoice and batch collide on the ledger's own uniqueness rule rather
       // than silently duplicating stock.
       supplierInvoiceRef: `${receipt.supplierInvoiceRef}#${line.lineNumber}`,
-      unitCostMinor: line.unitCostMinor,
+      unitCostMinor,
       printedMrpMinor: line.printedMrpMinor,
       receivedExpiresAt: batch.expiresAt,
       receivedExpiryPrecision: line.expiryPrecision,
@@ -372,6 +523,9 @@ export async function postGoodsReceipt(
       where: { id: line.id },
       data: {
         inventoryLotId: posted.lot.id,
+        ...(orderTerms && orderTerms.allocatedChargeMinor !== line.allocatedOrderChargeMinor
+          ? { unitCostMinor, allocatedOrderChargeMinor: orderTerms.allocatedChargeMinor }
+          : {}),
         ...(near && !line.gs1Warnings.includes(near.code)
           ? { gs1Warnings: [...line.gs1Warnings, near.code] }
           : {}),

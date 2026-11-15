@@ -99,13 +99,9 @@ const DESCRIPTION =
 
 const DIRECT_SLOTS = [0, 1, 2] as const;
 
-const DEBIT_NOTE_REASON_LABEL: Record<
-  'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE' | 'WRONG_ITEM',
-  string
-> = {
+const DEBIT_NOTE_REASON_LABEL: Record<'BILLED_SHORTAGE' | 'PRICE_OVERCHARGE', string> = {
   BILLED_SHORTAGE: 'Billed, not delivered',
   PRICE_OVERCHARGE: 'Above the order price',
-  WRONG_ITEM: 'Wrong batch or expiry',
 };
 
 /**
@@ -732,7 +728,7 @@ export default async function PharmacyReceivingPage({
         {debitNoteDrafts.length === 0 ? (
           <EmptyState
             title="No draft debit notes at this branch"
-            detail="When a posted receipt has packs billed but not delivered, a batch or expiry the bill or order does not accept, or a price above the order, a draft debit note is proposed here. Nothing is claimed until somebody confirms it."
+            detail="When a posted receipt has packs billed but not delivered, or a price above the order, a draft debit note is proposed here. A wrong batch or expiry is raised as a match exception above. Nothing is claimed until somebody confirms it."
           />
         ) : (
           <ul className="space-y-3">

@@ -16,9 +16,11 @@ import {
   PharmacyReceivingError,
   receiptDebitNoteLines,
   receiptLineQuantities,
+  receiptLineAllocatedChargeMinor,
   receiptLineUnitCostMinor,
   type SaleableEvidence,
 } from './receiving';
+import { landedCost } from './purchasing';
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
 const LICENCE = {
@@ -323,6 +325,128 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
         invoicedPricePerPackMinor: 10_000,
       })
     ).toBe(0);
+  });
+
+  it('matches the purchase order landed cost: rebate before tax, then allocated freight and charges', () => {
+    const orderLine = {
+      orderedPacks: 10,
+      bonusPacks: 2,
+      canonicalUnitsPerPack: 10,
+      listPricePerPackMinor: 10_000,
+      discountBps: 1_000,
+      rebateBps: 500,
+      taxBps: 1_700,
+      taxCreditable: false,
+    };
+    const order = landedCost({ lines: [orderLine], freightMinor: 3_000, otherChargesMinor: 1_200 });
+    const [costed] = order.lines;
+    const unitCost = receiptLineUnitCostMinor({
+      receivedPacks: 10,
+      bonusPacks: 2,
+      canonicalUnitsPerPack: 10,
+      invoicedPricePerPackMinor: 10_000,
+      discountBps: 1_000,
+      rebateBps: 500,
+      taxBps: 1_700,
+      taxCreditable: false,
+      allocatedChargeMinor: costed!.allocatedChargeMinor,
+    });
+    // 100_000 − 10% = 90_000; − 5% rebate = 85_500; + 17% tax = 100_035;
+    // + 4_200 freight and charges = 104_235 over 120 units.
+    expect(costed!.landedCostMinor).toBe(104_235);
+    expect(unitCost).toBe(869);
+    expect(unitCost).toBe(Math.round(costed!.landedCostMinor / costed!.canonicalUnits));
+  });
+
+  it('spreads an allocated charge over an all-bonus line instead of dropping it', () => {
+    expect(
+      receiptLineUnitCostMinor({
+        receivedPacks: 0,
+        bonusPacks: 5,
+        canonicalUnitsPerPack: 10,
+        invoicedPricePerPackMinor: 10_000,
+        allocatedChargeMinor: 500,
+      })
+    ).toBe(10);
+  });
+
+  it('refuses a negative or fractional allocated charge and an out-of-range rebate', () => {
+    const terms = {
+      receivedPacks: 10,
+      bonusPacks: 0,
+      canonicalUnitsPerPack: 10,
+      invoicedPricePerPackMinor: 10_000,
+    };
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, allocatedChargeMinor: -1 }))).toBe(
+      'INVALID_MONEY'
+    );
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, allocatedChargeMinor: 1.5 }))).toBe(
+      'INVALID_MONEY'
+    );
+    expect(reasonOf(() => receiptLineUnitCostMinor({ ...terms, rebateBps: 10_001 }))).toBe(
+      'INVALID_MONEY'
+    );
+  });
+
+  it('prorates an order line charge by the paid canonical units a delivery brings', () => {
+    const charge = {
+      orderLineAllocatedChargeMinor: 4_200,
+      orderedPaidCanonicalUnits: 100,
+      previouslyReceivedPaidCanonicalUnits: 0,
+    };
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 100 })).toBe(
+      4_200
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 40 })).toBe(
+      1_680
+    );
+    expect(receiptLineAllocatedChargeMinor({ ...charge, receivedPaidCanonicalUnits: 0 })).toBe(0);
+    expect(
+      reasonOf(() =>
+        receiptLineAllocatedChargeMinor({
+          ...charge,
+          orderedPaidCanonicalUnits: 0,
+          receivedPaidCanonicalUnits: 1,
+        })
+      )
+    ).toBe('INVALID_QUANTITY');
+  });
+
+  it('never capitalises more than the whole allocation however a line is split or over-delivered', () => {
+    const charge = { orderLineAllocatedChargeMinor: 10_000, orderedPaidCanonicalUnits: 100 };
+    // One over-delivery carries the allocation once.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 0,
+        receivedPaidCanonicalUnits: 200,
+      })
+    ).toBe(10_000);
+    // Two full lots: the second finds the allocation already spent.
+    expect(
+      receiptLineAllocatedChargeMinor({
+        ...charge,
+        previouslyReceivedPaidCanonicalUnits: 100,
+        receivedPaidCanonicalUnits: 100,
+      })
+    ).toBe(0);
+    // Three uneven partial lots sum to the allocation exactly, with no rounding drift.
+    const thirds = [33, 33, 34].reduce<{ received: number; shares: number[] }>(
+      (acc, units) => ({
+        received: acc.received + units,
+        shares: [
+          ...acc.shares,
+          receiptLineAllocatedChargeMinor({
+            orderLineAllocatedChargeMinor: 1_001,
+            orderedPaidCanonicalUnits: 100,
+            previouslyReceivedPaidCanonicalUnits: acc.received,
+            receivedPaidCanonicalUnits: units,
+          }),
+        ],
+      }),
+      { received: 0, shares: [] }
+    );
+    expect(thirds.shares.reduce((sum, share) => sum + share, 0)).toBe(1_001);
   });
 });
 
@@ -664,7 +788,7 @@ describe('DEV-691 — GRN, purchase order and distributor bill three-way match',
     ]);
   });
 
-  it('drafts a full claim for the wrong batch and does not also claim its overcharge', () => {
+  it('proposes no money for a wrong batch, whose packs stay in stock, but still claims its overcharge', () => {
     const exceptions = matchReceiptLine({
       ordered: ORDERED,
       received: { ...RECEIVED, batchNumber: 'XY-99', invoicedPricePerPackMinor: 1_200 },
@@ -678,7 +802,7 @@ describe('DEV-691 — GRN, purchase order and distributor bill three-way match',
       line: { ...LINE, invoicedPricePerPackMinor: 1_200 },
     });
     expect(lines).toEqual([
-      expect.objectContaining({ reason: 'WRONG_ITEM', packs: 10, amountMinor: 12_000 }),
+      expect.objectContaining({ reason: 'PRICE_OVERCHARGE', packs: 10, amountMinor: 2_000 }),
     ]);
   });
 
@@ -727,19 +851,6 @@ describe('DEV-691 — GRN, purchase order and distributor bill three-way match',
   });
 
   it('never claims more packs than the bill charged for (review)', () => {
-    const exceptions = matchReceiptLine({
-      ordered: ORDERED,
-      received: {
-        ...RECEIVED,
-        batchNumber: 'XY-99',
-        billed: { ...RECEIVED.billed, paidPacks: 8 },
-      },
-    });
-    expect(receiptDebitNoteLines({ exceptions, line: { ...LINE, billedPacks: 8 } })).toEqual([
-      expect.objectContaining({ reason: 'WRONG_ITEM', packs: 8, amountMinor: 8_000 }),
-    ]);
-    expect(receiptDebitNoteLines({ exceptions, line: { ...LINE, billedPacks: 0 } })).toEqual([]);
-
     const over = matchReceiptLine({
       ordered: ORDERED,
       received: { ...RECEIVED, invoicedPricePerPackMinor: 1_150 },
@@ -752,6 +863,12 @@ describe('DEV-691 — GRN, purchase order and distributor bill three-way match',
     ).toEqual([
       expect.objectContaining({ reason: 'PRICE_OVERCHARGE', packs: 6, amountMinor: 900 }),
     ]);
+    expect(
+      receiptDebitNoteLines({
+        exceptions: over,
+        line: { ...LINE, billedPacks: 0, invoicedPricePerPackMinor: 1_150 },
+      })
+    ).toEqual([]);
   });
 
   it('claims nothing for damage, which leaves through a purchase return', () => {
