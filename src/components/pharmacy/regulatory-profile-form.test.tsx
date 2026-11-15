@@ -122,7 +122,14 @@ it("locks the province to a Sindh branch and says Sindh's rules are not publishe
       .getAllByRole('status')
       .some((notice) => notice.textContent?.startsWith('Sindh rules are not published yet.'))
   ).toBe(true);
-  expect(screen.getByRole('button', { name: 'Save this version' })).toBeDisabled();
+  // The server decides by the version's effective date, so the form still
+  // submits the branch's own province rather than guessing from today's rules.
+  const save = screen.getByRole('button', { name: 'Save this version' });
+  expect(save).toBeEnabled();
+  fireEvent.submit(save.closest('form')!);
+  expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ branchId: 'branch-sd', provinceCode: 'PK-SD' })
+  );
 });
 
 it("submits the branch's own province, matched to its published rules (#977)", () => {

@@ -763,7 +763,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button disabled={save.isPending || uploading || rulesMissing} type="submit">
+            {/* Not disabled when `rulesMissing`: that reads the rules in force today,
+                while the server checks the date this version takes effect, so a
+                province whose rules start later can still be recorded for that date. */}
+            <Button disabled={save.isPending || uploading} type="submit">
               {save.isPending ? 'Saving…' : 'Save this version'}
             </Button>
             <Link
