@@ -40,6 +40,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
+  VOUCHER_CATEGORY_REFUSED:
+    'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
+  VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
@@ -56,6 +59,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+  // DEV-630: the server books money on today in the workspace zone only.
+  BUSINESS_DATE_NOT_CURRENT:
+    'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
@@ -75,8 +81,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
-  UNCERTIFIED_PROVIDER:
-    'This tender needs a connected provider. Take another tender.',
+  UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:

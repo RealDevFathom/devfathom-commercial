@@ -5,7 +5,7 @@
  * Every decision this module reports is made by an existing kernel rather than
  * re-derived here: `blockReasonFor` decides what is sellable (INV-03),
  * `planAllocation`'s FEFO order decides the nearest safe expiry (INV-02),
- * `priceFromLot` decides price (MED-08), and `saleUnitOptions` decides the
+ * `priceFromLot` decides price (MED-08), and `resolveCounterSaleUnits` decides the
  * pack/strip/unit toggle. A counter that computed its own "what is safe" rule
  * would eventually disagree with the ledger that actually posts the sale.
  *
@@ -22,9 +22,8 @@ import {
 } from './inventory';
 import {
   previewSaleLine,
-  lotSaleUnitOptions,
-  saleUnitOptions,
-  type PackLevelNode,
+  resolveCounterSaleUnits,
+  type CounterPackMismatch,
   type SaleUnitKind,
   type SaleUnitOption,
 } from './counter-pricing';
@@ -78,6 +77,12 @@ export type CounterSearchRow = {
     proRataCeilingMinor: number;
   }>;
   saleUnits: SaleUnitOption[];
+  /**
+   * DEV-724: set only when stock is on hand but neither the received lot nor the
+   * medicine's own pack setup yields a priceable sale unit, so the counter can
+   * say what to fix instead of guessing.
+   */
+  packMismatch?: CounterPackMismatch | null;
   restriction: {
     rx: boolean;
     otc: boolean;
@@ -337,6 +342,9 @@ export async function searchCounterCatalog(
         parentPackLevelId: true,
         unitsPerParent: true,
         presentationId: true,
+        effectiveFrom: true,
+        effectiveTo: true,
+        versionGroupId: true,
       },
     }),
     db.medicinePackMrp.findMany({
@@ -386,7 +394,7 @@ export async function searchCounterCatalog(
     bucket.push(balance as BalanceRow);
     balancesByLot.set(balance.inventoryLotId, bucket);
   }
-  const packLevelsByPresentation = new Map<string, PackLevelNode[]>();
+  const packLevelsByPresentation = new Map<string, (typeof packLevels)[number][]>();
   for (const level of packLevels) {
     const bucket = packLevelsByPresentation.get(level.presentationId) ?? [];
     bucket.push(level);
@@ -395,6 +403,7 @@ export async function searchCounterCatalog(
   const presentationByPackLevel = new Map(
     packLevels.map((level) => [level.id, level.presentationId])
   );
+  const levelLabelByPackLevel = new Map(packLevels.map((level) => [level.id, level.level]));
 
   const rows: CounterSearchRow[] = [];
   for (const medicine of medicines) {
@@ -406,6 +415,7 @@ export async function searchCounterCatalog(
     let best: { lot: LotRow; locationId: string } | null = null;
     let labelLot: CounterLabelLot | null = null;
     let labelLotRow: LotRow | null = null;
+    const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
       if (lot.id === labelLotId) {
@@ -431,6 +441,7 @@ export async function searchCounterCatalog(
         }
         if (labelLot?.inventoryLotId === lot.id) labelLot.sellableUnits += balance.onHandUnits;
         onHandUnits += balance.onHandUnits;
+        sellableLots.set(lot.id, lot);
         const better =
           best === null ||
           lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
@@ -458,28 +469,22 @@ export async function searchCounterCatalog(
       medicine.presentations[0]!;
 
     let saleUnits: SaleUnitOption[] = [];
+    let packMismatch: CounterPackMismatch | null = null;
     if (priced) {
-      const levels = packLevelsByPresentation.get(presentationId) ?? [];
-      try {
-        saleUnits = saleUnitOptions({
-          packLevels: levels,
-          rootPackLevelId: priced.packLevelId,
-          unitsPerPack: priced.unitsPerPack,
-        });
-      } catch {
-        // A pack hierarchy that disagrees with the received lot cannot derive a
-        // strip. The lot's own frozen units per pack is what the server prices
-        // from, so the sealed pack and the loose unit stay sellable.
-        try {
-          saleUnits = lotSaleUnitOptions({
-            packLevelId: priced.packLevelId,
-            levelLabel: levels.find((level) => level.id === priced!.packLevelId)?.level ?? 'PACK',
-            unitsPerPack: priced.unitsPerPack,
-          });
-        } catch {
-          saleUnits = [];
-        }
-      }
+      // A lot whose received pack disagrees with the medicine's pack setup is
+      // still sold through that setup, priced from the same lot exactly as the
+      // server prices the line; only a setup that cannot price it reports why.
+      ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
+        packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+        lotPackLevelId: priced.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(priced.packLevelId) ?? null,
+        lotUnitsPerPack: priced.unitsPerPack,
+        otherLotUnitsPerPack: [...sellableLots.values()]
+          .filter((lot) => lot.id !== priced!.id)
+          .map((lot) => lot.unitsPerPack),
+        dosageForm: presentation.dosageForm,
+        at,
+      }));
     }
 
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
@@ -534,6 +539,7 @@ export async function searchCounterCatalog(
       onHandUnits,
       saleableUnits,
       saleUnits,
+      packMismatch,
       restriction: {
         rx: medicine.rx,
         otc: medicine.otc,
@@ -596,11 +602,20 @@ export type CounterCartLine = {
   }>;
 };
 
+/** #722: one recorded payment row of a (possibly split) bill. */
+export type CounterCartTender = {
+  tenderId: string;
+  type: string;
+  amountMinor: number;
+};
+
 export type CounterCart = {
   saleId: string;
   status: string;
   receiptNumber: number | null;
   lines: CounterCartLine[];
+  /** Recorded payments in the order taken; optional for older cached responses. */
+  tenders?: CounterCartTender[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number; tenderedMinor: number };
 };
 
@@ -608,7 +623,7 @@ async function saleInScope(db: ScopedDb, scope: CounterScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
-      tenders: true,
+      tenders: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       lines: {
         orderBy: { createdAt: 'asc' },
         include: {
@@ -711,6 +726,12 @@ export async function readCounterCart(
     status: sale.status,
     receiptNumber: sale.receiptNumber,
     lines,
+    // Allowlisted: actor, device and provider references stay server-side.
+    tenders: sale.tenders.map((tender) => ({
+      tenderId: tender.id,
+      type: tender.type,
+      amountMinor: tender.amountMinor,
+    })),
     totals: {
       grossMinor,
       discountMinor,
