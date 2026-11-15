@@ -9,7 +9,7 @@ vi.mock('./regulatory', async (original) => ({
 
 import { redeemSalePoints } from './customer-loyalty';
 import { assertStoredPharmacyMayOperate, BranchOperationDeniedError } from './regulatory';
-import { createSale } from './sales';
+import { addReservedSaleLine, addSaleLine, changeSaleStatus, createSale } from './sales';
 import { applyPharmacyTender } from './settlement';
 
 /**
@@ -52,7 +52,11 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
         return 1;
       }),
       pharmacyMoneyIdempotencyKey: {
-        findUnique: vi.fn(async () => ({ commandType: 'tender', payloadHash, resultPayload: null })),
+        findUnique: vi.fn(async () => ({
+          commandType: 'tender',
+          payloadHash,
+          resultPayload: null,
+        })),
       },
       $queryRaw: vi.fn(async () => []),
       pharmacySale: { findFirst: vi.fn() },
@@ -100,5 +104,95 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     expect(db.pharmacySale.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+
+  // #414: a sale opened while the licence was valid must not keep dispensing after it lapses.
+  const lapsed = new BranchOperationDeniedError('LICENCE_INVALID');
+  const lineInput = {
+    saleId: 'sale-a',
+    medicineId: 'medicine-a',
+    presentationId: 'presentation-a',
+    packLevelId: 'pack-a',
+    saleUnit: 'STRIP',
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 10,
+    idempotencyKey: 'line-a',
+  } as Parameters<typeof addSaleLine>[2];
+  const lineDb = () => ({
+    pharmacySale: { findFirst: vi.fn(), updateMany: vi.fn() },
+    medicine: { findFirst: vi.fn() },
+    pharmacyInventoryLot: { findMany: vi.fn() },
+    pharmacySaleLine: { create: vi.fn() },
+    pharmacySaleLineAllocation: { create: vi.fn() },
+    pharmacySaleEvent: { create: vi.fn() },
+  });
+
+  it('addSaleLine refuses on an expired licence before reading the sale or allocating stock', async () => {
+    vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(lapsed);
+    const db = lineDb();
+
+    await expect(addSaleLine(db as never, scope, lineInput)).rejects.toBe(lapsed);
+    expect(assertStoredPharmacyMayOperate).toHaveBeenCalledWith(db, 'org-a', 'branch-a', {
+      name: 'pharmacy.sale.dispense',
+    });
+    expect(db.pharmacySale.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySale.updateMany).not.toHaveBeenCalled();
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
+  });
+
+  it('addReservedSaleLine (customer orders) refuses on an expired licence too', async () => {
+    vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(lapsed);
+    const db = lineDb();
+
+    await expect(addReservedSaleLine(db as never, scope, lineInput, {} as never)).rejects.toBe(
+      lapsed
+    );
+    expect(assertStoredPharmacyMayOperate).toHaveBeenCalledWith(db, 'org-a', 'branch-a', {
+      name: 'pharmacy.sale.dispense',
+    });
+    expect(db.pharmacySale.updateMany).not.toHaveBeenCalled();
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['resume', 'HELD'],
+    ['convertQuotation', 'QUOTATION'],
+  ] as const)(
+    'changeSaleStatus %s refuses to re-open a sale on an expired licence',
+    async (action, status) => {
+      vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(lapsed);
+      const db = {
+        pharmacySale: {
+          findFirst: vi.fn(async () => ({ id: 'sale-a', status, lines: [] })),
+          updateMany: vi.fn(),
+        },
+        pharmacySaleEvent: { create: vi.fn() },
+      };
+
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', action)).rejects.toBe(lapsed);
+      expect(assertStoredPharmacyMayOperate).toHaveBeenCalledWith(db, 'org-a', 'branch-a', {
+        name: `pharmacy.sale.${action}`,
+      });
+      expect(db.pharmacySale.updateMany).not.toHaveBeenCalled();
+      expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('changeSaleStatus still lets an expired branch hold a sale it cannot finish', async () => {
+    vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(lapsed);
+    const sale = { id: 'sale-a', status: 'OPEN', lines: [] };
+    const db = {
+      pharmacySale: {
+        findFirst: vi.fn(async () => sale),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      pharmacySaleEvent: { create: vi.fn() },
+    };
+
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'hold')).resolves.toBe(sale);
+    expect(assertStoredPharmacyMayOperate).not.toHaveBeenCalled();
+    expect(db.pharmacySale.updateMany).toHaveBeenCalledOnce();
   });
 });
