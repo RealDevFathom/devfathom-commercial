@@ -544,3 +544,14 @@ describe('DEV-660 — only assigned branches are offered', () => {
     expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
   });
 });
+
+it('uses the same opening-stock importer from the header and empty inventory', async () => {
+  lots.mockResolvedValue([]);
+  await show();
+  const links = screen.getAllByRole('link', { name: 'Import opening stock' });
+  expect(links).toHaveLength(2);
+  for (const link of links) expect(link).toHaveAttribute('href', '/pharmacy/inventory/import');
+  expect(screen.getByRole('link', { name: 'Receive supplier delivery' })).toHaveAttribute(
+    'href', '/pharmacy/purchasing/receiving'
+  );
+});
