@@ -63,6 +63,9 @@ const previousBusinessDate = (date: string) => {
   return previous.toISOString().slice(0, 10);
 };
 
+/** Terminal order commands require the composer proof issued at unlock. */
+const composerProofs = new Map<string, string>();
+
 const key = (label: string) => `${label}_${suffix}_${randomBytes(3).toString('hex')}`;
 const utcDate = (date: string) => new Date(`${date}T00:00:00.000Z`);
 
@@ -81,6 +84,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (options.secret) headers.authorization = `Bearer ${options.secret}`;
   if (options.session) headers['x-terminal-session'] = options.session;
+  const composerProof = options.session ? composerProofs.get(options.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (options.key) headers['idempotency-key'] = options.key;
   const url = new URL('https://tenant.test/api/restaurant/probe');
   for (const [name, value] of Object.entries(options.query ?? {})) {
@@ -116,6 +121,8 @@ async function unlock(device: Device): Promise<string> {
     body: { staffProfileId: ids.operator, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  composerProofs.set(session, unlocked.json.composerProof as string);
   return session;
 }
 
@@ -192,6 +199,21 @@ async function cardTender(
   return response.json;
 }
 
+/** Day close refuses active orders; finish a paid order the way the terminal does. */
+async function closeOrder(device: Device, session: string, orderId: string) {
+  const response = await call(deps.routes.orderClose, {
+    secret: device.secret,
+    session,
+    key: key('order_close'),
+    body: { orderId },
+  });
+  expect(response.status, JSON.stringify(response.json)).toBe(200);
+  const order = await deps.withTenantDb(orgId, (tx) =>
+    tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+  );
+  expect(order?.status).toBe('CLOSED');
+}
+
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
   const [scopedDb, deviceModule, credentials, ...routeModules] = await Promise.all([
@@ -206,15 +228,27 @@ beforeAll(async () => {
     import('@/app/api/restaurant/cash/day/correct/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
+    import('@/lib/test-support/retained-comp-route'),
   ]);
-  const [bill, comp, tender, refund, dayClose, dayCorrect, establish, unlockRoute] =
-    routeModules as RouteModule[];
+  const [
+    bill,
+    comp,
+    tender,
+    refund,
+    dayClose,
+    dayCorrect,
+    establish,
+    unlockRoute,
+    orderClose,
+    retainedComp,
+  ] = routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: deviceModule.enrollDevice,
     hashOperatorCredential: credentials.hashOperatorCredential,
-    routes: { bill, comp, tender, refund, dayClose, dayCorrect },
+    routes: { bill, comp, retainedComp, tender, refund, dayClose, dayCorrect, orderClose },
     terminal: { establish, unlock: unlockRoute },
   };
 
@@ -376,18 +410,28 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
         select: { id: true },
       })
     );
-    const comp = await call(deps.routes.comp, {
+    const compBody = {
+      billId: compBillId,
+      billLineId: compLine!.id,
+      reason: 'service recovery',
+      approving: { staffProfileId: ids.manager, type: 'PIN', secret: PIN },
+    };
+    // The public comp endpoint is deliberately denied for the MVP; the retained
+    // comp domain is exercised through its test-only transport.
+    const publicComp = await call(deps.routes.comp, {
+      secret: device.secret,
+      session,
+      key: key('public_comp'),
+      body: compBody,
+    });
+    expect(publicComp.status).toBe(403);
+    const comp = await call(deps.routes.retainedComp, {
       secret: device.secret,
       session,
       key: key('comp'),
-      body: {
-        billId: compBillId,
-        billLineId: compLine!.id,
-        reason: 'service recovery',
-        approving: { staffProfileId: ids.manager, type: 'PIN', secret: PIN },
-      },
+      body: compBody,
     });
-    expect(comp.status).toBe(200);
+    expect(comp.status, JSON.stringify(comp.json)).toBe(200);
 
     const zeroed = await deps.withTenantDb(orgId, async (tx) => ({
       line: await tx.restaurantBillLine.findUnique({
@@ -419,12 +463,14 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
       tx.restaurantBill.findUnique({ where: { id: compBillId }, select: { status: true } })
     );
     expect(settledComp?.status).toBe('SETTLED');
+    await closeOrder(device, session, compOrder.orderId);
 
     const tipOrder = await seedOrder(ids.moneyBranch, device.deviceId, businessDate, 41002, [
       '5.00',
     ]);
     const [tipBillId] = await cutBills(device, session, tipOrder.orderId, { kind: 'NONE' });
     await cardTender(device, session, tipBillId!, '5.00', '1.23');
+    await closeOrder(device, session, tipOrder.orderId);
 
     const close = await call(deps.routes.dayClose, {
       secret: device.secret,
@@ -451,6 +497,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const order = await seedOrder(ids.crossBranch, device.deviceId, saleDate, 51001, ['40.00']);
     const [billId] = await cutBills(device, session, order.orderId, { kind: 'NONE' });
     const sale = await cardTender(device, session, billId!, '40.00', '2.00');
+    await closeOrder(device, session, order.orderId);
 
     const d1CloseResponse = await call(deps.routes.dayClose, {
       secret: device.secret,

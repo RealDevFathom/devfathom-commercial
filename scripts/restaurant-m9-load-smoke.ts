@@ -25,6 +25,8 @@ type Queue = {
 };
 
 const MENU_ITEM_ID = 'menu_item_restaurant_e2e_burger';
+/** The seeded item's Heat group is mandatory (min 1, max 1). */
+const HEAT_MODIFIER_OPTION_ID = 'modifier_option_restaurant_e2e_spicy';
 const PUBLICATION_ID = 'menu_publication_restaurant_e2e';
 const FIXTURE = {
   operatorId: 'staff_restaurant_e2e_operator',
@@ -165,7 +167,11 @@ async function runOrder(
 
   const itemIds: string[] = [];
   for (let itemIndex = 0; itemIndex < 2; itemIndex++) {
-    const body = { orderId: opened.orderId, menuItemId: MENU_ITEM_ID };
+    const body = {
+      orderId: opened.orderId,
+      menuItemId: MENU_ITEM_ID,
+      modifierOptionIds: [HEAT_MODIFIER_OPTION_ID],
+    };
     const added = await command<CommandResult & { itemId: string }>(
       baseUrl,
       signal,
