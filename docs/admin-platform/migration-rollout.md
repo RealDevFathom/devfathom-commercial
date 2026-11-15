@@ -104,8 +104,8 @@ For every release:
 
 ### Stage 3: enterprise dedicated pilot
 
-- provision an approved isolated Azure environment;
-- validate generated environment values, managed identity, and deployment URL;
+- provision an approved isolated AWS environment;
+- validate generated environment values, IAM role, and deployment URL;
 - connect dedicated/custom domain;
 - run customer IdP and SCIM acceptance;
 - test audited support on the dedicated URL;

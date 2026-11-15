@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 import { PackPhotoReader } from '../_components/pack-photo-reader';
+import { ScanSearch } from '../_components/scan-search';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -67,6 +68,7 @@ import {
   integerField,
   money,
   moneyFieldMinor,
+  optionalMoneyFieldMinor,
   noticeFrom,
   NO_ACTOR,
   optionalField,
@@ -312,6 +314,7 @@ export default async function PharmacyReceivingPage({
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
         qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'freight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -382,6 +385,7 @@ export default async function PharmacyReceivingPage({
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
+        freightMinor: optionalMoneyFieldMinor(form, 'directFreight', 'Freight', 0),
         lines,
       });
       if ('blocked' in receipt)
@@ -541,18 +545,15 @@ export default async function PharmacyReceivingPage({
         <input name="branch" type="hidden" value={branchId} />
         {selectedOrder ? <input name="order" type="hidden" value={selectedOrder.id} /> : null}
         {selectedReceipt ? <input name="receipt" type="hidden" value={selectedReceipt.id} /> : null}
-        <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
-          Scan or search
-          <input
-            autoComplete="off"
-            autoFocus
-            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
-            defaultValue={scanTerm ?? ''}
-            id="scan"
-            name="scan"
-            placeholder="Scan a 2D or linear code, or type a product name"
-          />
-        </label>
+        <ScanSearch
+          key={scanTerm ?? ''}
+          defaultValue={scanTerm ?? ''}
+          medicines={workspace.medicines.map(({ id, productName, brandName }) => ({
+            id,
+            productName,
+            brandName,
+          }))}
+        />
         <SubmitButton variant="secondary">Find line</SubmitButton>
       </form>
       {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
@@ -749,7 +750,7 @@ export default async function PharmacyReceivingPage({
                     hint="Required: stock is not saleable without its source invoice."
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Invoice date"
                     name="supplierInvoiceDate"
                     notice={notice}
@@ -757,7 +758,7 @@ export default async function PharmacyReceivingPage({
                     type="date"
                   />
                   <TextField
-                    defaultValue={today()}
+                    defaultValue={today(ctx.organization?.timezone)}
                     label="Received on"
                     name="receivedAt"
                     notice={notice}
@@ -783,6 +784,13 @@ export default async function PharmacyReceivingPage({
                     notice={notice}
                     required
                     hint="Where the warranty or source declaration for this consignment is filed."
+                  />
+                  <TextField
+                    inputMode="decimal"
+                    label="Freight on this supplier invoice (PKR)"
+                    name="freight"
+                    notice={notice}
+                    hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
                   />
                 </div>
 
@@ -963,7 +971,7 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase invoice date"
                 name="directInvoiceDate"
                 notice={notice}
@@ -971,7 +979,7 @@ export default async function PharmacyReceivingPage({
                 type="date"
               />
               <TextField
-                defaultValue={today()}
+                defaultValue={today(ctx.organization?.timezone)}
                 label="Direct purchase received on"
                 name="directReceivedAt"
                 notice={notice}
@@ -995,6 +1003,13 @@ export default async function PharmacyReceivingPage({
                 name="directDistributorStrn"
                 notice={notice}
                 hint="As printed on this purchase bill."
+              />
+              <TextField
+                inputMode="decimal"
+                label="Freight on this supplier invoice (PKR)"
+                name="directFreight"
+                notice={notice}
+                hint="Only freight the supplier billed on this invoice. Spread across the lines by cost into each lot's landed unit cost."
               />
               <TextAreaField
                 className="sm:col-span-2"
@@ -1455,7 +1470,7 @@ function ReceiptDetail({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium text-text-strong">{line.medicine.productName}</span>
               <span className="font-mono text-sm tabular-nums text-text-strong">
-                {money(line.unitCostMinor)} / unit
+                {money(line.unitCostMinor)} / unit landed
               </span>
             </div>
             <p className="mt-1 text-xs text-text-muted">
@@ -1467,6 +1482,9 @@ function ReceiptDetail({
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
               {line.canonicalUnitsPerPack} ={' '}
               {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}
+              {line.allocatedFreightMinor > 0
+                ? ` · freight share ${money(line.allocatedFreightMinor)}`
+                : ''}
             </p>
             <p className="mt-1 text-xs text-text-muted">
               Accepted {units(line.acceptedCanonicalUnits)} into {line.stockLocation.name}

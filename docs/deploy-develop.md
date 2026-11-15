@@ -267,7 +267,7 @@ The instance profile needs the SSM managed-instance core permissions plus only
 Block all public bucket access, require TLS, enable encryption and bucket versioning, and configure
 an artifact lifecycle appropriate to rollback/audit retention. Use default S3 encryption (SSE-S3),
 or add narrowly scoped KMS encrypt/decrypt permissions if choosing a customer-managed key.
-This deployment does not modify Azure infrastructure or contact a host through SSH.
+This deployment does not contact a host through SSH.
 
 ## Local regression checks
 

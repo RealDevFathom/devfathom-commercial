@@ -2,6 +2,7 @@ import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { workspaceToday } from '@/lib/timezone';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -115,6 +116,14 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'amountMinor',
   },
   BLOCKED_STOCK: { message: 'That stock is quarantined or recalled and cannot be moved.' },
+  REVERSAL_STOCK_MOVED: {
+    message:
+      'Some of the stock this receipt brought in has since been sold, transferred, quarantined or written off, so the receipt cannot be reversed. Return the remaining stock to the supplier or write it off instead.',
+  },
+  REVERSAL_PACKS_OPENED: {
+    message:
+      'Sealed packs from this receipt have since been opened into loose units, so the receipt cannot be reversed exactly. Return the remaining stock to the supplier or write it off instead.',
+  },
   COLD_CHAIN_STORAGE_REQUIRED: {
     message:
       'This medicine requires cold-chain storage. Choose a validated cold-chain zone before posting the receipt.',
@@ -166,6 +175,8 @@ const KNOWN_REJECTIONS = new Set([
   'GTIN_MEDICINE_MISMATCH',
   'SERIALIZED_PACK_QUANTITY',
   'CARTON_PACK_COUNT',
+  'REVERSAL_STOCK_MOVED',
+  'REVERSAL_PACKS_OPENED',
 ]);
 
 export type ActionFailure = { message: string; field?: string };
@@ -459,6 +470,7 @@ export function dateInputValue(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
-export function today(): string {
-  return dateInputValue(new Date());
+/** Today in the workspace's zone: a GRN keyed in 00:00–04:59 PKT is today's, not yesterday's. */
+export function today(timeZone: string | null | undefined): string {
+  return workspaceToday(timeZone);
 }

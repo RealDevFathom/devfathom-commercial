@@ -15,6 +15,30 @@ export const ASSISTANT_SUGGESTION_CONDITIONS = [
   },
   { text: 'Find notes I can access', module: 'notes', tool: 'searchNotes' },
   { text: 'What meetings are on my schedule?', module: 'meetings', tool: 'listMeetings' },
+  {
+    text: "What are today's sales?",
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: 'Which medicines are expiring soon?',
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: 'Which items are running low on stock?',
+    module: 'pharmacy-reports',
+    tool: 'askPharmacyReports',
+    vertical: 'PHARMACY',
+  },
+  {
+    text: "How did today's orders go?",
+    module: 'restaurant-core',
+    tool: 'askRestaurantReports',
+    vertical: 'RESTAURANT',
+  },
 ] as const;
 
 export function assistantEntry(

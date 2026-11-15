@@ -79,8 +79,8 @@ import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
+  receiptLandedCosts,
   receiptLineQuantities,
-  receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -1404,6 +1404,8 @@ const purchasingRouter = router({
             .optional(),
           note: z.string().trim().max(2000).optional(),
           qualifiedPersonUserId: z.string().trim().min(1).optional(),
+          /** DEV-77: freight the supplier billed on this invoice, spread into lot landed cost. */
+          freightMinor: z.number().int().nonnegative().max(999_999_999).default(0),
           lines: z
             .array(
               z
@@ -1659,17 +1661,11 @@ const purchasingRouter = router({
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // PUR-03: bonus units divide the same money over more units, so a
-              // scheme lowers the landed cost and never adds revenue.
-              unitCostMinor: receiptLineUnitCostMinor({
-                receivedPacks: line.receivedPacks,
-                bonusPacks: line.bonusPacks,
-                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-                discountBps: line.discountBps,
-                taxBps: line.taxBps,
-                taxCreditable: line.taxCreditable,
-              }),
+              // PUR-03 / DEV-77: bonus units divide the same money over more
+              // units, so a scheme lowers the landed cost and never adds revenue;
+              // the receipt freight share is added once every line is known.
+              allocatedFreightMinor: 0,
+              unitCostMinor: 0,
               stockLocationId: line.stockLocationId,
               quarantineLocationId: line.quarantineLocationId ?? null,
               gtin: identity.gtin,
@@ -1679,11 +1675,32 @@ const purchasingRouter = router({
             });
           }
 
+          // DEV-77: one landed-cost pass over the whole receipt, so the freight
+          // shares sum to the billed freight exactly and every lot carries
+          // (net + non-creditable tax + freight share) / (received + bonus).
+          const landed = receiptLandedCosts({
+            freightMinor: input.freightMinor,
+            lines: input.lines.map((line) => ({
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+              discountBps: line.discountBps,
+              taxBps: line.taxBps,
+              taxCreditable: line.taxCreditable,
+            })),
+          });
+          for (const [index, line] of lines.entries()) {
+            line.allocatedFreightMinor = landed[index]!.allocatedFreightMinor;
+            line.unitCostMinor = landed[index]!.unitCostMinor;
+          }
+
           const receipt = await db.pharmacyGoodsReceipt.create({
             data: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
               reference: input.reference,
+              freightMinor: input.freightMinor,
               supplierId: input.supplierId,
               purchaseOrderId: input.purchaseOrderId ?? null,
               supplierInvoiceRef: input.supplierInvoiceRef,

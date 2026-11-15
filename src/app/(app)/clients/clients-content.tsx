@@ -333,7 +333,7 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
           <button
             onClick={handleSubmit}
             disabled={!name.trim() || createClient.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createClient.isPending ? (
               <>

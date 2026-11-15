@@ -200,7 +200,7 @@ export const pharmacyPrescriptionsRouter = router({
         })),
       };
     }),
-  createPatient: protectedProcedure
+  createPatient: capabilityProcedure('pharmacy:prescriptions')
     .input(
       z
         .object({
@@ -213,7 +213,7 @@ export const pharmacyPrescriptionsRouter = router({
     )
     .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
 
-  recordConsent: protectedProcedure
+  recordConsent: capabilityProcedure('pharmacy:prescriptions')
     .input(
       z
         .object({

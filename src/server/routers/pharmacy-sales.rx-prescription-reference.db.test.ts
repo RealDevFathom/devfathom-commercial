@@ -35,6 +35,8 @@ const ids = {
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const DAY = 24 * 60 * 60 * 1000;
 const key = () => randomBytes(8).toString('hex');
+/** DEV-725: bills start only on a counter device with an OPEN drawer, seeded below. */
+const counterDevice = `device-r518rx-${suffix}`;
 const refused = (message: string, code = 'BAD_REQUEST') => ({ code, message });
 const NOT_FOUND = refused(
   'That prescription reference does not match a prescription for this medicine in this pharmacy.'
@@ -53,7 +55,7 @@ const RX_DENIED = refused(
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
 type SalesCaller = {
-  create: (input: { branchId: string }) => Promise<{ id: string }>;
+  create: (input: { branchId: string; deviceId: string }) => Promise<{ id: string }>;
   addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string } }>;
   linkCustomer: (input: Record<string, unknown>) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<{ lines: unknown[] }>;
@@ -141,7 +143,7 @@ const withReference = (prescriptionLineId: string, patientId = patients.ayesha) 
 
 async function newSale(userId: string, prepare?: (api: SalesCaller, saleId: string) => unknown) {
   return act(userId, async (api) => {
-    const sale = await api.create({ branchId: ids.branch });
+    const sale = await api.create({ branchId: ids.branch, deviceId: counterDevice });
     await prepare?.(api, sale.id);
     return sale.id;
   });
@@ -348,6 +350,15 @@ beforeAll(async () => {
       });
       await tx.pharmacyBranchAssignment.create({ data: { userId, branchId: ids.branch } });
     }
+    await tx.pharmacyDrawerSession.create({
+      data: {
+        branchId: ids.branch,
+        deviceId: counterDevice,
+        businessDate: new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`),
+        openingFloatMinor: 0,
+        openedByActorId: ids.pharmacist,
+      },
+    });
     rx = await medicineIn(tx, 'Amoxicillin 500mg', { rx: true }, 500);
     otc = await medicineIn(tx, 'Paracetamol 500mg', {});
     controlled = await medicineIn(tx, 'Tramadol 50mg', { controlled: true });
