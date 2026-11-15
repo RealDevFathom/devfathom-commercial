@@ -22,9 +22,19 @@ export type PackPhotoLotDraft = {
   serialLocked: boolean;
   unitsPerPack: number;
   outstandingPacks: number | null;
+  /**
+   * DEV-770: printed MRP per pack in rupees, as confirmed by the receiver. Blank
+   * leaves the line's own MRP field as it is.
+   */
+  mrp?: string;
+  /**
+   * The printed price differs from the pack's current price, so the receiver
+   * must pick one (or type the price) before the line is filled.
+   */
+  priceChoiceRequired?: boolean;
 };
 
-export type PackPhotoLotField = 'batch' | 'expiry' | 'packs' | 'confirm';
+export type PackPhotoLotField = 'batch' | 'expiry' | 'price' | 'packs' | 'confirm';
 
 export type PackPhotoLotCheck =
   | {
@@ -35,6 +45,8 @@ export type PackPhotoLotCheck =
         expiryPrecision: 'DAY' | 'MONTH';
         receivedPacks: number;
         canonicalUnits: number;
+        /** PKR minor units, or null when the receiver left the price to the line. */
+        printedMrpMinor: number | null;
       };
       notes: string[];
     }
@@ -55,6 +67,22 @@ function realDate(value: string): boolean {
 }
 
 /**
+ * Rupees as typed on the bench into paisa: the same shape the receipt's MRP
+ * field accepts (digits, at most two decimals), positive, no float maths.
+ */
+export function rupeesToMinor(value: string): number | null {
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(value.trim());
+  if (!match) return null;
+  const minor = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
+}
+
+/** Paisa as the receipt's rupee field expects it, e.g. 45000 → "450.00". */
+export function minorToRupees(minor: number): string {
+  return `${Math.trunc(minor / 100)}.${String(minor % 100).padStart(2, '0')}`;
+}
+
+/**
  * The receiver supplies the count; the photo never does. A serial names one
  * pack, so a serialized pack can never be multiplied into a bulk lot.
  */
@@ -70,6 +98,14 @@ export function checkPackPhotoLot(draft: PackPhotoLotDraft): PackPhotoLotCheck {
     errors.expiry = 'Enter the printed expiry date.';
   } else if (draft.precision !== 'DAY' && draft.precision !== 'MONTH') {
     errors.expiry = 'Choose whether the pack prints a month or an exact day.';
+  }
+
+  const mrp = (draft.mrp ?? '').trim();
+  const printedMrpMinor = mrp ? rupeesToMinor(mrp) : null;
+  if (mrp && printedMrpMinor === null) {
+    errors.price = 'Enter the printed MRP per pack, like 450 or 450.50.';
+  } else if (!mrp && draft.priceChoiceRequired) {
+    errors.price = 'Choose the printed price or the current price, or type the price on the pack.';
   }
 
   const raw = draft.packs.trim();
@@ -106,6 +142,7 @@ export function checkPackPhotoLot(draft: PackPhotoLotDraft): PackPhotoLotCheck {
       expiryPrecision: draft.precision as 'DAY' | 'MONTH',
       receivedPacks: packs,
       canonicalUnits: packs * draft.unitsPerPack,
+      printedMrpMinor,
     },
     notes,
   };
