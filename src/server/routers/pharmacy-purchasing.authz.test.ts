@@ -237,6 +237,11 @@ beforeEach(() => {
   m('pharmacySupplier').findFirst.mockResolvedValue(SUPPLIER);
   m('medicine').findFirst.mockResolvedValue({ id: 'medicine_a' });
   m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a' });
+  // createPurchaseOrder resolves its lines' medicines and pack levels by ID in one query each.
+  const byIds = async (args?: { where?: { id?: { in?: string[] } } }) =>
+    (args?.where?.id?.in ?? []).map((id) => ({ id }));
+  m('medicine').findMany.mockImplementation(byIds);
+  m('packLevel').findMany.mockImplementation(byIds);
   m('restaurantOperatorCredential').findFirst.mockResolvedValue({
     id: 'credential_a',
     credentialHash: APPROVER_HASH,
