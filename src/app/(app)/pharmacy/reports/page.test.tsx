@@ -7,7 +7,9 @@ const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefine
 const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
 const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
+const expiryEmpty = vi.hoisted(() => ({ value: false }));
 const suppliers = vi.hoisted(() => vi.fn());
+const demandAggregate = vi.hoisted(() => vi.fn());
 const extraCatalog = vi.hoisted(() => ({
   reports: [] as Array<{ key: string; label: string; metrics: string[]; filters: string[] }>,
   metrics: [] as Array<Record<string, string | null>>,
@@ -39,7 +41,7 @@ vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
     db: {},
     requestMeta: { ip: null, userAgent: null },
-    organization: { id: 'org-a', currency: 'PKR' },
+    organization: { id: 'org-a', currency: 'PKR', timezone: 'Asia/Karachi' },
     entitlements: {
       organizationId: 'org-a',
       enabledModules: reportModules.enabled,
@@ -51,14 +53,16 @@ vi.mock('@/server/trpc', () => ({
 vi.mock('@/server/routers/pharmacy-sales', () => ({
   pharmacySalesRouter: {
     createCaller: () => ({
-      demandAggregate: async ({ from, to }: { from: Date; to: Date }) => ({
-        label: 'Estimate',
-        method: 'Explicit POS-10 events grouped by requested item and cause',
-        window: { from, to },
-        exclusions: ['searches without an explicit event', 'abandoned carts'],
-        confidence: 'observed-events-only',
-        rows: [],
-      }),
+      demandAggregate: demandAggregate.mockImplementation(
+        async ({ from, to }: { from: Date; to: Date }) => ({
+          label: 'Estimate',
+          method: 'Explicit POS-10 events grouped by requested item and cause',
+          window: { from, to },
+          exclusions: ['searches without an explicit event', 'abandoned carts'],
+          confidence: 'observed-events-only',
+          rows: [],
+        })
+      ),
     }),
   },
 }));
@@ -96,6 +100,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       ],
       expiryAdvice: async () => {
         if (expiryError.value) throw expiryError.value;
+        if (expiryEmpty.value) return [];
         return [
           {
             lotId: 'lot-1',
@@ -176,6 +181,7 @@ describe('pharmacy report catalog filters', () => {
     reportBranches.mockClear();
     commandCentre.mockClear();
     expiryError.value = null;
+    expiryEmpty.value = false;
     suppliers.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
     extraCatalog.reports = [];
     extraCatalog.metrics = [];
@@ -244,6 +250,27 @@ describe('pharmacy report catalog filters', () => {
     expect(reportBranches).not.toHaveBeenCalled();
   });
 
+  it('renders a sales detail section for ?section=sales and not otherwise', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ section: 'sales', branch: 'b1' }),
+      })
+    );
+    const detail = screen.getByRole('heading', { name: 'Sales and margin for the selected period' });
+    expect(detail.closest('[id="sales"]')).not.toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports?branch=b1'
+    );
+  });
+
+  it('omits the sales detail section without ?section=sales', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(
+      screen.queryByRole('heading', { name: 'Sales and margin for the selected period' })
+    ).toBeNull();
+  });
+
   it('names the missing reports capability and who can grant it', async () => {
     actor.role = 'MEMBER';
     reportBranches.mockRejectedValueOnce(
@@ -299,6 +326,32 @@ describe('pharmacy report catalog filters', () => {
 
     expect(screen.getByText('Sign in again to access pharmacy reports.')).toBeVisible();
     expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it('defaults the period to the Karachi business day after midnight PKT, not the UTC day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 PKT on 15 November is still 14 November in UTC.
+    vi.setSystemTime(new Date('2026-11-14T20:30:00.000Z'));
+    try {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(commandCentre).toHaveBeenCalledWith(
+      expect.objectContaining({ from: '2026-11-09', to: '2026-11-15' })
+    );
+    // Demand logged at 00:00–04:59 PKT on the 9th belongs to the period: bound it on the Karachi clock.
+    expect(demandAggregate).toHaveBeenCalledWith({
+      branchId: 'b1',
+      from: new Date('2026-11-08T19:00:00.000Z'),
+      to: new Date('2026-11-15T19:00:00.000Z'),
+    });
+    expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
+    expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+    expect(
+      screen.getByText(/to the start of the day after the last, in PKT\. Finance/)
+    ).toBeVisible();
+    expect(screen.queryByText(/UTC posting dates/)).toBeNull();
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
@@ -410,6 +463,34 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply filters' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Selected period at a glance' })).toBeVisible();
+  });
+
+  it.each([
+    new Error('private database detail'),
+    new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'private database detail' }),
+  ])('logs an unexpected expiry failure on the server without exposing it: %s', async (error) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expiryError.value = error;
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      expect(log).toHaveBeenCalledWith('[pharmacy-reports] Expiry advice failed', error);
+      expect(screen.getByRole('alert')).toHaveTextContent('Expiry advice could not load.');
+      expect(screen.queryByText(/private database detail/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('shows an empty expiry result without an error or permission warning', async () => {
+    expiryEmpty.value = true;
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText('No future-expiry lots with available stock match this scope.')
+    ).toBeVisible();
+    expect(screen.queryByText(/Expiry advice could not load/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
   });
 
   it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(

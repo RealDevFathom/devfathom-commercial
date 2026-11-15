@@ -7,6 +7,7 @@ const regions = [
   ['dispensing/prescriptions-console.tsx', 'Captured prescriptions'],
   ['dispensing/controlled-register-console.tsx', 'Controlled medicine register'],
   ['staged-medicine-catalogue.tsx', 'Staged medicine catalogue'],
+  ['regulatory-profile-form.tsx', 'Regulatory version history'],
   ['../../app/(app)/pharmacy/inventory/page.tsx', 'Pharmacy inventory batches'],
   ['../../app/(app)/pharmacy/marketing/page.tsx', 'Marketing campaigns'],
 ] as const;

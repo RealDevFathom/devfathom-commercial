@@ -16,7 +16,7 @@ import {
  * R-lane / WHA-194 — the provider-neutral VISION extraction adapter.
  *
  * It reuses the existing `@/lib/ai/provider` seam, so the vendor is an
- * environment decision (`AI_PROVIDER=azure|groq|google|vertex`), never a code
+ * environment decision (`AI_PROVIDER`), never a code
  * decision. Nothing below is provider-specific: one structured-output call with
  * a zod schema, one image or file part, and the same normalizer every other
  * adapter goes through.

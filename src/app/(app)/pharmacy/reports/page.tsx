@@ -13,6 +13,12 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateRange,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -28,6 +34,7 @@ type SearchParams = Promise<
       | 'branch'
       | 'from'
       | 'to'
+      | 'section'
       | 'supplier'
       | 'ingredient'
       | 'batch'
@@ -152,13 +159,16 @@ export default async function PharmacyReportsPage({
     const amount = formatMinor(minor).replace(/\B(?=(\d{3})+\.)/g, ',');
     return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
   };
-  const today = new Date().toISOString().slice(0, 10);
+  // The owner's business day: the workspace zone, not UTC (00:00–04:59 PKT is still "today").
+  const timeZone = ctx.organization?.timezone;
+  const today = workspaceToday(timeZone);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch = value(query.branch);
+  const section = value(query.section);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
   try {
@@ -212,11 +222,15 @@ export default async function PharmacyReportsPage({
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
-    else
+    else {
       expiryAdviceError = !(
         expiryResult.reason instanceof TRPCError &&
         ['FORBIDDEN', 'UNAUTHORIZED'].includes(expiryResult.reason.code)
       );
+      if (expiryAdviceError) {
+        console.error('[pharmacy-reports] Expiry advice failed', expiryResult.reason);
+      }
+    }
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
@@ -226,10 +240,10 @@ export default async function PharmacyReportsPage({
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
   if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
     try {
+      // Event timestamps: bound the selected business dates on the workspace clock.
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
         branchId: branch,
-        from: new Date(`${from}T00:00:00.000Z`),
-        to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
+        ...workspaceDateRange(from, to, timeZone),
       });
     } catch {
       demandError = true;
@@ -486,6 +500,7 @@ export default async function PharmacyReportsPage({
         financial={catalog.permissions.financial}
       />
       <ObservedDemand
+        timeZone={timeZone}
         report={demand}
         failed={demandError}
         selected={!!branch}
@@ -522,9 +537,35 @@ export default async function PharmacyReportsPage({
               status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
+            <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
             <span>Source: {result.freshness.source}</span>
           </div>
+          {section === 'sales' && metrics ? (
+            <SectionCard
+              id="sales"
+              eyebrow="Sales detail"
+              title="Sales and margin for the selected period"
+              titleLevel={2}
+            >
+              <p className="mb-4 text-sm text-text-muted">
+                Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+                {branch
+                  ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                  : 'All available branches'}
+                . — means unavailable, not zero.
+              </p>
+              <div className="grid gap-6 sm:grid-cols-2">
+                <Stat label="Sales" value={money(metrics.salesMinor)} sub="Ledger source" />
+                <Stat label="Gross margin" value={money(metrics.marginMinor)} sub="Ledger source" />
+              </div>
+              <Link
+                className="mt-4 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={scopedDrillThrough('/pharmacy/reports', branch)}
+              >
+                Back to overview
+              </Link>
+            </SectionCard>
+          ) : null}
           <SectionCard
             eyebrow="Owner command centre"
             title="Selected period at a glance"
@@ -544,11 +585,14 @@ export default async function PharmacyReportsPage({
               selected period. Stock signals, recommended orders and expiry exposure are current
               snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
               margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+              on postings from the start of the first selected date to the start of the day after
+              the last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still
+              splits days at midnight UTC, so its totals can differ for the same dates. It may
+              differ from sales grouped by business date. Missing journal evidence is unavailable;
+              posted totals do not establish complete source or cost coverage. Supplier, ingredient
+              and batch filters do not apply to these KPI totals, the daily work pack or observed
+              demand. Those panels use branch/date scope only; current snapshots use branch scope
+              only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
@@ -583,6 +627,7 @@ export default async function PharmacyReportsPage({
           {expiryAdvice ? (
             <SectionCard
               eyebrow="AI-02 · Advisory only"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -668,6 +713,7 @@ export default async function PharmacyReportsPage({
           ) : expiryAdviceError ? (
             <SectionCard
               eyebrow="Could not load"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -679,6 +725,7 @@ export default async function PharmacyReportsPage({
           ) : (
             <SectionCard
               eyebrow="AI-02 · Owner only"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >

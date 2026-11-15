@@ -5,6 +5,7 @@ import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
+import { PharmacyStaffHome } from './pharmacy-staff-home';
 import {
   PHARMACIST_LANDING_CAPABILITIES,
   PharmacistHome,
@@ -17,6 +18,7 @@ import { loadHotelLanding } from '@/lib/hotel/landing';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
+import { canOpenPharmacyCommandCentre, loadPharmacyStaffHome } from '@/lib/pharmacy/staff-home';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -34,18 +36,30 @@ export default async function DashboardPage({
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
 
-  // Apply role-based routing only to a fresh sign-in. Explicit dashboard visits
-  // must retain the management overview, saved preferences and first-run checklist.
-  if (signInLanding && restaurant && ssr?.session?.user) {
-    redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
+  const organizationId = ssr?.organization?.id;
+  const user = ssr?.session?.user;
+  // Only fresh sign-ins choose an operational landing. Read effective grants
+  // through the tenant-scoped ABAC engine (including role/override DENYs), and
+  // mirror the POS page's module gate so a grant cannot land on a disabled POS.
+  // Everyone else keeps the restaurant overview and its quick-access links.
+  if (signInLanding && restaurant && organizationId && user) {
+    const target = await withTenantDb(organizationId, async (db) => {
+      const subject = subjectFromSession(user);
+      if (await can(subject, 'admin:access', undefined, { db })) return '/restaurant';
+      if (
+        ssr.entitlements.enabledModules.includes('restaurant-pos') &&
+        (await can(subject, 'orders:take', undefined, { db }))
+      )
+        return '/pos';
+      return null;
+    });
+    if (target) redirect(target);
   }
 
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical
       : null;
-  const organizationId = ssr?.organization?.id;
-  const user = ssr?.session?.user;
   const checklist =
     organizationId && firstRunVertical && user
       ? await withTenantDb(organizationId, async (db) =>
@@ -84,6 +98,30 @@ export default async function DashboardPage({
     ? pharmacistLanding(pharmacyCapabilities, ssr?.entitlements.enabledModules)
     : null;
   if (signInLanding && pharmacist?.home) redirect(pharmacist.home);
+
+  // DEV-20: after DEV-95's pharmacist home, only the owner/administrator or a manager who holds
+  // the operational-reports grant gets the Owner command centre. Every other pharmacy member
+  // lands on their own staff home, decided here on the server from their grants, never from a
+  // client-side flag. Like DEV-95, an unavailable access read falls back to the command centre,
+  // whose own report reads stay server-gated.
+  const pharmacyStaffHome =
+    pharmacy && organizationId && user && !pharmacist
+      ? await withTenantDb(organizationId, async (db) =>
+          (await canOpenPharmacyCommandCentre(db, user))
+            ? null
+            : loadPharmacyStaffHome(
+                db,
+                organizationId,
+                user,
+                ssr?.entitlements.enabledModules ?? []
+              )
+        ).catch((error: unknown) => {
+          console.error('[dashboard] pharmacy staff home unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : null;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -126,6 +164,8 @@ export default async function DashboardPage({
         />
       ) : pharmacy && pharmacist ? (
         <PharmacistHome tools={pharmacist.tools} />
+      ) : pharmacyStaffHome ? (
+        <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (
         <PharmacyDashboardContent role={ssr.session?.user?.role} />
       ) : restaurant ? (
