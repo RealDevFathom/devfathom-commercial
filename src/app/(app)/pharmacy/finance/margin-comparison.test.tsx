@@ -20,7 +20,7 @@ describe('gross-margin comparison UI', () => {
     const html = renderToStaticMarkup(<MarginComparisonLedger report={report} />);
     for (const text of [
       '25.00 (currency unknown)',
-      '2026-08-30T00:00:00.000Z',
+      '30 Aug 2026, 12:00 AM UTC',
       'start inclusive, end exclusive',
       'the previous period',
       'not a causal price/volume/mix',

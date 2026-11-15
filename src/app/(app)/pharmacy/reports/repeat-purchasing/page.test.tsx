@@ -73,7 +73,7 @@ describe('repeat purchasing page', () => {
     const cutoff = screen.getByLabelText('As-of cutoff (UTC)');
     expect(cutoff).toHaveAttribute('type', 'datetime-local');
     expect(cutoff).toHaveValue('2026-05-01T09:30');
-    expect(screen.getByText(/Frozen cutoff: 1 May 2026, 00:00 UTC\./)).toBeInTheDocument();
+    expect(screen.getByText(/Frozen cutoff: 1 May 2026, 12:00 AM UTC\./)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   });
   it('shows loaded eligible, repeated and immature counts', async () => {

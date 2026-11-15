@@ -24,6 +24,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -512,7 +513,7 @@ export default async function PharmacyReportsPage({
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
             <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
-            <span>Source: {result.freshness.source}</span>
+            <span>Source: {plainReportSource(result.freshness.source) ?? 'pharmacy records'}</span>
           </div>
           {section === 'sales' && metrics ? (
             <SectionCard

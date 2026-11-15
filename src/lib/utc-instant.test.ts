@@ -16,7 +16,7 @@ describe('utc instant helpers', () => {
   });
 
   it('shows instants in words, never raw ISO', () => {
-    expect(formatUtcInstant(new Date('2026-10-07T07:00:00Z'))).toBe('7 Oct 2026, 07:00 UTC');
+    expect(formatUtcInstant(new Date('2026-10-07T07:00:00Z'))).toBe('7 Oct 2026, 7:00 AM UTC');
     expect(formatUtcInstant('2026-05-01T00:00:00Z')).not.toMatch(/T\d{2}:/);
   });
 });

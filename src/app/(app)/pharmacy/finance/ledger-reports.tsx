@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatUtcInstant } from '@/lib/utc-instant';
+import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
@@ -65,9 +67,9 @@ function Metadata({ report }: { report: Report }) {
     <div className="space-y-2 break-words text-sm text-text-muted">
       <p>
         {'at' in report.period
-          ? `Through ${report.period.at.toISOString()} (inclusive).`
-          : `${report.period.from.toISOString()} to ${report.period.to.toISOString()} (start inclusive, end exclusive).`}{' '}
-        Timezone: {report.timezone}. Branch: {report.scope.branchId}.
+          ? `Through ${formatUtcInstant(report.period.at)} (inclusive).`
+          : `${formatUtcInstant(report.period.from)} to ${formatUtcInstant(report.period.to)} (start inclusive, end exclusive).`}{' '}
+        Timezone: {report.timezone}.
       </p>
       <p>
         Currency: {report.currency ?? 'unknown — not recorded by the ledger reader'}. Integer minor
@@ -75,12 +77,16 @@ function Metadata({ report }: { report: Report }) {
       </p>
       <p>{report.definition}</p>
       <p>
-        Source: {report.source}. Coverage: posted entries only; completeness{' '}
-        {report.coverage.completeness}. Refunds included only when posted as reversals.
+        Source: {plainReportSource(report.source) ?? 'posted accounts'}. Coverage: posted entries
+        only; completeness {report.coverage.completeness}. Refunds included only when posted as
+        reversals.
       </p>
       <p>
-        Retrieved: {report.freshness.retrievedAt.toISOString()}. Latest posting:{' '}
-        {report.freshness.latestPostingAt ?? 'unknown'}.
+        Retrieved: {formatUtcInstant(report.freshness.retrievedAt)}. Latest posting:{' '}
+        {report.freshness.latestPostingAt
+          ? formatUtcInstant(report.freshness.latestPostingAt)
+          : 'unknown'}
+        .
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>

@@ -6,6 +6,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 type PriceData = Awaited<ReturnType<typeof priceIntelligence>>;
 const money = (minor: number | null) =>
@@ -197,8 +198,8 @@ export function PriceNoticesView({
       </SectionCard>
       <SectionCard title="DRAP price notices" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
-          Current prices as of {data.asOf.toISOString()}. Variance = selling − confirmed MRP for the
-          same pack. Missing selling policies remain unknown. Unit amounts are derived previews.
+          Current prices as of {formatUtcInstant(data.asOf)}. Variance = selling − confirmed MRP for
+          the same pack. Missing selling policies remain unknown. Unit amounts are derived previews.
         </p>
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <Button

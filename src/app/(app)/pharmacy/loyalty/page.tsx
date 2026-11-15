@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
+import { formatUtcInstant } from '@/lib/utc-instant';
 
 export const metadata = { title: 'Loyalty points · Pharmacy' };
 const linkClass =
@@ -230,7 +231,7 @@ export default async function LoyaltyPage({
                     >
                       <td className="whitespace-nowrap p-3">
                         <time dateTime={e.occurredAt.toISOString()}>
-                          {e.occurredAt.toISOString().replace('T', ' ').slice(0, 19)}
+                          {formatUtcInstant(e.occurredAt)}
                         </time>
                       </td>
                       <td className="p-3">
