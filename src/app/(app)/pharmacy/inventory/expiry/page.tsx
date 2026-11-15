@@ -187,6 +187,20 @@ export default async function PharmacyExpiryBoardPage({
         text = result.created
           ? `Supplier return draft ${result.purchaseReturn.reference} created in Purchasing → Returns. A draft reserves nothing until it is submitted.`
           : `This lot already has return ${result.purchaseReturn.reference} (${result.purchaseReturn.status.toLowerCase()}) — open it in Purchasing → Returns.`;
+      } else if (action === 'claim') {
+        const positions = data.getAll('position').map((value) => {
+          const [inventoryLotId = '', stockLocationId = ''] = String(value).split('|');
+          return { inventoryLotId, stockLocationId };
+        });
+        const result = await caller.draftExpiryReturnClaim({
+          branchId: params.branch,
+          supplierId: field(data, 'supplierId'),
+          positions,
+          reason: field(data, 'reason'),
+        });
+        text = result.created
+          ? `Expiry claim draft ${result.purchaseReturn.reference} created in Purchasing → Returns with ${result.lineCount} lot${result.lineCount === 1 ? '' : 's'}${result.skipped ? ` (${result.skipped} skipped: already on a return or reserved)` : ''}. A draft reserves nothing until it is submitted.`
+          : `These lots are already on return ${result.purchaseReturn.reference} (${result.purchaseReturn.status.toLowerCase()}) — open it in Purchasing → Returns.`;
       } else if (action === 'quarantine') {
         const result = await caller.quarantineExpiring({
           ...position,

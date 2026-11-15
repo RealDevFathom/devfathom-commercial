@@ -225,6 +225,172 @@ describe('pharmacy write-off accounting', () => {
   });
 });
 
+describe('DEV-728 distributor expiry claim draft', () => {
+  const soon = () => new Date(Date.now() + 20 * 86_400_000);
+  function lotRow(id: string, unitCostMinor = 1_000) {
+    return {
+      id,
+      unitCostMinor,
+      batch: { batchNumber: `B-${id}`, expiresAt: soon(), state: 'ACTIVE', medicine: {} },
+    };
+  }
+  function prepare({
+    open = new Set<string>(),
+    reserved = {} as Record<string, number>,
+  }: { open?: Set<string>; reserved?: Record<string, number> } = {}) {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_1', name: 'Distributor' });
+    db.pharmacyInventoryLot.findFirst.mockImplementation(
+      async ({ where }: { where: { id: string } }) =>
+        lotRow(where.id, where.id === 'lot_2' ? 2_000 : 1_000)
+    );
+    db.pharmacyStockLocation.findFirst.mockResolvedValue({ id: 'location_1' });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 10 });
+    db.pharmacyPurchaseReturnLine.findFirst.mockImplementation(
+      async ({ where }: { where: { inventoryLotId: string } }) =>
+        open.has(where.inventoryLotId)
+          ? { purchaseReturn: { id: 'ret_old', reference: 'EXP-OLD', status: 'DRAFT' } }
+          : null
+    );
+    const aggregate = vi.fn(async ({ where }: { where: { inventoryLotId: string } }) => ({
+      _sum: { reservedUnits: reserved[where.inventoryLotId] ?? null },
+    }));
+    const createMany = vi.fn().mockResolvedValue({ count: 0 });
+    const findFirstOrThrow = vi.fn().mockResolvedValue({
+      id: 'ret_new',
+      reference: 'EXPC-NEW',
+      status: 'DRAFT',
+    });
+    Object.assign(db.pharmacySupplierClaim, { aggregate });
+    Object.assign(db.pharmacyPurchaseReturnLine, { createMany });
+    Object.assign(db.pharmacyPurchaseReturn, { findFirstOrThrow });
+    return { createMany };
+  }
+  const claim = (positions: string[]) =>
+    caller().draftExpiryReturnClaim({
+      branchId: 'branch_a',
+      supplierId: 'supplier_1',
+      positions: positions.map((inventoryLotId) => ({
+        inventoryLotId,
+        stockLocationId: 'location_1',
+      })),
+      reason: 'Near-expiry return claim',
+    });
+
+  it('drafts one EXPIRY_CLAIM for the distributor with every claimable lot as a line', async () => {
+    const { createMany } = prepare({ reserved: { lot_2: 4 } });
+
+    const result = await claim(['lot_2', 'lot_1']);
+
+    expect(result).toEqual({
+      created: true,
+      purchaseReturn: { id: 'ret_new', reference: 'EXPC-NEW', status: 'DRAFT' },
+      lineCount: 2,
+      skipped: 0,
+    });
+    expect(db.pharmacyPurchaseReturn.create).toHaveBeenCalledOnce();
+    expect(db.pharmacyPurchaseReturn.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        supplierId: 'supplier_1',
+        kind: 'EXPIRY_CLAIM',
+        createdByUserId: 'user_a',
+      }),
+    });
+    // Only unreserved units are claimed, and the credit is priced at the lot cost.
+    expect(createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          lineNumber: 1,
+          inventoryLotId: 'lot_1',
+          quantityUnits: 10,
+          expectedCreditMinor: 10_000,
+        }),
+        expect.objectContaining({
+          lineNumber: 2,
+          inventoryLotId: 'lot_2',
+          quantityUnits: 6,
+          expectedCreditMinor: 12_000,
+        }),
+      ],
+    });
+    // Every lot is locked before it is read.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips lots already on an open return or fully reserved', async () => {
+    const { createMany } = prepare({ open: new Set(['lot_1']), reserved: { lot_3: 10 } });
+
+    const result = await claim(['lot_1', 'lot_2', 'lot_3']);
+
+    expect(result).toMatchObject({ created: true, lineCount: 1, skipped: 2 });
+    expect(createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ inventoryLotId: 'lot_2', quantityUnits: 10 })],
+    });
+  });
+
+  it('replays the existing return instead of drafting a duplicate claim', async () => {
+    prepare({ open: new Set(['lot_1']) });
+
+    await expect(claim(['lot_1'])).resolves.toEqual({
+      created: false,
+      purchaseReturn: { id: 'ret_old', reference: 'EXP-OLD', status: 'DRAFT' },
+      lineCount: 0,
+      skipped: 0,
+    });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses when no unit is left to claim', async () => {
+    prepare({ reserved: { lot_1: 10 } });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({ message: 'INSUFFICIENT_STOCK' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a supplier outside the workspace before touching any lot', async () => {
+    prepare();
+    db.pharmacySupplier.findFirst.mockResolvedValue(null);
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Supplier is outside this workspace.',
+    });
+    expect(db.pharmacySupplier.findFirst).toHaveBeenCalledWith({
+      where: { id: 'supplier_1', organizationId: 'org_a', active: true },
+      select: { id: true, name: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a lot beyond the action horizon', async () => {
+    prepare();
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lotRow('lot_1'),
+      batch: {
+        batchNumber: 'B',
+        expiresAt: new Date(Date.now() + 400 * 86_400_000),
+        state: 'ACTIVE',
+        medicine: {},
+      },
+    });
+
+    await expect(claim(['lot_1'])).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses duplicated positions and a caller without the inventory capability', async () => {
+    prepare();
+    await expect(claim(['lot_1', 'lot_1'])).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    grant([]);
+    await expect(claim(['lot_1'])).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyPurchaseReturn.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('PH-A5 expiry recovery integration', () => {
   function position(id: string, expiresAt: Date, unitCostMinor = 2_500) {
     return {
@@ -960,6 +1126,17 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         idempotencyKeyPrefix: 'receive-1',
       }),
   },
+  {
+    name: 'draftExpiryReturnClaim',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().draftExpiryReturnClaim({
+        branchId: 'branch_a',
+        supplierId: 'supplier_1',
+        positions: [{ inventoryLotId: 'lot_1', stockLocationId: 'location_1' }],
+        reason: 'Near-expiry return claim',
+      }),
+  },
 ];
 
 /** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
@@ -1489,7 +1666,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(18);
+    expect(ASSIGNMENT_GATED).toHaveLength(19);
   });
 });
 

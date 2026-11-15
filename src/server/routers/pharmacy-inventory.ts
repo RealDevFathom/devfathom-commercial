@@ -957,10 +957,15 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           medicineId: z.string().min(1),
-          batchNumber: z.string().trim().min(1).max(120).regex(
-            /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/u,
-            'Batch number cannot contain control characters.'
-          ),
+          batchNumber: z
+            .string()
+            .trim()
+            .min(1)
+            .max(120)
+            .regex(
+              /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/u,
+              'Batch number cannot contain control characters.'
+            ),
           printedExpiry: z.date(),
           expiryPrecision,
         })
@@ -2188,6 +2193,136 @@ export const pharmacyInventoryRouter = router({
               reference: created.reference,
               status: created.status,
             },
+          };
+        });
+      } catch (error) {
+        expiryError(error);
+      }
+    }),
+
+  /**
+   * DEV-728: one EXPIRY_CLAIM DRAFT to a distributor covering every listed
+   * near-expiry position it can still take. Each position is checked exactly as
+   * `draftExpiryReturn` checks one: branch-locked lot, inside the action horizon,
+   * no open return already on the lot, and only units not reserved for a claim.
+   * Positions that fail those checks are skipped, never forced onto the claim.
+   * Like any draft it reserves nothing until it is submitted in Purchasing.
+   */
+  draftExpiryReturnClaim: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          supplierId: z.string().min(1).max(128),
+          positions: z
+            .array(
+              z
+                .object({
+                  inventoryLotId: z.string().min(1).max(128),
+                  stockLocationId: z.string().min(1).max(128),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(100)
+            .refine(
+              (positions) =>
+                new Set(positions.map((p) => `${p.inventoryLotId}:${p.stockLocationId}`)).size ===
+                positions.length,
+              'Each stock position may appear once.'
+            ),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      const at = new Date();
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          const supplier = await tx.pharmacySupplier.findFirst({
+            where: { id: input.supplierId, organizationId: scope.organizationId, active: true },
+            select: { id: true, name: true },
+          });
+          if (!supplier) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Supplier is outside this workspace.',
+            });
+          }
+          // Lock in a stable order so two claims over overlapping lots cannot deadlock.
+          const positions = [...input.positions].sort(
+            (left, right) =>
+              left.inventoryLotId.localeCompare(right.inventoryLotId) ||
+              left.stockLocationId.localeCompare(right.stockLocationId)
+          );
+          const lines: Array<Parameters<typeof createPurchaseReturn>[2]['lines'][number]> = [];
+          const alreadyOpen: Array<{ id: string; reference: string; status: string }> = [];
+          for (const position of positions) {
+            const lot = await lockExpiringLot(tx, scope, position.inventoryLotId);
+            assertOnBoard(lot.batch.expiresAt, at);
+            const open = await tx.pharmacyPurchaseReturnLine.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: position.inventoryLotId,
+                purchaseReturn: { status: { in: ['DRAFT', 'SUBMITTED'] } },
+              },
+              orderBy: { createdAt: 'desc' },
+              select: { purchaseReturn: { select: { id: true, reference: true, status: true } } },
+            });
+            if (open) {
+              alreadyOpen.push(open.purchaseReturn);
+              continue;
+            }
+            const [onHandUnits, reserved] = await Promise.all([
+              availableAt(tx, scope, position.inventoryLotId, position.stockLocationId),
+              tx.pharmacySupplierClaim.aggregate({
+                where: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  inventoryLotId: position.inventoryLotId,
+                  status: 'RESERVED',
+                },
+                _sum: { reservedUnits: true },
+              }),
+            ]);
+            const units = Math.min(onHandUnits, onHandUnits - (reserved._sum.reservedUnits ?? 0));
+            if (units <= 0) continue;
+            lines.push({
+              inventoryLotId: position.inventoryLotId,
+              stockLocationId: position.stockLocationId,
+              quantityUnits: units,
+              reason: input.reason,
+              returnWindowEndsAt: lot.batch.expiresAt,
+              expectedCreditMinor: units * lot.unitCostMinor,
+            });
+          }
+          if (lines.length === 0) {
+            if (alreadyOpen[0]) {
+              return { created: false, purchaseReturn: alreadyOpen[0], lineCount: 0, skipped: 0 };
+            }
+            throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+          }
+          const stamp = at.toISOString().slice(0, 10).replaceAll('-', '');
+          const created = await createPurchaseReturn(tx, scope, {
+            supplierId: supplier.id,
+            kind: 'EXPIRY_CLAIM',
+            reference: `EXPC-${stamp}-${at.getTime().toString(36).toUpperCase()}`,
+            note: `Expiry claim to ${supplier.name}, drafted from the near-expiry board. A draft reserves nothing; submit it to hold the stock for the supplier.`,
+            lines,
+          });
+          return {
+            created: true,
+            purchaseReturn: {
+              id: created.id,
+              reference: created.reference,
+              status: created.status,
+            },
+            lineCount: lines.length,
+            skipped: positions.length - lines.length,
           };
         });
       } catch (error) {

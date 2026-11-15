@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ExpiryBoard,
+  expiryRiskBand,
+  groupExpiryRows,
   nearExpiryCsv,
   type ExpiryBoardProps,
   type ExpiryBoardRow,
@@ -65,14 +67,12 @@ const props: ExpiryBoardProps = {
 
 describe('ExpiryBoard recovery facts', () => {
   it('prevents row injection and neutralizes formulas after invisible prefixes in CSV', () => {
-    const csv = nearExpiryCsv([
-      { ...row, batchNumber: 'QA\r=1+1', medicineName: '\t@SUM(A1:A2)' },
-    ]);
+    const csv = nearExpiryCsv([{ ...row, batchNumber: 'QA\r=1+1', medicineName: '\t@SUM(A1:A2)' }]);
 
     expect(csv.split('\n')).toHaveLength(2);
     expect(csv).not.toContain('\r');
     expect(csv).toContain('"QA =1+1"');
-    expect(csv).toContain("\"' @SUM(A1:A2)\"");
+    expect(csv).toContain('"\' @SUM(A1:A2)"');
   });
 
   it('renders cumulative 30/60/90 PKR risk and the distributor calendar', () => {
@@ -186,5 +186,125 @@ describe('ExpiryBoard recovery facts', () => {
       expect(within(table).queryByRole('note')).not.toBeInTheDocument();
       expect(csv).not.toContain('ineligible');
     }
+  });
+});
+
+describe('DEV-728 distributor grouping and return claims', () => {
+  const second = {
+    ...row,
+    key: 'lot_2:location_1',
+    inventoryLotId: 'lot_2',
+    supplierName: 'Another distributor',
+    suggestedSupplierId: 'supplier_2',
+  };
+  const sameDistributor = { ...row, key: 'lot_3:location_1', inventoryLotId: 'lot_3' };
+
+  it('groups lots by distributor with one Draft return claim per distributor', () => {
+    const action = vi.fn();
+    render(<ExpiryBoard {...props} action={action} rows={[row, second, sameDistributor]} />);
+
+    const first = screen.getByRole('region', { name: 'Branch distributor' });
+    const other = screen.getByRole('region', { name: 'Another distributor' });
+    expect(first).toHaveTextContent('2 stock positions');
+    expect(within(first).getAllByRole('article')).toHaveLength(2);
+    expect(within(other).getAllByRole('article')).toHaveLength(1);
+
+    const button = within(first).getByRole('button', { name: 'Draft return claim' });
+    const form = button.closest('form')!;
+    const data = new FormData(form);
+    expect(data.get('action')).toBe('claim');
+    expect(data.get('branchId')).toBe('branch_1');
+    expect(data.get('supplierId')).toBe('supplier_1');
+    expect(data.getAll('position')).toEqual(['lot_1|location_1', 'lot_3|location_1']);
+    expect(within(other).getByRole('button', { name: 'Draft return claim' })).toBeVisible();
+  });
+
+  it('leaves lots already on a return or fully reserved off the claim', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[
+          row,
+          {
+            ...sameDistributor,
+            returnDraft: { id: 'ret_1', reference: 'EXP-1', status: 'DRAFT' },
+          },
+          { ...row, key: 'lot_4:location_1', inventoryLotId: 'lot_4', reservedUnits: 10 },
+        ]}
+      />
+    );
+    const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
+    expect(new FormData(form).getAll('position')).toEqual(['lot_1|location_1']);
+  });
+
+  it('offers no group claim once every lot is already on a return, and links to it', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[{ ...row, returnDraft: { id: 'ret_1', reference: 'EXP-1', status: 'DRAFT' } }]}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Draft return claim' })).toBeNull();
+    expect(
+      screen.getByRole('link', { name: 'Open EXP-1 in Purchasing → Returns' })
+    ).toHaveAttribute('href', '/returns?branch=branch_1&return=ret_1');
+  });
+
+  it('does not invent a supplier for an unmatched distributor', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[{ ...row, suggestedSupplierId: null, supplierName: 'Unmatched' }]}
+      />
+    );
+    expect(screen.getByRole('region', { name: 'Unmatched' })).toHaveTextContent(
+      'not matched to a supplier record'
+    );
+    expect(screen.queryByRole('button', { name: 'Draft return claim' })).toBeNull();
+  });
+
+  it('keeps distinct supplier records apart and merges unmatched names case-insensitively', () => {
+    expect(groupExpiryRows([row, { ...row, suggestedSupplierId: 'other' }])).toHaveLength(2);
+    expect(
+      groupExpiryRows([
+        { ...row, suggestedSupplierId: null, supplierName: 'Acme ' },
+        { ...row, suggestedSupplierId: null, supplierName: 'acme' },
+      ])
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [0, '30'],
+    [30, '30'],
+    [31, '60'],
+    [60, '60'],
+    [61, '90'],
+    [90, '90'],
+    [91, 'later'],
+  ] as const)('places %i days left in the %s step', (daysLeft, band) => {
+    expect(expiryRiskBand({ expired: false, daysLeft })).toBe(band);
+  });
+
+  it('shows amber 90/60/30 steps and keeps red for expired stock only', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[
+          { ...row, key: 'a', daysLeft: 85 },
+          { ...row, key: 'b', daysLeft: 45 },
+          { ...row, key: 'c', daysLeft: 10 },
+          { ...row, key: 'd', daysLeft: -2, expired: true },
+        ]}
+      />
+    );
+    const pill = (text: RegExp) => screen.getByText(text).closest('[data-slot="status-pill"]');
+    expect(pill(/^Within 90 days · 85 days left/)).toHaveAttribute('data-tone', 'warning');
+    expect(pill(/^Within 60 days · 45 days left/)).toHaveAttribute('data-tone', 'warning');
+    expect(pill(/^Within 30 days · 10 days left/)).toHaveAttribute('data-tone', 'warning');
+    expect(pill(/^Within 30 days/)).toHaveClass('bg-warning/20');
+    expect(pill(/^Within 60 days/)).toHaveClass('bg-warning/15');
+    expect(pill(/^Within 90 days/)).toHaveClass('bg-warning/10');
+    expect(pill(/^Expired · Expired 2 days ago/)).toHaveAttribute('data-tone', 'danger');
+    expect(document.querySelectorAll('[data-tone="danger"]')).toHaveLength(1);
   });
 });
