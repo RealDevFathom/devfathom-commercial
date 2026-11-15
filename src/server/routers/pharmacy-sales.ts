@@ -1114,13 +1114,36 @@ export const pharmacySalesRouter = router({
       }
     }),
   create: protectedProcedure
-    .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          quotation: z.boolean().default(false),
+          // DEV-725: the counter device whose drawer will take this bill's cash.
+          deviceId: z.string().min(1).optional(),
+        })
+        .strict()
+        .refine((value) => value.quotation || value.deviceId !== undefined, {
+          message: 'A counter bill needs the counter device.',
+          path: ['deviceId'],
+        })
+    )
     .mutation(async ({ ctx, input }) => {
       try {
         // createSale enforces the persisted regulatory gate in this transaction.
-        return await ctx.db.$transaction(async (tx) =>
-          createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          // DEV-725: opening the drawer is the first step of the shift. A counter
+          // bill is never started on a device with no OPEN drawer, so the cashier
+          // cannot build a bill they are then refused at payment.
+          if (
+            !input.quotation &&
+            !(input.deviceId && (await readOpenPharmacyDrawer(db, scope, input.deviceId)))
+          )
+            throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+          return createSale(db, scope, input.quotation);
+        });
       } catch (error) {
         fail(error);
       }
