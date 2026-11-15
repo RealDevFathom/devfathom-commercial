@@ -220,3 +220,34 @@ describe('DEV-746 versioned earn reversal', () => {
     );
   });
 });
+
+describe('DEV-764 refund after the earned lot expired', () => {
+  it('never takes back points that already expired from the lot', async () => {
+    const db = fixture(950);
+    // 9 points earned (legacy PKR 1 curve on PKR 9.50); 4 of them already expired.
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({
+      points: 9,
+      netPaidMinor: 950,
+      closedBy: [{ points: -4 }],
+    });
+    await expect(
+      reverseRefundedEarnedPoints(db as never, scope, 'refund-a')
+    ).resolves.toMatchObject({ kind: 'EARN_REVERSAL', points: -5 });
+    expect(db.pharmacyLoyaltyPointsEntry.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: { closedBy: { where: { kind: 'EXPIRY' }, select: { points: true } } },
+      })
+    );
+  });
+
+  it('takes nothing more when the whole refundable part already expired', async () => {
+    const db = fixture(475);
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({
+      points: 9,
+      netPaidMinor: 950,
+      closedBy: [{ points: -9 }],
+    });
+    await expect(reverseRefundedEarnedPoints(db as never, scope, 'refund-a')).resolves.toBeNull();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { processPlatformJobs } from '@/lib/platform/jobs';
 import { processDueChurnScoring } from '@/lib/pharmacy/churn-scoring';
 import { processDueOwnerDigests } from '@/lib/pharmacy/owner-digest';
+import { processDuePharmacyLoyaltyExpiries } from '@/lib/pharmacy/loyalty-expiry';
 
 export const maxDuration = 300;
 
@@ -21,12 +22,14 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => ({}))) as { maxJobs?: unknown };
   const maxJobs =
     typeof input.maxJobs === 'number' && Number.isFinite(input.maxJobs) ? input.maxJobs : 25;
-  const [jobs, ownerDigests, churnScoring] = await Promise.all([
+  const [jobs, ownerDigests, churnScoring, loyaltyExpiry] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
     processDueChurnScoring(new Date(), maxJobs),
+    // DEV-764: pharmacy points expire as the owner's program says, one ledger entry per lot.
+    processDuePharmacyLoyaltyExpiries(new Date(), maxJobs),
   ]);
-  return NextResponse.json({ ...jobs, ownerDigests, churnScoring });
+  return NextResponse.json({ ...jobs, ownerDigests, churnScoring, loyaltyExpiry });
 }
 
 export const GET = POST;

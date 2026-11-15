@@ -810,7 +810,7 @@ const MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;
  * assignment, or the audited organization-administrator exception. A cashier
  * holding only `pharmacy:counter` is refused before any lock or write.
  */
-function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+export function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   return requireCounterReceiptAccess(
     ctx,
     branch,

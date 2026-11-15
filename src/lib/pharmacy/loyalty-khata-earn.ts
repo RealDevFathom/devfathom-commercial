@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { earnedPointsForTranche } from '@/lib/commerce/loyalty-arithmetic';
+import { earnedPointsForTranche, loyaltyExpiresAt } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { currentLoyaltyProgram, hasLoyaltyEarningConsent } from './loyalty-program';
@@ -32,6 +32,8 @@ export async function earnKhataCollectionPoints(
   // No rate set by the owner means nothing is earned; no default rate is assumed.
   const program = await currentLoyaltyProgram(db, scope.organizationId);
   if (!program) return [];
+  // DEV-764: the owner's switch. Off means khata purchases earn nothing, even once paid.
+  if (program.khataEarns === false) return [];
   const earned = [];
   for (const payment of eligible) {
     if (!payment.settlesChargeId) continue;
@@ -106,6 +108,8 @@ export async function earnKhataCollectionPoints(
           netPaidMinor: basisMinor,
           earnStartMinor: startMinor,
           programVersionId: program.id,
+          // DEV-764: the lot lasts as long as the program in force when it was earned says.
+          expiresAt: loyaltyExpiresAt(new Date(), program.expiryDays),
           actorId: scope.actorId,
           idempotencyKey,
         },

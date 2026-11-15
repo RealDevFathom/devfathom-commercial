@@ -11,7 +11,10 @@ import { assertStoredPharmacyMayOperate } from './regulatory';
 import { Prisma } from '@/generated/prisma/client';
 import {
   earnedPointsFor,
-  pointsForNetPaid,
+  LOYALTY_POINT_VALUE_MINOR,
+  loyaltyExpiresAt,
+  loyaltyLiabilityMinor,
+  pointsForRedeemedMoney,
   redemptionFor,
 } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -21,6 +24,12 @@ import type { LedgerScope } from './stock-ledger';
 
 /** Tenders that never earn at sale time: points themselves, and khata until it is paid. */
 export const SALE_EARN_EXCLUDED_TENDERS: readonly string[] = ['LOYALTY', 'CREDIT'];
+
+/**
+ * DEV-764: an EXPIRY entry that closed a lot already spent in full takes no points. It stays in
+ * the ledger (it is how the expiry job knows the lot is closed) but is not shown as an event.
+ */
+const CLOSED_LOT_WITHOUT_POINTS = { kind: 'EXPIRY', points: 0 } as const;
 
 export class PharmacyLoyaltyError extends Error {
   constructor(
@@ -33,6 +42,8 @@ export class PharmacyLoyaltyError extends Error {
       | 'INSUFFICIENT_POINTS'
       | 'INVALID_REDEMPTION'
       | 'IDEMPOTENCY_CONFLICT'
+      | 'INVALID_ADJUSTMENT'
+      | 'ADJUSTMENT_EXCEEDS_BALANCE'
   ) {
     super(reason);
   }
@@ -136,6 +147,8 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       points,
       netPaidMinor,
       programVersionId: program.id,
+      // DEV-764: the lot lasts as long as the program in force when it was earned says.
+      expiresAt: loyaltyExpiresAt(new Date(), program.expiryDays),
       actorId: scope.actorId,
       idempotencyKey: `loyalty:earn:${sale.id}`,
     },
@@ -228,12 +241,15 @@ export async function redeemSalePoints(
   );
   const outstandingMinor =
     totalMinor - sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
+  // DEV-764: points redeem at the owner's current redemption value (PKR 1 before one is set).
+  const program = await currentLoyaltyProgram(db, scope.organizationId);
   let redemption: { points: number; amountMinor: number };
   try {
     redemption = redemptionFor({
       requestedPoints: input.points,
       availablePoints: balance._sum.points ?? 0,
       outstandingMinor,
+      pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
     });
   } catch (error) {
     throw new PharmacyLoyaltyError(
@@ -298,9 +314,9 @@ export async function restoreRefundedLoyaltyPoints(
       tenderId: input.tenderId,
       kind: 'REDEEM',
     },
-    select: { points: true },
+    select: { points: true, tender: { select: { amountMinor: true } } },
   });
-  if (!redemption) return null;
+  if (!redemption?.tender) return null;
   const [refunds, restored] = await Promise.all([
     db.pharmacyRefund.aggregate({
       where: {
@@ -321,7 +337,13 @@ export async function restoreRefundedLoyaltyPoints(
     }),
   ]);
   const redeemedPoints = -redemption.points;
-  const target = Math.min(redeemedPoints, pointsForNetPaid(refunds._sum.amountMinor ?? 0));
+  // DEV-764: at the value the points were redeemed at (PKR 1 each before DEV-764), so a later
+  // change of redemption value never mints or loses points on a refund.
+  const target = pointsForRedeemedMoney({
+    releasedMinor: refunds._sum.amountMinor ?? 0,
+    tenderMinor: redemption.tender.amountMinor,
+    redeemedPoints,
+  });
   const points = target - (restored._sum.points ?? 0);
   if (points <= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -377,7 +399,12 @@ export async function readCustomerSnapshot(
       take: 10,
     }),
     db.pharmacyLoyaltyPointsEntry.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        customerId,
+        NOT: CLOSED_LOT_WITHOUT_POINTS,
+      },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       skip: (page - 1) * 25,
       take: 25,
@@ -392,7 +419,12 @@ export async function readCustomerSnapshot(
       },
     }),
     db.pharmacyLoyaltyPointsEntry.count({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        customerId,
+        NOT: CLOSED_LOT_WITHOUT_POINTS,
+      },
     }),
     currentLoyaltyProgram(db, scope.organizationId),
   ]);
@@ -411,6 +443,8 @@ export async function readCustomerSnapshot(
     pointsBalance: points._sum.points ?? 0,
     // DEV-746: false until the owner sets an earn rate; nothing new is earned until then.
     earnRateSet: Boolean(program),
+    // DEV-764: what one point redeems for at the counter now.
+    pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
     pointsHistory,
     pointsCount,
     pointsPage: page,
@@ -517,14 +551,15 @@ export async function readLoyaltyHistory(
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };
+  const listed = { ...where, NOT: CLOSED_LOT_WITHOUT_POINTS };
   const [balance, total] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
-    db.pharmacyLoyaltyPointsEntry.count({ where }),
+    db.pharmacyLoyaltyPointsEntry.count({ where: listed }),
   ]);
   const pageCount = Math.max(1, Math.ceil(total / LOYALTY_HISTORY_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const entries = await db.pharmacyLoyaltyPointsEntry.findMany({
-    where,
+    where: listed,
     orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
     skip: (currentPage - 1) * LOYALTY_HISTORY_PAGE_SIZE,
     take: LOYALTY_HISTORY_PAGE_SIZE,
@@ -536,6 +571,8 @@ export async function readLoyaltyHistory(
       saleId: true,
       tenderId: true,
       refundId: true,
+      reason: true,
+      expiresAt: true,
       sale: { select: { receiptNumber: true, receiptDeviceId: true } },
     },
   });
@@ -549,5 +586,186 @@ export async function readLoyaltyHistory(
     hasNext: currentPage < Math.min(pageCount, LOYALTY_HISTORY_MAX_PAGE),
     historyLimitReached:
       pageCount > LOYALTY_HISTORY_MAX_PAGE && currentPage === LOYALTY_HISTORY_MAX_PAGE,
+  };
+}
+
+/** DEV-764: the most points one manual adjustment may add or remove. */
+export const LOYALTY_MAX_ADJUSTMENT_POINTS = 1_000_000;
+
+/**
+ * DEV-764: an owner's or manager's correction to a customer's points at one branch, with a
+ * written reason. Append-only: it is a new signed entry, never an edit of an earlier one. A
+ * removal may not take the balance below zero. The caller has authorized the actor and records
+ * the audit; this runs in the caller's tenant transaction.
+ */
+export async function adjustLoyaltyPoints(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { customerId: string; points: number; reason: string; idempotencyKey: string }
+) {
+  const reason = input.reason.trim();
+  if (
+    !Number.isSafeInteger(input.points) ||
+    input.points === 0 ||
+    Math.abs(input.points) > LOYALTY_MAX_ADJUSTMENT_POINTS ||
+    reason.length < 3 ||
+    reason.length > 500
+  )
+    throw new PharmacyLoyaltyError('INVALID_ADJUSTMENT');
+  await assertLoyaltyHistoryBranch(db, scope);
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: input.customerId, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  // Same per-customer lock as redemption, so a removal and a redemption cannot both spend
+  // the same points.
+  await lockCustomerConsent(db, scope.organizationId, customer.id);
+  const key = `loyalty:adjust:${input.idempotencyKey}`;
+  const prior = await db.pharmacyLoyaltyPointsEntry.findUnique({
+    where: {
+      organizationId_idempotencyKey: { organizationId: scope.organizationId, idempotencyKey: key },
+    },
+  });
+  if (prior) {
+    if (
+      prior.kind !== 'ADJUSTMENT' ||
+      prior.branchId !== scope.branchId ||
+      prior.customerId !== customer.id ||
+      prior.points !== input.points ||
+      prior.reason !== reason
+    )
+      throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
+    return { entry: prior, balanceBefore: null, balanceAfter: null, replayed: true };
+  }
+  const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: customer.id,
+    },
+    _sum: { points: true },
+  });
+  const balanceBefore = balance._sum.points ?? 0;
+  if (balanceBefore + input.points < 0)
+    throw new PharmacyLoyaltyError('ADJUSTMENT_EXCEEDS_BALANCE');
+  const entry = await db.pharmacyLoyaltyPointsEntry.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: customer.id,
+      kind: 'ADJUSTMENT',
+      points: input.points,
+      reason,
+      actorId: scope.actorId,
+      idempotencyKey: key,
+    },
+  });
+  return { entry, balanceBefore, balanceAfter: balanceBefore + input.points, replayed: false };
+}
+
+/**
+ * DEV-764: value of unredeemed points, organization-wide and per branch, at the current
+ * redemption value (PKR 1 per point before an owner sets one). Balances are branch-scoped.
+ */
+export async function readLoyaltyLiability(db: ScopedDb, organizationId: string) {
+  const [balances, program] = await Promise.all([
+    db.pharmacyLoyaltyPointsEntry.groupBy({
+      by: ['branchId', 'customerId'],
+      where: { organizationId },
+      _sum: { points: true },
+    }),
+    currentLoyaltyProgram(db, organizationId),
+  ]);
+  const pointValueMinor = program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR;
+  const byBranch = new Map<string, { points: number; customers: number }>();
+  for (const row of balances) {
+    const points = Math.max(0, row._sum.points ?? 0);
+    if (points === 0) continue;
+    const branch = byBranch.get(row.branchId) ?? { points: 0, customers: 0 };
+    branch.points += points;
+    branch.customers += 1;
+    byBranch.set(row.branchId, branch);
+  }
+  const branches = [...byBranch.entries()]
+    .map(([branchId, row]) => ({
+      branchId,
+      points: row.points,
+      customers: row.customers,
+      liabilityMinor: loyaltyLiabilityMinor(row.points, pointValueMinor),
+    }))
+    .sort((a, b) => a.branchId.localeCompare(b.branchId));
+  const points = branches.reduce((sum, row) => sum + row.points, 0);
+  return {
+    pointValueMinor,
+    points,
+    customers: branches.reduce((sum, row) => sum + row.customers, 0),
+    liabilityMinor: loyaltyLiabilityMinor(points, pointValueMinor),
+    branches,
+  };
+}
+
+export const LOYALTY_REDEMPTION_PAGE_SIZE = 25;
+
+/**
+ * DEV-764: points redemptions at one branch, newest first, with what each was worth and
+ * what came back (refund restorations and void releases on the same tender).
+ */
+export async function listLoyaltyRedemptions(db: ScopedDb, scope: LedgerScope, page = 1) {
+  if (!Number.isInteger(page) || page < 1 || page > LOYALTY_HISTORY_MAX_PAGE)
+    throw new RangeError('INVALID_HISTORY_PAGE');
+  await assertLoyaltyHistoryBranch(db, scope);
+  const where = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    kind: 'REDEEM' as const,
+  };
+  const total = await db.pharmacyLoyaltyPointsEntry.count({ where });
+  const pageCount = Math.max(1, Math.ceil(total / LOYALTY_REDEMPTION_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const rows = await db.pharmacyLoyaltyPointsEntry.findMany({
+    where,
+    orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+    skip: (currentPage - 1) * LOYALTY_REDEMPTION_PAGE_SIZE,
+    take: LOYALTY_REDEMPTION_PAGE_SIZE,
+    select: {
+      id: true,
+      points: true,
+      occurredAt: true,
+      tenderId: true,
+      customer: { select: { id: true, displayName: true } },
+      sale: { select: { id: true, receiptNumber: true, status: true } },
+      tender: { select: { amountMinor: true } },
+    },
+  });
+  const tenderIds = rows.flatMap((row) => (row.tenderId ? [row.tenderId] : []));
+  const returned = tenderIds.length
+    ? await db.pharmacyLoyaltyPointsEntry.groupBy({
+        by: ['tenderId'],
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          tenderId: { in: tenderIds },
+          kind: { in: ['REFUND', 'REDEMPTION_RELEASE'] },
+        },
+        _sum: { points: true },
+      })
+    : [];
+  const returnedBy = new Map(returned.map((row) => [row.tenderId, row._sum.points ?? 0]));
+  return {
+    redemptions: rows.map((row) => ({
+      id: row.id,
+      occurredAt: row.occurredAt,
+      customer: row.customer,
+      receiptNumber: row.sale?.receiptNumber ?? null,
+      saleId: row.sale?.id ?? null,
+      saleVoided: row.sale?.status === 'VOID',
+      points: -row.points,
+      amountMinor: row.tender?.amountMinor ?? 0,
+      pointsReturned: (row.tenderId && returnedBy.get(row.tenderId)) || 0,
+    })),
+    total,
+    page: currentPage,
+    pageCount,
   };
 }

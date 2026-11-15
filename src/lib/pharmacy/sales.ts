@@ -35,6 +35,7 @@ import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
 import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
@@ -613,8 +614,15 @@ export async function changeSaleStatus(
     // the refund path's own manager/owner gate. Read after the claim: the sale
     // row is locked, so a tender that committed earlier is seen here and a later
     // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    // DEV-764: a points tender is not money taken: the void releases it below instead, so it
+    // never needs a money refund (or refund authority) first.
     const tenders = await db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId,
+        type: { not: 'LOYALTY' },
+      },
       select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
     });
     const unrefundedMinor = tenders.reduce(
@@ -625,6 +633,7 @@ export async function changeSaleStatus(
       0
     );
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
+    await releaseVoidedSaleRedemptions(db, scope, saleId);
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,

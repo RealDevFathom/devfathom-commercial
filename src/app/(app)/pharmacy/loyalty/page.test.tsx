@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   setReminderLanguage: vi.fn(),
   earnRate: vi.fn(),
+  liability: vi.fn(),
+  redemptions: vi.fn(),
   replace: vi.fn(),
 }));
 vi.mock('next/navigation', async () => ({
@@ -21,6 +23,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main' }]);
   mocks.earnRate.mockResolvedValue({ current: null, versions: [] });
+  mocks.liability.mockResolvedValue({
+    pointValueMinor: 100,
+    points: 0,
+    customers: 0,
+    liabilityMinor: 0,
+    branches: [],
+  });
+  mocks.redemptions.mockResolvedValue({ redemptions: [], total: 0, page: 1, pageCount: 1 });
   mocks.customers.mockResolvedValue({
     customers: [
       { id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234', pointsBalance: 14 },
@@ -219,5 +229,134 @@ describe('ordinary loyalty history page', () => {
     render(<LoyaltyLoading />);
     expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
     expect(screen.getByRole('status')).toHaveTextContent('Loading customer selection');
+  });
+});
+
+describe('DEV-764 loyalty owner console', () => {
+  it('shows the full program in force and its dated history', async () => {
+    const v2 = {
+      id: 'program-2',
+      version: 2,
+      effectiveFrom: new Date('2026-11-14T09:30:00Z'),
+      earnMode: 'POINTS_PER_SPEND_STEP',
+      earnPoints: 1,
+      perSpendMinor: 100_000,
+      redemptionValueMinor: 250,
+      expiryDays: 180,
+      khataEarns: false,
+    };
+    mocks.earnRate.mockResolvedValue({ current: v2, versions: [v2] });
+    await show();
+    expect(screen.getAllByText('1 point = PKR 2.50').length).toBeGreaterThan(0);
+    expect(screen.getByText('After 180 days')).toBeInTheDocument();
+    expect(screen.getByText('Do not earn')).toBeInTheDocument();
+    expect(screen.getByLabelText('PKR value of 1 point')).toHaveValue('2.50');
+    expect(screen.getByLabelText('Points expire after (days)')).toHaveValue('180');
+    expect(
+      screen.getByRole('checkbox', {
+        name: 'Khata purchases earn points once the customer pays them off',
+      })
+    ).not.toBeChecked();
+  });
+
+  it('makes the first setup obvious and starts from the PKR 1 default', async () => {
+    await show();
+    expect(screen.getByText(/First setup: choose how points are earned/)).toBeInTheDocument();
+    expect(screen.getByLabelText('PKR value of 1 point')).toHaveValue('1');
+    expect(screen.getByLabelText('Points expire after (days)')).toHaveValue('');
+    expect(
+      screen.getByRole('checkbox', {
+        name: 'Khata purchases earn points once the customer pays them off',
+      })
+    ).toBeChecked();
+  });
+
+  it('shows the value of unredeemed points by branch', async () => {
+    mocks.liability.mockResolvedValue({
+      pointValueMinor: 100,
+      points: 1_500,
+      customers: 3,
+      liabilityMinor: 150_000,
+      branches: [{ branchId: 'branch-a', points: 1_500, customers: 3, liabilityMinor: 150_000 }],
+    });
+    await show();
+    expect(screen.getByRole('heading', { name: 'Points liability' })).toBeInTheDocument();
+    expect(screen.getAllByText('PKR 1500.00')).toHaveLength(2);
+    const byBranch = screen.getByRole('region', { name: 'Points liability by branch' });
+    expect(byBranch).toHaveTextContent('Main');
+  });
+
+  it('lists redemptions with their value and points given back by a void', async () => {
+    mocks.redemptions.mockResolvedValue({
+      redemptions: [
+        {
+          id: 'redeem-a',
+          occurredAt: new Date('2026-11-14T10:00:00Z'),
+          customer: { id: 'customer-a', displayName: 'Retail customer' },
+          receiptNumber: null,
+          saleId: 'sale-a',
+          saleVoided: true,
+          points: 20,
+          amountMinor: 2_000,
+          pointsReturned: 20,
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageCount: 1,
+    });
+    await show();
+    const table = screen.getByRole('region', { name: 'Redemption history' });
+    expect(table).toHaveTextContent('PKR 20.00');
+    expect(table).toHaveTextContent('Sale voided');
+    expect(mocks.redemptions).toHaveBeenCalledWith({ branchId: 'branch-a', page: 1 });
+  });
+
+  it('offers a reasoned adjustment and labels adjustments and expiries in the ledger', async () => {
+    mocks.history.mockResolvedValue({
+      customer: { id: 'customer-a', displayName: 'Retail customer', preferredLanguage: 'en' },
+      pointsBalance: 5,
+      total: 2,
+      page: 1,
+      pageCount: 1,
+      hasNext: false,
+      entries: [
+        {
+          id: 'adjust-a',
+          kind: 'ADJUSTMENT',
+          points: 15,
+          occurredAt: new Date('2026-11-14T10:00:00Z'),
+          saleId: null,
+          tenderId: null,
+          refundId: null,
+          reason: 'Points missed on receipt 1042',
+          expiresAt: null,
+          sale: null,
+        },
+        {
+          id: 'expiry-a',
+          kind: 'EXPIRY',
+          points: -10,
+          occurredAt: new Date('2026-11-13T10:00:00Z'),
+          saleId: null,
+          tenderId: null,
+          refundId: null,
+          reason: null,
+          expiresAt: null,
+          sale: null,
+        },
+      ],
+    });
+    await show({ customerId: 'customer-a' });
+    expect(screen.getByText('Points adjusted')).toBeInTheDocument();
+    expect(screen.getByText('Reason: Points missed on receipt 1042')).toBeInTheDocument();
+    expect(screen.getByText('Points expired')).toBeInTheDocument();
+    expect(screen.getByText('Expiry of earned points')).toBeInTheDocument();
+    expect(screen.getByLabelText('Number of points')).toBeRequired();
+    expect(screen.getByLabelText('Reason')).toBeRequired();
+    expect(screen.getByRole('button', { name: 'Record adjustment' })).toHaveAttribute(
+      'type',
+      'submit'
+    );
   });
 });

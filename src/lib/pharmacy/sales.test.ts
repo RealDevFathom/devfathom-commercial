@@ -234,7 +234,13 @@ describe('POS sale voiding', () => {
       );
       expect(tenderQueries).toEqual([
         {
-          where: { organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+          // DEV-764: points tenders are released by the void, not refunded before it.
+          where: {
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            saleId: 'sale-a',
+            type: { not: 'LOYALTY' },
+          },
           select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
       ]);

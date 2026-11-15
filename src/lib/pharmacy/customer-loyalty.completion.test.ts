@@ -86,6 +86,8 @@ function fixture() {
       create: vi.fn().mockResolvedValue({ id: 'tender-a', createdAt: new Date() }),
     },
     pharmacySaleEvent: { create: vi.fn() },
+    // DEV-764: redemption reads the redemption value in force; none set means PKR 1 per point.
+    pharmacyLoyaltyProgramVersion: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyLoyaltyPointsEntry: {
       findUnique: vi.fn().mockResolvedValue(null),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 10 } }),
@@ -157,5 +159,28 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
     });
     expect(await redeemSalePoints(db as never, scope, input)).toMatchObject({ replayed: true });
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-764 redemption at the owner-set point value', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('takes the current redemption value off the bill, not a fixed PKR 1', async () => {
+    const { db } = fixture();
+    // PKR 0.50 a point: 2 points take PKR 1 (100 minor) off a PKR 2 bill.
+    db.pharmacyLoyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program-2',
+      redemptionValueMinor: 50,
+    });
+    expect(await redeemSalePoints(db as never, scope, input)).toMatchObject({
+      points: 2,
+      amountMinor: 100,
+      settled: false,
+    });
+    expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ type: 'LOYALTY', amountMinor: 100 }),
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'REDEEM', points: -2, requestedPoints: 2 }),
+    });
   });
 });

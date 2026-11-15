@@ -10,7 +10,13 @@ import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
-import { describeLoyaltyEarnRule } from '@/lib/commerce/loyalty-arithmetic';
+import { AdjustPointsForm } from './adjust-points-form';
+import {
+  describeLoyaltyEarnRule,
+  describeRedemptionValue,
+  LOYALTY_POINT_VALUE_MINOR,
+} from '@/lib/commerce/loyalty-arithmetic';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
 
 export const metadata = { title: 'Loyalty points · Pharmacy' };
@@ -22,7 +28,17 @@ const eventLabels: Record<string, string> = {
   REFUND: 'Redeemed points restored',
   EARN_REVERSAL: 'Earned points reversed',
   KHATA_EARN: 'Points earned on khata payment',
+  ADJUSTMENT: 'Points adjusted',
+  EXPIRY: 'Points expired',
+  REDEMPTION_RELEASE: 'Redeemed points released (sale voided)',
 };
+const pkr = (minor: number) => `PKR ${formatMinor(minor)}`;
+const pointValueOf = (version: { redemptionValueMinor?: number } | null) =>
+  version?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR;
+const describeExpiry = (days: number | null | undefined) =>
+  days ? `After ${days.toLocaleString('en-PK')} ${days === 1 ? 'day' : 'days'}` : 'Never';
+const rupeesInput = (minor: number) =>
+  minor % 100 === 0 ? String(minor / 100) : formatMinor(minor);
 
 async function loadLoyalty(text: (key: string) => string) {
   try {
@@ -33,9 +49,11 @@ async function loadLoyalty(text: (key: string) => string) {
     if (!branches.some((branch) => branch.id === branchId))
       throw new TRPCError({ code: 'NOT_FOUND' });
     const query = text('query');
-    const [{ customers, hasMore }, earnRate] = await Promise.all([
+    const [{ customers, hasMore }, earnRate, liability, redemptions] = await Promise.all([
       caller.customers({ branchId, query }),
       caller.earnRate(),
+      caller.liability(),
+      caller.redemptions({ branchId, page: Number(text('redemptionsPage') || 1) }),
     ]);
     const customerId = text('customerId');
     const history = customerId
@@ -51,6 +69,8 @@ async function loadLoyalty(text: (key: string) => string) {
       customerId,
       history,
       earnRate,
+      liability,
+      redemptions,
     };
   } catch (error) {
     unstable_rethrow(error);
@@ -106,9 +126,24 @@ export default async function LoyaltyPage({
         </SectionCard>
       </main>
     );
-  const { branches, branchId, query, customers, hasMore, customerId, history, earnRate } = data;
+  const {
+    branches,
+    branchId,
+    query,
+    customers,
+    hasMore,
+    customerId,
+    history,
+    earnRate,
+    liability,
+    redemptions,
+  } = data;
   const href = (id: string, page = 1) =>
     `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, query, page: String(page) })}`;
+  const redemptionsHref = (page: number) =>
+    `/pharmacy/loyalty?${new URLSearchParams({ branchId, ...(customerId ? { customerId } : {}), query, redemptionsPage: String(page) })}#redemption-history`;
+  const current = earnRate.current;
+  const branchLabel = (id: string) => branches.find((branch) => branch.id === id)?.name ?? id;
   const branchName = branches.find((branch) => branch.id === branchId)!.name;
   async function saveReminderLanguage(formData: FormData) {
     'use server';
@@ -124,24 +159,43 @@ export default async function LoyaltyPage({
     <main className="min-w-0 space-y-6">
       {header}
       <SectionCard title="Earning rate" titleLevel={2}>
-        {earnRate.current ? (
-          <Stat label="Current earning rate" value={describeLoyaltyEarnRule(earnRate.current)} />
+        {current ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat label="Current earning rate" value={describeLoyaltyEarnRule(current)} />
+            <Stat label="Redemption value" value={describeRedemptionValue(pointValueOf(current))} />
+            <Stat label="Points expire" value={describeExpiry(current.expiryDays)} />
+            <Stat
+              label="Khata purchases"
+              value={current.khataEarns === false ? 'Do not earn' : 'Earn once paid off'}
+            />
+          </div>
         ) : (
-          <p className="text-sm font-medium text-warning">
-            Points are not being earned: set an earn rate below. Existing balances stay available to
-            redeem.
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-warning">
+              Points are not being earned: set an earn rate below. Existing balances stay available
+              to redeem.
+            </p>
+            <p className="text-sm text-text-body">
+              First setup: choose how points are earned, what one point is worth and whether points
+              expire, then save. Customers start earning on their next purchase.
+            </p>
+          </div>
         )}
         <p className="mt-2 mb-5 text-sm text-text-muted">
-          {earnRate.current
-            ? `Version ${earnRate.current.version}, in effect since ${earnRate.current.effectiveFrom.toISOString().slice(0, 10)} (UTC). `
+          {current
+            ? `Version ${current.version}, in effect since ${current.effectiveFrom.toISOString().slice(0, 10)} (UTC). `
             : ''}
-          Every purchase earns, including khata purchases once the customer pays them off. Points
-          tenders never earn. 1 point always redeems for PKR 1. A new rate applies from when it is
-          saved; points already earned keep the rate they were earned at.
+          Every purchase earns, including khata purchases once the customer pays them off when that
+          is switched on. Points tenders never earn. Every save is a new dated version: it applies
+          from when it is saved, and points already earned keep the rate they were earned at.
         </p>
         <EarnRateForm
           presets={LOYALTY_EARN_PRESETS.map((preset) => ({ id: preset.id, label: preset.label }))}
+          defaults={{
+            pointValue: rupeesInput(pointValueOf(current)),
+            expiryDays: current?.expiryDays ?? null,
+            khataEarns: current?.khataEarns ?? true,
+          }}
         />
         {earnRate.versions.length > 1 && (
           <div
@@ -154,7 +208,7 @@ export default async function LoyaltyPage({
               <caption className="sr-only">Earning rate history</caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {['Version', 'Rate', 'From (UTC)'].map((t) => (
+                  {['Version', 'Rate', 'Point value', 'Expiry', 'Khata', 'From (UTC)'].map((t) => (
                     <th key={t} scope="col" className="p-3 text-left">
                       {t}
                     </th>
@@ -169,10 +223,68 @@ export default async function LoyaltyPage({
                   >
                     <td className="p-3 font-mono tabular-nums">{version.version}</td>
                     <td className="p-3">{describeLoyaltyEarnRule(version)}</td>
+                    <td className="whitespace-nowrap p-3">{pkr(pointValueOf(version))}</td>
+                    <td className="whitespace-nowrap p-3">{describeExpiry(version.expiryDays)}</td>
+                    <td className="p-3">{version.khataEarns === false ? 'Off' : 'On'}</td>
                     <td className="whitespace-nowrap p-3">
                       <time dateTime={version.effectiveFrom.toISOString()}>
                         {version.effectiveFrom.toISOString().replace('T', ' ').slice(0, 16)}
                       </time>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+      <SectionCard title="Points liability" titleLevel={2}>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Stat
+            label="Unredeemed points"
+            value={liability.points.toLocaleString('en-PK')}
+            sub={`${liability.customers.toLocaleString('en-PK')} customer balances`}
+          />
+          <Stat label="Value owed" value={pkr(liability.liabilityMinor)} />
+          <Stat label="At" value={describeRedemptionValue(liability.pointValueMinor)} />
+        </div>
+        <p className="mt-2 text-sm text-text-muted">
+          What every unredeemed point across the organization would take off bills at the current
+          redemption value. Expired, redeemed and removed points are not counted.
+        </p>
+        {liability.branches.length > 0 && (
+          <div
+            className="mt-4 overflow-x-auto"
+            role="region"
+            aria-label="Points liability by branch"
+            tabIndex={0}
+          >
+            <table className="w-full text-sm">
+              <caption className="sr-only">Points liability by branch</caption>
+              <thead className="font-mono text-xs uppercase">
+                <tr>
+                  {['Branch', 'Customers', 'Points', 'Value'].map((t) => (
+                    <th
+                      key={t}
+                      scope="col"
+                      className={`p-3 ${t === 'Branch' ? 'text-left' : 'text-right'}`}
+                    >
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {liability.branches.map((row) => (
+                  <tr
+                    key={row.branchId}
+                    className="border-t border-border-subtle hover:bg-surface-sunken"
+                  >
+                    <td className="p-3">{branchLabel(row.branchId)}</td>
+                    <td className="p-3 text-right font-mono tabular-nums">{row.customers}</td>
+                    <td className="p-3 text-right font-mono tabular-nums">{row.points}</td>
+                    <td className="whitespace-nowrap p-3 text-right font-mono tabular-nums">
+                      {pkr(row.liabilityMinor)}
                     </td>
                   </tr>
                 ))}
@@ -278,8 +390,12 @@ export default async function LoyaltyPage({
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <p className="mt-2 text-sm text-text-muted">
             {branchName} · {history.total} ledger entries. All-time branch balance; newest entries
-            first. Refunds and reversals remain visible.
+            first. Refunds, reversals, adjustments and expiries remain visible.
           </p>
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <h3 className="mb-3 text-sm font-semibold text-text-strong">Adjust points</h3>
+            <AdjustPointsForm branchId={branchId} customerId={customerId} />
+          </div>
           {history.entries.length ? (
             <div
               className="mt-4 overflow-x-auto"
@@ -322,21 +438,39 @@ export default async function LoyaltyPage({
                             Refund: {e.refundId}
                           </span>
                         )}
-                      </td>
-                      <td className="p-3">
-                        <span>
-                          {e.sale.receiptNumber !== null
-                            ? `Receipt #${e.sale.receiptNumber}`
-                            : 'Receipt not issued'}
-                        </span>
-                        {e.sale.receiptDeviceId && (
-                          <span className="block break-all text-xs text-text-muted">
-                            Device: {e.sale.receiptDeviceId}
+                        {e.reason && (
+                          <span className="mt-1 block break-words text-xs text-text-muted">
+                            Reason: {e.reason}
                           </span>
                         )}
-                        <span className="block break-all text-xs text-text-muted">
-                          Sale: {e.saleId}
-                        </span>
+                        {e.expiresAt && (
+                          <span className="mt-1 block text-xs text-text-muted">
+                            Expires {e.expiresAt.toISOString().slice(0, 10)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        {e.sale ? (
+                          <>
+                            <span>
+                              {e.sale.receiptNumber !== null
+                                ? `Receipt #${e.sale.receiptNumber}`
+                                : 'Receipt not issued'}
+                            </span>
+                            {e.sale.receiptDeviceId && (
+                              <span className="block break-all text-xs text-text-muted">
+                                Device: {e.sale.receiptDeviceId}
+                              </span>
+                            )}
+                            <span className="block break-all text-xs text-text-muted">
+                              Sale: {e.saleId}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-text-muted">
+                            {e.kind === 'EXPIRY' ? 'Expiry of earned points' : 'Manual adjustment'}
+                          </span>
+                        )}
                         {e.tenderId && (
                           <span className="block break-all text-xs text-text-muted">
                             Tender: {e.tenderId}
@@ -387,6 +521,89 @@ export default async function LoyaltyPage({
           )}
         </SectionCard>
       ) : null}
+      <SectionCard id="redemption-history" title="Redemption history" titleLevel={2}>
+        <p className="text-sm text-text-muted">
+          Points redeemed at {branchName}, newest first, with what each redemption took off the bill
+          and any points given back by a refund or a voided sale.
+        </p>
+        {redemptions.redemptions.length ? (
+          <div
+            className="mt-4 overflow-x-auto"
+            role="region"
+            aria-label="Redemption history"
+            tabIndex={0}
+          >
+            <table className="w-full text-sm">
+              <caption className="sr-only">Points redemptions at {branchName}</caption>
+              <thead className="font-mono text-xs uppercase">
+                <tr>
+                  {['Time (UTC)', 'Customer', 'Receipt', 'Points', 'Value', 'Returned'].map((t) => (
+                    <th
+                      key={t}
+                      scope="col"
+                      className={`p-3 ${['Points', 'Value', 'Returned'].includes(t) ? 'text-right' : 'text-left'}`}
+                    >
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {redemptions.redemptions.map((r) => (
+                  <tr key={r.id} className="border-t border-border-subtle hover:bg-surface-sunken">
+                    <td className="whitespace-nowrap p-3">
+                      <time dateTime={r.occurredAt.toISOString()}>
+                        {r.occurredAt.toISOString().replace('T', ' ').slice(0, 16)}
+                      </time>
+                    </td>
+                    <td className="p-3">
+                      <Link
+                        className={`${linkClass} max-w-full break-words`}
+                        href={href(r.customer.id)}
+                      >
+                        {r.customer.displayName}
+                      </Link>
+                    </td>
+                    <td className="p-3">
+                      {r.receiptNumber !== null ? `No. ${r.receiptNumber}` : 'Not issued'}
+                      {r.saleVoided && (
+                        <span className="block text-xs text-text-muted">Sale voided</span>
+                      )}
+                    </td>
+                    <td className="p-3 text-right font-mono tabular-nums">{r.points}</td>
+                    <td className="whitespace-nowrap p-3 text-right font-mono tabular-nums">
+                      {pkr(r.amountMinor)}
+                    </td>
+                    <td className="p-3 text-right font-mono tabular-nums">{r.pointsReturned}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm">
+            No points have been redeemed at {branchName} yet. Redemptions taken at the counter
+            appear here.
+          </p>
+        )}
+        {redemptions.pageCount > 1 && (
+          <nav aria-label="Redemption pages" className="mt-3 flex flex-wrap items-center gap-4">
+            {redemptions.page > 1 ? (
+              <Link className={linkClass} href={redemptionsHref(redemptions.page - 1)}>
+                Newer redemptions
+              </Link>
+            ) : null}
+            <span className="text-sm tabular-nums">
+              Page {redemptions.page} of {redemptions.pageCount}
+            </span>
+            {redemptions.page < redemptions.pageCount ? (
+              <Link className={linkClass} href={redemptionsHref(redemptions.page + 1)}>
+                Older redemptions
+              </Link>
+            ) : null}
+          </nav>
+        )}
+      </SectionCard>
       <Link className={linkClass} href="/pharmacy/counter">
         Open counter
       </Link>

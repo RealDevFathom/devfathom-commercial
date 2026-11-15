@@ -203,7 +203,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
     const db = {
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockImplementation(async () => created),
-        findFirst: vi.fn().mockResolvedValue({ points: -20 }),
+        findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: 5 } }),
         create,
       },
@@ -289,5 +289,63 @@ describe('CRM-L01 pharmacy loyalty', () => {
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       })
     );
+  });
+});
+
+describe('DEV-764 expiry dates and value-true refund restoration', () => {
+  const saleWith = (tenders: Array<{ type: string; amountMinor: number }>) => ({
+    findFirst: vi.fn().mockResolvedValue({ id: 'sale-a', customerId: 'customer-a', tenders }),
+  });
+
+  it('dates an earned lot from the expiry period of the version in force', async () => {
+    const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
+    const db = {
+      ...earningFixture({ program: programVersion({ expiryDays: 90 }) }),
+      pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+      pharmacySale: saleWith([{ type: 'CASH', amountMinor: 1_000 }]),
+    };
+    const before = Date.now();
+    await accrueSalePoints(db as never, scope, 'sale-a');
+    const expiresAt = create.mock.calls[0]![0].data.expiresAt as Date;
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 90 * 86_400_000);
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 90 * 86_400_000);
+
+    const neverCreate = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-b', ...data }));
+    const never = {
+      ...earningFixture(),
+      pharmacyLoyaltyPointsEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: neverCreate,
+      },
+      pharmacySale: saleWith([{ type: 'CASH', amountMinor: 1_000 }]),
+    };
+    await accrueSalePoints(never as never, scope, 'sale-a');
+    expect(neverCreate.mock.calls[0]![0].data.expiresAt).toBeNull();
+  });
+
+  it('restores refunded points at the value they were redeemed at', async () => {
+    const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'offset-a', ...data }));
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        // 20 points redeemed at PKR 2.50 each for PKR 50.
+        findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 5_000 } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: null } }),
+        create,
+      },
+      pharmacyRefund: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 2_500 } }),
+      },
+    };
+    await restoreRefundedLoyaltyPoints(db as never, scope, {
+      refundId: 'refund-a',
+      tenderId: 'tender-a',
+      saleId: 'sale-a',
+      customerId: 'customer-a',
+    });
+    // Half the money back is half the points back: 10, not the 25 a PKR 1 value would give.
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'REFUND', points: 10 }),
+    });
   });
 });

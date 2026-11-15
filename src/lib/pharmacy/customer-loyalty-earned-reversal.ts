@@ -8,6 +8,21 @@ import { lockCustomerConsent } from './consent-writer';
 import { khataEarnRetained } from './loyalty-khata-earn';
 import type { LedgerScope } from './stock-ledger';
 
+/**
+ * DEV-764: points of an earned lot that already expired are gone from the balance. A refund
+ * reverses the earn, but never takes those points a second time.
+ */
+const EXPIRED_FROM_LOT = {
+  closedBy: { where: { kind: 'EXPIRY' as const }, select: { points: true } },
+};
+function expiredFromLots(lots: ReadonlyArray<{ closedBy?: ReadonlyArray<{ points: number }> }>) {
+  return lots.reduce(
+    (sum, lot) =>
+      sum + (lot.closedBy ?? []).reduce((total, row) => total + Math.max(0, -row.points), 0),
+    0
+  );
+}
+
 /** Internal refund transaction only. No provider calls or stock-return accrual. */
 export async function reverseRefundedEarnedPoints(
   db: ScopedDb,
@@ -54,6 +69,7 @@ export async function reverseRefundedEarnedPoints(
   };
   const earn = await db.pharmacyLoyaltyPointsEntry.findFirst({
     where: { ...binding, kind: 'EARN' },
+    include: EXPIRED_FROM_LOT,
   });
   // DEV-746: a versioned sale never earned on its CREDIT tender; that money earns, and is
   // reversed, per collection. Sales from before versioning keep their original reversal.
@@ -96,7 +112,7 @@ export async function reverseRefundedEarnedPoints(
     }),
   ]);
   const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
-  const target = earn.points - pointsFor(netPaidMinor);
+  const target = Math.max(0, earn.points - pointsFor(netPaidMinor) - expiredFromLots([earn]));
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -127,7 +143,7 @@ async function reverseKhataEarnedPoints(
 ) {
   const earns = await db.pharmacyLoyaltyPointsEntry.findMany({
     where: { ...binding, tenderId: refund.originalTenderId, kind: 'KHATA_EARN' },
-    include: { programVersion: true },
+    include: { programVersion: true, ...EXPIRED_FROM_LOT },
     orderBy: [{ earnStartMinor: 'asc' }, { id: 'asc' }],
   });
   if (!earns.length) return null;
@@ -163,7 +179,8 @@ async function reverseKhataEarnedPoints(
     })),
     capMinor
   );
-  const points = -(totals.earnedPoints - totals.retainedPoints) - (reversed._sum.points ?? 0);
+  const target = Math.max(0, totals.earnedPoints - totals.retainedPoints - expiredFromLots(earns));
+  const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {

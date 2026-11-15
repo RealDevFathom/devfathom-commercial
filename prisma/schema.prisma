@@ -1171,6 +1171,12 @@ enum PharmacyLoyaltyEntryKind {
   REDEEM
   REFUND
   KHATA_EARN
+  /// DEV-764: owner or manager correction with a written reason.
+  ADJUSTMENT
+  /// DEV-764: closes one earned lot after the program's expiry period.
+  EXPIRY
+  /// DEV-764: points of a redemption tender returned when its sale is voided.
+  REDEMPTION_RELEASE
 }
 
 enum PharmacyLoyaltyEarnMode {
@@ -1444,17 +1450,25 @@ model PharmacyKhataLimitDecision {
 }
 
 /// DEV-746: owner-set earning rule. Append-only and dated: a new rate is a new version, so
-/// points already earned keep the rule they were priced with. Redemption value is fixed in code.
+/// points already earned keep the rule they were priced with.
+/// DEV-764: each version also carries the redemption value, the expiry period and whether
+/// khata purchases earn once paid off.
 model PharmacyLoyaltyProgramVersion {
-  id             String                  @id @default(cuid())
-  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  version        Int
-  earnMode       PharmacyLoyaltyEarnMode
-  earnPoints     Int
-  perSpendMinor  Int
-  effectiveFrom  DateTime                @default(now())
-  actorId        String
-  createdAt      DateTime                @default(now())
+  id                   String                  @id @default(cuid())
+  organizationId       String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  version              Int
+  earnMode             PharmacyLoyaltyEarnMode
+  earnPoints           Int
+  perSpendMinor        Int
+  /// Money one point redeems for. Versions from before DEV-764 redeem at 100 (PKR 1).
+  redemptionValueMinor Int                     @default(100)
+  /// Days an earned point lasts; null means points never expire.
+  expiryDays           Int?
+  /// Owner switch: whether khata purchases earn points when the customer pays them off.
+  khataEarns           Boolean                 @default(true)
+  effectiveFrom        DateTime                @default(now())
+  actorId              String
+  createdAt            DateTime                @default(now())
 
   entries PharmacyLoyaltyPointsEntry[]
 
@@ -1466,30 +1480,39 @@ model PharmacyLoyaltyProgramVersion {
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
 /// sale and idempotency constraints make settlement replay safe.
 model PharmacyLoyaltyPointsEntry {
-  id              String                   @id @default(cuid())
-  organizationId  String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  customerId      String
-  saleId          String
-  tenderId        String?
-  refundId        String?
-  kind            PharmacyLoyaltyEntryKind
-  points          Int
-  requestedPoints Int?
-  netPaidMinor    Int?
+  id               String                   @id @default(cuid())
+  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  customerId       String
+  /// Null only for ADJUSTMENT and EXPIRY entries (DEV-764); every other kind has its sale.
+  saleId           String?
+  tenderId         String?
+  refundId         String?
+  kind             PharmacyLoyaltyEntryKind
+  points           Int
+  requestedPoints  Int?
+  netPaidMinor     Int?
   /// DEV-746: the earn rule this entry was priced with; null on entries from before versioning.
   programVersionId String?
   /// KHATA_EARN only: money already collected against the same khata charge before this entry.
   earnStartMinor   Int?
-  actorId         String
-  idempotencyKey  String
-  occurredAt      DateTime                 @default(now())
+  /// DEV-764: ADJUSTMENT only, the owner's or manager's written reason.
+  reason           String?
+  /// DEV-764: when an earned lot expires; null means it never does.
+  expiresAt        DateTime?
+  /// DEV-764: EXPIRY only, the earned lot it closes.
+  reversesEntryId  String?
+  actorId          String
+  idempotencyKey   String
+  occurredAt       DateTime                 @default(now())
 
   programVersion PharmacyLoyaltyProgramVersion? @relation(fields: [organizationId, programVersionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_points_entries_program_version_fkey")
-  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  sale     PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  tender   PharmacyTender?  @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
-  refund   PharmacyRefund?  @relation(fields: [organizationId, refundId], references: [organizationId, id], onDelete: Restrict)
+  customer       PharmacyCustomer               @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  sale           PharmacySale?                  @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  reverses       PharmacyLoyaltyPointsEntry?    @relation("PharmacyLoyaltyLotClosure", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_points_entries_reverses_fkey")
+  closedBy       PharmacyLoyaltyPointsEntry[]   @relation("PharmacyLoyaltyLotClosure")
+  tender         PharmacyTender?                @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
+  refund         PharmacyRefund?                @relation(fields: [organizationId, refundId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
