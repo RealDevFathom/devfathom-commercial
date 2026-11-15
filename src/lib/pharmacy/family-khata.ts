@@ -497,13 +497,18 @@ export async function signUpSaleKhata(
       granted: true,
       source: 'COUNTER_TABLET',
     });
-  const phoneLast4 = (phone ?? patient.phone ?? '').replace(/\D/g, '').slice(-4);
+  // A selected patient keeps their stored phone; a request phone only names a new patient.
+  const phoneLast4 = ((input.patientId ? patient.phone : phone) ?? '').replace(/\D/g, '').slice(-4);
   const customer = await linkCustomerToSale(db, scope, {
     saleId: input.saleId,
     patientId: patient.id,
     displayName: patient.displayName,
     ...(phoneLast4.length === 4 ? { phoneLast4 } : {}),
   });
+  // Serialize account creation per customer and branch so two counters cannot open two ledgers.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`khata-account:${scope.organizationId}:${scope.branchId}:${customer.id}`}, 0))`
+  );
   const existing = await db.pharmacyFamilyAccount.findFirst({
     where: {
       organizationId: scope.organizationId,

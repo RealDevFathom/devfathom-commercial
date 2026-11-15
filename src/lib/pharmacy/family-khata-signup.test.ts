@@ -180,6 +180,45 @@ describe('DEV-716 inline Khata signup', () => {
     expect(db.pharmacyPatient.findMany.mock.calls[0]![0]).not.toHaveProperty('take');
   });
 
+  it('keeps the selected patient stored phone suffix even if a request phone is sent', async () => {
+    const db = fakeDb({
+      patient: { id: 'patient_1', displayName: 'Bilal', phone: '0311-765 4321' },
+      consent: { granted: true, revokedAt: null },
+    });
+    await signUpSaleKhata(db as never, scope, {
+      saleId: 'sale_1',
+      patientId: 'patient_1',
+      displayName: 'Bilal',
+      phone: '03009999999',
+      consentGranted: true,
+    });
+    expect(linkCustomerToSale).toHaveBeenCalledWith(
+      db,
+      scope,
+      expect.objectContaining({ patientId: 'patient_1', phoneLast4: '4321' })
+    );
+  });
+
+  it('locks the customer and branch before checking for an existing account', async () => {
+    const db = fakeDb({
+      patient: { id: 'patient_1', displayName: 'Bilal', phone: null },
+      consent: { granted: true, revokedAt: null },
+    });
+    await signUpSaleKhata(db as never, scope, {
+      saleId: 'sale_1',
+      patientId: 'patient_1',
+      displayName: 'Bilal',
+      consentGranted: true,
+    });
+    const lockCall = db.$queryRaw.mock.calls.findIndex(([sql]) =>
+      (sql as { values: unknown[] }).values.includes('khata-account:org_a:branch_a:customer_1')
+    );
+    expect(lockCall).toBeGreaterThanOrEqual(0);
+    expect(db.$queryRaw.mock.invocationCallOrder[lockCall]).toBeLessThan(
+      db.pharmacyFamilyAccount.findFirst.mock.invocationCallOrder[0]!
+    );
+  });
+
   it('re-records consent when the latest loyalty consent was revoked', async () => {
     const db = fakeDb({
       patient: { id: 'patient_1', displayName: 'Bilal', phone: null },
