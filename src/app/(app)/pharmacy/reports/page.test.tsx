@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
+const actor = vi.hoisted(() => ({ id: 'user_1', role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
 const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
@@ -29,15 +29,25 @@ const commandCentre = vi.fn(async () => ({
     expiryValueMinor90: 0,
   },
 }));
+const reportAccess = vi.hoisted(() => ({
+  can: vi.fn(async (..._args: unknown[]) => true),
+  session: true,
+}));
+vi.mock('@/lib/abac', () => ({
+  can: reportAccess.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
+    db: {},
+    requestMeta: { ip: null, userAgent: null },
     organization: { id: 'org-a', currency: 'PKR', timezone: 'Asia/Karachi' },
     entitlements: {
       organizationId: 'org-a',
       enabledModules: reportModules.enabled,
       modules: [{ key: 'pharmacy-reports', name: 'Pharmacy Reports' }],
     },
-    session: { user: actor },
+    session: reportAccess.session ? { user: actor } : null,
   })),
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
@@ -164,6 +174,8 @@ import PharmacyReportsPage from './page';
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
+    reportAccess.can.mockReset().mockResolvedValue(true);
+    reportAccess.session = true;
     signalStaff.userId = 'cashier_1';
     reportModules.enabled = ['pharmacy-reports'];
     reportBranches.mockClear();
@@ -210,6 +222,33 @@ describe('pharmacy report catalog filters', () => {
       );
     }
   );
+
+  it('locks a member without the reports permission before any report read (DEV-35)', async () => {
+    actor.role = 'MANAGER';
+    reportAccess.can.mockResolvedValue(false);
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/You need the operational reports permission/)).toBeVisible();
+    expect(reportAccess.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_1' }),
+      'reports:operational',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(reportBranches).not.toHaveBeenCalled();
+    expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it('asks a signed-out visitor to sign in before any report read (DEV-35)', async () => {
+    reportAccess.session = false;
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Sign in again to access pharmacy reports.')).toBeVisible();
+    expect(reportAccess.can).not.toHaveBeenCalled();
+    expect(reportBranches).not.toHaveBeenCalled();
+  });
 
   it('renders a sales detail section for ?section=sales and not otherwise', async () => {
     render(
