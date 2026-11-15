@@ -1332,7 +1332,8 @@ const RECOVERY_LOOKBACK_DAYS = 90;
  * recovered them, through the same attribution as `recoverRestockInterest`
  * (`recoveredSaleId` / `recoveredSaleLineId`). A request is recovered by a
  * receipted sale of the requested SKU at the branch completed after its notice
- * and within the policy's recovery window, preferring the customer who asked.
+ * was sent and within the policy's recovery window, preferring the customer
+ * who asked.
  * Each sale line recovers at most one request. Safe to run repeatedly.
  */
 export async function linkRestockRecoveries(
@@ -1360,18 +1361,37 @@ export async function linkRestockRecoveries(
           status: 'CAPTURED',
           queuedAt: { gt: new Date(now.getTime() - RECOVERY_LOOKBACK_DAYS * DAY_MS) },
         },
-        select: { queuedAt: true },
-        orderBy: { queuedAt: 'asc' },
-        take: 1,
+        select: { id: true },
       },
     },
   });
+  // A queued notice is not a delivered one. The window opens only when the
+  // provider accepted the back-in-stock message, at the time it was sent;
+  // withheld, failed or never-sent notices recover nothing.
+  const noticeKeys = interests.flatMap((interest) =>
+    interest.notifications.map((notice) => `back-in-stock:${notice.id}`)
+  );
+  const sent = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { dedupeKey: true, createdAt: true },
+      })
+    : [];
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
   const pending = interests
     .map((interest) => ({
       id: interest.id,
       patientId: interest.patientId,
       medicineId: interest.demandEvent.requestedMedicineId,
-      notifiedAt: interest.notifications[0]?.queuedAt,
+      notifiedAt: interest.notifications
+        .map((notice) => sentAt.get(`back-in-stock:${notice.id}`))
+        .filter((at): at is Date => at instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime())[0],
     }))
     .filter(
       (interest): interest is typeof interest & { medicineId: string; notifiedAt: Date } =>

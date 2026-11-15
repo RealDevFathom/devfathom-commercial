@@ -389,12 +389,21 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
 
   function recoveryDb(
     lines: Array<{ id: string; medicineId: string; completedAt: Date; patientId: string | null }>,
-    usedLineIds: string[] = []
+    usedLineIds: string[] = [],
+    /** When the provider accepted the notice; null when it was never sent. */
+    sentAt: Date | null = ago(10)
   ) {
     const recovered: Array<{ interestId: string; saleLineId: string }> = [];
     let current = '';
+    let logWhere: Record<string, unknown> | undefined;
     const db = {
       $queryRaw: async () => [],
+      pharmacyMessageLog: {
+        findMany: async (args: { where: Record<string, unknown> }) => {
+          logWhere = args.where;
+          return sentAt ? [{ dedupeKey: 'back-in-stock:notice-a', createdAt: sentAt }] : [];
+        },
+      },
       pharmacyRestockInterest: {
         findMany: async (args: { where: Record<string, unknown> }) =>
           'recoveredSaleLineId' in args.where
@@ -404,7 +413,7 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
                   id: 'interest-a',
                   patientId: 'patient-a',
                   demandEvent: { requestedMedicineId: 'med-a' },
-                  notifications: [{ queuedAt: ago(10) }],
+                  notifications: [{ id: 'notice-a' }],
                 },
               ],
         findFirst: async ({ where }: { where: { id: string } }) => {
@@ -444,7 +453,7 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
       unfulfilledDemandEvent: { update: async () => ({}) },
       pharmacyRestockReservation: { updateMany: async () => ({ count: 0 }) },
     };
-    return { db, recovered };
+    return { db, recovered, logWhere: () => logWhere };
   }
 
   it('links a sale of the same SKU within 7 days of the notice, preferring the customer', async () => {
@@ -455,6 +464,28 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
     const linked = await linkRestockRecoveries(db as never, scope, { now: AT, policy });
     expect(recovered).toEqual([{ interestId: 'interest-a', saleLineId: 'customer' }]);
     expect(linked).toMatchObject([{ interestId: 'interest-a', saleId: 'sale-customer' }]);
+  });
+
+  it('opens the window only when the notice was actually sent, from the send time', async () => {
+    const sale = [{ id: 'sale', medicineId: 'med-a', completedAt: ago(4), patientId: 'patient-a' }];
+    const unsent = recoveryDb(sale, [], null);
+    expect(await linkRestockRecoveries(unsent.db as never, scope, { now: AT, policy })).toEqual([]);
+    expect(unsent.recovered).toEqual([]);
+    expect(unsent.logWhere()).toMatchObject({
+      kind: 'BACK_IN_STOCK',
+      status: 'SENT',
+      dedupeKey: { in: ['back-in-stock:notice-a'] },
+    });
+    // Queued ten days ago but sent five days ago: a sale four days ago is within 7 days of sending.
+    const sentLate = recoveryDb(sale, [], ago(5));
+    expect(
+      await linkRestockRecoveries(sentLate.db as never, scope, { now: AT, policy })
+    ).toHaveLength(1);
+    // Sent after the sale: the sale cannot be a recovery.
+    const sentAfterSale = recoveryDb(sale, [], ago(3));
+    expect(
+      await linkRestockRecoveries(sentAfterSale.db as never, scope, { now: AT, policy })
+    ).toEqual([]);
   });
 
   it('does not link a sale more than 7 days after the notice or already linked elsewhere', async () => {

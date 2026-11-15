@@ -76,8 +76,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
-import { captureReceiptArrivals } from '@/lib/pharmacy/back-in-stock';
-import { captureSafeRestockArrival, PharmacySaleError } from '@/lib/pharmacy/sales';
+import { scheduleReceiptArrivalCapture } from '@/lib/pharmacy/back-in-stock-arrivals';
 import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
@@ -1891,22 +1890,11 @@ const purchasingRouter = router({
       } catch (error) {
         domainError(error);
       }
-      // DEV-79: the receipt has committed; queue back-in-stock notices for
-      // customers waiting on these lots. A lot that cannot notify never fails
-      // the posting the operator already completed.
-      await captureReceiptArrivals(
-        posted.lines.map((line) => line.inventoryLotId),
-        (inventoryLotId) =>
-          ctx.db.$transaction((tx) =>
-            captureSafeRestockArrival(txDb(tx), scope, { inventoryLotId })
-          ),
-        (inventoryLotId, error) => {
-          if (!(error instanceof PharmacySaleError))
-            console.error('[pharmacy-purchasing] Back-in-stock capture failed', {
-              inventoryLotId,
-              error,
-            });
-        }
+      // DEV-79: back-in-stock notices are captured after this request's
+      // transaction ends, so they can never abort or undo the posting.
+      scheduleReceiptArrivalCapture(
+        scope,
+        posted.lines.map((line) => line.inventoryLotId)
       );
       return posted;
     }),
