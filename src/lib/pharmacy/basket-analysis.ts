@@ -5,6 +5,8 @@
  * whose pending state must be consumed by the existing owner-approval workflow.
  */
 
+import { isNonDrugRetail } from './product-class';
+
 export type BasketProduct = {
   id: string;
   name: string;
@@ -40,9 +42,10 @@ export type BundleProposal = {
   approvalRequired: true;
 };
 
+// #718: only NON_DRUG_RETAIL (FRONT_SHOP) items may be promoted; an OTC medicine is still a medicine.
 function eligibleForBundle(product: BasketProduct) {
   if (product.rx || product.restricted || product.controlled) return false;
-  return product.otc || product.productFamily === 'FRONT_SHOP';
+  return isNonDrugRetail(product.productFamily);
 }
 
 function validConfig(config: BasketMiningConfig) {

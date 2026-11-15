@@ -288,11 +288,19 @@ export function OrganizationAdminContent() {
   }
   if (overview.error || !overview.data) {
     return (
-      <Card title="Organization administration">
-        <p className="text-sm text-destructive">
-          {overview.error?.message ?? 'Organization information is unavailable.'}
-        </p>
-      </Card>
+      <div className="mx-auto max-w-[1320px] space-y-6">
+        <PageHeader
+          eyebrow="ORGANIZATION CONTROL"
+          heading="Organization administration"
+          description="Manage your workspace identity, people, access, and licensed capabilities."
+        />
+        <Card title="Access unavailable">
+          <p className="text-sm text-destructive" role="alert">
+            {overview.error?.message ?? 'Organization information is unavailable.'} Ask a
+            workspace administrator to grant you organization access.
+          </p>
+        </Card>
+      </div>
     );
   }
 
@@ -959,8 +967,8 @@ export function OrganizationAdminContent() {
                 });
               }}
             >
-              <Input name="host" placeholder="hub.example.com" required />
-              <Input name="kind" defaultValue="APP" required />
+              <Input name="host" placeholder="hub.example.com" aria-label="Domain host" required />
+              <Input name="kind" defaultValue="APP" aria-label="Domain kind" required />
               <SubmitButton pending={addDomain.isPending}>Add</SubmitButton>
               <label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-3">
                 <input name="isPrimary" type="checkbox" /> Primary workspace domain

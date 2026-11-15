@@ -269,9 +269,9 @@ export function LicenceBadge({ supplier }: { supplier: SupplierPickerOption }) {
     const days = supplier.governingLicence?.daysToExpiry;
     return (
       <StatusPill
-        status="Orderable"
+        status="Ready to order"
         tone={days != null && days <= 30 ? 'warning' : 'success'}
-        label={days != null && days <= 30 ? `Licence expires in ${days}d` : 'Orderable'}
+        label={days != null && days <= 30 ? `Licence expires in ${days}d` : 'Ready to order'}
       />
     );
   }

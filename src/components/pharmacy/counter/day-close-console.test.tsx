@@ -21,8 +21,11 @@ const mocks = vi.hoisted(() => ({
   checkError: null as { message: string; data?: { code: string } } | null,
   /** Drawers beyond the one every fixture has, e.g. a second open counter. */
   extraDrawers: [] as Array<Record<string, unknown>>,
+  openBills: undefined as { open: number; held: number } | undefined,
   /** The rail capability read (DEV-127): who it answered for and what it granted. */
   accessUserId: 'owner',
+  accessOrganizationId: 'org',
+  accessInput: vi.fn(),
   accessCapabilities: [] as string[],
   accessLoading: false,
   accessError: null as { message: string; data?: { code: string } } | null,
@@ -55,7 +58,8 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacyAccess: {
       navigation: {
-        useQuery: (_input: unknown, options: { enabled: boolean }) => {
+        useQuery: (input: unknown, options: { enabled: boolean }) => {
+          mocks.accessInput(input);
           mocks.accessOptions(options);
           if (!options.enabled) return { isLoading: false, data: undefined };
           if (mocks.accessError)
@@ -66,7 +70,7 @@ vi.mock('@/lib/trpc', () => ({
                 isLoading: false,
                 data: {
                   userId: mocks.accessUserId,
-                  organizationId: 'org',
+                  organizationId: mocks.accessOrganizationId,
                   capabilities: mocks.accessCapabilities,
                 },
               };
@@ -107,6 +111,7 @@ vi.mock('@/lib/trpc', () => ({
                 },
                 ...mocks.extraDrawers,
               ],
+              ...(mocks.openBills ? { openBills: mocks.openBills } : {}),
             },
           };
         },
@@ -133,7 +138,12 @@ vi.mock('@/lib/pharmacy/counter-browser-print', () => ({
   printCounterBrowserZReport: mocks.printZReport,
 }));
 import { workspaceToday } from '@/lib/timezone';
-import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
+import {
+  cashMinor,
+  drawerOpenedLabel,
+  openBillsWarning,
+  PharmacyDayCloseConsole,
+} from './day-close-console';
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -152,7 +162,10 @@ beforeEach(() => {
   mocks.checkFindings = [];
   mocks.checkError = null;
   mocks.extraDrawers = [];
+  mocks.openBills = undefined;
   mocks.accessUserId = 'owner';
+  mocks.accessOrganizationId = 'org';
+  mocks.accessInput.mockReset();
   mocks.accessCapabilities = [];
   mocks.accessLoading = false;
   mocks.accessError = null;
@@ -315,6 +328,7 @@ describe('day-close console', () => {
     mocks.role = 'MEMBER';
     mocks.accessCapabilities = ['pharmacy:dispense', 'pharmacy:counter'];
     render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Day close' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(
       'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.'
     );
@@ -359,6 +373,15 @@ describe('day-close console', () => {
     mocks.accessUserId = 'someone-else';
     mocks.accessCapabilities = ['pharmacy:close'];
     render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Day close unavailable')).toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('ignores a day-close grant answered for another workspace (DEV-240)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessOrganizationId = 'previous-org';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    render(<PharmacyDayCloseConsole />);
+    expect(mocks.accessInput).toHaveBeenLastCalledWith({ userId: 'owner', organizationId: 'org' });
     expect(screen.getByText('Day close unavailable')).toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
   });
@@ -632,5 +655,30 @@ describe('day-close console', () => {
     render(<PharmacyDayCloseConsole initial={{ branch: 'foreign', date: 'yesterday' }} />);
     expect(screen.getByLabelText('Branch')).toHaveValue('b');
     expect(screen.getByLabelText('Business date')).toHaveValue(workspaceToday(WORKSPACE_ZONE));
+  });
+});
+
+describe('day-close open bills warning (DEV-623)', () => {
+  it('warns about unpaid bills still holding stock, without blocking the close', () => {
+    mocks.openBills = { open: 2, held: 1 };
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '2 open and 1 held bills are still unpaid and holding stock. Resume or void them from Open bills on the counter.'
+    );
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeEnabled();
+  });
+
+  it('says nothing when no bill is left unpaid', () => {
+    mocks.openBills = { open: 0, held: 0 };
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.queryByText(/still unpaid/)).not.toBeInTheDocument();
+  });
+
+  it('words a single bill in the singular', () => {
+    expect(openBillsWarning({ open: 0, held: 1 })).toBe(
+      '1 held bill is still unpaid and holding stock. Resume or void it from Open bills on the counter.'
+    );
   });
 });

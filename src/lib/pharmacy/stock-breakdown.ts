@@ -103,3 +103,34 @@ export function lotStockBreakdown(input: {
   }
   return formatStockBreakdown(input.onHandUnits, levels, input.dosageForm);
 }
+
+/**
+ * DEV-638: the pack level a line was sold in. The stored level label wins for
+ * a pack or strip (a standalone strip is sold as kind `PACK`), and a line with
+ * no label falls back to a neutral word rather than inventing a box. A loose
+ * `UNIT` sale shares the sealed pack's level id (see `lotSaleUnitOptions`), so
+ * its stored label names the pack, not what was sold: it is always a unit.
+ */
+function soldUnitNouns(saleUnit: string, levelLabel?: string | null): readonly [string, string] {
+  if (saleUnit === 'UNIT') return ['unit', 'units'];
+  if (levelLabel?.trim()) return levelNoun(levelLabel);
+  return levelNoun(saleUnit === 'STRIP' ? 'strip' : 'pack');
+}
+
+/** DEV-638: the singular noun for the pack level a line was sold in. */
+export function soldUnitNoun(saleUnit: string, levelLabel?: string | null): string {
+  return soldUnitNouns(saleUnit, levelLabel)[0];
+}
+
+/** DEV-638: a sold line as it was sold, for example "1 strip of 10" or "3 units". */
+export function formatSoldQuantity(input: {
+  quantity: number;
+  saleUnit: string;
+  levelLabel?: string | null;
+  canonicalUnitsPerSaleUnit: number;
+}): string {
+  const sold = count(input.quantity, soldUnitNouns(input.saleUnit, input.levelLabel));
+  return input.canonicalUnitsPerSaleUnit > 1
+    ? `${sold} of ${input.canonicalUnitsPerSaleUnit.toLocaleString('en-PK')}`
+    : sold;
+}

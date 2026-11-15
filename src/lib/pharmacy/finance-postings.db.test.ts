@@ -900,7 +900,13 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(short), count.id, `count-${tag('short')}`);
+      await deps.operations.approveCount(
+        db,
+        scopeOf(short),
+        count.id,
+        `count-${tag('short')}`,
+        'Shelf recount'
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(short), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -930,7 +936,13 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(over), count.id, `count-${tag('over')}`);
+      await deps.operations.approveCount(
+        db,
+        scopeOf(over),
+        count.id,
+        `count-${tag('over')}`,
+        'Shelf recount'
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(over), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -962,7 +974,13 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('exact')}`);
+      await deps.operations.approveCount(
+        db,
+        scopeOf(f),
+        count.id,
+        `count-${tag('exact')}`,
+        'Shelf recount'
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -1277,7 +1295,13 @@ describeIfDatabase('FIN-01 — stock operations post their own journal entries',
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('wired')}`);
+      await deps.operations.approveCount(
+        db,
+        scopeOf(f),
+        count.id,
+        `count-${tag('wired')}`,
+        'Shelf recount'
+      );
       return entriesFor(db, 'PHARMACY_INVENTORY_COUNT_LINE', count.lines[0]!.id);
     });
 
@@ -1545,7 +1569,13 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('leakage')}`);
+      await deps.operations.approveCount(
+        db,
+        scopeOf(f),
+        count.id,
+        `count-${tag('leakage')}`,
+        'Shelf recount'
+      );
       await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,

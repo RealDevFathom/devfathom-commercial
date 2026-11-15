@@ -40,9 +40,9 @@ export type ExpiryBoardRow = {
   reservedUnits: number;
   quarantinedUnits: number;
   unitsPerPack: number;
-  unitCostMinor: number;
   printedMrpMinor: number;
-  valueAtRiskMinor: number;
+  /** Null unless the viewer holds `reports:financial` (DEV-627). */
+  valueAtRiskMinor: number | null;
   supplierName: string;
   suggestedSupplierId: string | null;
   markdownEligible: boolean;
@@ -66,6 +66,11 @@ export type ExpiryBoardProps = {
   branchName: string;
   withinDays: number;
   generatedAt: string;
+  /**
+   * DEV-627: whether the server released purchase-cost facts to this viewer
+   * (`reports:financial`). Without it no PKR value at risk is shown or exported.
+   */
+  costVisible: boolean;
   riskBuckets: Array<{ days: number; valueAtRiskMinor: number }>;
   rows: ExpiryBoardRow[];
   suppliers: Array<{ id: string; name: string }>;
@@ -156,7 +161,7 @@ export function groupExpiryRows(rows: readonly ExpiryBoardRow[]): DistributorGro
   );
 }
 
-export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
+export function nearExpiryCsv(rows: readonly ExpiryBoardRow[], costVisible: boolean): string {
   const header = [
     'Medicine',
     'Batch',
@@ -164,7 +169,7 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
     'Status',
     'Location',
     'Units on hand',
-    'Value at risk (PKR)',
+    ...(costVisible ? ['Value at risk (PKR)'] : []),
     'Supplier',
     'Mark-down draft',
     'Return draft',
@@ -177,7 +182,7 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
       expiryText(row),
       row.locationName,
       row.onHandUnits,
-      (row.valueAtRiskMinor / 100).toFixed(2),
+      ...(costVisible ? [((row.valueAtRiskMinor ?? 0) / 100).toFixed(2)] : []),
       row.supplierName,
       row.markdown
         ? `${row.markdown.markdownPercent}% off (${(row.markdown.proposedPackPriceMinor / 100).toFixed(2)} per pack)${row.markdownEligible ? '' : ` · ${INELIGIBLE_MARKDOWN_WARNING}`}`
@@ -194,26 +199,31 @@ function Totals({
   rows,
   riskBuckets,
   withinDays,
-}: Pick<ExpiryBoardProps, 'rows' | 'riskBuckets' | 'withinDays'>) {
+  costVisible,
+}: Pick<ExpiryBoardProps, 'rows' | 'riskBuckets' | 'withinDays' | 'costVisible'>) {
   const units = rows.reduce((total, row) => total + row.onHandUnits, 0);
-  const value = rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
+  const value = rows.reduce((total, row) => total + (row.valueAtRiskMinor ?? 0), 0);
   const expired = rows.filter((row) => row.expired).length;
   const drafted = rows.filter((row) => row.markdown || row.returnDraft).length;
   return (
     <section aria-label="Near-expiry summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <Stat
-        label="Value at risk"
-        value={money(value)}
-        sub={`Selected ${withinDays}-day window, plus expired stock`}
-      />
-      {riskBuckets.map((bucket) => (
-        <Stat
-          key={bucket.days}
-          label={`${bucket.days}-day PKR at risk`}
-          value={money(bucket.valueAtRiskMinor)}
-          sub="Cumulative units × landed cost"
-        />
-      ))}
+      {costVisible ? (
+        <>
+          <Stat
+            label="Value at risk"
+            value={money(value)}
+            sub={`Selected ${withinDays}-day window, plus expired stock`}
+          />
+          {riskBuckets.map((bucket) => (
+            <Stat
+              key={bucket.days}
+              label={`${bucket.days}-day PKR at risk`}
+              value={money(bucket.valueAtRiskMinor)}
+              sub="Cumulative units × landed cost"
+            />
+          ))}
+        </>
+      ) : null}
       <Stat label="Units at risk" value={units.toLocaleString('en-PK')} sub="Still saleable" />
       <Stat label="Expired on the shelf" value={expired} sub="Quarantine these first" />
       <Stat label="Positions with a draft" value={drafted} sub="Mark-down or supplier return" />
@@ -222,7 +232,7 @@ function Totals({
 }
 
 function PrintableList(props: ExpiryBoardProps) {
-  const csv = nearExpiryCsv(props.rows);
+  const csv = nearExpiryCsv(props.rows, props.costVisible);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 print:hidden">
@@ -255,7 +265,9 @@ function PrintableList(props: ExpiryBoardProps) {
                 <TableHead>Expiry</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead className="text-right">Units</TableHead>
-                <TableHead className="text-right">Value at risk</TableHead>
+                {props.costVisible ? (
+                  <TableHead className="text-right">Value at risk</TableHead>
+                ) : null}
                 <TableHead>Drafts</TableHead>
               </TableRow>
             </TableHeader>
@@ -274,9 +286,11 @@ function PrintableList(props: ExpiryBoardProps) {
                   </TableCell>
                   <TableCell>{row.locationName}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.onHandUnits}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {money(row.valueAtRiskMinor)}
-                  </TableCell>
+                  {props.costVisible ? (
+                    <TableCell className="text-right tabular-nums">
+                      {row.valueAtRiskMinor === null ? '—' : money(row.valueAtRiskMinor)}
+                    </TableCell>
+                  ) : null}
                   <TableCell className="text-xs">
                     {row.markdown ? `Mark-down ${row.markdown.markdownPercent}% · ` : ''}
                     {row.markdown && !row.markdownEligible ? (
@@ -332,7 +346,10 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
           <h3 className="font-semibold text-text-strong">{heading}</h3>
           <p className="mt-1 text-sm text-text-body">
             Expires {day(row.expiresAt)} · {row.onHandUnits} units ({row.unitsPerPack} per pack) ·
-            value at risk {money(row.valueAtRiskMinor)} · MRP {money(row.printedMrpMinor)} per pack
+            {props.costVisible && row.valueAtRiskMinor !== null
+              ? ` value at risk ${money(row.valueAtRiskMinor)} ·`
+              : ''}{' '}
+            MRP {money(row.printedMrpMinor)} per pack
           </p>
           <p className="mt-1 text-xs text-text-muted">
             Supplier on the lot: {row.supplierName}
@@ -539,7 +556,11 @@ function DistributorSection({
   );
   // Rows arrive soonest-expiry first, so a capped claim takes the most urgent lots.
   const batch = claimable.slice(0, EXPIRY_CLAIM_MAX_POSITIONS);
-  const value = group.rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
+  // DEV-627: without `reports:financial` the server sends no value at risk, so the
+  // group shows no PKR figure at all rather than a misleading PKR 0.00.
+  const value = props.costVisible
+    ? group.rows.reduce((total, row) => total + (row.valueAtRiskMinor ?? 0), 0)
+    : null;
   const open = group.rows.find((row) => row.returnDraft)?.returnDraft ?? null;
   return (
     <section
@@ -552,8 +573,8 @@ function DistributorSection({
             {group.supplierName}
           </h3>
           <p className="mt-1 text-xs text-text-muted">
-            {group.rows.length} stock position{group.rows.length === 1 ? '' : 's'} · value at risk{' '}
-            {money(value)}
+            {group.rows.length} stock position{group.rows.length === 1 ? '' : 's'}
+            {value === null ? '' : ` · value at risk ${money(value)}`}
           </p>
         </div>
         {group.supplierId && claimable.length > 0 ? (
@@ -622,7 +643,12 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
   if (props.view === 'print') return <PrintableList {...props} />;
   return (
     <div className="space-y-6">
-      <Totals riskBuckets={props.riskBuckets} rows={props.rows} withinDays={props.withinDays} />
+      <Totals
+        costVisible={props.costVisible}
+        riskBuckets={props.riskBuckets}
+        rows={props.rows}
+        withinDays={props.withinDays}
+      />
       <SectionCard
         actions={
           <Link
@@ -632,7 +658,7 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
             Printable / shareable list
           </Link>
         }
-        eyebrow={`INV-09 · expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
+        eyebrow={`Expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
         title="Expiry board"
         titleLevel={2}
       >

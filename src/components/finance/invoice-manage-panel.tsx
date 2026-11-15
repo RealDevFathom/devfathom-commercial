@@ -1,5 +1,9 @@
 'use client';
 
+import { InvoiceAdjustments } from '@/components/finance/invoice-adjustments';
+import { invoiceTotals, invoiceTotalsError } from '@/lib/finance/invoice-totals';
+import { MAX_MONEY, multiplyMoney } from '@/lib/finance/money';
+
 import { memo, useCallback, useMemo, useState } from 'react';
 import {
   Pencil,
@@ -19,10 +23,6 @@ import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { moneyLabel } from '@/lib/finance/currency';
 
-// Money columns are Decimal(12,2); largest value Postgres accepts. Mirrors the
-// server bound so an oversized rate fails inline, not at the DB.
-const MAX_MONEY = 9_999_999_999.99;
-
 type LineItem = { description: string; quantity: number; rate: number; amount: number };
 
 // getInvoices ships every scalar field (items/tax/notes/dueDate) plus relations and
@@ -35,6 +35,7 @@ type ManageInvoice = {
   currency: string;
   total: unknown;
   tax: unknown;
+  discount: unknown;
   dueDate: Date | string;
   notes: string | null;
   items: unknown;
@@ -212,6 +213,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   const [items, setItems] = useState(initialItems);
   const [tax, setTax] = useState(String(Number(inv.tax) || 0));
+  const [discount, setDiscount] = useState(String(Number(inv.discount) || 0));
   const [dueDate, setDueDate] = useState(format(new Date(inv.dueDate), 'yyyy-MM-dd'));
   const [notes, setNotes] = useState(inv.notes ?? '');
 
@@ -225,16 +227,21 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
     value: string | number
   ) => setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
-  // Live preview — recomputed exactly as the server will (qty × rate, + tax).
-  const taxNum = parseFloat(tax) || 0;
-  const subtotal = items.reduce((s, it) => s + it.quantity * it.rate, 0);
-  const total = subtotal + taxNum;
+  const amounts = items.map((item) => multiplyMoney(item.quantity, item.rate));
+  const totals = invoiceTotals(amounts, Number(tax), Number(discount));
+  const { subtotal, total, tax: taxNum, discount: discountNum } = totals;
+  const adjustmentError =
+    Number(tax) < 0 ||
+    Number(discount) < 0 ||
+    Number(tax) > MAX_MONEY ||
+    Number(discount) > MAX_MONEY
+      ? 'Tax and discount must be between 0 and 9,999,999,999.99'
+      : invoiceTotalsError(totals);
 
   const hasValidItems =
     items.length > 0 &&
     items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
-  const taxTooLarge = taxNum > MAX_MONEY;
-  const canSave = hasValidItems && !taxTooLarge && !!dueDate && !updateInvoice.isPending;
+  const canSave = hasValidItems && !adjustmentError && !!dueDate && !updateInvoice.isPending;
 
   const submit = () => {
     if (!canSave) return;
@@ -246,6 +253,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         rate: it.rate,
       })),
       tax: taxNum,
+      discount: discountNum,
       dueDate: new Date(dueDate),
       notes: notes.trim() || undefined,
     });
@@ -263,7 +271,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 value={item.description}
                 onChange={(e) => updateItem(i, 'description', e.target.value)}
                 placeholder="Description"
-                className="col-span-5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                className="col-span-12 sm:col-span-5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
               />
               <input
                 type="number"
@@ -272,7 +280,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 value={item.quantity}
                 onChange={(e) => updateItem(i, 'quantity', parseFloat(e.target.value) || 0)}
                 placeholder="Qty"
-                className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-center text-sm text-foreground focus:border-primary focus:outline-none"
+                className="col-span-3 sm:col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-center text-sm text-foreground focus:border-primary focus:outline-none"
               />
               <input
                 type="number"
@@ -281,15 +289,15 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 value={item.rate || ''}
                 onChange={(e) => updateItem(i, 'rate', parseFloat(e.target.value) || 0)}
                 placeholder="Rate"
-                className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+                className="col-span-4 sm:col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm text-foreground focus:border-primary focus:outline-none"
               />
-              <span className="col-span-2 text-right text-sm font-medium tabular-nums text-foreground">
-                {moneyLabel(item.quantity * item.rate, inv.currency)}
+              <span className="col-span-3 sm:col-span-2 text-right text-sm font-medium tabular-nums text-foreground">
+                {moneyLabel(amounts[i], inv.currency)}
               </span>
               <button
                 onClick={() => removeItem(i)}
                 disabled={items.length === 1}
-                className="col-span-1 flex justify-center text-muted-foreground transition-colors hover:text-red-500 disabled:opacity-30"
+                className="col-span-2 sm:col-span-1 flex justify-center text-muted-foreground transition-colors hover:text-red-500 disabled:opacity-30"
                 title="Remove line"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -305,28 +313,15 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         </button>
       </div>
 
-      {/* Tax + due date */}
+      <InvoiceAdjustments
+        tax={tax}
+        discount={discount}
+        currency={inv.currency}
+        onTaxChange={setTax}
+        onDiscountChange={setDiscount}
+        error={adjustmentError}
+      />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-foreground">
-            Tax ({inv.currency})
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            max={MAX_MONEY}
-            value={tax}
-            onChange={(e) => setTax(e.target.value)}
-            placeholder="0.00"
-            className={cn(
-              'w-full rounded-xl border bg-background px-3 py-2 text-right text-sm text-foreground focus:outline-none focus:ring-2',
-              taxTooLarge
-                ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20'
-                : 'border-border focus:border-primary focus:ring-primary/20'
-            )}
-          />
-        </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-foreground">Due date *</label>
           <input
@@ -355,6 +350,10 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
             <span className="tabular-nums">{moneyLabel(subtotal, inv.currency)}</span>
+          </div>
+          <div className="flex justify-between text-muted-foreground">
+            <span>Discount</span>
+            <span className="tabular-nums">{moneyLabel(-discountNum, inv.currency)}</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Tax</span>

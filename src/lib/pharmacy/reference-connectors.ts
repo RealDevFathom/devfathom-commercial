@@ -106,6 +106,76 @@ function cell(row: Record<string, unknown>, column: string | undefined): string 
   return value.length ? value : undefined;
 }
 
+type ScheduleFlagField = 'rx' | 'restricted' | 'controlled';
+const SCHEDULE_FLAG_FIELDS: readonly ScheduleFlagField[] = ['rx', 'restricted', 'controlled'];
+
+interface NormalizeOptions {
+  sourceType: MedicineReferenceSourceType;
+  rights: ConnectorRights;
+  /** Returns the canonical value, or `null` when the source value cannot be trusted. */
+  scheduleFlag: (field: ScheduleFlagField, value: string) => string | null;
+  fallbackRowSourceKey: (values: Partial<Record<MedicineReferenceField, string>>) => string | null;
+}
+
+function normalizeReferenceRows(
+  input: ManualFileInput,
+  options: NormalizeOptions
+): MedicineReferenceFetchResult['rows'] {
+  const fetchedAt = input.retrievedAt ?? new Date().toISOString();
+  return input.rows.map((sourceRow, index) => {
+    const targetMedicineId = cell(sourceRow, input.mapping.targetMedicineId);
+    const values: Partial<Record<MedicineReferenceField, string>> = {};
+    let invalidSchedule = false;
+
+    for (const field of MEDICINE_REFERENCE_FIELDS) {
+      const raw = cell(sourceRow, input.mapping[field]);
+      if (!raw) continue;
+      if ((SCHEDULE_FLAG_FIELDS as readonly string[]).includes(field)) {
+        const flag = options.scheduleFlag(field as ScheduleFlagField, raw);
+        if (flag === null) {
+          invalidSchedule = true;
+          values[field] = raw;
+          continue;
+        }
+        values[field] = flag;
+      } else values[field] = raw;
+    }
+
+    const rowSourceKey =
+      cell(sourceRow, input.mapping.rowSourceKey) ??
+      options.fallbackRowSourceKey(values) ??
+      `row-${index + 2}`;
+    const assertions: MedicineReferenceAssertion[] = Object.entries(values).map(
+      ([field, value]) => ({
+        field: field as MedicineReferenceField,
+        value,
+        source: input.fileName,
+        sourceType: options.sourceType,
+        retrievedAt: fetchedAt,
+        batchId: input.batchId,
+        rowSourceKey,
+        rights: options.rights,
+      })
+    );
+
+    const blockingIssues: NormalizedMedicineReferenceRow['blockingIssues'] = [];
+    if (!values.productName) blockingIssues.push('MISSING_PRODUCT_NAME');
+    if (!values.strength) blockingIssues.push('MISSING_STRENGTH');
+    if (!values.dosageForm) blockingIssues.push('MISSING_DOSAGE_FORM');
+    if (!values.pack) blockingIssues.push('MISSING_PACK');
+    if (invalidSchedule) blockingIssues.push('INVALID_SCHEDULE_CLASSIFICATION');
+
+    return {
+      batchId: input.batchId,
+      rowSourceKey,
+      ...(targetMedicineId ? { targetMedicineId } : {}),
+      values,
+      assertions,
+      blockingIssues,
+    };
+  });
+}
+
 export class ManualFileConnector implements MedicineReferenceConnector<ManualFileInput> {
   readonly id = 'manual-file';
   readonly label = 'Manual CSV / Excel';
@@ -115,52 +185,117 @@ export class ManualFileConnector implements MedicineReferenceConnector<ManualFil
 
   async fetch(input: ManualFileInput): Promise<MedicineReferenceFetchResult> {
     const fetchedAt = input.retrievedAt ?? new Date().toISOString();
-    const rows = input.rows.map((sourceRow, index) => {
-      const fallbackKey = `row-${index + 2}`;
-      const rowSourceKey = cell(sourceRow, input.mapping.rowSourceKey) ?? fallbackKey;
-      const targetMedicineId = cell(sourceRow, input.mapping.targetMedicineId);
-      const values: Partial<Record<MedicineReferenceField, string>> = {};
-      const assertions: MedicineReferenceAssertion[] = [];
-
-      for (const field of MEDICINE_REFERENCE_FIELDS) {
-        const value = cell(sourceRow, input.mapping[field]);
-        if (!value) continue;
-        values[field] = value;
-        assertions.push({
-          field,
-          value,
-          source: input.fileName,
-          sourceType: this.sourceType,
-          retrievedAt: fetchedAt,
-          batchId: input.batchId,
-          rowSourceKey,
-          rights: this.rights,
-        });
+    const rows = normalizeReferenceRows(
+      { ...input, retrievedAt: fetchedAt },
+      {
+        sourceType: this.sourceType,
+        rights: this.rights,
+        scheduleFlag: (_field, value) =>
+          ['true', 'false'].includes(value.toLowerCase()) ? value : null,
+        fallbackRowSourceKey: () => null,
       }
+    );
+    return { connectorId: this.id, batchId: input.batchId, fetchedAt, rows };
+  }
+}
 
-      const blockingIssues: NormalizedMedicineReferenceRow['blockingIssues'] = [];
-      if (!values.productName) blockingIssues.push('MISSING_PRODUCT_NAME');
-      if (!values.strength) blockingIssues.push('MISSING_STRENGTH');
-      if (!values.dosageForm) blockingIssues.push('MISSING_DOSAGE_FORM');
-      if (!values.pack) blockingIssues.push('MISSING_PACK');
-      for (const field of ['rx', 'restricted', 'controlled'] as const) {
-        const value = values[field]?.toLowerCase();
-        if (value && !['true', 'false'].includes(value)) {
-          blockingIssues.push('INVALID_SCHEDULE_CLASSIFICATION');
-          break;
-        }
+/** Connector key for an official DRAP registered-products export uploaded by an administrator. */
+export const DRAP_REGISTRY_CONNECTOR_ID = 'drap-registry';
+export const DRAP_REGISTRY_LABEL = 'DRAP registry file';
+
+export const DRAP_REGISTRY_RIGHTS: ConnectorRights = {
+  acquisition:
+    'Official DRAP registered-product data uploaded by an authorized workspace administrator',
+  cache: 'Tenant-controlled operational cache',
+  redistribution: 'Not permitted outside the tenant workspace',
+  deletion: 'Subject to tenant retention and legal-hold policy',
+};
+
+/** Header aliases found in DRAP registered-product exports, most specific first. */
+const DRAP_COLUMN_ALIASES: Record<MedicineReferenceField | 'rowSourceKey', readonly string[]> = {
+  drapRegistrationNumber: [
+    'drapregistrationnumber',
+    'registrationnumber',
+    'registrationno',
+    'regno',
+    'registration',
+  ],
+  productName: ['productname', 'brandname', 'medicinename', 'drugname', 'product', 'name'],
+  brandName: ['brandname', 'brand'],
+  manufacturer: ['manufacturer', 'manufacturername', 'company', 'companyname', 'firm'],
+  strength: ['strength', 'potency'],
+  dosageForm: ['dosageform', 'form', 'dosage'],
+  pack: ['packsize', 'pack', 'packing', 'presentation'],
+  barcode: ['barcode', 'gtin'],
+  alias: ['genericname', 'generic', 'composition', 'formulation', 'molecule', 'salt'],
+  rx: ['prescriptionstatus', 'prescriptiononly', 'prescription', 'legalstatus', 'rx'],
+  restricted: ['restricted'],
+  controlled: ['controlledstatus', 'controlleddrug', 'controlled'],
+  rowSourceKey: [],
+};
+
+/** Maps DRAP export headers to reference fields without manual column picking. */
+export function drapRegistryMapping(headers: readonly string[]): ManualMappingTemplate {
+  const normalized = headers.map((header) => header.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const mapping: ManualMappingTemplate = {};
+  for (const [field, candidates] of Object.entries(DRAP_COLUMN_ALIASES)) {
+    for (const candidate of candidates) {
+      const index = normalized.indexOf(candidate);
+      if (index >= 0) {
+        mapping[field as keyof ManualMappingTemplate] = headers[index]!;
+        break;
       }
+    }
+  }
+  return mapping;
+}
 
-      return {
-        batchId: input.batchId,
-        rowSourceKey,
-        ...(targetMedicineId ? { targetMedicineId } : {}),
-        values,
-        assertions,
-        blockingIssues,
-      };
-    });
+const TRUE_WORDS = ['true', 'yes', 'y', '1'];
+const FALSE_WORDS = ['false', 'no', 'n', '0'];
 
+/**
+ * Reads a DRAP schedule flag. Only explicit official wording is accepted; anything else blocks
+ * the row so a guessed Rx or controlled flag never reaches review as a value.
+ */
+export function drapScheduleFlag(field: ScheduleFlagField, raw: string): 'true' | 'false' | null {
+  const value = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ');
+  if (TRUE_WORDS.includes(value)) return 'true';
+  if (FALSE_WORDS.includes(value)) return 'false';
+  if (field === 'rx') {
+    if (['rx', 'prescription', 'prescription only', 'pom', 'prescription required'].includes(value))
+      return 'true';
+    if (['otc', 'over the counter', 'non prescription'].includes(value)) return 'false';
+  }
+  if (field === 'controlled') {
+    if (['controlled', 'narcotic', 'psychotropic'].includes(value)) return 'true';
+    if (['not controlled', 'non controlled'].includes(value)) return 'false';
+  }
+  return null;
+}
+
+export class DrapRegistryFileConnector implements MedicineReferenceConnector<ManualFileInput> {
+  readonly id = DRAP_REGISTRY_CONNECTOR_ID;
+  readonly label = DRAP_REGISTRY_LABEL;
+  readonly sourceType = 'REGULATOR' as const;
+  readonly enabled = true;
+  readonly rights = DRAP_REGISTRY_RIGHTS;
+
+  async fetch(input: ManualFileInput): Promise<MedicineReferenceFetchResult> {
+    const fetchedAt = input.retrievedAt ?? new Date().toISOString();
+    const rows = normalizeReferenceRows(
+      { ...input, retrievedAt: fetchedAt },
+      {
+        sourceType: this.sourceType,
+        rights: this.rights,
+        scheduleFlag: drapScheduleFlag,
+        // The registration number identifies a DRAP row across repeated exports.
+        fallbackRowSourceKey: (values) =>
+          values.drapRegistrationNumber ? `drap-${values.drapRegistrationNumber}` : null,
+      }
+    );
     return { connectorId: this.id, batchId: input.batchId, fetchedAt, rows };
   }
 }

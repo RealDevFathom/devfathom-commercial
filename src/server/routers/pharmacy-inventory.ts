@@ -30,6 +30,10 @@ import {
   approveTransfer,
   closeRecall,
   createCount,
+  CYCLE_COUNT_DEFAULT_SIZE,
+  CYCLE_COUNT_MAX_SIZE,
+  CYCLE_COUNT_REASON_MAX,
+  dailyCycleCountList,
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
@@ -77,6 +81,11 @@ import {
 } from '@/lib/pharmacy/stock-signals-operations';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  SOLO_OWNER_POLICY,
+  soloOwnerApprovalAllowed,
+  verifyPurchaseApprover,
+} from '@/lib/pharmacy/purchase-approval';
+import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
@@ -88,6 +97,13 @@ import {
   loadTemperatureZoneStatuses,
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
+import {
+  enrollColdChainSensor,
+  listColdChainSensors,
+  PharmacyColdChainSensorError,
+  revokeColdChainSensor,
+  rotateColdChainSensorSecret,
+} from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
@@ -102,6 +118,8 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 // Storage zones and their cold-chain readings belong to whoever runs the stock
 // (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
+const SOLO_COUNT_APPROVAL_REFUSED =
+  'Only the pharmacy owner who works alone can approve their own count, with their current PIN.';
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -150,6 +168,17 @@ function domainError(error: unknown): never {
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyColdChainSensorError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DUPLICATE_DEVICE_IDENTIFIER' || error.reason === 'REVOKED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -394,6 +423,19 @@ export type ExpiryMarkdownDraft = {
   onHandUnits: number;
   expiresAt: string;
 };
+
+/** A mark-down draft as any response carries it: never with the landed unit cost. */
+export type PublicExpiryMarkdownDraft = Omit<ExpiryMarkdownDraft, 'unitCostMinor'>;
+
+/**
+ * DEV-627: the stored draft keeps `unitCostMinor` as evidence, but it is a
+ * purchase-cost fact, so it is dropped before a draft leaves the server.
+ */
+export function publicMarkdownDraft(draft: ExpiryMarkdownDraft): PublicExpiryMarkdownDraft {
+  const copy: Partial<ExpiryMarkdownDraft> = { ...draft };
+  delete copy.unitCostMinor;
+  return copy as PublicExpiryMarkdownDraft;
+}
 
 export function parseMarkdownDraft(detail: string | null): ExpiryMarkdownDraft | null {
   if (!detail?.startsWith(MARKDOWN_DRAFT_PREFIX)) return null;
@@ -933,6 +975,60 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-82 — live cold-chain sensors. Like the storage zones and readings they
+   * feed, they belong to whoever runs the stock (`pharmacy:inventory`) AND is
+   * admitted to the branch, not just to a branch of the tenant. A push secret
+   * is returned once and only its hash is stored; every call is audited.
+   */
+  coldChainSensors: inventoryControl
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      listColdChainSensors(ctx.db, await admittedScopeFor(ctx, input.branchId))
+    ),
+
+  enrollColdChainSensor: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1).max(128),
+          name: z.string().trim().min(1).max(120),
+          deviceIdentifier: z.string().trim().min(1).max(120),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await enrollColdChainSensor(ctx.db, scope, input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  rotateColdChainSensorSecret: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await rotateColdChainSensorSecret(ctx.db, scope, input.sensorId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  revokeColdChainSensor: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await revokeColdChainSensor(ctx.db, scope, input.sensorId, new Date());
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
   temperatureZoneStatuses: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
@@ -1262,6 +1358,33 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-682: today's cycle-count list — fast movers and high-value positions,
+   * ranked in SQL. It is a read; nothing is saved until a person submits the
+   * counted quantities (`createCount`) and confirms the variance (`approveCount`).
+   */
+  dailyCycleCountList: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          size: z.number().int().min(1).max(CYCLE_COUNT_MAX_SIZE).default(CYCLE_COUNT_DEFAULT_SIZE),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await dailyCycleCountList(
+          ctx.db,
+          await admittedScopeFor(ctx, input.branchId),
+          new Date(),
+          input.size
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
   approveCount: inventoryControl
     .input(
       z
@@ -1269,19 +1392,76 @@ export const pharmacyInventoryRouter = router({
           branchId,
           countId: z.string().min(1),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+          // DEV-682: required (server-side) whenever the count has a variance.
+          varianceReason: z.string().trim().max(CYCLE_COUNT_REASON_MAX).optional(),
+          // DEV-682 solo-pharmacy rule: a sole owner co-authorizes their own
+          // above-threshold variance with a fresh PIN instead of a second person.
+          soloPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          approveCount(
-            txDb(tx),
-            await scopeFor(ctx, input.branchId),
-            input.countId,
-            input.idempotencyKeyPrefix
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (input.soloPin === undefined)
+            return approveCount(
+              db,
+              scope,
+              input.countId,
+              input.idempotencyKeyPrefix,
+              input.varianceReason
+            );
+          if (
+            !(await soloOwnerApprovalAllowed(
+              db,
+              scope.organizationId,
+              scope.actorId,
+              scope.branchId
+            ))
           )
-        );
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_COUNT_APPROVAL_REFUSED });
+          const pin = await verifyPurchaseApprover(db, {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            approverId: scope.actorId,
+            pin: input.soloPin,
+          });
+          if ('blocked' in pin)
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_COUNT_APPROVAL_REFUSED });
+          const approved = await approveCount(
+            db,
+            scope,
+            input.countId,
+            input.idempotencyKeyPrefix,
+            input.varianceReason,
+            { soloSelfApproval: true }
+          );
+          await db.auditLog.create({
+            data: {
+              organizationId: scope.organizationId,
+              actorId: scope.actorId,
+              actorType: 'USER',
+              source: 'TRPC',
+              category: 'PHARMACY_INVENTORY',
+              operation: 'OTHER',
+              action: 'pharmacy.inventoryCountSoloApproval',
+              targetType: 'PharmacyInventoryCount',
+              targetId: input.countId,
+              metadata: {
+                branchId: scope.branchId,
+                approverId: scope.actorId,
+                pinVerified: true,
+                policy: SOLO_OWNER_POLICY,
+              },
+            },
+          });
+          return approved;
+        });
       } catch (error) {
         domainError(error);
       }
@@ -1795,6 +1975,13 @@ export const pharmacyInventoryRouter = router({
    * Every saleable lot position expiring inside the window — and every one that
    * has already expired but is still AVAILABLE on a shelf, which is the stock
    * most in need of an action — with the drafts already raised against it.
+   *
+   * DEV-627: landed unit cost never leaves the server (not on a row, not inside a
+   * mark-down draft), and the PKR value at risk
+   * derived from it is released only to a caller holding `reports:financial`
+   * (owner or finance). Everyone else still gets the operational board — units,
+   * expiry, MRP, drafts — with `costVisible: false`, a null value at risk and no
+   * PKR risk buckets.
    */
   expiryBoardLots: auditedProtectedProcedure
     .input(
@@ -1810,6 +1997,12 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
       await assertBranch(ctx.db, scope);
+      const costVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+      );
       const at = new Date();
       const { withinDays } = input;
       // Always read through 90 days so the headline recovery ledger can show
@@ -1933,14 +2126,14 @@ export const pharmacyInventoryRouter = router({
           returnByLot.set(line.inventoryLotId, line.purchaseReturn);
       const markdownByPosition = new Map<
         string,
-        ExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
+        PublicExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
       >();
       for (const event of markdownEvents) {
         const draft = parseMarkdownDraft(event.detail);
         const key = draft ? `${draft.inventoryLotId}:${draft.stockLocationId}` : null;
         if (draft && key && !markdownByPosition.has(key))
           markdownByPosition.set(key, {
-            ...draft,
+            ...publicMarkdownDraft(draft),
             eventId: event.id,
             reason: event.reason,
             recordedAt: event.createdAt,
@@ -1992,9 +2185,8 @@ export const pharmacyInventoryRouter = router({
             reservedUnits: reservedByLot.get(row.inventoryLotId) ?? 0,
             quarantinedUnits: heldByLot.get(row.inventoryLotId) ?? 0,
             unitsPerPack: lot.unitsPerPack,
-            unitCostMinor: lot.unitCostMinor,
             printedMrpMinor: lot.printedMrpMinor,
-            valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
+            valueAtRiskMinor: (row.onHandUnits * lot.unitCostMinor) as number | null,
             supplierName: lot.supplierName,
             suggestedSupplierId,
             markdownEligible,
@@ -2009,10 +2201,21 @@ export const pharmacyInventoryRouter = router({
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
-            right.valueAtRiskMinor - left.valueAtRiskMinor ||
+            // Without cost access the order must not hint at relative cost either.
+            (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
+      if (!costVisible) {
+        return {
+          generatedAt: at,
+          withinDays,
+          costVisible,
+          riskBuckets: [] as typeof riskBuckets,
+          rows: rows.map((row) => ({ ...row, valueAtRiskMinor: null })),
+          suppliers,
+        };
+      }
+      return { generatedAt: at, withinDays, costVisible, riskBuckets, rows, suppliers };
     }),
 
   /**
@@ -2136,7 +2339,12 @@ export const pharmacyInventoryRouter = router({
             latest.draft.markdownPercent === input.markdownPercent &&
             latest.draft.proposedPackPriceMinor === proposedPackPriceMinor
           ) {
-            return { created: false, signalId: signal.id, eventId: latest.id, draft: latest.draft };
+            return {
+              created: false,
+              signalId: signal.id,
+              eventId: latest.id,
+              draft: publicMarkdownDraft(latest.draft),
+            };
           }
           const event = await tx.pharmacyStockSignalEvent.create({
             data: {
@@ -2150,7 +2358,12 @@ export const pharmacyInventoryRouter = router({
             },
             select: { id: true },
           });
-          return { created: true, signalId: signal.id, eventId: event.id, draft };
+          return {
+            created: true,
+            signalId: signal.id,
+            eventId: event.id,
+            draft: publicMarkdownDraft(draft),
+          };
         });
       } catch (error) {
         expiryError(error);

@@ -8,6 +8,7 @@ import {
   localizeReceiptNumber,
   PharmacyCounterReceiptError,
   receiptLineLabel,
+  receiptPromotionLabel,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLine,
@@ -323,7 +324,67 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
   });
 });
 
+describe('promotion receipt line (#727)', () => {
+  const promoted = receiptLine({
+    quantity: 1,
+    unitPriceMinor: 1_000,
+    discountMinor: 100,
+    lineTotalMinor: 900,
+    promotionName: 'Winter week',
+  });
+
+  it('names the issued promotion and its saving, in English and Urdu', () => {
+    expect(receiptPromotionLabel(promoted, 'en')).toBe('Promotion: Winter week (-1.00)');
+    expect(receiptPromotionLabel(promoted, 'ur')).toBe(
+      `${COUNTER_RECEIPT_STRINGS.ur.promotion}: Winter week (-${formatMinor(100, 'ur')})`
+    );
+  });
+
+  it('prints nothing for a line without a promotion or saving', () => {
+    expect(receiptPromotionLabel(receiptLine(), 'en')).toBeNull();
+    expect(receiptPromotionLabel({ ...promoted, discountMinor: 0 }, 'en')).toBeNull();
+    expect(receiptPromotionLabel({ ...promoted, promotionName: null }, 'en')).toBeNull();
+  });
+
+  it('adds the promotion under its line on the thermal and raw-print documents, counted once', () => {
+    const source = receipt({ lines: [promoted] });
+    expect(source.totals).toMatchObject({ grossMinor: 1_000, discountMinor: 100, netMinor: 900 });
+
+    const document = buildCounterReceiptDocument(source, 'en');
+    expect(document.lines.map((line) => line.label)).toEqual([
+      receiptLineLabel(promoted, 'en'),
+      'Promotion: Winter week (-1.00)',
+    ]);
+    expect(PrintDocumentSchema.safeParse(document).success).toBe(true);
+
+    const raw = buildPharmacyReceiptPrintDocument(source, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    });
+    expect(raw.receiptSnapshot?.facts.lines[0]).toContain('Promotion: Winter week (-1.00)');
+  });
+
+  it('keeps the promotion on browser-printed thermal and A4 receipts, in both languages', () => {
+    const source = receipt({ lines: [promoted] });
+    expect(buildCounterReceiptPreview(source, 'en', 80)).toContain(
+      'Promotion: Winter week (-1.00)'
+    );
+    expect(buildCounterReceiptPreview(source, 'en', 58)).toContain('Winter week');
+    expect(buildCounterReceiptPreview(source, 'ur', 80)).toContain(
+      COUNTER_RECEIPT_STRINGS.ur.promotion
+    );
+    expect(buildCounterReceiptPreview(receipt(), 'en', 80)).not.toContain('Promotion:');
+  });
+});
+
 describe('receiptTitle', () => {
+  it('names the issuing counter because numbers restart per counter', () => {
+    expect(receiptTitle({ ...receipt(), counterLabel: 'Front till' }, 'en')).toBe(
+      'Receipt 12 · Front till'
+    );
+  });
+
   it('names the number when settled and says so when not', () => {
     expect(receiptTitle(receipt(), 'en')).toBe('Receipt 12');
     expect(receiptTitle(receipt({ receiptNumber: null }), 'en')).toBe(
