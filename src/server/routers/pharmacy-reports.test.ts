@@ -762,6 +762,64 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     }
   );
 
+  // DEV-832 (F08 sibling): the DRAP safety export must not carry a seeded
+  // patient's CNIC, phone or address, nor the prescriber's phone.
+  it('exports only the minimal patient and prescriber fields', async () => {
+    const fullPatient = {
+      id: 'patient_1',
+      displayName: 'Synthetic Patient',
+      cnic: '35202-1234567-1',
+      phone: '+923001234567',
+      address: '12 Synthetic Road, Lahore',
+      dateOfBirth: new Date('1980-02-03'),
+    };
+    const fullPrescriber = {
+      id: 'doc_1',
+      name: 'Dr Synthetic',
+      registrationNumber: 'PMDC-1',
+      phone: '+923009999999',
+      facility: 'Synthetic Clinic',
+    };
+    const pick = (row: Record<string, unknown>, spec: unknown) =>
+      spec === true
+        ? row
+        : Object.fromEntries(
+            Object.keys((spec as { select: Record<string, true> }).select).map((key) => [
+              key,
+              row[key],
+            ])
+          );
+    mocks.reportFindMany.mockImplementation(
+      async ({ include }: { include: { patient: unknown; prescriber: unknown } }) => [
+        {
+          id: 'pv_1',
+          state: 'READY',
+          externalSubmissionState: 'NOT_SUBMITTED',
+          patient: pick(fullPatient, include.patient),
+          prescriber: pick(fullPrescriber, include.prescriber),
+        },
+      ]
+    );
+
+    const exported = await pvCaller().exportPharmacovigilanceDrap({
+      branchId: 'branch_1',
+      from: new Date('2026-09-01'),
+      to: new Date('2026-09-30'),
+    });
+
+    const body = JSON.stringify(exported);
+    for (const raw of [fullPatient.cnic, fullPatient.phone, fullPatient.address, '+923009999999'])
+      expect(body).not.toContain(raw);
+    expect(exported.reports[0]).toMatchObject({
+      patient: {
+        id: 'patient_1',
+        displayName: 'Synthetic Patient',
+        dateOfBirth: fullPatient.dateOfBirth,
+      },
+      prescriber: { id: 'doc_1', name: 'Dr Synthetic', registrationNumber: 'PMDC-1' },
+    });
+  });
+
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
