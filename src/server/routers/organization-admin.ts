@@ -166,7 +166,7 @@ export const organizationAdminRouter = router({
     return ctx.db.organizationRole.findMany({
       where: { organizationId: id },
       orderBy: { name: 'asc' },
-      select: { id: true, key: true, name: true, description: true },
+      select: { id: true, key: true, name: true },
     });
   }),
 
