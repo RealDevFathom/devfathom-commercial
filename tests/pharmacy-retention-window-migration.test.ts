@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync(
   path.join(
     process.cwd(),
-    'prisma/migrations/20261115090000_pharmacy_retention_window_enforcement/migration.sql'
+    'prisma/migrations/20261115100000_pharmacy_retention_window_enforcement/migration.sql'
   ),
   'utf8'
 );
@@ -20,7 +20,15 @@ describe('DEV-96 retention window migration contract', () => {
     expect(migration).toContain(`r."recordRetentionByClass" -> 'values' -> (p_record_class::text)`);
     expect(migration).toContain(`r."prescriptionRetentionDays" -> 'values'`);
     expect(migration).toContain('FROM "pharmacy_retention_classes" rc');
-    expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days);');
+    expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days, default_days);');
+  });
+
+  it('gives the pharmacy-only classes a 10-year default floor and AUDIT none', () => {
+    expect(migration).toMatch(
+      /default_days integer := CASE p_record_class\s+WHEN 'PRESCRIPTION' THEN 3653\s+WHEN 'CONTROLLED_REGISTER' THEN 3653\s+WHEN 'FISCAL' THEN 3653\s+END;/
+    );
+    expect(migration).not.toMatch(/WHEN 'AUDIT' THEN \d+/);
+    expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days, default_days);');
   });
 
   it('refuses deletes inside the window on every pharmacy record class', () => {

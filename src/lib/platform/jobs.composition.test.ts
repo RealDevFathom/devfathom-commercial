@@ -103,16 +103,25 @@ describe('composed platform worker boundaries', () => {
     expect(m.archiveCreate).not.toHaveBeenCalled();
   });
 
-  it('runs the DEV-96 pharmacy retention purge on every worker run', async () => {
-    await processPlatformJobs();
-    const purgeScans = m.query.mock.calls.filter(([sql]) =>
+  const purgeScans = () =>
+    m.query.mock.calls.filter(([sql]) =>
       String(sql?.text ?? '').includes('pharmacy_retention_days(')
     );
-    expect(purgeScans).toHaveLength(4);
+
+  it('runs the DEV-96 pharmacy retention purge on the first worker run of each hour', async () => {
+    vi.setSystemTime(new Date('2026-10-12T01:02:00.000Z'));
+    await processPlatformJobs();
+    expect(purgeScans()).toHaveLength(4);
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
   });
 
+  it('skips the retention purge on the other worker runs of the hour', async () => {
+    await processPlatformJobs();
+    expect(purgeScans()).toHaveLength(0);
+  });
+
   it('keeps recovering and claiming jobs when the retention purge fails', async () => {
+    vi.setSystemTime(new Date('2026-10-12T01:02:00.000Z'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     queue(job('SUSPEND'));
     const query = m.query.getMockImplementation()!;

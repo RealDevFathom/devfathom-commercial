@@ -7,6 +7,14 @@ BEGIN;
 --    and "prescriptionRetentionDays" for prescriptions) and the tenant's latest
 --    effective pharmacy_retention_classes row. The longer period wins: a tenant
 --    may extend a statutory period, never shorten it.
+--    Built-in defaults are a floor for the pharmacy-only classes, so a branch
+--    with no confirmed statutory value still has a period: PRESCRIPTION,
+--    CONTROLLED_REGISTER and FISCAL default to 3653 days (10 years), longer than
+--    the six-year record-keeping minima commonly applied to tax records. They
+--    are provisional until legal confirms per-jurisdiction values; the owner
+--    lengthens them with a retention class. AUDIT has no built-in default: the
+--    table is shared by every vertical, so its period comes only from a rule
+--    set or the owner's retention class.
 -- 2. A BEFORE DELETE trigger refuses deleting a prescription, controlled register
 --    entry, sale (FISCAL) or audit row while it is inside its retention window.
 --    Pharmacy records with no resolvable period are refused outright (fail
@@ -48,6 +56,11 @@ DECLARE
   at_utc timestamp := timezone('UTC', now());
   tenant_days integer;
   rule_days integer;
+  default_days integer := CASE p_record_class
+    WHEN 'PRESCRIPTION' THEN 3653
+    WHEN 'CONTROLLED_REGISTER' THEN 3653
+    WHEN 'FISCAL' THEN 3653
+  END;
 BEGIN
   SELECT rc."retentionDays" INTO tenant_days
     FROM "pharmacy_retention_classes" rc
@@ -72,7 +85,7 @@ BEGIN
      AND p."effectiveFrom" <= at_utc
      AND (p."effectiveTo" IS NULL OR p."effectiveTo" > at_utc);
 
-  RETURN GREATEST(tenant_days, rule_days);
+  RETURN GREATEST(tenant_days, rule_days, default_days);
 END $$;
 
 -- Same latest-event-per-holdKey rule as pharmacy_safe_refuse_delete_under_hold().

@@ -883,7 +883,12 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
  * per run. Isolated from job processing: a purge that fails or times out is
  * logged and never stops stale recovery or claims.
  */
-async function runPharmacyRetentionPurge(): Promise<void> {
+const PHARMACY_RETENTION_PURGE_MINUTES = 5;
+
+async function runPharmacyRetentionPurge(now: Date): Promise<void> {
+  // Retention is measured in years, so one pass an hour is enough: only the
+  // first five-minute worker run of each UTC hour scans the record tables.
+  if (now.getUTCMinutes() >= PHARMACY_RETENTION_PURGE_MINUTES) return;
   try {
     const result = await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), {
       timeout: 120_000,
@@ -914,7 +919,7 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
-  await runPharmacyRetentionPurge();
+  await runPharmacyRetentionPurge(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,
