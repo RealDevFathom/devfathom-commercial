@@ -1603,16 +1603,39 @@ model PharmacyDrawerSession {
   countedCashMinor    Int?
   controlledCountHook Json?
   openedByActorId     String
+  /// DEV-821: the cashier who runs this till. Cash may go into the drawer only from
+  /// this user or a manager/owner. Null only on drawers opened before DEV-821, which
+  /// read as their opener.
+  operatingCashierId  String?
   closedByActorId     String?
   openedAt            DateTime                    @default(now())
   closedAt            DateTime?
   movements           PharmacyDrawerMovement[]
   tenders             PharmacyTender[]
+  handovers           PharmacyDrawerHandover[]
   visibilityAnchor    PharmacyBranch              @relation("PharmacyDrawerSessionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_sessions_visibility_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
   @@map("pharmacy_drawer_sessions")
+}
+
+/// DEV-821: append-only record of a manager or owner handing an open till to another
+/// cashier. The close reports read it to tell whose shift each cash movement fell in.
+model PharmacyDrawerHandover {
+  id              String                @id @default(cuid())
+  organizationId  String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  drawerSessionId String
+  fromCashierId   String
+  toCashierId     String
+  actorId         String
+  reason          String
+  createdAt       DateTime              @default(now())
+  drawerSession   PharmacyDrawerSession @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, drawerSessionId, createdAt])
+  @@map("pharmacy_drawer_handovers")
 }
 
 model PharmacyDrawerMovement {

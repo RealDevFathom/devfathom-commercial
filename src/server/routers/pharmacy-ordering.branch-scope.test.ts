@@ -103,7 +103,8 @@ describe('pharmacyOrdering.deliveryCommand: the branch in the input', () => {
       db,
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
       remittance,
-      { authorizeRefund: expect.any(Function) }
+      // DEV-821: whether the actor may remit into a till they do not run.
+      { authorizeRefund: expect.any(Function), actorIsManager: false }
     );
   });
 });

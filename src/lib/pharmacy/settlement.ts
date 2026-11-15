@@ -45,6 +45,8 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
+      | 'DRAWER_NOT_YOURS'
+      | 'CASHIER_NOT_ASSIGNED'
       | 'REFUND_EXCEEDS_TENDER'
       | 'IDEMPOTENCY_CONFLICT'
       | 'UNCERTIFIED_PROVIDER'
@@ -296,8 +298,69 @@ export async function requireCurrentPharmacyBusinessDate(
     throw new PharmacySettlementError('BUSINESS_DATE_NOT_CURRENT');
 }
 
+/**
+ * DEV-821: who is putting cash into, or taking it out of, a drawer. A counter user
+ * may use only a drawer they run; a manager or owner may use any open drawer of the
+ * branch. An enrolled offline counter replays under its own authenticated device.
+ */
+export type PharmacyDrawerOperator =
+  | { kind: 'COUNTER'; actorIsManager: boolean }
+  | { kind: 'REGISTERED_DEVICE_REPLAY' };
+
 /** Options for an online counter call; replay and delivery paths omit them. */
-export type PharmacySettlementOptions = { requireCurrentBusinessDate?: boolean };
+export type PharmacySettlementOptions = {
+  requireCurrentBusinessDate?: boolean;
+  /** Omitted: the caller is treated as a counter user who is not a manager. */
+  drawerOperator?: PharmacyDrawerOperator;
+};
+
+/** The cashier who runs a drawer. Drawers opened before DEV-821 are run by their opener. */
+export function drawerOperatingCashierId(drawer: {
+  operatingCashierId?: string | null;
+  openedByActorId: string;
+}) {
+  return drawer.operatingCashierId ?? drawer.openedByActorId;
+}
+
+/**
+ * DEV-821: refuses cash into or out of a drawer the actor does not run. Fails closed:
+ * without an operator, only the drawer's own cashier passes.
+ */
+export function assertDrawerOperator(
+  drawer: { operatingCashierId?: string | null; openedByActorId: string },
+  scope: { actorId: string },
+  operator?: PharmacyDrawerOperator
+) {
+  if (operator?.kind === 'REGISTERED_DEVICE_REPLAY') return;
+  if (operator?.kind === 'COUNTER' && operator.actorIsManager) return;
+  if (drawerOperatingCashierId(drawer) !== scope.actorId)
+    throw new PharmacySettlementError('DRAWER_NOT_YOURS');
+}
+
+/**
+ * DEV-821: the one server-side drawer resolver for cash. The client-sent device id
+ * reaches only that device's OPEN drawer for the business date on the caller's own
+ * branch, and only when the caller runs it or is a manager/owner.
+ */
+export async function resolveOperatingPharmacyDrawer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { deviceId: string; businessDate: Date },
+  operator?: PharmacyDrawerOperator
+) {
+  const drawer = await db.pharmacyDrawerSession.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId: input.deviceId,
+      businessDate: input.businessDate,
+      status: 'OPEN',
+    },
+  });
+  if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  assertDrawerOperator(drawer, scope, operator);
+  return drawer;
+}
 
 async function lockDrawerDay(db: ScopedDb, scope: LedgerScope, drawerSessionId: string) {
   const drawer = await db.pharmacyDrawerSession.findFirst({
@@ -454,16 +517,12 @@ export async function applyPharmacyTender(
     if (!Number.isSafeInteger(cashReceivedMinor) || cashReceivedMinor < input.amountMinor)
       throw new PharmacySettlementError('INVALID_AMOUNT');
     changeGivenMinor = cashReceivedMinor - input.amountMinor;
-    const drawer = await db.pharmacyDrawerSession.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        deviceId: input.deviceId,
-        businessDate: input.businessDate,
-        status: 'OPEN',
-      },
-    });
-    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    const drawer = await resolveOperatingPharmacyDrawer(
+      db,
+      scope,
+      input,
+      options.drawerOperator
+    );
     drawerSessionId = drawer.id;
   } else if (isManualTender(input.type)) {
     if (input.cashReceivedMinor !== undefined) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
@@ -695,16 +754,12 @@ export async function refundPharmacyTender(
     if (!result.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     providerRef = result.providerRef;
   } else if (tender.type === 'CASH' || manualReversalRequired) {
-    const drawer = await db.pharmacyDrawerSession.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        deviceId: input.deviceId,
-        businessDate: input.businessDate,
-        status: 'OPEN',
-      },
-    });
-    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    const drawer = await resolveOperatingPharmacyDrawer(
+      db,
+      scope,
+      input,
+      options.drawerOperator
+    );
     drawerSessionId = drawer.id;
   }
   const refund = await db.pharmacyRefund.create({
@@ -800,10 +855,35 @@ export function foldExpectedCash(movements: readonly DrawerMovement[]) {
   }, 0);
 }
 
+/**
+ * DEV-821: a drawer's operating cashier must be an active member actively assigned
+ * to the drawer's branch. The caller decides who may name someone other than
+ * themselves (a manager or owner).
+ */
+async function assertBranchCashier(db: ScopedDb, scope: LedgerScope, cashierId: string) {
+  const assignment = await db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      userId: cashierId,
+      active: true,
+      user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+    },
+    select: { id: true },
+  });
+  if (!assignment) throw new PharmacySettlementError('CASHIER_NOT_ASSIGNED');
+}
+
 export async function openPharmacyDrawer(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { deviceId: string; businessDate: Date; openingFloatMinor: number },
+  input: {
+    deviceId: string;
+    businessDate: Date;
+    openingFloatMinor: number;
+    /** DEV-821: who runs the till; defaults to the opener. Naming another is a manager's. */
+    operatingCashierId?: string;
+  },
   options: PharmacySettlementOptions = {}
 ) {
   if (!Number.isSafeInteger(input.openingFloatMinor) || input.openingFloatMinor < 0)
@@ -811,6 +891,8 @@ export async function openPharmacyDrawer(
   if (options.requireCurrentBusinessDate)
     await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
   await requirePharmacyDayOpen(db, scope, input.businessDate);
+  const operatingCashierId = input.operatingCashierId ?? scope.actorId;
+  if (operatingCashierId !== scope.actorId) await assertBranchCashier(db, scope, operatingCashierId);
   // One OPEN drawer per counter device (the partial unique index
   // `pharmacy_one_open_drawer_per_device`). The pre-check answers the ordinary
   // second click with the typed reason; the P2002 translation below is the
@@ -835,6 +917,7 @@ export async function openPharmacyDrawer(
         businessDate: input.businessDate,
         openingFloatMinor: input.openingFloatMinor,
         openedByActorId: scope.actorId,
+        operatingCashierId,
       },
     });
   } catch (error) {
@@ -864,7 +947,14 @@ export async function readOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, d
       deviceId,
       status: 'OPEN',
     },
-    select: { id: true, businessDate: true, openedAt: true, openingFloatMinor: true },
+    select: {
+      id: true,
+      businessDate: true,
+      openedAt: true,
+      openingFloatMinor: true,
+      openedByActorId: true,
+      operatingCashierId: true,
+    },
     orderBy: { openedAt: 'desc' },
   });
 }
@@ -899,7 +989,9 @@ export async function recordPharmacyCashMovement(
     kind: 'PAID_IN' | 'PAID_OUT';
     amountMinor: number;
     reason: string;
-  }
+  },
+  /** DEV-821: omitted, only the drawer's own cashier may move its cash. */
+  operator?: PharmacyDrawerOperator
 ) {
   assertPositiveMinor(input.amountMinor);
   if (!input.reason.trim()) throw new PharmacySettlementError('INVALID_AMOUNT');
@@ -913,6 +1005,7 @@ export async function recordPharmacyCashMovement(
     },
   });
   if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  assertDrawerOperator(drawer, scope, operator);
   return db.pharmacyDrawerMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -923,6 +1016,81 @@ export async function recordPharmacyCashMovement(
       actorId: scope.actorId,
     },
   });
+}
+
+/**
+ * DEV-821: a manager or owner hands an open till to another cashier of the branch.
+ * The handover is recorded append-only, with who did it and why, under the same
+ * day lock a close takes.
+ */
+export async function handoverPharmacyDrawer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { drawerSessionId: string; toCashierId: string; reason: string }
+) {
+  const reason = input.reason.trim();
+  if (!reason) throw new PharmacySettlementError('INVALID_AMOUNT');
+  await lockDrawerDay(db, scope, input.drawerSessionId);
+  const drawer = await db.pharmacyDrawerSession.findFirst({
+    where: {
+      id: input.drawerSessionId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+  });
+  if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  const fromCashierId = drawerOperatingCashierId(drawer);
+  if (fromCashierId === input.toCashierId) return { drawer, handover: null };
+  await assertBranchCashier(db, scope, input.toCashierId);
+  const handover = await db.pharmacyDrawerHandover.create({
+    data: {
+      organizationId: scope.organizationId,
+      drawerSessionId: drawer.id,
+      fromCashierId,
+      toCashierId: input.toCashierId,
+      actorId: scope.actorId,
+      reason,
+    },
+  });
+  const updated = await db.pharmacyDrawerSession.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: drawer.id } },
+    data: { operatingCashierId: input.toCashierId },
+  });
+  return { drawer: updated, handover };
+}
+
+export type DrawerOperatorMovement = {
+  id: string;
+  kind: string;
+  amountMinor: number;
+  actorId: string;
+  createdAt: Date;
+};
+
+/**
+ * DEV-821: cash movements made by someone other than the cashier running the till
+ * at that moment, for the drawer-close and day-close reports. The handovers give
+ * the run of cashiers: before the first handover the till was its first cashier's.
+ * The opening float and the closing count are the open and the close themselves,
+ * made by whoever opened or closed the till, so they are left out.
+ */
+export function movementsByOtherThanOperator(
+  drawer: { operatingCashierId?: string | null; openedByActorId: string },
+  movements: readonly DrawerOperatorMovement[],
+  handovers: readonly { fromCashierId: string; toCashierId: string; createdAt: Date }[]
+): DrawerOperatorMovement[] {
+  const shifts = [...handovers].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const firstCashier = shifts[0]?.fromCashierId ?? drawerOperatingCashierId(drawer);
+  const cashierAt = (at: Date) =>
+    shifts.reduce(
+      (cashier, handover) => (handover.createdAt.getTime() <= at.getTime() ? handover.toCashierId : cashier),
+      firstCashier
+    );
+  return movements
+    .filter((movement) => movement.kind !== 'OPENING_FLOAT' && movement.kind !== 'CLOSING_COUNT')
+    .filter((movement) => movement.actorId !== cashierAt(movement.createdAt))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
 export async function closePharmacyDrawer(
@@ -940,10 +1108,16 @@ export async function closePharmacyDrawer(
       branchId: scope.branchId,
       status: 'OPEN',
     },
-    include: { movements: true },
+    include: { movements: true, handovers: true },
   });
   if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
   const expectedCashMinor = foldExpectedCash(drawer.movements as DrawerMovement[]);
+  // DEV-821: the drawer-close report names cash moved by anyone but the till's cashier.
+  const otherOperatorMovements = movementsByOtherThanOperator(
+    drawer,
+    drawer.movements,
+    drawer.handovers ?? []
+  );
   await db.pharmacyDrawerMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -967,6 +1141,7 @@ export async function closePharmacyDrawer(
     drawer: closed,
     expectedCashMinor,
     varianceMinor: input.countedCashMinor - expectedCashMinor,
+    otherOperatorMovements,
   };
 }
 

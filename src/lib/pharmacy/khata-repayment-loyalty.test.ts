@@ -78,8 +78,14 @@ function store(
           receipts.find((row) => row.idempotencyKey === where.idempotencyKey) ?? null
       ),
     },
+    // DEV-821: the paying cashier runs this till.
     pharmacyDrawerSession: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', businessDate }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'drawer_1',
+        businessDate,
+        openedByActorId: 'cashier_1',
+        operatingCashierId: 'cashier_1',
+      }),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerMovement: {

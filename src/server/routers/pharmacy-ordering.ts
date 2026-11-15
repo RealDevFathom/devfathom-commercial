@@ -157,6 +157,9 @@ export const pharmacyOrderingRouter = router({
       return await ctx.db.$transaction(async (tx) => {
         const scope = await scopeFor(ctx, input.branchId);
         return recordDeliveryCommand(txDb(tx), scope, input, {
+          // DEV-821: a COD remit goes into a till the actor runs, unless a manager or owner.
+          actorIsManager:
+            input.action === 'REMIT' && (await actorMayRefund(ctx.db, ctx.session.user)),
           // DEV-647 / DEV-786: a physical return that refunds cash or returns a completed sale
           // needs a manager or owner PIN.
           authorizeRefund: async () => {

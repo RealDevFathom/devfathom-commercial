@@ -187,7 +187,11 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
         settlement,
-        { requireCurrentBusinessDate: true }
+        // DEV-821: a refund is a manager's, so any open till of the branch may pay it out.
+        {
+          requireCurrentBusinessDate: true,
+          drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+        }
       );
       // The credential is the signed-in user's own PIN.
       expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(

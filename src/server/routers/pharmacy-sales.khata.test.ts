@@ -1326,7 +1326,11 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await expect(f.caller().recordKhataPayment(payment)).resolves.toEqual(slip);
     expect(f.db.$transaction).toHaveBeenCalledTimes(1);
     expect(f.db.$queryRaw).toHaveBeenCalled();
-    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment);
+    // DEV-821: the drawer operator decides whose till the cash may go into.
+    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment, {
+      kind: 'COUNTER',
+      actorIsManager: true,
+    });
   });
 
   // DEV-821: a client-sent device only reaches a drawer through the caller's own
