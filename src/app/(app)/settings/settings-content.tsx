@@ -643,7 +643,7 @@ export function ProfileSection() {
               <button
                 onClick={handleSave}
                 disabled={updateProfile.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
               >
                 {updateProfile.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -777,7 +777,7 @@ function PasswordSection() {
           <button
             onClick={handleSubmit}
             disabled={!current || !newPw || !confirm || changePassword.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {changePassword.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1096,7 +1096,7 @@ function TwoFactorSection() {
             </div>
             <button
               onClick={() => setRecoveryCodes(null)}
-              className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C]"
+              className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C]"
             >
               I&apos;ve saved them
             </button>
@@ -1170,7 +1170,7 @@ function TwoFactorSection() {
               <button
                 onClick={() => confirm.mutate({ token: code })}
                 disabled={code.length < 6 || confirm.isPending}
-                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-50"
               >
                 {confirm.isPending ? 'Verifying…' : 'Verify & enable'}
               </button>
@@ -1187,7 +1187,7 @@ function TwoFactorSection() {
             <button
               onClick={() => begin.mutate()}
               disabled={begin.isPending}
-              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-50"
             >
               {begin.isPending ? 'Starting…' : 'Enable two-factor authentication'}
             </button>
@@ -1378,7 +1378,7 @@ export function ApiTokensSection() {
               </code>
               <button
                 onClick={handleCopy}
-                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] transition-colors"
               >
                 {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? 'Copied' : 'Copy'}
@@ -1619,7 +1619,7 @@ export function ApiTokensSection() {
                   }
                 }}
                 disabled={!name.trim() || selectedScopes.length === 0 || createToken.isPending}
-                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
               >
                 {createToken.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -1825,7 +1825,7 @@ export function WebhooksSection() {
               </code>
               <button
                 onClick={handleCopy}
-                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-[#0C2E2C] transition-colors"
+                className="flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] transition-colors"
               >
                 {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? 'Copied' : 'Copy'}
@@ -1915,7 +1915,7 @@ export function WebhooksSection() {
                       <span
                         className={cn(
                           'flex h-4 w-4 items-center justify-center rounded border',
-                          on ? 'border-primary bg-primary text-white' : 'border-border'
+                          on ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
                         )}
                       >
                         {on && <Check className="h-3 w-3" />}
@@ -1946,7 +1946,7 @@ export function WebhooksSection() {
               <button
                 onClick={handleCreate}
                 disabled={!url.trim() || selectedEvents.length === 0 || createWebhook.isPending}
-                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
               >
                 {createWebhook.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />

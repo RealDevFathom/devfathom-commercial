@@ -279,7 +279,7 @@ function TransactionsTab({
           </button>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Transaction
@@ -408,7 +408,7 @@ const TransactionRow = memo(function TransactionRow({
               }
             }}
             disabled={!eDesc.trim() || !eAmount || updateTransaction.isPending}
-            className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {updateTransaction.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
           </button>
@@ -658,7 +658,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
             disabled={
               !amount || !description.trim() || amountTooLarge || createTransaction.isPending
             }
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createTransaction.isPending ? (
               <>
@@ -744,7 +744,7 @@ function RecurringTab() {
           </button>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <Plus className="h-3.5 w-3.5" /> Add Recurring
           </button>
@@ -882,7 +882,7 @@ function RecurringTab() {
               <button
                 onClick={handleCreate}
                 disabled={!name.trim() || !amount || !nextDueDate || createRecurring.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
               >
                 {createRecurring.isPending ? (
                   <>
@@ -1331,7 +1331,7 @@ function AddPaymentForm({
           <button
             onClick={submit}
             disabled={!amountValid || overpay || addPayment.isPending}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
           >
             {addPayment.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             Add
