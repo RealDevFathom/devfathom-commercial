@@ -3041,6 +3041,7 @@ enum PlatformJobType {
   RESUME
   PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
   CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  PHARMACY_RECORD_RETENTION_V1 @map("pharmacy.record.retention.v1")
 }
 
 enum PlatformJobStatus {
