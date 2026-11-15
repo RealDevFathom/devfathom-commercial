@@ -532,6 +532,13 @@ export type CounterRxPanelProps = {
   state: 'idle' | 'loading' | 'ready' | 'error' | 'denied';
   error?: string | null;
   disabled?: boolean;
+  /**
+   * DEV-323: prescription upload and capture are refused on the server without
+   * Pharmacy Dispensing and `pharmacy:prescriptions` (a pharmacist or tenant
+   * administrator). Without them the counter withholds both capture controls
+   * and says who can capture instead of offering an action that fails.
+   */
+  canCapturePrescription: boolean;
   onQueryChange: (query: string) => void;
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
@@ -572,6 +579,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSelectPatient,
       onClearPatient,
       onCapturePrescription,
+      canCapturePrescription,
     },
     ref
   ) {
@@ -769,7 +777,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               )}
               <div className="space-y-2">
                 <div className="flex flex-wrap gap-2">
-                  {onCapturePrescription ? (
+                  {!canCapturePrescription ? null : onCapturePrescription ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -808,18 +816,27 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     Detach patient
                   </Button>
                 </div>
-                <p className="text-xs text-text-muted">
-                  {onCapturePrescription
-                    ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
-                  Capture does not replace pharmacist review or dispensing consent.
-                </p>
-                <CounterRxPhotoCapture
-                  key={patient.patientId}
-                  patientId={patient.patientId}
-                  patientName={patient.displayName}
-                  disabled={disabled || state === 'loading' || state === 'error'}
-                />
+                {canCapturePrescription ? (
+                  <>
+                    <p className="text-xs text-text-muted">
+                      {onCapturePrescription
+                        ? `Capture evidence for ${patient.displayName}.`
+                        : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                      Capture does not replace pharmacist review or dispensing consent.
+                    </p>
+                    <CounterRxPhotoCapture
+                      key={patient.patientId}
+                      patientId={patient.patientId}
+                      patientName={patient.displayName}
+                      disabled={disabled || state === 'loading' || state === 'error'}
+                    />
+                  </>
+                ) : (
+                  <p className="text-xs text-text-muted">
+                    Prescription capture needs a pharmacist or administrator. Ask one to capture the
+                    prescription for {patient.displayName}; this bill stays open.
+                  </p>
+                )}
               </div>
             </div>
           ) : (

@@ -14,13 +14,13 @@ export default async function PharmacyPrinterSettingsPage() {
   const ctx = await createTRPCContext();
   const canSave = ctx.session?.user?.role === 'ADMIN';
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Printer settings"
         description="Choose each branch's receipt paper — thermal 58 mm, thermal 80 mm or A4 — and print a test page."
       />
       <PharmacyPrinterSettingsConsole canSave={canSave} />
-    </main>
+    </div>
   );
 }

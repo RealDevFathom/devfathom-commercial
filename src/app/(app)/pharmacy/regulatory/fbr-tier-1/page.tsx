@@ -21,7 +21,7 @@ export default async function PharmacyFbrTier1Page() {
     initial = await caller.fbrTier1Status();
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy · FBR"
           heading="Am I Tier-1?"
@@ -33,18 +33,18 @@ export default async function PharmacyFbrTier1Page() {
             result.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy · FBR"
         heading="Am I Tier-1?"
         description="Questions about chain membership, location, electricity, bulk import and wholesale, card-payment POS, notified categories and turnover. The answers and the result are kept, and the check is asked again every twelve months."
       />
       <FbrTier1Check initial={initial} />
-    </main>
+    </div>
   );
 }

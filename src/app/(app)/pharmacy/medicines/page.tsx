@@ -17,7 +17,7 @@ export default async function MedicineReferencePage({
   const ctx = await createTRPCContext();
   if (ctx.session?.user.role !== 'ADMIN') {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy / catalog governance"
           heading="Medicine reference connectors"
@@ -29,11 +29,11 @@ export default async function MedicineReferencePage({
             reference assertions. No connector data has been exposed or changed.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {await StagedMedicineCatalogue({ searchParams, ctx })}
       <details className="rounded-md border border-border bg-surface-card p-6">
         <summary className="min-h-11 cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-ring">
@@ -41,6 +41,6 @@ export default async function MedicineReferencePage({
         </summary>
         <MedicineReferenceWorkbench health={medicineConnectorHealth()} />
       </details>
-    </main>
+    </div>
   );
 }

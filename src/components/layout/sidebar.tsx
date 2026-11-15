@@ -51,6 +51,7 @@ import {
   DoorOpen,
   MessageSquareText,
   Printer,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -729,6 +730,8 @@ interface SidebarProps {
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
   collapsible?: boolean;
+  /** Renders a close control in the header; used by the mobile drawer. */
+  onClose?: () => void;
 }
 
 export function Sidebar({
@@ -737,6 +740,7 @@ export function Sidebar({
   collapsed: controlledCollapsed,
   onCollapsedChange,
   collapsible = true,
+  onClose,
 }: SidebarProps = {}) {
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const collapsed = controlledCollapsed ?? localCollapsed;
@@ -799,6 +803,16 @@ export function Sidebar({
               Company workspace
             </span>
           </div>
+        )}
+        {onClose && !collapsed && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close menu"
+            className="studio-icon-button ms-auto"
+          >
+            <X className="h-5 w-5" />
+          </button>
         )}
       </div>
 
