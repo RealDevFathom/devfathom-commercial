@@ -12,7 +12,12 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceToday } from '@/lib/timezone';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateRange,
+  workspaceTimezone,
+  workspaceToday,
+} from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -515,11 +520,12 @@ export default async function PharmacyReportsPage({
               selected period. Stock signals, recommended orders and expiry exposure are current
               snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
               margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+              on postings from the start of the first selected date to the start of the day after
+              the last, on the {workspaceTimezone(timeZone)} clock. It may differ from sales grouped
+              by business date. Missing journal evidence is unavailable; posted totals do not
+              establish complete source or cost coverage. Supplier, ingredient and batch filters do
+              not apply to these KPI totals, the daily work pack or observed demand. Those panels
+              use branch/date scope only; current snapshots use branch scope only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (

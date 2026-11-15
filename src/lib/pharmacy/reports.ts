@@ -44,7 +44,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Gross margin',
     'Posted revenue less discounts and exact allocated lot cost, including return and reversal postings. Missing journal evidence is unknown; source completeness is not asserted.',
     'finance_journal_entries + finance_journal_lines',
-    'selected branches and UTC posting dates',
+    'selected branches and posting times within workspace dates',
     '/pharmacy/reports?section=sales',
     'reports:financial',
   ],
@@ -316,7 +316,8 @@ async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: read
 
 export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
-  // Business-date columns compare against `parsed`; event timestamps use the workspace day.
+  // Business-date columns compare against `parsed`; event and posting timestamps use the
+  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.
   const eventWindow = workspaceDateRange(filters.from, filters.to, filters.timeZone);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);
@@ -326,7 +327,7 @@ export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClien
       organizationId: Prisma.sql`current_setting('app.current_organization_id', true)`,
       branchIds: filters.branchIds,
     },
-    { from: parsed.from, to: parsed.to, by: 'branch' }
+    { from: eventWindow.from, to: eventWindow.to, by: 'branch' }
   );
   const [money, stock, lostDemand, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([

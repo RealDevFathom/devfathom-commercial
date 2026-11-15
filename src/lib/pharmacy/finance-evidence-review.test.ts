@@ -200,7 +200,9 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
     expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
     const byKey = Object.fromEntries(PHARMACY_METRIC_CONTRACT.map((m) => [m.key, m]));
     expect(byKey.salesMinor?.scope).toBe('selected branches and business dates');
-    expect(byKey.marginMinor?.scope).toBe('selected branches and UTC posting dates');
+    expect(byKey.marginMinor?.scope).toBe(
+      'selected branches and posting times within workspace dates'
+    );
     expect(byKey.refundsMinor?.source).toBe('pharmacy_refunds');
     expect(byKey.lostDemandEvents).toMatchObject({
       source: 'pharmacy_unfulfilled_demand_events',
@@ -351,7 +353,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(calls[9]?.sql).toContain("set_config('app.current_branch_id'");
   });
 
-  it('counts lost demand between workspace midnights while business dates stay calendar dates', async () => {
+  it('bounds lost demand and margin postings by workspace midnights; business dates stay calendar dates', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: 'Asia/Karachi' });
     // 1 March on the Karachi clock: 19:00 UTC on 28 February to 19:00 UTC on 1 March.
@@ -361,8 +363,12 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       new Date('2026-03-01T19:00:00.000Z'),
     ]);
     expect(calls[0]?.sql).toContain('s."businessDate">=');
+    expect(calls[0]?.sql).toContain('entry."occurredAt" >=');
+    // Business-date columns keep calendar dates; journal postings use the Karachi day.
     expect(isoDates(calls[0]?.values ?? [])).toEqual([
+      '2026-02-28T19:00:00.000Z',
       '2026-03-01T00:00:00.000Z',
+      '2026-03-01T19:00:00.000Z',
       '2026-03-02T00:00:00.000Z',
     ]);
   });
