@@ -88,3 +88,22 @@ describe('Settings notification preferences vertical gate', () => {
     }
   );
 });
+
+describe('Settings notification switches accessible names (#1233)', () => {
+  it('names every switch with its category and channel', () => {
+    renderFor('AGENCY');
+    const switches = screen.getAllByRole('switch');
+    expect(switches.length).toBeGreaterThan(0);
+    for (const control of switches) {
+      expect(control).toHaveAccessibleName(/ (in-app|email) notifications$/);
+    }
+    for (const label of AGENCY_CATEGORIES) {
+      expect(
+        screen.getByRole('switch', { name: `${label} in-app notifications` })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('switch', { name: `${label} email notifications` })
+      ).toBeInTheDocument();
+    }
+  });
+});

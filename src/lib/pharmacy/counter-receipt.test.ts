@@ -324,6 +324,12 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
 });
 
 describe('receiptTitle', () => {
+  it('names the issuing counter because numbers restart per counter', () => {
+    expect(receiptTitle({ ...receipt(), counterLabel: 'Front till' }, 'en')).toBe(
+      'Receipt 12 · Front till'
+    );
+  });
+
   it('names the number when settled and says so when not', () => {
     expect(receiptTitle(receipt(), 'en')).toBe('Receipt 12');
     expect(receiptTitle(receipt({ receiptNumber: null }), 'en')).toBe(
