@@ -58,7 +58,10 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(input.onFormatChange).toHaveBeenCalledWith('THERMAL_58');
   fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
   expect(input.onPrint).toHaveBeenCalledOnce();
-  expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
+  expect(
+    screen.getByText(/saved printer settings; a change here applies to this session only/i)
+  ).toBeTruthy();
+  expect(screen.getByText(/Printing cannot be confirmed here/i)).toBeTruthy();
 });
 
 it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {

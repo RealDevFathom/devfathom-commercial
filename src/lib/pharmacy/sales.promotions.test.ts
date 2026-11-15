@@ -12,6 +12,11 @@ vi.mock('./stock-ledger', async () => ({
   })),
 }));
 
+vi.mock('./voucher-scope', async () => ({
+  ...(await vi.importActual<typeof import('./voucher-scope')>('./voucher-scope')),
+  assertVoucherEligibleLine: vi.fn(),
+}));
+
 import { addSaleLine } from './sales';
 
 /**
@@ -187,6 +192,36 @@ describe('addSaleLine counter promotion hook (#727)', () => {
       discountKind: 'DISCOUNT',
       discountMinor: 30,
       approvedByUserId: 'manager-b',
+      promotionId: undefined,
+    });
+  });
+
+  it('does not stack a promotion on a redeemed voucher', async () => {
+    const db = {
+      ...counterDb(),
+      pharmacyVoucher: {
+        findFirst: vi.fn(async () => ({
+          id: 'voucher-a',
+          discountMinor: 40,
+          eligibleCategories: null,
+          issuedByUserId: 'manager-v',
+          validUntil: null,
+        })),
+      },
+    };
+
+    await addSaleLine(
+      db as never,
+      scope,
+      { ...lineInput, voucherId: 'voucher-a' },
+      { applyCounterPromotions: true }
+    );
+
+    expect(db.pharmacyPromotion.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountKind: 'VOUCHER',
+      discountMinor: 40,
+      voucherId: 'voucher-a',
       promotionId: undefined,
     });
   });

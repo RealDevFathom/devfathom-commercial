@@ -78,6 +78,8 @@ export type CounterReceipt = {
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;
+  /** Names the counter that issued the number; numbers restart per counter. */
+  counterLabel?: string | null;
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
@@ -262,9 +264,9 @@ export function formatReceiptDate(value: string | null): string {
 
 export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
-  return receipt.receiptNumber === null
-    ? strings.unissued
-    : `${strings.receipt} ${receipt.receiptNumber}`;
+  if (receipt.receiptNumber === null) return strings.unissued;
+  const base = `${strings.receipt} ${receipt.receiptNumber}`;
+  return receipt.counterLabel ? `${base} · ${receipt.counterLabel}` : base;
 }
 
 /**

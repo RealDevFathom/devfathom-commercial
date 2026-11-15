@@ -137,14 +137,20 @@ describe('marketing workflow authorization', () => {
   it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
     'denies nonowner %s before reading data',
     async (role) => {
-      await expect(caller(role).history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller(role).history(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: expect.stringContaining('owner account is required'),
+      });
       expect(mocks.organization).not.toHaveBeenCalled();
       expect(mocks.history).not.toHaveBeenCalled();
     }
   );
   it('denies the wrong package before reading data', async () => {
     mocks.licensed.mockReturnValue(false);
-    await expect(caller().history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().history(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('Pharmacy CRM license'),
+    });
     expect(mocks.organization).not.toHaveBeenCalled();
   });
   it('denies a foreign or inactive branch before mutation', async () => {
@@ -268,39 +274,43 @@ describe('growth current authorization', () => {
     );
     expect(mocks.growthHistory).toHaveBeenCalledTimes(1);
   });
-  it.each(['branch', 'actor', 'licence', 'lifecycle', 'reports:financial', 'reports:operational'] as const)(
-    'rejects %s revocation during model latency',
-    async (kind) => {
-      mocks.settings.mockResolvedValue({ askFathomEnabled: true });
-      mocks.growthBuild.mockResolvedValue({ facts: [] });
-      mocks.growthGenerate.mockImplementation(async () => {
-        if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
-        if (kind === 'actor') mocks.actor.mockResolvedValue(null);
-        if (kind === 'licence') mocks.licensed.mockReturnValue(false);
-        if (kind === 'reports:financial' || kind === 'reports:operational')
-          mocks.permissions.mockResolvedValue({
-            organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
-            permissionOverrides: [{ capability: kind, effect: 'DENY' }],
-          });
-        if (kind === 'lifecycle')
-          mocks.organization.mockResolvedValue({
-            id: 'org-a',
-            vertical: 'PHARMACY',
-            status: 'SUSPENDED',
-          });
-        return { status: 'UNAVAILABLE' };
-      });
-      await expect(
-        caller().generateGrowth({
-          ...input,
-          from: new Date('2026-09-01'),
-          cutoff: new Date('2026-10-01'),
-        })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
-      expect(mocks.growthSave).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    'branch',
+    'actor',
+    'licence',
+    'lifecycle',
+    'reports:financial',
+    'reports:operational',
+  ] as const)('rejects %s revocation during model latency', async (kind) => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.growthBuild.mockResolvedValue({ facts: [] });
+    mocks.growthGenerate.mockImplementation(async () => {
+      if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
+      if (kind === 'actor') mocks.actor.mockResolvedValue(null);
+      if (kind === 'licence') mocks.licensed.mockReturnValue(false);
+      if (kind === 'reports:financial' || kind === 'reports:operational')
+        mocks.permissions.mockResolvedValue({
+          organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+          permissionOverrides: [{ capability: kind, effect: 'DENY' }],
+        });
+      if (kind === 'lifecycle')
+        mocks.organization.mockResolvedValue({
+          id: 'org-a',
+          vertical: 'PHARMACY',
+          status: 'SUSPENDED',
+        });
+      return { status: 'UNAVAILABLE' };
+    });
+    await expect(
+      caller().generateGrowth({
+        ...input,
+        from: new Date('2026-09-01'),
+        cutoff: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
+    expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
 });
 describe('campaign generation and approval stay owner-only (DEV-31)', () => {
   const from = new Date('2026-10-01T00:00:00.000Z');

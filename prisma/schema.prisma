@@ -627,6 +627,9 @@ model Medicine {
   lasa                         Boolean                              @default(false)
   coldChain                    Boolean                              @default(false)
   saleable                     Boolean                              @default(false)
+  /// #718: shop-set retail price and category; NON_DRUG_RETAIL (FRONT_SHOP) items only.
+  retailPriceMinor             Int?
+  retailCategory               String?
   createdAt                    DateTime                             @default(now())
   updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
@@ -1140,6 +1143,7 @@ enum PharmacyDiscountKind {
   DISCOUNT
   PROMOTION
   COMPLIMENTARY
+  VOUCHER
 }
 
 enum PharmacyTenderType {
@@ -1709,6 +1713,8 @@ model PharmacySaleLine {
   unitCostMinor             Int
   discountKind              PharmacyDiscountKind?
   discountMinor             Int                              @default(0)
+  // DEV-27: the stored voucher a VOUCHER discount redeems (DB foreign key).
+  voucherId                 String?
   approvalPolicy            String?
   approvedByUserId          String?
   /// #727: the automatic offer applied, and its name as issued on the receipt.
@@ -1987,6 +1993,8 @@ model PharmacyCustomerOrder {
   city                  String?
   deliveryInstructions  String?
   runnerUserId          String?
+  /// DEV-63: route distance recorded at dispatch, for radius profitability.
+  deliveryDistanceMeters Int?
   reservationExpiresAt  DateTime
   counterSaleId         String?
   acceptedAt            DateTime?
@@ -2094,6 +2102,7 @@ model PharmacyStockLocation {
   discrepancies           PharmacyStockDiscrepancy[]
   deviceQuotas            PharmacyDeviceLotQuota[]
   temperatureLogs         PharmacyTemperatureLog[]
+  coldChainSensors        PharmacyColdChainSensor[]
   unidentifiedReturnHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
@@ -2106,11 +2115,40 @@ model PharmacyStockLocation {
 enum PharmacyTemperatureReadingSource {
   MANUAL
   IMPORT
+  /// DEV-82 — pushed live by an enrolled PharmacyColdChainSensor.
+  SENSOR
 }
 
-/// INV-05: immutable storage-zone temperature evidence. Staff entry and
-/// data-logger files append through the same source seam; live devices remain
-/// outside this boundary.
+/// DEV-82 — a live cold-chain sensor bound to exactly one storage zone. Only the
+/// SHA-256 hash of its push secret is stored; it is globally unique so the
+/// webhook resolves the sensor before it knows the tenant. Revocation is a
+/// state, never a deletion.
+model PharmacyColdChainSensor {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  stockLocationId   String
+  name              String
+  deviceIdentifier  String
+  secretHash        String               @unique(map: "pharmacy_cold_chain_sensors_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  lastReadingAt     DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_cold_chain_sensors_location_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_cold_chain_sensors_org_id_key")
+  @@unique([organizationId, deviceIdentifier], map: "pharmacy_cold_chain_sensors_org_device_key")
+  @@index([organizationId, branchId, stockLocationId], map: "pharmacy_cold_chain_sensors_org_branch_location_idx")
+  @@map("pharmacy_cold_chain_sensors")
+}
+
+/// INV-05: immutable storage-zone temperature evidence. Staff entry, data-logger
+/// files and (DEV-82) enrolled live sensors append through the same source seam.
 model PharmacyTemperatureLog {
   id               String                           @id @default(cuid())
   organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -5218,6 +5256,7 @@ enum RestaurantActivationAcknowledgementKind {
 model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyMessageLogs      PharmacyMessageLog[]
+  pharmacyWhatsAppAccountEvents PharmacyWhatsAppAccountEvent[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
   legalName                String
@@ -14304,16 +14343,39 @@ model PharmacyMarketingSegment {
   @@map("pharmacy_marketing_segments")
 }
 
+/// DEV-27: a voucher carries its eligible-category allowlist. Only non-drug
+/// categories are allowed (database check); the POS refuses it on drug lines.
+model PharmacyVoucher {
+  id                 String    @id @default(cuid())
+  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  code               String
+  name               String
+  body               String
+  discountMinor      Int
+  eligibleCategories String[]  @default(["NON_DRUG"])
+  active             Boolean   @default(true)
+  validUntil         DateTime?
+  issuedByUserId     String
+  createdAt          DateTime  @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_vouchers_org_id_key")
+  @@unique([organizationId, branchId, code], map: "pharmacy_vouchers_org_branch_code_key")
+  @@map("pharmacy_vouchers")
+}
+
 model PharmacyMarketingTemplate {
-  id               String                   @id @default(cuid())
-  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId         String
-  name             String
-  channel          PharmacyMarketingChannel
-  body             String
-  approvedByUserId String
-  approvedAt       DateTime
-  createdAt        DateTime                 @default(now())
+  id                  String                   @id @default(cuid())
+  organizationId      String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  name                String
+  channel             PharmacyMarketingChannel
+  body                String
+  approvedByUserId    String
+  approvedAt          DateTime
+  createdAt           DateTime                 @default(now())
+  /// #718: catalogue items this template promotes; NON_DRUG_RETAIL only (trigger-guarded).
+  featuredMedicineIds String[]                 @default([])
 
   @@unique([organizationId, id])
   @@map("pharmacy_marketing_templates")
@@ -15001,6 +15063,29 @@ model PharmacyMessageLog {
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+/// DEV-22: append-only evidence of Meta `account_update` and
+/// `phone_number_quality_update` webhooks for the tenant's WhatsApp sender.
+/// The latest row decides whether marketing sends are auto-paused.
+model PharmacyWhatsAppAccountEvent {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessAccountId String
+  field             String
+  event             String
+  severity          String
+  detail            String?
+  restrictedUntil   DateTime?
+  eventKey          String
+  occurredAt        DateTime
+  createdAt         DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, eventKey], map: "pharmacy_whatsapp_account_events_event_key")
+  @@index([organizationId, occurredAt(sort: Desc)], map: "pharmacy_whatsapp_account_events_recent_idx")
+  @@map("pharmacy_whatsapp_account_events")
 }
 
 /// Minimized consent evidence surviving tenant erasure for a bounded period.

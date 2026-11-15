@@ -44,6 +44,9 @@ DEFAULT_ORGANIZATION_ID=org_devfathom
 SEED_PASSWORD=<local-seed-password>
 ```
 
+`SEED_PASSWORD` is mandatory: the seed refuses to run without it (or `ADMIN_PASSWORD`). Set both
+`PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`, or the seed creates no platform operator.
+
 Generate local secrets with:
 
 ```bash
@@ -97,7 +100,9 @@ bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
-Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
+Prisma, the seed, and the `prisma/*.ts` admin scripts read variables already exported in the
+shell first, then `.env.local`, then `.env`, so `.env.local` alone is enough. If no database URL
+is found, they exit with an error naming the variable and the files searched. After migrate, grant the application role
 access to the objects the migration role owns:
 
 ```sql
@@ -117,6 +122,15 @@ and it sets the platform-admin tenant setting inside its transaction:
 ```bash
 bun run db:seed
 ```
+
+The seed is safe to re-run against a database it has already seeded. A second run finds the
+existing demo data, refreshes the seeded users' passwords from `SEED_PASSWORD`, and leaves the
+rest in place; `bun run db:reset` is not required first. The platform operator is committed in its
+own transaction before the tenant demo data, so a later seed failure cannot roll it back. The seed
+prints `Created platform operator` or `Updated platform operator`, or warns when
+`PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD` are unset. If a run still stops on a unique
+constraint, the database holds conflicting rows; reset it as shown in
+[Resetting local data](#resetting-local-data).
 
 `bun prisma/prepare-extensions.ts` must run **before** `prisma migrate deploy`. The trusted
 `btree_gist` and `pg_trgm` extensions install functions owned by PostgreSQL's extension bootstrap
@@ -370,10 +384,14 @@ are in [AI providers](./ai-providers.md).
 
 ## Resetting local data
 
-This deletes the local database contents and rebuilds them:
+This deletes the local database contents, reapplies every migration, and seeds again:
 
 ```bash
-bun run db:reset
+bun run db:reset && bun run db:seed
 ```
+
+Prisma 7 `migrate reset` no longer runs the configured seed, so `bun run db:reset` alone leaves an
+empty schema with no organization, users, or platform operator. Always follow it with
+`bun run db:seed`.
 
 Use it only when you are certain the configured database is disposable.

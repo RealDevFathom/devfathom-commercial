@@ -7,6 +7,7 @@ import { blockReasonFor, planAllocation, PharmacyInventoryError } from './invent
 import { priceFromLot } from './medicine';
 import { deliveryTotals } from './customer-delivery';
 import { saleTotalMinor } from './settlement';
+import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -36,6 +37,7 @@ export class PharmacyCustomerOrderError extends Error {
       | 'RUNNER_REQUIRED'
       | 'SALE_NOT_COMPLETED'
       | 'RESERVATION_UNAVAILABLE'
+      | 'INVALID_DELIVERY_DISTANCE'
   ) {
     super(reason);
   }
@@ -700,6 +702,8 @@ export async function transitionCustomerOrder(
     orderId: string;
     action: keyof typeof STAFF_TRANSITIONS | 'cancel' | 'expire';
     runnerUserId?: string;
+    /** DEV-63: route distance for a dispatch, kept for radius profitability. */
+    deliveryDistanceMeters?: number;
   }
 ) {
   await activateBranchScope(db, scope);
@@ -730,6 +734,15 @@ export async function transitionCustomerOrder(
     return readOrder(db, scope.organizationId, order.id);
   }
   const transition = STAFF_TRANSITIONS[input.action];
+  if (
+    input.deliveryDistanceMeters !== undefined &&
+    (input.action !== 'dispatch' ||
+      !Number.isSafeInteger(input.deliveryDistanceMeters) ||
+      input.deliveryDistanceMeters < 0 ||
+      input.deliveryDistanceMeters > MAX_DELIVERY_DISTANCE_METERS)
+  ) {
+    throw new PharmacyCustomerOrderError('INVALID_DELIVERY_DISTANCE');
+  }
   if (order.status !== transition.from) throw new PharmacyCustomerOrderError('INVALID_STATE');
   if (input.action === 'ready' && order.fulfillment !== 'COLLECT') {
     throw new PharmacyCustomerOrderError('INVALID_FULFILLMENT');
@@ -765,6 +778,7 @@ export async function transitionCustomerOrder(
       status: transition.to,
       [transition.at]: at,
       runnerUserId: input.action === 'dispatch' ? input.runnerUserId : undefined,
+      deliveryDistanceMeters: input.deliveryDistanceMeters,
     },
   });
   await appendOrderEvent(db, scope, order.id, transition.kind, transition.from, transition.to);
