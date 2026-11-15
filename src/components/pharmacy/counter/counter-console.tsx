@@ -1639,6 +1639,9 @@ function ScopedPharmacyCounterConsole({
                 original.input.amountMinor
               : 0,
         };
+        // The confirmed payment is settled: retire its attempt ID so the next
+        // payment of the same type and amount gets a fresh idempotency key.
+        paymentAttempt.current = null;
         setTenderOutcome(outcome);
         setTenderReadRequired(true);
         // This acknowledgement is historical; only fresh bill/receipt reads
