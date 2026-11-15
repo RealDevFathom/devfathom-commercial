@@ -14,12 +14,12 @@ import {
   PharmacyLoyaltyError,
 } from '@/lib/pharmacy/customer-loyalty';
 import {
-  currentLoyaltyProgram,
   DEFAULT_MANAGER_ADJUST_LIMIT_POINTS,
   LOYALTY_EARN_PRESETS,
   LOYALTY_MAX_EXPIRY_DAYS,
   LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS,
   listLoyaltyProgramVersions,
+  lockedLoyaltyProgram,
   percentRule,
   publishLoyaltyProgramVersion,
   stepRule,
@@ -278,24 +278,27 @@ export const pharmacyLoyaltyRouter = router({
   // DEV-764: owner or manager correction of a customer's points, with a written reason.
   adjustPoints: protectedProcedure.input(adjustPointsInput).mutation(async ({ ctx, input }) => {
     const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
-    // DEV-764: a manager may adjust up to the owner's ceiling; anything larger needs the owner.
-    const program = await currentLoyaltyProgram(ctx.db, scope.organizationId);
-    const managerLimit = program?.managerAdjustLimitPoints ?? DEFAULT_MANAGER_ADJUST_LIMIT_POINTS;
-    if (authority === 'MANAGER' && Math.abs(input.points) > managerLimit)
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: `Adjustments above ${managerLimit.toLocaleString('en-PK')} points need the owner.`,
-      });
     let result: Awaited<ReturnType<typeof adjustLoyaltyPoints>>;
+    let managerLimit = DEFAULT_MANAGER_ADJUST_LIMIT_POINTS;
     try {
-      result = await ctx.db.$transaction((tx) =>
-        adjustLoyaltyPoints(txDb(tx), scope, {
+      result = await ctx.db.$transaction(async (tx) => {
+        // DEV-764: a manager may adjust up to the owner's ceiling; anything larger needs the
+        // owner. Read under the program lock, in this transaction, so a concurrent owner save
+        // cannot change the ceiling under the adjustment.
+        const program = await lockedLoyaltyProgram(txDb(tx), scope.organizationId);
+        managerLimit = program?.managerAdjustLimitPoints ?? DEFAULT_MANAGER_ADJUST_LIMIT_POINTS;
+        if (authority === 'MANAGER' && Math.abs(input.points) > managerLimit)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `Adjustments above ${managerLimit.toLocaleString('en-PK')} points need the owner.`,
+          });
+        return adjustLoyaltyPoints(txDb(tx), scope, {
           customerId: input.customerId,
           points: input.points,
           reason: input.reason,
           idempotencyKey: input.idempotencyKey,
-        })
-      );
+        });
+      });
     } catch (error) {
       if (error instanceof PharmacyLoyaltyError) {
         if (error.reason === 'CUSTOMER_NOT_FOUND')

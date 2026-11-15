@@ -294,3 +294,60 @@ describe('DEV-764 points past expiry cannot be spent before the sweep runs', () 
     expect(findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-764 a spend between expiry and the sweep conserves points', () => {
+  it('never spends an expired lot, so redemptions stop at the unexpired points and the sweep expires the rest', async () => {
+    const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    // Lot A: 100 points, expired on day 10 and not yet swept. Lot B: 50 points, still valid.
+    const ledger: PharmacyPointsEntryForExpiry[] = [
+      entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(10) }),
+      entry('lot-b', 'EARN', 50, 2, { saleId: 'sale-b', expiresAt: day(90) }),
+    ];
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        count: vi.fn(
+          async () =>
+            ledger.filter(
+              (row) =>
+                row.kind === 'EARN' &&
+                !ledger.some((other) => other.kind === 'EXPIRY' && other.reversesEntryId === row.id)
+            ).length
+        ),
+        findMany: vi.fn(async () => [...ledger]),
+      },
+    };
+    let redeemed = 0;
+    for (const [attempt, onDay] of [11, 12, 13].entries()) {
+      const balance = ledger.reduce((sum, row) => sum + row.points, 0);
+      const spendable = balance - (await pointsPastExpiry(db as never, scope, day(onDay)));
+      if (spendable < 50) continue;
+      ledger.push(
+        entry(`redeem-${attempt}`, 'REDEEM', -50, onDay, {
+          saleId: `sale-r${attempt}`,
+          tenderId: `points-${attempt}`,
+        })
+      );
+      redeemed += 50;
+    }
+    // Only lot B's 50 points could be spent; lot A's 100 still expire in full.
+    expect(redeemed).toBe(50);
+    expect(planPharmacyLotExpiries(ledger, day(14))).toEqual([
+      { lotId: 'lot-a', programVersionId: 'program-1', points: 100 },
+    ]);
+    const balanceAfterSweep = ledger.reduce((sum, row) => sum + row.points, 0) - 100;
+    expect(balanceAfterSweep).toBe(0);
+  });
+
+  it('lets an earn reversal take back its own lot even after that lot expired', () => {
+    const plan = planPharmacyLotExpiries(
+      [
+        entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(10) }),
+        entry('lot-b', 'EARN', 50, 2, { saleId: 'sale-b', expiresAt: day(90) }),
+        entry('reverse-a', 'EARN_REVERSAL', -100, 11, { saleId: 'sale-a', tenderId: 'cash-a' }),
+      ],
+      day(12)
+    );
+    // The reversal removed lot A's points; the sweep must not remove them a second time.
+    expect(plan).toEqual([{ lotId: 'lot-a', programVersionId: 'program-1', points: 0 }]);
+  });
+});

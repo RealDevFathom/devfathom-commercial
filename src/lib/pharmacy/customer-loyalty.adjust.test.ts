@@ -7,6 +7,7 @@ import {
   adjustLoyaltyPoints,
   listLoyaltyRedemptions,
   readLoyaltyLiability,
+  restoreRefundedLoyaltyPoints,
 } from './customer-loyalty';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'manager-a' };
@@ -132,6 +133,8 @@ describe('DEV-764 liability and redemption history', () => {
   it('values every positive branch balance at the current redemption value', async () => {
     const db = {
       pharmacyLoyaltyPointsEntry: {
+        // No lot is past expiry and unswept.
+        findMany: vi.fn().mockResolvedValue([]),
         groupBy: vi.fn().mockResolvedValue([
           { branchId: 'branch-b', customerId: 'c1', _sum: { points: 40 } },
           { branchId: 'branch-a', customerId: 'c1', _sum: { points: 100 } },
@@ -163,6 +166,7 @@ describe('DEV-764 liability and redemption history', () => {
   it('values points at PKR 1 each before an owner sets a redemption value', async () => {
     const db = {
       pharmacyLoyaltyPointsEntry: {
+        findMany: vi.fn().mockResolvedValue([]),
         groupBy: vi
           .fn()
           .mockResolvedValue([{ branchId: 'branch-a', customerId: 'c1', _sum: { points: 7 } }]),
@@ -278,5 +282,139 @@ describe('DEV-764 a removal cannot take points already past expiry', () => {
       adjustLoyaltyPoints(db as never, scope, { ...adjustment, points: -10 })
     ).resolves.toMatchObject({ balanceAfter: 20 });
     expect(created).toHaveLength(1);
+  });
+});
+
+describe('DEV-764 refund restoration under the customer lock', () => {
+  it('locks the customer, then expires at once points restored into a lot already expired', async () => {
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000);
+    const created: Record<string, unknown>[] = [];
+    const history = [
+      {
+        id: 'earn-a',
+        kind: 'EARN',
+        points: 20,
+        saleId: 'sale-old',
+        tenderId: null,
+        programVersionId: 'program-1',
+        reversesEntryId: null,
+        expiresAt: at(30),
+        occurredAt: at(60),
+      },
+      {
+        id: 'redeem-a',
+        kind: 'REDEEM',
+        points: -20,
+        saleId: 'sale-a',
+        tenderId: 'points-a',
+        programVersionId: null,
+        reversesEntryId: null,
+        expiresAt: null,
+        occurredAt: at(40),
+      },
+      {
+        id: 'expiry-a',
+        kind: 'EXPIRY',
+        points: 0,
+        saleId: null,
+        tenderId: null,
+        programVersionId: 'program-1',
+        reversesEntryId: 'earn-a',
+        expiresAt: null,
+        occurredAt: at(30),
+      },
+    ];
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: null } }),
+        findMany: vi.fn(async () => [
+          ...history,
+          ...created.map((row) => ({
+            saleId: null,
+            tenderId: null,
+            programVersionId: null,
+            reversesEntryId: null,
+            expiresAt: null,
+            occurredAt: at(0.001),
+            ...row,
+          })),
+        ]),
+        create: vi.fn(async ({ data }) => {
+          const row = { id: `restore-${created.length}`, ...data };
+          created.push(row);
+          return row;
+        }),
+      },
+      pharmacyRefund: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 2_000 } }),
+      },
+    };
+    await restoreRefundedLoyaltyPoints(db as never, scope, {
+      refundId: 'refund-a',
+      tenderId: 'points-a',
+      saleId: 'sale-a',
+      customerId: 'customer-a',
+    });
+    expect(lockCustomerConsent).toHaveBeenCalledWith(db, 'org-a', 'customer-a');
+    expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyLoyaltyPointsEntry.create.mock.invocationCallOrder[0]!
+    );
+    expect(created).toEqual([
+      expect.objectContaining({ kind: 'REFUND', points: 20, tenderId: 'points-a' }),
+      expect.objectContaining({
+        kind: 'EXPIRY',
+        points: -20,
+        reversesEntryId: 'restore-0',
+        idempotencyKey: 'loyalty:expiry:restore-0',
+      }),
+    ]);
+  });
+});
+
+describe('DEV-764 liability leaves out points already past expiry', () => {
+  it('subtracts points of lots past expiry the sweep has not closed yet', async () => {
+    const lot = {
+      id: 'earn-old',
+      kind: 'EARN',
+      points: 30,
+      saleId: 'sale-old',
+      tenderId: null,
+      programVersionId: 'program-1',
+      reversesEntryId: null,
+      expiresAt: new Date(Date.now() - 86_400_000),
+      occurredAt: new Date(Date.now() - 40 * 86_400_000),
+    };
+    const findMany = vi
+      .fn()
+      // The customers with a due, unswept lot.
+      .mockResolvedValueOnce([{ branchId: 'branch-a', customerId: 'c1' }])
+      // That customer's ledger, read to value the expired lot.
+      .mockResolvedValueOnce([lot]);
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        findMany,
+        count: vi.fn().mockResolvedValue(1),
+        groupBy: vi.fn().mockResolvedValue([
+          { branchId: 'branch-a', customerId: 'c1', _sum: { points: 100 } },
+          { branchId: 'branch-a', customerId: 'c2', _sum: { points: 10 } },
+        ]),
+      },
+      pharmacyLoyaltyProgramVersion: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    expect(await readLoyaltyLiability(db as never, 'org-a')).toMatchObject({
+      points: 80,
+      customers: 2,
+      liabilityMinor: 8_000,
+    });
+    expect(findMany.mock.calls[0]![0]).toMatchObject({
+      where: {
+        organizationId: 'org-a',
+        kind: { in: ['EARN', 'KHATA_EARN'] },
+        closedBy: { none: { kind: 'EXPIRY' } },
+      },
+      distinct: ['branchId', 'customerId'],
+    });
   });
 });

@@ -55,6 +55,19 @@ export async function currentLoyaltyProgram(db: ScopedDb, organizationId: string
   });
 }
 
+/**
+ * DEV-764: the version in force, read under a shared lock on the program, inside the caller's
+ * transaction. A concurrent owner save (which takes the exclusive lock) either commits before
+ * this read or waits until the caller's transaction ends, so a redemption value or adjustment
+ * ceiling cannot change under a redemption or adjustment that is using it.
+ */
+export async function lockedLoyaltyProgram(db: ScopedDb, organizationId: string) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${`pharmacy-loyalty-program:${organizationId}`}, 0))`
+  );
+  return currentLoyaltyProgram(db, organizationId);
+}
+
 export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: string) {
   return db.pharmacyLoyaltyProgramVersion.findMany({
     where: { organizationId },

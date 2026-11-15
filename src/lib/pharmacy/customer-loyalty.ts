@@ -20,7 +20,11 @@ import {
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { expireStrandedRestoration, pointsPastExpiry } from './loyalty-expiry';
-import { currentLoyaltyProgram, hasLoyaltyEarningConsent } from './loyalty-program';
+import {
+  currentLoyaltyProgram,
+  hasLoyaltyEarningConsent,
+  lockedLoyaltyProgram,
+} from './loyalty-program';
 import type { LedgerScope } from './stock-ledger';
 
 /** Tenders that never earn at sale time: points themselves, and khata until it is paid. */
@@ -244,7 +248,7 @@ export async function redeemSalePoints(
     totalMinor - sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   // DEV-764: points redeem at the owner's current redemption value (PKR 1 before one is set),
   // and points already past their expiry date cannot be spent even before the sweep runs.
-  const program = await currentLoyaltyProgram(db, scope.organizationId);
+  const program = await lockedLoyaltyProgram(db, scope.organizationId);
   const pastExpiry = await pointsPastExpiry(
     db,
     { organizationId: scope.organizationId, branchId: scope.branchId, customerId: sale.customerId },
@@ -307,6 +311,10 @@ export async function restoreRefundedLoyaltyPoints(
   scope: LedgerScope,
   input: { refundId: string; tenderId: string; saleId: string; customerId: string }
 ) {
+  // DEV-764: the same per-customer lock as redemption, adjustment, void release and the expiry
+  // sweep, so restored points cannot land in a lot the sweep is closing at the same moment.
+  // The refund flow already holds the sale and tender rows, the same order as redemption.
+  await lockCustomerConsent(db, scope.organizationId, input.customerId);
   const key = `loyalty:refund:${input.refundId}`;
   const prior = await db.pharmacyLoyaltyPointsEntry.findUnique({
     where: {
@@ -705,9 +713,30 @@ export async function readLoyaltyLiability(db: ScopedDb, organizationId: string)
     currentLoyaltyProgram(db, organizationId),
   ]);
   const pointValueMinor = program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR;
+  // Points already past their expiry date are not owed, even before the sweep closes them.
+  const now = new Date();
+  const due = await db.pharmacyLoyaltyPointsEntry.findMany({
+    where: {
+      organizationId,
+      kind: { in: ['EARN', 'KHATA_EARN'] },
+      expiresAt: { lte: now },
+      closedBy: { none: { kind: 'EXPIRY' } },
+    },
+    distinct: ['branchId', 'customerId'],
+    select: { branchId: true, customerId: true },
+  });
+  const expired = new Map<string, number>();
+  for (const row of due)
+    expired.set(
+      `${row.branchId}:${row.customerId}`,
+      await pointsPastExpiry(db, { organizationId, ...row }, now)
+    );
   const byBranch = new Map<string, { points: number; customers: number }>();
   for (const row of balances) {
-    const points = Math.max(0, row._sum.points ?? 0);
+    const points = Math.max(
+      0,
+      (row._sum.points ?? 0) - (expired.get(`${row.branchId}:${row.customerId}`) ?? 0)
+    );
     if (points === 0) continue;
     const branch = byBranch.get(row.branchId) ?? { points: 0, customers: 0 };
     branch.points += points;

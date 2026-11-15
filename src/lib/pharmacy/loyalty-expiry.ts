@@ -24,6 +24,8 @@ export type PharmacyPointsEntryForExpiry = {
 type Lot = PharmacyPointsEntryForExpiry & { remaining: number };
 
 const isLot = (entry: { kind: string }) => (LOT_KINDS as readonly string[]).includes(entry.kind);
+const isPastExpiry = (lot: { expiresAt: Date | null }, at: Date) =>
+  lot.expiresAt !== null && lot.expiresAt.getTime() <= at.getTime();
 const chronological = (a: PharmacyPointsEntryForExpiry, b: PharmacyPointsEntryForExpiry) =>
   a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id);
 /** Points that come back from a points tender: a refund restoration or a void release. */
@@ -45,7 +47,8 @@ function linkedLots(entry: PharmacyPointsEntryForExpiry, lots: readonly Lot[]): 
  * DEV-764: replays one customer's ledger at one branch up to `at`, tracking what is left of
  * each earned lot. Same lot model as the restaurant planner (spending consumes the oldest lots
  * first; points given back by a positive adjustment never expire), with pharmacy rules:
- * - an expiry closes exactly its lot;
+ * - an expiry closes exactly its lot, and a spend never takes from a lot already past its
+ *   expiry date at the time of the spend (only an earn reversal takes back its own lot);
  * - a khata refund's reversal takes back its own khata collection lots, and a reversal larger
  *   than what is left of its own lots takes the rest from other lots, oldest first, so expiry
  *   never deducts reclaimed points a second time;
@@ -100,8 +103,12 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
     if (entry.points >= 0) continue;
     let consume = -entry.points;
     const portions: Array<{ lot: Lot; used: number }> = [];
-    for (const lot of [...linkedLots(entry, lots), ...lots]) {
+    const own = linkedLots(entry, lots);
+    for (const lot of [...own, ...lots]) {
       if (consume === 0) break;
+      // A spend never comes out of a lot already past its expiry date: those points are gone
+      // even before the sweep closes the lot. Only an earn reversal may take back its own lot.
+      if (!own.includes(lot) && isPastExpiry(lot, entry.occurredAt)) continue;
       const used = Math.min(lot.remaining, consume);
       if (used === 0) continue;
       lot.remaining -= used;

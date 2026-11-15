@@ -64,6 +64,13 @@ describe('DEV-764 a voided sale releases its points tender exactly once', () => 
     const create = vi.fn();
     const aggregate = vi.fn().mockResolvedValue({ _sum: { points: 20 } });
     const db = {
+      // The per-customer lock refund restoration takes (DEV-764).
+      $queryRaw: vi.fn(async (query: { strings: readonly string[] }) =>
+        query.strings.join('').includes('pharmacy_patients')
+          ? [{ id: 'patient-1' }]
+          : [{ patientId: 'patient-1' }]
+      ),
+      pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-1' }) },
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockResolvedValue(null),
         findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),

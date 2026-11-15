@@ -44,6 +44,16 @@ function earningFixture(
   };
 }
 
+/** DEV-764: refund restoration takes the per-customer lock; these reads let it succeed. */
+const customerLock = () => ({
+  $queryRaw: vi.fn(async (query: { strings: readonly string[] }) =>
+    query.strings.join('').includes('pharmacy_patients')
+      ? [{ id: 'patient-a' }]
+      : [{ patientId: 'patient-a' }]
+  ),
+  pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }) },
+});
+
 describe('CRM-L01 pharmacy loyalty', () => {
   it('links a retail customer only with current purpose-specific LOYALTY consent', async () => {
     const update = vi.fn();
@@ -201,6 +211,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
       return created;
     });
     const db = {
+      ...customerLock(),
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockImplementation(async () => created),
         findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
@@ -328,6 +339,7 @@ describe('DEV-764 expiry dates and value-true refund restoration', () => {
   it('restores refunded points at the value they were redeemed at', async () => {
     const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'offset-a', ...data }));
     const db = {
+      ...customerLock(),
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockResolvedValue(null),
         // 20 points redeemed at PKR 2.50 each for PKR 50.
