@@ -75,3 +75,26 @@ describe('#720 readLicenceRenewalReminders', () => {
     expect(licences).toMatchObject({ orderBy: { expiresAt: 'desc' }, take: 1 });
   });
 });
+
+describe('renewal reminders read the profile in force on the workspace day (DEV-298)', () => {
+  const dayStart = new Date('2026-10-21T00:00:00.000Z');
+  it.each([
+    ['00:30 PKT on the start day', new Date('2026-10-20T19:30:00.000Z'), dayStart],
+    [
+      '23:59 PKT the day before',
+      new Date('2026-10-20T18:59:00.000Z'),
+      new Date('2026-10-20T18:59:00.000Z'),
+    ],
+  ])('at %s', async (_label, instant, asOf) => {
+    const db = dbWith([]);
+    await readLicenceRenewalReminders(db as never, {
+      organizationId: 'org-1',
+      at: instant,
+      timeZone: 'Asia/Karachi',
+    });
+    expect(db.branchRegulatoryProfile.findMany.mock.calls[0]![0].where).toMatchObject({
+      effectiveFrom: { lte: asOf },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+    });
+  });
+});

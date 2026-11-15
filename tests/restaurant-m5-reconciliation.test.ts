@@ -59,6 +59,9 @@ let registerB: Device;
 const key = (label: string) => `${label}_${suffix}_${randomBytes(3).toString('hex')}`;
 const utcDate = (date: string) => new Date(`${date}T00:00:00.000Z`);
 
+/** Terminal order commands require the composer proof issued at unlock. */
+const composerProofs = new Map<string, string>();
+
 async function call(
   route: RouteModule,
   options: {
@@ -74,6 +77,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (options.secret) headers.authorization = `Bearer ${options.secret}`;
   if (options.session) headers['x-terminal-session'] = options.session;
+  const composerProof = options.session ? composerProofs.get(options.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (options.key) headers['idempotency-key'] = options.key;
   const url = new URL('https://tenant.test/api/restaurant/probe');
   for (const [name, value] of Object.entries(options.query ?? {})) {
@@ -103,6 +108,8 @@ async function unlock(device: Device): Promise<string> {
     body: { staffProfileId: ids.operator, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  composerProofs.set(session, unlocked.json.composerProof as string);
   return session;
 }
 
@@ -156,6 +163,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/cash/day/close/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
   ]);
   const [
     bill,
@@ -167,13 +175,23 @@ beforeAll(async () => {
     dayClose,
     establish,
     unlockRoute,
+    orderClose,
   ] = routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: devices.enrollDevice,
     hashOperatorCredential: credentials.hashOperatorCredential,
-    routes: { bill, tender, refund, drawerOpen, drawerMovement, drawerClose, dayClose },
+    routes: {
+      bill,
+      tender,
+      refund,
+      drawerOpen,
+      drawerMovement,
+      drawerClose,
+      dayClose,
+      orderClose,
+    },
     terminal: { establish, unlock: unlockRoute },
   };
 
@@ -376,6 +394,25 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
     });
     expect(refunded.status).toBe(200);
     eqMoney(refunded.json.amount, '4.00');
+
+    // Day close refuses active orders; finish each paid order as the terminal does.
+    for (const [device, session, orderId] of [
+      [registerA, sessionA, orderIds[0]!],
+      [registerB, sessionB, orderIds[1]!],
+      [registerB, sessionB, orderIds[2]!],
+    ] as const) {
+      const closedOrder = await call(deps.routes.orderClose, {
+        secret: device.secret,
+        session,
+        key: key('order_close'),
+        body: { orderId },
+      });
+      expect(closedOrder.status, JSON.stringify(closedOrder.json)).toBe(200);
+    }
+    const orderStatuses = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.findMany({ where: { id: { in: orderIds } }, select: { status: true } })
+    );
+    expect(orderStatuses.map((order) => order.status)).toEqual(['CLOSED', 'CLOSED', 'CLOSED']);
 
     for (const [kind, amount] of [
       ['PAID_IN', '3.00'],
