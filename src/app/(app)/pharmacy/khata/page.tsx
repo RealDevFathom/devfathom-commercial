@@ -128,7 +128,7 @@ export default async function KhataPage({
   const data = await loadKhata(text);
   if (data.state === 'error')
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard
           title={data.denied ? 'Khata access required' : 'Khata unavailable'}
@@ -143,16 +143,16 @@ export default async function KhataPage({
             Reset selection and retry
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   if (data.state === 'empty')
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard title="No active branch" titleLevel={2}>
           <p>An owner must activate a pharmacy branch before its Khata can be viewed.</p>
         </SectionCard>
-      </main>
+      </div>
     );
 
   const { branches, branchId, accounts, truncated } = data;
@@ -163,7 +163,7 @@ export default async function KhataPage({
   const overdueCount = owing.filter((account) => account.oldestOverdueAt).length;
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       {notice && (
         <p
@@ -323,6 +323,6 @@ export default async function KhataPage({
       <Link className={linkClass} href="/pharmacy/counter">
         Open counter
       </Link>
-    </main>
+    </div>
   );
 }

@@ -95,7 +95,7 @@ export default async function PharmacyMarketingPage({
   }
   if (failed) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {heading}
         <SectionCard
           title={denied ? 'Marketing access required' : 'Marketing unavailable'}
@@ -114,17 +114,17 @@ export default async function PharmacyMarketingPage({
             Reload marketing
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   if (!workspace)
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {heading}
         <SectionCard title="No active branches" titleLevel={2}>
           Activate a pharmacy branch before preparing campaigns.
         </SectionCard>
-      </main>
+      </div>
     );
   const {
     branches,
@@ -141,7 +141,7 @@ export default async function PharmacyMarketingPage({
   const zoneLabel = timeZoneLabel(zone);
   const recent = recentCompletedDays(zone, 7);
   return (
-    <main key={branchId} className="min-w-0 space-y-6">
+    <div key={branchId} className="min-w-0 space-y-6">
       {heading}
       <SectionCard title="Workspace" titleLevel={2}>
         <form action="/pharmacy/marketing" className="flex flex-wrap items-end gap-4">
@@ -589,6 +589,6 @@ export default async function PharmacyMarketingPage({
           </MarketingActionForm>
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }

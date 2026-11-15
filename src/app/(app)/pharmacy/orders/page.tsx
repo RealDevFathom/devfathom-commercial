@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: 'Pharmacy orders' };
 
 export default function PharmacyOrdersPage() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Customer orders"
@@ -16,6 +16,6 @@ export default function PharmacyOrdersPage() {
       />
       <CustomerPortalPanel />
       <PharmacyCustomerOrderingConsole />
-    </main>
+    </div>
   );
 }

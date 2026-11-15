@@ -50,7 +50,7 @@ export default async function RepeatPurchasingPage({
           : 'Report unavailable. The complete report could not be generated. Retry or select a single branch using the filters; no partial rates are shown.';
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Repeat purchasing"
@@ -173,6 +173,6 @@ export default async function RepeatPurchasingPage({
         <p className="text-sm text-text-body">{REPEAT_DEFINITION}</p>
         <p className="mt-3 text-sm text-text-muted">{REPEAT_LIMITS}</p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

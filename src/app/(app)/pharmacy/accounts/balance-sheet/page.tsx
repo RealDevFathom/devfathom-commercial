@@ -27,7 +27,7 @@ export default async function PharmacyBalanceSheetPage({
   const ctx = await tenantContext();
   if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN') {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy accounts"
           heading="Balance sheet"
@@ -38,7 +38,7 @@ export default async function PharmacyBalanceSheetPage({
             Administrator financial-report access is required.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -55,7 +55,7 @@ export default async function PharmacyBalanceSheetPage({
       : branches.find(({ id }) => id === query.branch);
   if (!branch) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy accounts"
           heading="Balance sheet"
@@ -68,7 +68,7 @@ export default async function PharmacyBalanceSheetPage({
               : 'The requested branch is not an active branch in your tenant. No financial rows are shown.'}
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -82,7 +82,7 @@ export default async function PharmacyBalanceSheetPage({
       ? requestedCutoff
       : today;
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Balance sheet"
@@ -93,6 +93,6 @@ export default async function PharmacyBalanceSheetPage({
         branchId={branch.id}
         cutoff={cutoff}
       />
-    </main>
+    </div>
   );
 }

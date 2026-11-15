@@ -111,8 +111,9 @@ describe('DEV-730 Khata page', () => {
   });
 
   it('has a textual loading state', () => {
-    render(<KhataLoading />);
-    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    const { container } = render(<KhataLoading />);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Loading branch balances');
   });
 });

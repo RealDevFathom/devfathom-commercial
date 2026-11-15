@@ -79,7 +79,7 @@ export default async function PharmacyFinancePage({
   const ctx = await tenantContext();
   if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN') {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Finance"
@@ -90,7 +90,7 @@ export default async function PharmacyFinancePage({
             An organization administrator must perform financial postings and approve tax versions.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   const organizationId = ctx.entitlements.organizationId;
@@ -102,7 +102,7 @@ export default async function PharmacyFinancePage({
   const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
   if (!branch) {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Finance"
@@ -113,7 +113,7 @@ export default async function PharmacyFinancePage({
             Finish pharmacy onboarding before recording branch finance.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   const caller = pharmacyFinanceRouter.createCaller(ctx);
@@ -122,7 +122,7 @@ export default async function PharmacyFinancePage({
     workspace = await caller.workspace({ branchId: branch.id });
   } catch {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Finance"
@@ -133,7 +133,7 @@ export default async function PharmacyFinancePage({
             Refresh the page. No financial data was changed.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -284,7 +284,7 @@ export default async function PharmacyFinancePage({
   const ledgerTo =
     query.ledgerTo ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Finance"
@@ -935,6 +935,6 @@ export default async function PharmacyFinancePage({
           </div>
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }

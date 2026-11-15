@@ -7,13 +7,13 @@ export const metadata: Metadata = { title: 'DRAP recall alerts' };
 
 export default function DrapRecallAlertsPage() {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy / inventory"
         heading="DRAP recall alerts"
         description="Confirm or dismiss each alert parsed from DRAP's recall pages. Stock is quarantined only after a person confirms."
       />
       <DrapRecallReview />
-    </main>
+    </div>
   );
 }
