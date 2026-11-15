@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   invoiceUpdate: vi.fn(),
   paymentAggregate: vi.fn(),
   paymentCreate: vi.fn(),
+  ledgerCreate: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
 }));
@@ -34,6 +35,7 @@ function transactionClient() {
     $queryRaw: mocks.queryRaw,
     invoice: { findUnique: mocks.invoiceFindUnique, update: mocks.invoiceUpdate },
     payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
+    transaction: { create: mocks.ledgerCreate },
   };
 }
 
@@ -69,6 +71,7 @@ describe('finance.addPayment', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 40 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 60 });
     mocks.invoiceUpdate.mockResolvedValue({});
+    mocks.ledgerCreate.mockResolvedValue({ id: 'transaction-1' });
     mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
     mocks.transaction.mockImplementation(
       async (callback: (transaction: ReturnType<typeof transactionClient>) => unknown) =>
@@ -169,6 +172,69 @@ describe('finance.addPayment', () => {
     expect(mocks.invoiceUpdate).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
     expect(mocks.emitEvent).not.toHaveBeenCalled();
+  });
+
+  // DEV-166: Finance "Monthly revenue" reads INCOME transactions, so a paid
+  // invoice must post its payment to the ledger or revenue stays at $0.
+  it('posts a paid $100 invoice as INCOME so monthly revenue includes it', async () => {
+    const paidAt = new Date('2026-10-22T14:50:00.000Z');
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: 'invoice-6',
+      invoiceNumber: 'INV-2026-006',
+      status: 'SENT',
+      total: 100,
+      currency: 'USD',
+      clientId: 'client-1',
+      projectId: 'project-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: null } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-6', amount: 100, paidAt });
+
+    const result = await caller().addPayment({ invoiceId: 'invoice-6', amount: 100 });
+
+    expect(result).toMatchObject({ amountPaid: 100, balance: 0, status: 'PAID' });
+    expect(mocks.ledgerCreate).toHaveBeenCalledOnce();
+    expect(mocks.ledgerCreate).toHaveBeenCalledWith({
+      data: {
+        type: 'INCOME',
+        amount: 100,
+        currency: 'USD',
+        description: 'Payment for INV-2026-006',
+        clientId: 'client-1',
+        projectId: 'project-1',
+        paymentId: 'payment-6',
+        date: paidAt,
+      },
+    });
+    expect(mocks.paymentCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ledgerCreate.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('posts each partial payment as INCOME for the amount received', async () => {
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-2', amount: 50 });
+
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 50 });
+
+    expect(mocks.ledgerCreate).toHaveBeenCalledOnce();
+    expect(mocks.ledgerCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'INCOME',
+        amount: 50,
+        currency: 'USD',
+        paymentId: 'payment-2',
+        projectId: null,
+        date: expect.any(Date),
+      }),
+    });
+  });
+
+  it('does not post revenue when an overpayment is rejected', async () => {
+    await expect(caller().addPayment({ invoiceId: 'invoice-1', amount: 61 })).rejects.toMatchObject(
+      { code: 'BAD_REQUEST' }
+    );
+
+    expect(mocks.ledgerCreate).not.toHaveBeenCalled();
   });
 
   it.each(['DRAFT', 'PAID', 'CANCELLED'] as const)(

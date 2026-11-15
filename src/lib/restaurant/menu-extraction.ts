@@ -21,7 +21,7 @@
  *  3. NO VENDOR LOCK. `MenuExtractionAdapter` is the only contract the domain
  *     depends on. `FIXTURE` makes the acceptance battery deterministic and
  *     offline; `VISION` rides the existing `@/lib/ai/provider` seam, so switching
- *     Azure -> Vertex -> Groq is an env change, not a code change.
+ *     providers is an env change, not a code change.
  */
 
 const MAX_TEXT_LENGTH = 2_000;

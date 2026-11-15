@@ -7,6 +7,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import { readPharmacyAdviceAccess } from '@/lib/pharmacy/advice-access';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { resolveBranch } from './_components/branch-scope';
 import {
@@ -233,6 +234,8 @@ export default async function PharmacyPurchasingPage({
     },
   ];
   const unmet = gates.filter((gate) => !gate.met);
+  // DEV-594: reorder advice belongs where orders are raised, not only under Reports.
+  const advice = await readPharmacyAdviceAccess(ctx);
 
   return (
     <main className="min-w-0 space-y-6">
@@ -334,6 +337,27 @@ export default async function PharmacyPurchasingPage({
             reloads purchasing records; it does not submit orders, returns or credits.
           </p>
           <ReadRetry branchId={branchId} />
+        </SectionCard>
+      ) : null}
+
+      {advice.reorder ? (
+        <SectionCard
+          eyebrow="AI advice · Advisory only"
+          title="Reorder advice"
+          titleLevel={2}
+          actions={
+            <Link
+              className="inline-flex min-h-11 shrink-0 items-center rounded-[var(--radius-sm)] border border-border-default px-4 text-sm font-medium text-text-strong hover:bg-muted focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
+              href={`/pharmacy/reports/replenishment${branchId ? `?${new URLSearchParams({ branch: branchId })}` : ''}`}
+            >
+              Open reorder advice
+            </Link>
+          }
+        >
+          <p className="max-w-3xl text-sm text-text-muted">
+            Compare each medicine&apos;s recorded use with stock on hand before you draft a
+            requisition. The advice never raises an order on its own; you decide what to buy.
+          </p>
         </SectionCard>
       ) : null}
 

@@ -2,20 +2,31 @@ import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { formatUtcInstant } from '@/lib/utc-instant';
 import { bundleProposalWhatsAppText } from '@/lib/pharmacy/basket-analysis';
 import type { listBasketInsights } from '@/lib/pharmacy/basket-workflow';
+import {
+  localDateTimeLabel,
+  recentCompletedDays,
+  timeZoneLabel,
+} from '@/lib/pharmacy/marketing-dates';
+import { workspaceTimezone } from '@/lib/timezone';
 import { MarketingActionForm } from './action-form';
 
 export function BasketPanel({
   branchId,
   history,
   unavailable,
+  timeZone,
 }: {
   branchId: string;
   history: Awaited<ReturnType<typeof listBasketInsights>> | null;
   unavailable: boolean;
+  /** Workspace zone: periods and schedules are entered as local days and times. */
+  timeZone?: string;
 }) {
+  const zone = workspaceTimezone(timeZone);
+  const zoneLabel = timeZoneLabel(zone);
+  const recent = recentCompletedDays(zone, 7);
   return (
     <SectionCard title="Basket bundle proposals" titleLevel={2}>
       <div className="space-y-6">
@@ -34,69 +45,102 @@ export function BasketPanel({
           branchId={branchId}
           operation="basket-generate"
           label="Find bundle proposals"
+          timeZone={zone}
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="text-sm">
-              Basket period start (UTC)
-              <Input name="from" type="date" required className="mt-1 min-h-11" />
+              First day
+              <Input
+                name="from"
+                type="date"
+                required
+                defaultValue={recent.firstDay}
+                max={recent.lastDay}
+                aria-describedby="basket-period-help"
+                className="mt-1 min-h-11"
+              />
             </label>
             <label className="text-sm">
-              Basket exclusive cutoff (UTC)
-              <Input name="cutoff" type="date" required className="mt-1 min-h-11" />
+              Last day
+              <Input
+                name="lastDay"
+                type="date"
+                required
+                defaultValue={recent.lastDay}
+                max={recent.lastDay}
+                aria-describedby="basket-period-help"
+                className="mt-1 min-h-11"
+              />
             </label>
-            {[
-              {
-                name: 'minimumPairCount',
-                label: 'Minimum paired receipts',
-                value: 2,
-                min: 1,
-                step: 1,
-              },
-              {
-                name: 'minimumSupport',
-                label: 'Minimum support (fraction of all receipts)',
-                value: 0.3,
-                min: 0,
-                max: 1,
-                step: 0.01,
-              },
-              {
-                name: 'minimumConfidence',
-                label: 'Minimum confidence (stronger direction)',
-                value: 0.5,
-                min: 0,
-                max: 1,
-                step: 0.01,
-              },
-              { name: 'minimumLift', label: 'Minimum lift', value: 1, min: 0, step: 0.01 },
-              {
-                name: 'maximumProposals',
-                label: 'Maximum proposals',
-                value: 3,
-                min: 1,
-                max: 3,
-                step: 1,
-              },
-            ].map((field) => (
-              <label key={field.name} className="text-sm">
-                {field.label}
-                <Input
-                  name={field.name}
-                  type="number"
-                  required
-                  defaultValue={field.value}
-                  min={field.min}
-                  max={field.max}
-                  step={field.step}
-                  className="mt-1 min-h-11"
-                />
-              </label>
-            ))}
           </div>
-          <p className="text-sm text-text-muted">
-            Use one to ninety completed days and at most 5000 receipts. Thresholds are adjustable;
-            no AI provider is required.
+          <p id="basket-period-help" className="text-sm text-text-muted">
+            Pre-filled with the last 7 full days. Choose 1 to 90 full days ending yesterday or
+            earlier, in {zoneLabel}, with at most 5000 receipts. No AI service is required.
           </p>
+          <details className="border-t border-border-subtle pt-4">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+              Advanced matching rules (optional)
+            </summary>
+            <p className="mt-2 text-sm text-text-muted">
+              Standard rules are already filled in. Relax them only if no pairs are found.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {[
+                {
+                  name: 'minimumPairCount',
+                  label: 'Bought together on at least this many receipts',
+                  value: 2,
+                  min: 1,
+                  step: 1,
+                },
+                {
+                  name: 'minimumSupport',
+                  label: 'Share of all receipts with both items (0–1)',
+                  value: 0.3,
+                  min: 0,
+                  max: 1,
+                  step: 0.01,
+                },
+                {
+                  name: 'minimumConfidence',
+                  label: 'How often buyers of one item also buy the other (0–1)',
+                  value: 0.5,
+                  min: 0,
+                  max: 1,
+                  step: 0.01,
+                },
+                {
+                  name: 'minimumLift',
+                  label: 'Bought together more often than by chance (1 = same as chance)',
+                  value: 1,
+                  min: 0,
+                  step: 0.01,
+                },
+                {
+                  name: 'maximumProposals',
+                  label: 'Number of bundle ideas (1–3)',
+                  value: 3,
+                  min: 1,
+                  max: 3,
+                  step: 1,
+                },
+              ].map((field) => (
+                <label key={field.name} className="text-sm">
+                  {field.label}
+                  <Input
+                    name={field.name}
+                    type="number"
+                    required
+                    defaultValue={field.value}
+                    min={field.min}
+                    max={field.max}
+                    step={field.step}
+                    className="mt-1 min-h-11"
+                  />
+                </label>
+              ))}
+            </div>
+          </details>
         </MarketingActionForm>
         {history && !history.insights.length && (
           <p className="text-sm">No saved bundle analyses. Choose a completed period above.</p>
@@ -104,14 +148,14 @@ export function BasketPanel({
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
             <p className="break-words text-sm text-text-muted">
-              {formatUtcInstant(insight.snapshot.from)} to{' '}
-              {formatUtcInstant(insight.snapshot.cutoff)} (exclusive). Saved{' '}
-              {formatUtcInstant(insight.createdAt)}.
+              {localDateTimeLabel(new Date(insight.snapshot.from), zone)} to{' '}
+              {localDateTimeLabel(new Date(insight.snapshot.cutoff), zone)} (exclusive). Saved{' '}
+              {localDateTimeLabel(insight.createdAt, zone)} ({zoneLabel}).
             </p>
             {!insight.output.recommendations.length && (
               <p className="text-sm">
-                No eligible pairs met these thresholds. Adjust the period or thresholds and try
-                again.
+                No eligible pairs met these rules. Try a longer period or relax the advanced
+                matching rules.
               </p>
             )}
             {insight.output.recommendations.map((proposal, index) => {
@@ -163,12 +207,13 @@ export function BasketPanel({
                         operation="basket-review"
                         label="Approve bundle and create draft"
                         disabled={unavailable}
+                        timeZone={zone}
                       >
                         <input type="hidden" name="insightId" value={insight.id} />
                         <input type="hidden" name="recommendation" value={index} />
                         <input type="hidden" name="decision" value="APPROVE" />
                         <label className="block text-sm">
-                          Bundle campaign schedule (UTC)
+                          Bundle campaign send date and time ({zoneLabel})
                           <Input
                             name="scheduledAt"
                             type="datetime-local"

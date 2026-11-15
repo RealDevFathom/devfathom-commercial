@@ -5,7 +5,8 @@ import { TRPCError } from '@trpc/server';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { previewWhatsAppCost } from '@/lib/pharmacy/whatsapp/rate-card';
-import { utcInstantFromInput } from '@/lib/utc-instant';
+import { localDateTime, localDayAfter, localDayStart } from '@/lib/pharmacy/marketing-dates';
+import { workspaceTimezone } from '@/lib/timezone';
 
 function exclusionsText(exclusions: Record<string, number>) {
   return (
@@ -19,6 +20,16 @@ export async function marketingAction(
   form: FormData
 ): Promise<{ error: boolean; message: string; campaignId?: string }> {
   const text = (key: string) => String(form.get(key) ?? '');
+  // Owners enter calendar days and local times in the workspace zone; the server still
+  // validates the resulting instants (completed period, bounded length, future schedule).
+  const zone = workspaceTimezone(text('timeZone'));
+  const period = () => ({
+    from: localDayStart(text('from'), zone),
+    cutoff: form.has('lastDay')
+      ? localDayAfter(text('lastDay'), zone)
+      : localDayStart(text('cutoff'), zone),
+  });
+  const scheduledAt = () => localDateTime(text('scheduledAt'), zone);
   try {
     // Every invocation resolves the current session, tenant, license and branch.
     const caller = pharmacyMarketingRouter.createCaller(await createTRPCContext());
@@ -30,8 +41,7 @@ export async function marketingAction(
       case 'basket-generate': {
         const result = await caller.generateBaskets({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          ...period(),
           config: {
             minimumPairCount: Number(text('minimumPairCount')),
             minimumSupport: Number(text('minimumSupport')),
@@ -55,10 +65,7 @@ export async function marketingAction(
           recommendation: Number(text('recommendation')),
           decision,
           ...(decision === 'APPROVE'
-            ? {
-                pinCredential: text('pin'),
-                scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
-              }
+            ? { pinCredential: text('pin'), scheduledAt: scheduledAt() }
             : {}),
         });
         if ('blocked' in result && typeof result.blocked === 'string')
@@ -72,13 +79,18 @@ export async function marketingAction(
       case 'growth-generate': {
         const result = await caller.generateGrowth({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          ...period(),
         });
         message =
           result.status === 'READY'
             ? 'Insights saved. Review evidence before creating a draft.'
-            : `Insight status: ${result.status}. ${result.failureCode ?? ''}. Manual campaigns remain available.`;
+            : result.status === 'INSUFFICIENT_DATA'
+              ? 'Not enough sales evidence in this period after privacy rules. Try a longer period. Manual campaigns remain available.'
+              : result.failureCode === 'CONFIGURATION'
+                ? "AI suggestions aren't set up yet. Contact DevFathom support to connect the AI service. Manual campaigns remain available."
+                : result.status === 'UNAVAILABLE'
+                  ? 'AI suggestions are not available right now. Try again later. Manual campaigns remain available.'
+                  : 'No suggestion could be generated from this evidence. Manual campaigns remain available.';
         break;
       }
       case 'growth-review': {
@@ -98,7 +110,7 @@ export async function marketingAction(
                 edit: {
                   name: text('name'),
                   templateId: text('templateId'),
-                  scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
+                  scheduledAt: scheduledAt(),
                 },
               }),
         });
@@ -129,7 +141,7 @@ export async function marketingAction(
           branchId,
           name: text('name'),
           templateId: text('templateId'),
-          scheduledAt: new Date(utcInstantFromInput(text('scheduledAt'))),
+          scheduledAt: scheduledAt(),
           definition: {
             version: 1,
             all: [{ field, operator: 'gte', value: Number(text('threshold')) }],
@@ -188,8 +200,7 @@ export async function marketingAction(
       case 'attribution': {
         const result = await caller.attributeReceipts({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          ...period(),
         });
         message = `Estimated receipt links: ${result.created} saved, ${result.eligible} eligible. Sandbox delivery never qualifies. Message cost is unavailable.`;
         break;

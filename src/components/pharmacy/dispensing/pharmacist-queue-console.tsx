@@ -1,11 +1,12 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -91,7 +92,17 @@ export function PharmacistQueueConsole() {
       ) : null}
       {queue.data?.items.length === 0 ? (
         <WorkspaceState title="Queue clear">
-          No medicine lines are waiting for pharmacist review.
+          <p>No medicine lines are waiting for pharmacist review.</p>
+          <p className="mt-2">
+            Review records link prescription lines to sale lines. Controlled sales recorded at the
+            Counter create a review record here.
+          </p>
+          <Link
+            href="/pharmacy/counter"
+            className={buttonVariants({ variant: 'outline', size: 'touch', className: 'mt-4' })}
+          >
+            Go to Counter
+          </Link>
         </WorkspaceState>
       ) : null}
       {queue.data && active ? (

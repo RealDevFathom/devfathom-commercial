@@ -4,7 +4,6 @@ const sdk = vi.hoisted(() => {
   const credentialProvider = vi.fn();
   return {
     select,
-    azure: vi.fn(() => select),
     google: vi.fn(() => select),
     vertex: vi.fn(() => select),
     groq: vi.fn(() => select),
@@ -13,8 +12,6 @@ const sdk = vi.hoisted(() => {
     bedrock: vi.fn(() => select),
     awsCredentialChain: vi.fn(() => credentialProvider),
     credentialProvider,
-    credential: vi.fn(function () {}),
-    token: vi.fn(),
     generate: vi.fn(),
     stream: vi.fn(),
     fetch: vi.fn(),
@@ -23,15 +20,10 @@ const sdk = vi.hoisted(() => {
 vi.mock('@ai-sdk/amazon-bedrock', () => ({ createAmazonBedrock: sdk.bedrock }));
 vi.mock('@ai-sdk/anthropic', () => ({ createAnthropic: sdk.anthropic }));
 vi.mock('@ai-sdk/openai', () => ({ createOpenAI: sdk.openai }));
-vi.mock('@ai-sdk/azure', () => ({ createAzure: sdk.azure }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
 vi.mock('@ai-sdk/groq', () => ({ createGroq: sdk.groq }));
 vi.mock('@aws-sdk/credential-providers', () => ({ fromNodeProviderChain: sdk.awsCredentialChain }));
-vi.mock('@azure/identity', () => ({
-  DefaultAzureCredential: sdk.credential,
-  getBearerTokenProvider: sdk.token,
-}));
 vi.mock('ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('ai')>()),
   generateText: sdk.generate,
@@ -50,7 +42,6 @@ import {
 import { generateGrowthRecommendations, type GrowthInput } from './growth-recommendations';
 const inert = {
   AI_MODEL: 'inert-model',
-  AZURE_OPENAI_RESOURCE_NAME: 'inert-resource',
   GROQ_API_KEY: 'inert-test-key',
   GOOGLE_GENERATIVE_AI_API_KEY: 'inert-test-key',
   GOOGLE_VERTEX_API_KEY: 'inert-test-key',
@@ -115,7 +106,7 @@ describe('shared provider gate with real factory boundary', () => {
     expect(readAIAvailability(env).available).toBe(false);
     expect(() => createAIModel(env)).toThrow(AIUnavailableError);
   });
-  it.each(['azure', 'groq', 'google', 'vertex'] as const)(
+  it.each(['groq', 'google', 'vertex'] as const)(
     'preserves configured %s selection via fake SDK',
     (provider) => {
       expect(createAIModel({ ...inert, AI_PROVIDER: ` ${provider.toUpperCase()} ` })).toMatchObject(
@@ -123,7 +114,6 @@ describe('shared provider gate with real factory boundary', () => {
       );
       expect(sdk[provider]).toHaveBeenCalledOnce();
       expect(sdk.select).toHaveBeenCalledWith('inert-model');
-      expect(sdk.credential).toHaveBeenCalledTimes(provider === 'azure' ? 1 : 0);
       expect(sdk.fetch).not.toHaveBeenCalled();
     }
   );
@@ -201,7 +191,12 @@ describe('shared provider gate with real factory boundary', () => {
       'bedrock',
       'openai',
     ]);
-    expect(createAIModel({ ...inert, AI_PROVIDER: 'azure' })).toMatchObject({ provider: 'azure' });
+  });
+  it('refuses the removed Azure selector even with its former settings', () => {
+    const env = { ...inert, AI_PROVIDER: 'azure', AZURE_OPENAI_RESOURCE_NAME: 'r' };
+    expect(readAIAvailability(env)).toEqual({ available: false, reason: 'INVALID_PROVIDER' });
+    expect(() => createAIModel(env)).toThrow(AIUnavailableError);
+    for (const spy of Object.values(sdk)) expect(spy).not.toHaveBeenCalled();
   });
   it('builds Anthropic and OpenAI models only with a resolved key', () => {
     createTieredModel({
@@ -275,11 +270,11 @@ describe('provider readiness (DEV-583)', () => {
       [],
     ],
     [
-      { AI_PROVIDER: 'azure', AI_MODEL: 'm' },
-      'MISSING_CONFIG',
-      'azure',
-      ['AZURE_OPENAI_RESOURCE_NAME'],
+      { AI_PROVIDER: 'azure', AI_MODEL: 'm', AZURE_OPENAI_RESOURCE_NAME: 'r' },
+      'INVALID_PROVIDER',
+      null,
       [],
+      ['AI_PROVIDER'],
     ],
     [
       { AI_PROVIDER: 'vertex', AI_MODEL: 'm' },
@@ -318,7 +313,6 @@ describe('provider readiness (DEV-583)', () => {
   });
 
   it.each([
-    [{ AI_PROVIDER: 'azure', AI_MODEL: 'gpt-4o', AZURE_OPENAI_RESOURCE_NAME: 'r' }, 'azure'],
     [{ AI_PROVIDER: 'GROQ', AI_MODEL: 'openai/gpt-oss-120b', GROQ_API_KEY: 'k' }, 'groq'],
     [
       { AI_PROVIDER: 'google', AI_MODEL: 'gemini-2.5-flash', GOOGLE_GENERATIVE_AI_API_KEY: 'k' },
