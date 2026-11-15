@@ -92,6 +92,8 @@ describe('counterErrorMessage', () => {
       'INVALID_RECEIPT_LEASE',
       'LEASE_REQUIRES_SETTLEMENT',
       'DAY_CLOSED',
+      // DEV-821: cash into a drawer another user opened.
+      'DRAWER_NOT_YOURS',
     ] as const;
 
     for (const reason of settlementReasons) {

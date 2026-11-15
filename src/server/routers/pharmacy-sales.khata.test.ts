@@ -1326,7 +1326,10 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     await expect(f.caller().recordKhataPayment(payment)).resolves.toEqual(slip);
     expect(f.db.$transaction).toHaveBeenCalledTimes(1);
     expect(f.db.$queryRaw).toHaveBeenCalled();
-    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment);
+    // DEV-821: the manager/owner decision decides whose drawer the cash may go into.
+    expect(recordKhataRepayment).toHaveBeenCalledExactlyOnceWith(f.db, counterScope, payment, {
+      actorIsManager: true,
+    });
   });
 
   it('lists repayment accounts for counter users without a sale', async () => {

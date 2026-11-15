@@ -246,6 +246,59 @@ describe('POS sale voiding', () => {
     }
   );
 
+  // DEV-821: a void releases the bill's stock, so another counter user cannot do it.
+  it.each(['OPEN', 'HELD'])(
+    "refuses a cashier voiding another cashier's %s bill before claiming it",
+    async (current) => {
+      const updateMany = vi.fn();
+      const stockWrites = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({
+            id: 'sale-a',
+            status: current,
+            createdByUserId: 'user-b',
+            lines: [],
+          }),
+          updateMany,
+        },
+        pharmacyStockMovement: { create: stockWrites },
+      };
+      await expect(
+        changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Lost', undefined, {
+          actorIsManager: false,
+        })
+      ).rejects.toThrow('NOT_BILL_OWNER');
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(stockWrites).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['the cashier who opened it', 'user-a', false],
+    ['a manager or owner', 'user-b', true],
+  ])('lets %s void a held bill', async (_who, createdByUserId, actorIsManager) => {
+    let status = 'HELD';
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status, createdByUserId, lines: [] }),
+        updateMany: async ({ data }: { data: { status: string } }) => {
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacyTender: { findMany: async () => [] },
+      pharmacySaleLineAllocation: { findMany: async () => [] },
+      pharmacyStockMovement: { findMany: async () => [] },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: { create: async ({ data }: { data: unknown }) => data },
+    };
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Lost', undefined, {
+      actorIsManager,
+    });
+    expect(status).toBe('VOID');
+  });
+
   it.each(['QUOTATION', 'COMPLETED', 'VOID'])(
     'still refuses to void a %s sale',
     async (current) => {

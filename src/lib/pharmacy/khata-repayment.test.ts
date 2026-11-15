@@ -25,7 +25,9 @@ const cashInput: KhataRepaymentInput = {
   idempotencyKey: 'attempt-1',
 };
 
-function fixture(options: { prior?: Record<string, unknown>; closed?: boolean } = {}) {
+function fixture(
+  options: { prior?: Record<string, unknown>; closed?: boolean; drawerOpenedBy?: string } = {}
+) {
   const events: Record<string, unknown>[] = [
     { id: 'charge_a', kind: 'CHARGE', amountMinor: 2_000, occurredAt: new Date('2026-10-01') },
     { id: 'charge_b', kind: 'CHARGE', amountMinor: 5_000, occurredAt: new Date('2026-10-05') },
@@ -67,7 +69,11 @@ function fixture(options: { prior?: Record<string, unknown>; closed?: boolean } 
       }),
     },
     pharmacyDrawerSession: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', businessDate }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'drawer_1',
+        businessDate,
+        openedByActorId: options.drawerOpenedBy ?? 'cashier_1',
+      }),
     },
     pharmacyDailyClose: {
       findFirst: vi.fn().mockResolvedValue(options.closed ? { id: 'close_1' } : null),
@@ -98,7 +104,7 @@ describe('K4 counter khata repayment (DEV-731)', () => {
         businessDate,
         status: 'OPEN',
       },
-      select: { id: true },
+      select: { id: true, openedByActorId: true },
     });
     expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -175,6 +181,27 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     expect(db.$queryRaw).not.toHaveBeenCalled();
     expect(db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
     expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  // DEV-821: the device id is client-sent, so it cannot pick another cashier's drawer.
+  it("refuses cash into another cashier's open drawer before writing", async () => {
+    const db = fixture({ drawerOpenedBy: 'cashier_2' });
+    await expect(recordKhataRepayment(db as never, scope, cashInput)).rejects.toMatchObject({
+      reason: 'DRAWER_NOT_YOURS',
+    });
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  it("lets a manager or owner pay cash into another cashier's open drawer", async () => {
+    const db = fixture({ drawerOpenedBy: 'cashier_2' });
+    await expect(
+      recordKhataRepayment(db as never, scope, cashInput, { actorIsManager: true })
+    ).resolves.toMatchObject({ amountMinor: 3_000, replayed: false });
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ drawerSessionId: 'drawer_1', actorId: 'cashier_1' }),
+    });
   });
 
   it('refuses a payment larger than the balance owed', async () => {

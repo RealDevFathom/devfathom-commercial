@@ -119,7 +119,9 @@ export async function searchKhataRepaymentAccounts(
 export async function recordKhataRepayment(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: KhataRepaymentInput
+  input: KhataRepaymentInput,
+  /** DEV-821: a manager or owner may pay into any open drawer of the branch. */
+  authority: { actorIsManager: boolean } = { actorIsManager: false }
 ): Promise<KhataRepaymentSlip> {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -198,7 +200,7 @@ export async function recordKhataRepayment(
 
   if (input.tender === 'CASH') {
     // As for a cash sale tender: the server resolves this device's open drawer for the
-    // business date, so cash cannot be credited to another counter's drawer.
+    // business date on this branch, so cash cannot be credited to another branch.
     const drawer = await db.pharmacyDrawerSession.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -207,9 +209,13 @@ export async function recordKhataRepayment(
         businessDate: input.businessDate,
         status: 'OPEN',
       },
-      select: { id: true },
+      select: { id: true, openedByActorId: true },
     });
     if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    // DEV-821: the device id is client-sent, so it must name a drawer this user opened.
+    // Only a manager or owner may pay into another counter's drawer.
+    if (drawer.openedByActorId !== scope.actorId && !authority.actorIsManager)
+      throw new PharmacySettlementError('DRAWER_NOT_YOURS');
     // Takes the day lock and refuses a closed day or a drawer that is not open.
     await recordPharmacyCashMovement(db, scope, {
       drawerSessionId: drawer.id,

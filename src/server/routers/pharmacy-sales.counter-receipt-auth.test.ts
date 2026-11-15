@@ -90,6 +90,7 @@ import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import {
   changeSaleStatus,
   createSale,
+  PharmacySaleError,
   readReturnHistory,
   returnSaleLine,
 } from '@/lib/pharmacy/sales';
@@ -485,8 +486,29 @@ describe('counter receipt authorization', () => {
       'sale-a',
       'hold',
       undefined,
+      undefined,
       undefined
     );
+  });
+
+  // DEV-821: the void carries the manager/owner decision so the bill-owner check runs.
+  it("passes the void authority and refuses another cashier's bill as FORBIDDEN", async () => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
+    await f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' });
+    expect(changeSaleStatus).toHaveBeenLastCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      'sale-a',
+      'void',
+      undefined,
+      undefined,
+      { actorIsManager: true }
+    );
+
+    vi.mocked(changeSaleStatus).mockRejectedValueOnce(new PharmacySaleError('NOT_BILL_OWNER'));
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'void' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'NOT_BILL_OWNER' });
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {

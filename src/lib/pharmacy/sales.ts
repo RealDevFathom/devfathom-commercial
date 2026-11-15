@@ -169,6 +169,7 @@ export class PharmacySaleError extends Error {
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'NOT_BILL_OWNER'
   ) {
     super(reason);
   }
@@ -572,9 +573,22 @@ export async function changeSaleStatus(
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
   reason?: string,
-  controlledWitness?: ControlledRestorationPin
+  controlledWitness?: ControlledRestorationPin,
+  /**
+   * DEV-821: a counter void releases the bill's stock, so only the cashier who
+   * opened the bill or a manager/owner may void it. Omitted only by system paths
+   * (a failed delivery) that carry their own authorization.
+   */
+  voidAuthority?: { actorIsManager: boolean }
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  if (
+    action === 'void' &&
+    voidAuthority &&
+    !voidAuthority.actorIsManager &&
+    sale.createdByUserId !== scope.actorId
+  )
+    throw new PharmacySaleError('NOT_BILL_OWNER');
   // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
   // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
