@@ -275,6 +275,10 @@ describe('transfer short-close accounting (DEV-131)', () => {
     db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     db.$queryRaw
       .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
+      // DEV-825: the witness credential (document class) is locked before any
+      // stock row, then the IN_TRANSIT balances are locked before they are read.
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
       ] as never);
@@ -321,6 +325,85 @@ describe('transfer short-close accounting (DEV-131)', () => {
       db,
       { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
       { transferLineId: 'line_1', stockMovementId: 'loss_movement', at: occurredAt }
+    );
+  });
+});
+
+describe('DEV-825 transfer receipt lock order', () => {
+  it('locks every IN_TRANSIT balance, sorted, before reading or writing any line', async () => {
+    grant([allow('pharmacy:inventory')]);
+    witnessPinOnFile();
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.$queryRaw.mockImplementation(async (sql: unknown) => {
+      const text = (sql as { strings?: string[] }).strings?.join('') ?? '';
+      if (text.includes('pharmacy_interbranch_transfers')) return [{ id: 'transfer_1' }];
+      if (text.includes('FOR UPDATE')) return [];
+      return [{ onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 }];
+    });
+    const transitLine = (id: string, lot: string) => ({
+      id,
+      sourceLotId: lot,
+      sourceStockLocationId: 'location_src',
+      destinationStockLocationId: 'location_1',
+      quantityUnits: 20,
+      receivedUnits: 0,
+    });
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({
+      id: 'transfer_1',
+      status: 'DISPATCHED',
+      fromBranchId: 'branch_src',
+      toBranchId: 'branch_a',
+      lines: [transitLine('line_2', 'lot_b'), transitLine('line_1', 'lot_a')],
+    });
+    db.pharmacyStockMovement.create.mockResolvedValue({ id: 'loss', occurredAt: new Date() });
+
+    await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: 'transfer_1',
+      lines: [
+        { lineId: 'line_2', receivedUnits: 0 },
+        { lineId: 'line_1', receivedUnits: 0 },
+      ],
+      variance: {
+        reason: 'Lost in transit',
+        witnessId: 'user_b',
+        witnessPin: '2468',
+        evidenceRef: 'COURIER-1',
+      },
+      idempotencyKeyPrefix: 'receive-2',
+    });
+
+    const statements = db.$queryRaw.mock.calls.map(
+      ([sql]) => sql as unknown as { strings: string[]; values: unknown[] }
+    );
+    const lockIndex = statements.findIndex((sql) =>
+      sql.strings?.join('').includes('stock_lock:balance')
+    );
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(statements[lockIndex]!.values).toEqual([
+      'org_a',
+      'branch_src',
+      'lot_a',
+      'location_src',
+      'IN_TRANSIT',
+      'lot_b',
+      'location_src',
+      'IN_TRANSIT',
+    ]);
+    // The witness credential is a document-class lock: it comes before any stock row.
+    const credentialIndex = statements.findIndex((sql) =>
+      (sql.strings?.join('') ?? (sql as unknown as string[]).join?.('') ?? '').includes(
+        'restaurant_operator_credentials'
+      )
+    );
+    expect(credentialIndex).toBeGreaterThanOrEqual(0);
+    expect(credentialIndex).toBeLessThan(lockIndex);
+    // Every balance read and write comes after that one lock; no per-line lock remains.
+    statements.slice(lockIndex + 1).forEach((sql) => {
+      expect(sql.strings?.join('') ?? '').not.toMatch(/pharmacy_stock_balances[\s\S]*FOR UPDATE/);
+    });
+    expect(db.$queryRaw.mock.invocationCallOrder[lockIndex]).toBeLessThan(
+      db.pharmacyStockMovement.create.mock.invocationCallOrder[0]!
     );
   });
 });
@@ -1150,6 +1233,10 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     function shortTransfer() {
       db.$queryRaw
         .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
+        // DEV-825: the witness credential is locked before any stock row, then the
+        // IN_TRANSIT balances are locked before they are read.
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
           { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
         ] as never);
@@ -2467,6 +2554,8 @@ describe.each(GATED_MUTATIONS)(
     it('runs for the exact grant', async () => {
       grant([allow(capability)]);
       if (procedure === 'createRecall') {
+        db.$queryRaw.mockResolvedValueOnce([]);
+        // DEV-825: the batch lock statement, then the read of the locked batches.
         db.$queryRaw.mockResolvedValueOnce([]);
         db.$queryRaw.mockResolvedValueOnce([{ id: 'batch_1', medicineId: 'medicine_1' }] as never);
       }

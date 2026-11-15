@@ -55,6 +55,7 @@ import {
 } from '@/lib/pharmacy/counter-capability';
 import {
   appendControlledSaleEntries,
+  lockRegister,
   earlierRegisterEntry,
   emergencyNoRxDecision,
   resolveEmergencySupplyPolicy,
@@ -492,6 +493,15 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
     const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
     return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
   });
+}
+
+/**
+ * DEV-825: lock the sale row before a controlled line takes the branch register
+ * lock. The sale row is a document lock, which stock-lock-order.ts puts ahead of
+ * the register; `addSaleLine` would otherwise first touch it after the register.
+ */
+async function lockSaleForControlledLine(db: ScopedDb, scope: LedgerScope, saleId: string) {
+  await db.$queryRaw`SELECT id FROM pharmacy_sales WHERE id=${saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR NO KEY UPDATE`;
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -2186,7 +2196,10 @@ export const pharmacySalesRouter = router({
             if (!consent?.granted || consent.revokedAt) {
               return { blocked: 'Patient dispensing consent is required.' };
             }
-            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            // DEV-825: the sale row is a document lock, so it precedes the register
+            // lock (stock-lock-order.ts); a concurrent void takes them in that order.
+            await lockSaleForControlledLine(db, scope, input.saleId);
+            await lockRegister(db, scope.organizationId, scope.branchId);
             const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
@@ -2225,7 +2238,8 @@ export const pharmacySalesRouter = router({
           if (!authorization.prescriptionLineId) return blocked;
           // Lock prescription and branch before stock allocation, fill numbering and register numbering.
           await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
-          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+          await lockSaleForControlledLine(db, scope, input.saleId);
+          await lockRegister(db, scope.organizationId, scope.branchId);
           const rx = await db.prescriptionLine.findFirst({
             where: {
               id: authorization.prescriptionLineId,

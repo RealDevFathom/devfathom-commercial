@@ -4,6 +4,11 @@ vi.mock('./regulatory', async () => ({
   ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
   assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/entitlements', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements')),
+  resolveOrganizationEntitlements: vi.fn(async () => ({})),
+  hasModule: vi.fn((_view: unknown, key: string) => key === 'pharmacy-crm'),
+}));
 vi.mock('./stock-ledger', async () => ({
   ...(await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger')),
   allocateForSale: vi.fn(async () => ({
@@ -289,6 +294,7 @@ describe('addSaleLine counter promotion hook (#727)', () => {
   it('does not stack a promotion on a redeemed voucher', async () => {
     const db = {
       ...counterDb(),
+      pharmacyBranch: { findFirst: vi.fn(async () => ({ id: scope.branchId })) },
       user: {
         findFirst: vi.fn(async () => ({
           id: 'manager-v',

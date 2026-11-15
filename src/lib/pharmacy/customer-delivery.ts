@@ -8,6 +8,7 @@ import { applyPharmacyTender, refundPharmacyTender, saleTotalMinor } from './set
 import { changeSaleStatus, returnSaleLine } from './sales';
 import { quarantinePart } from './inventory-operations';
 import { releaseOrderReservations } from './customer-ordering';
+import { lockStockBalances } from './stock-lock-order';
 
 export class PharmacyDeliveryError extends Error {}
 
@@ -283,14 +284,7 @@ export async function recordDeliveryCommand(
             });
         }
       } else if (sale.status === 'OPEN') {
-        await changeSaleStatus(
-          db,
-          scope,
-          sale.id,
-          'void',
-          { kind: 'FAILED_DELIVERY_RETURN' },
-          'Failed delivery physically returned'
-        );
+        const movements = new Map<string, { stockLocationId: string }>();
         for (const line of sale.lines)
           for (const allocation of line.allocations) {
             const movement = await db.pharmacyStockMovement.findFirst({
@@ -301,6 +295,34 @@ export async function recordDeliveryCommand(
               },
             });
             if (!movement) throw new PharmacyDeliveryError('RESERVATION_UNAVAILABLE');
+            movements.set(allocation.id, movement);
+          }
+        // DEV-825: the void puts the units back AVAILABLE and the quarantine moves
+        // them on, so lock every balance both touch first, in the global key order.
+        await lockStockBalances(
+          db,
+          scope,
+          sale.lines.flatMap((line) =>
+            line.allocations.flatMap((allocation) =>
+              (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+                inventoryLotId: allocation.inventoryLotId,
+                stockLocationId: movements.get(allocation.id)!.stockLocationId,
+                disposition,
+              }))
+            )
+          )
+        );
+        await changeSaleStatus(
+          db,
+          scope,
+          sale.id,
+          'void',
+          { kind: 'FAILED_DELIVERY_RETURN' },
+          'Failed delivery physically returned'
+        );
+        for (const line of sale.lines)
+          for (const allocation of line.allocations) {
+            const movement = movements.get(allocation.id)!;
             await quarantinePart(db, scope, {
               inventoryLotId: allocation.inventoryLotId,
               stockLocationId: movement.stockLocationId,
@@ -321,11 +343,18 @@ export async function recordDeliveryCommand(
         orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }, { id: 'asc' }],
       });
       if (!reservations.length) throw new PharmacyDeliveryError('RESERVATION_UNAVAILABLE');
-      for (const reservation of reservations) {
-        await db.$queryRaw(
-          Prisma.sql`SELECT id FROM pharmacy_stock_balances WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "inventoryLotId"=${reservation.inventoryLotId} AND "stockLocationId"=${reservation.stockLocationId} FOR UPDATE`
-        );
-      }
+      // DEV-825: every balance the quarantine moves touch, locked once in key order.
+      await lockStockBalances(
+        db,
+        scope,
+        reservations.flatMap((reservation) =>
+          (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+            inventoryLotId: reservation.inventoryLotId,
+            stockLocationId: reservation.stockLocationId,
+            disposition,
+          }))
+        )
+      );
       await releaseOrderReservations(db, scope, order.id);
       for (const reservation of reservations)
         await quarantinePart(db, scope, {

@@ -160,7 +160,8 @@ describe('same-branch location transfer retries (DEV-608)', () => {
     db.pharmacyStockMovement.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce(POSTED_LEGS);
 
     await expect(run(db)).resolves.toEqual({ out: POSTED_LEGS[0], received: POSTED_LEGS[1] });
-    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    // DEV-825: one sorted lock of both balances, then one fresh read of the source.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
 

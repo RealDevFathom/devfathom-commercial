@@ -1,4 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -51,7 +52,7 @@ async function activeMemberMay(
 }
 
 /**
- * DEV-819: at redemption the issuer must still be an active owner of this workspace, and the
+ * DEV-819: at redemption the CRM module must be licensed, the branch active, the issuer still an active owner of this workspace, and the
  * recorded approval must still stand: within the cap the issuer's own; above it a different
  * active manager, or the solo owner's recorded fresh-PIN self-approval. Returns the approver
  * the sale line records.
@@ -59,8 +60,17 @@ async function activeMemberMay(
 export async function assertVoucherIssuerRights(
   db: ScopedDb,
   organizationId: string,
+  branchId: string,
   voucher: RedeemableVoucher
 ): Promise<string> {
+  // Issuance needed the CRM licence and an active branch; redemption re-checks both.
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { organizationId, id: branchId, active: true },
+    select: { id: true },
+  });
+  if (!branch) throw new VoucherIssuerRevoked();
+  if (!hasModule(await resolveOrganizationEntitlements(organizationId, db), 'pharmacy-crm'))
+    throw new VoucherIssuerRevoked();
   if (!(await activeMemberMay(db, organizationId, voucher.issuedByUserId, { owner: true })))
     throw new VoucherIssuerRevoked();
   const approver = voucher.approvedByUserId;

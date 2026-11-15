@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
+import { lockControlledRegister } from './stock-lock-order';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -88,8 +89,9 @@ export function derivedCorrectionDelta(
   return delta;
 }
 
+/** The branch register lock; see the global stock lock order in stock-lock-order.ts. */
 export async function lockRegister(db: ScopedDb, organizationId: string, branchId: string) {
-  await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${organizationId + ':' + branchId}, 0))`;
+  await lockControlledRegister(db, organizationId, branchId);
 }
 
 /** On-hand units that can still be sold. Quarantine is not part of the register balance. */
