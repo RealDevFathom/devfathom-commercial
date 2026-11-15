@@ -467,7 +467,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          mintPortalLink(txDb(tx), await scopeFor(ctx, input.branchId), input.customerId)
+          mintPortalLink(txDb(tx), await staffScopeFor(ctx, input.branchId), input.customerId)
         );
       } catch (error) {
         fail(error);
@@ -486,7 +486,7 @@ export const pharmacyOrderingRouter = router({
       ]);
       if (!pharmacist && !counter && !orders) throw new TRPCError({ code: 'FORBIDDEN' });
       const requests = await ctx.db.$transaction(async (tx) => {
-        const scope = await scopeFor(ctx, input.branchId);
+        const scope = await staffScopeFor(ctx, input.branchId);
         await bindBranch(txDb(tx), scope.branchId);
         return listPortalQueue(txDb(tx), scope);
       });
@@ -513,7 +513,7 @@ export const pharmacyOrderingRouter = router({
       if (!allowed.length) throw new TRPCError({ code: 'FORBIDDEN' });
       try {
         return await ctx.db.$transaction(async (tx) => {
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await staffScopeFor(ctx, input.branchId);
           await bindBranch(txDb(tx), scope.branchId);
           return decidePortalRequest(txDb(tx), scope, input, allowed);
         });
@@ -536,7 +536,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) => {
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await staffScopeFor(ctx, input.branchId);
           await bindBranch(txDb(tx), scope.branchId);
           return confirmPortalKhataPayment(txDb(tx), scope, input);
         });

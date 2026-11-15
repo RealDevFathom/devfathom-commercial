@@ -33,6 +33,13 @@ vi.mock('@/lib/pharmacy/customer-ordering', async (original) => ({
   startCustomerOrderCheckout: vi.fn(async () => ({ id: 'order-1' })),
   completeCustomerOrder: vi.fn(async () => ({ id: 'order-1' })),
 }));
+vi.mock('@/lib/pharmacy/customer-portal', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/customer-portal')>()),
+  mintPortalLink: vi.fn(async () => ({ url: 'https://portal.invalid/link' })),
+  listPortalQueue: vi.fn(async () => []),
+  decidePortalRequest: vi.fn(async () => ({ id: 'request-1' })),
+  confirmPortalKhataPayment: vi.fn(async () => ({ receiptReference: 'KP-1' })),
+}));
 vi.mock('@/lib/pharmacy/refill-subscriptions', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/refill-subscriptions')>()),
   listRefillSubscriptions: vi.fn(async () => []),
@@ -66,6 +73,12 @@ import {
   startRefillCycleCheckout,
   verifyRefillCyclePharmacistPin,
 } from '@/lib/pharmacy/refill-subscriptions';
+import {
+  confirmPortalKhataPayment,
+  decidePortalRequest,
+  listPortalQueue,
+  mintPortalLink,
+} from '@/lib/pharmacy/customer-portal';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
@@ -479,4 +492,88 @@ describe('DEV-845 runners and customers are scoped to assigned branches', () => 
     await expect(caller.customers()).resolves.toEqual([]);
     expect(db.pharmacyCustomer.findMany).not.toHaveBeenCalled();
   });
+});
+
+// DEV-845: the DEV-15 customer-portal staff procedures take the same boundary.
+const PORTAL_STAFF: Rule[] = [
+  ORDERS,
+  { capability: 'pharmacy:counter', effect: 'ALLOW' },
+  { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+];
+const portalPaths: StaffPath[] = [
+  {
+    name: 'portalLink',
+    run: (caller, branchId) => caller.portalLink({ branchId, customerId: 'customer-1' }),
+    command: () => mintPortalLink,
+  },
+  {
+    name: 'portalQueue',
+    run: (caller, branchId) => caller.portalQueue({ branchId }),
+    command: () => listPortalQueue,
+  },
+  {
+    name: 'portalDecide',
+    run: (caller, branchId) =>
+      caller.portalDecide({ branchId, requestId: 'request-1', decision: 'VERIFY' }),
+    command: () => decidePortalRequest,
+  },
+  {
+    name: 'portalConfirmPayment',
+    run: (caller, branchId) => caller.portalConfirmPayment({ branchId, requestId: 'request-1' }),
+    command: () => confirmPortalKhataPayment,
+  },
+];
+
+describe('DEV-845 pharmacyOrdering portal staff procedures: branch assignment', () => {
+  it.each(portalPaths)('$name refuses a staff member not assigned to the branch', async (path) => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: PORTAL_STAFF, assigned: ['branch-b'] });
+    await expect(path.run(caller, 'branch-a')).rejects.toMatchObject(OUTSIDE);
+    expect(path.command()).not.toHaveBeenCalled();
+  });
+
+  it.each(portalPaths)('$name admits a staff member assigned to the branch', async (path) => {
+    const { caller } = fixture({ role: 'EMPLOYEE', rules: PORTAL_STAFF, assigned: ['branch-a'] });
+    await path.run(caller, 'branch-a');
+    expect(path.command()).toHaveBeenCalledOnce();
+  });
+
+  it.each(portalPaths)('$name admits a tenant admin at any branch and audits it', async (path) => {
+    const { caller } = fixture({ role: 'ADMIN', rules: PORTAL_STAFF, assigned: [] });
+    await path.run(caller, 'branch-a');
+    expect(path.command()).toHaveBeenCalledOnce();
+    expect(annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        targetId: 'branch-a',
+        metadata: expect.objectContaining({
+          reason: 'tenant-admin-orders-access-without-branch-assignment',
+        }),
+      })
+    );
+  });
+
+  it.each(portalPaths)('$name admits the system owner at any branch', async (path) => {
+    const { caller } = fixture({
+      role: 'EMPLOYEE',
+      rules: [{ capability: '*', effect: 'ALLOW' }],
+      systemRole: { key: 'owner', isSystem: true },
+      assigned: [],
+    });
+    await path.run(caller, 'branch-a');
+    expect(path.command()).toHaveBeenCalledOnce();
+  });
+
+  it.each(portalPaths)(
+    '$name refuses an unassigned tenant admin with an explicit DENY',
+    async (path) => {
+      const { caller } = fixture({
+        role: 'ADMIN',
+        rules: PORTAL_STAFF,
+        overrides: [{ capability: 'reports:financial', effect: 'DENY' }],
+        assigned: [],
+      });
+      await expect(path.run(caller, 'branch-a')).rejects.toMatchObject(OUTSIDE);
+      expect(path.command()).not.toHaveBeenCalled();
+    }
+  );
 });
