@@ -310,6 +310,20 @@ export function notifyCapture(input: { notifyOptIn?: boolean; notifyPhone?: stri
   return { notifyOptIn: Boolean(input.notifyOptIn), notifyPhone: phone };
 }
 
+/**
+ * What a chip tap returns. DEV-817: the router redacts the phone to a
+ * has-contact flag before it leaves the server.
+ */
+const DEMAND_OUTCOME_RESULT = {
+  id: true,
+  outcome: true,
+  substituteProductId: true,
+  notifyOptIn: true,
+  notifyPhone: true,
+  lossProbability: true,
+  estLossPkrMinor: true,
+} as const;
+
 /** One tap on a counter outcome chip. Recomputes the loss on the server. */
 export async function setDemandOutcome(
   db: ScopedDb,
@@ -367,6 +381,7 @@ export async function setDemandOutcome(
         probability,
       }),
     },
+    select: DEMAND_OUTCOME_RESULT,
   });
 }
 
