@@ -21,6 +21,7 @@ import {
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
+import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -149,6 +150,7 @@ export class PharmacySaleError extends Error {
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
+      | 'VOUCHER_CATEGORY_REFUSED'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
@@ -254,7 +256,7 @@ type AddSaleLineInput = {
   saleUnit: 'PACK' | 'STRIP' | 'UNIT';
   quantity: number;
   canonicalUnitsPerSaleUnit: number;
-  discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
+  discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY' | 'VOUCHER';
   discountMinor?: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
@@ -315,6 +317,17 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-27: a voucher never applies to an Rx, OTC drug, supplement or device line.
+  // Refused before any stock is allocated.
+  if (input.discountKind === 'VOUCHER') {
+    try {
+      assertVoucherEligibleLine(medicine);
+    } catch (error) {
+      if (error instanceof VoucherScopeError)
+        throw new PharmacySaleError('VOUCHER_CATEGORY_REFUSED');
+      throw error;
+    }
+  }
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,

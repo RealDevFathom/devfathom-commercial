@@ -6,6 +6,8 @@
  * explainable segment and a policy-safe next action.
  */
 
+import { withVoucherFooter } from './voucher-scope';
+
 export type RfmWinBackConfig = {
   recencyDays: readonly [number, number, number, number];
   frequencyReceipts: readonly [number, number, number, number];
@@ -172,7 +174,9 @@ export function planRfmWinBack(
   nonDrugOffer: ReviewedNonDrugOffer
 ): WinBackAction[] {
   validateChurnScore(config.winBackChurnScore, 'winBackChurnScore');
-  const nonDrugOfferText = validateNonDrugOffer(nonDrugOffer);
+  // DEV-27: the required voucher footer is fixed system copy, added after the
+  // content policy check on the owner's text.
+  const nonDrugOfferText = withVoucherFooter(validateNonDrugOffer(nonDrugOffer));
   return customers.flatMap((customer): WinBackAction[] => {
     validateChurnScore(customer.churnScore, 'churnScore');
     if (customer.churnScore < config.winBackChurnScore) return [];

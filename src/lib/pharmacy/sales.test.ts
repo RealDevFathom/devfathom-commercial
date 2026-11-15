@@ -155,6 +155,56 @@ describe('POS sale voiding', () => {
   });
 });
 
+describe('DEV-27 voucher scoping at the POS', () => {
+  function voucherDb(medicine: Record<string, unknown>) {
+    let allocations = 0;
+    return {
+      get allocations() {
+        return allocations;
+      },
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      pharmacyInventoryLot: {
+        findMany: async () => {
+          allocations += 1;
+          return [];
+        },
+      },
+    };
+  }
+  const line = {
+    saleId: 'sale-a',
+    medicineId: 'medicine-a',
+    presentationId: 'presentation-a',
+    packLevelId: 'pack-level-a',
+    saleUnit: 'UNIT' as const,
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+    discountKind: 'VOUCHER' as const,
+    discountMinor: 100,
+    approvedByUserId: 'manager-a',
+    approvalPolicy: 'voucher',
+    idempotencyKey: 'line-a',
+  };
+  const flags = { rx: false, otc: false, restricted: false, controlled: false };
+
+  it.each([
+    ['Rx', { ...flags, rx: true, productFamily: 'PHARMACEUTICAL' }],
+    ['OTC drug', { ...flags, otc: true, productFamily: 'PHARMACEUTICAL' }],
+    ['supplement', { ...flags, productFamily: 'ALTERNATIVE' }],
+    ['medical device', { ...flags, productFamily: 'DEVICE' }],
+  ])('refuses a voucher on a %s line before allocating stock', async (_label, medicine) => {
+    const db = voucherDb(medicine);
+    await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_CATEGORY_REFUSED')
+    );
+    expect(db.allocations).toBe(0);
+  });
+});
+
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
   it('charges a full pack at its exact printed MRP without compounding loose-unit floors', () => {
     expect(

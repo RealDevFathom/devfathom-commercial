@@ -125,7 +125,7 @@ describe('RFM win-back policy', () => {
         {
           customerId: customer.customerId,
           kind: 'NON_DRUG_MARKETING',
-          text: OFFER_TEXT,
+          text: `${OFFER_TEXT}\nMedicines excluded / Adviyaat shamil nahin`,
           includesOffer: true,
         },
       ]);
@@ -174,7 +174,8 @@ describe('RFM win-back policy', () => {
       {
         customerId: 'consented',
         kind: 'NON_DRUG_MARKETING',
-        text: 'Save on personal-care essentials. Reply STOP to opt out.',
+        // DEV-27: the required voucher footer is auto-added.
+        text: 'Save on personal-care essentials. Reply STOP to opt out.\nMedicines excluded / Adviyaat shamil nahin',
         includesOffer: true,
       },
     ]);

@@ -40,6 +40,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
+  VOUCHER_CATEGORY_REFUSED:
+    'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',

@@ -1138,6 +1138,7 @@ enum PharmacyDiscountKind {
   DISCOUNT
   PROMOTION
   COMPLIMENTARY
+  VOUCHER
 }
 
 enum PharmacyTenderType {
