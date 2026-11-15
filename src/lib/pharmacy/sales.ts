@@ -3,6 +3,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import { minimumPriceForMargin } from './smart-discount';
+import { readDiscountPolicy } from './smart-discount-service';
 import {
   apportionDiscount,
   saleAllocationMoney,
@@ -166,6 +168,8 @@ export function validateDiscount(input: {
   costMinor: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  /** DEV-66: the branch's configured minimum margin on a discounted line, in bps. */
+  minMarginBps?: number;
 }) {
   if (input.discountMinor < 0 || input.discountMinor > input.grossMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
@@ -174,6 +178,12 @@ export function validateDiscount(input: {
   if (input.discountMinor > 0 && (!input.approvedByUserId || !input.approvalPolicy))
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.grossMinor - input.discountMinor < input.costMinor)
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  if (
+    input.discountMinor > 0 &&
+    input.grossMinor - input.discountMinor <
+      minimumPriceForMargin(input.costMinor, input.minMarginBps ?? 0)
+  )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
@@ -386,7 +396,10 @@ async function addSaleLineWithAllocation(
     input.canonicalUnitsPerSaleUnit
   );
   const discountMinor = input.discountMinor ?? 0;
+  // DEV-66: a discounted line must keep the branch's configured minimum margin.
+  const minMarginBps = discountMinor > 0 ? (await readDiscountPolicy(db, scope)).minMarginBps : 0;
   validateDiscount({
+    minMarginBps,
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
     discountMinor,
     grossMinor,

@@ -199,6 +199,10 @@ model PharmacyBranch {
   receiptLayoutRevision  Int                  @default(0)
   manualPaymentSettings  Json?
   manualPaymentRevision  Int                  @default(0)
+  /// DEV-66: owner-configured smart-discount policy (minimum margin, maximum
+  /// suggested depth, evidence windows). Null means the safe defaults.
+  discountPolicy         Json?
+  discountPolicyRevision Int                  @default(0)
   id                     String               @id @default(cuid())
   organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String
@@ -247,6 +251,7 @@ model PharmacyBranch {
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
   sopSiteSettings                          PharmacySopSiteSetting[]
   sopReworkNotes                           PharmacySopReworkNote[]
+  competitorPriceObservations              PharmacyCompetitorPriceObservation[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -15898,4 +15903,26 @@ model OutboundEffect {
   @@index([organizationId, status, createdAt])
   @@index([status, availableAt])
   @@map("outbound_effects")
+}
+
+/// DEV-66: APPEND-ONLY competitor discount log. A manager records the price a
+/// nearby competitor was seen charging for a medicine; the newest unexpired
+/// observations feed discount suggestions. `medicineId` references
+/// pharmacy_medicines through a SQL-only tenant-composite foreign key.
+model PharmacyCompetitorPriceObservation {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  medicineId         String
+  competitorLabel    String
+  observedPriceMinor Int
+  observedAt         DateTime
+  recordedByUserId   String
+  createdAt          DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
+  @@index([organizationId, branchId, medicineId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
+  @@map("pharmacy_competitor_price_observations")
 }
