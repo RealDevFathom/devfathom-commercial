@@ -181,5 +181,7 @@ describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
       expect.objectContaining({ units: 10 })
     );
     expect(mocks.addSaleLine).toHaveBeenCalledOnce();
+    // The line is checked against the pack setup in effect at the signed sale time.
+    expect(mocks.addSaleLine.mock.calls[0]![3]).toEqual({ saleUnitAt: new Date(SALE_AT) });
   });
 });

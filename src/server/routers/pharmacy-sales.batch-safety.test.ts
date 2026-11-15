@@ -30,19 +30,26 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
 
-function caller(granted = true) {
+function caller(granted = true, assignedBranches: string[] = [BRANCH]) {
   const db = {
-    $transaction: vi.fn(
-      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
+      callback(db)
     ),
     organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: BRANCH })),
+    },
+    // DEV-830: redemption uses the counter's branch-assignment gate; this cashier works here.
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async () => assignedBranches.map((branchId) => ({ branchId }))),
     },
     user: {
       findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: {
           permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
         },
@@ -129,5 +136,32 @@ describe('#633 batch refusal at tender', () => {
         idempotencyKey: 'redeem-1',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: reason });
+  });
+});
+
+describe('DEV-830 loyalty redemption branch gate', () => {
+  const redeem = (assigned: string[]) =>
+    caller(true, assigned).redeemPoints({
+      branchId: BRANCH,
+      saleId: 'sale-1',
+      points: 200,
+      deviceId: 'device-1',
+      businessDate: new Date('2026-10-22T00:00:00.000Z'),
+      idempotencyKey: 'redeem-branch',
+    });
+
+  it('refuses a pharmacist assigned only to another branch before any redemption', async () => {
+    await expect(redeem(['branch-other'])).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    await expect(redeem([])).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(loyalty.redeemSalePoints).not.toHaveBeenCalled();
+  });
+
+  it('redeems for a pharmacist assigned to the branch', async () => {
+    loyalty.redeemSalePoints.mockResolvedValueOnce({ settled: true });
+    await expect(redeem([BRANCH])).resolves.toEqual({ settled: true });
+    expect(loyalty.redeemSalePoints).toHaveBeenCalledOnce();
   });
 });

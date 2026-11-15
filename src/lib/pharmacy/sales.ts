@@ -354,9 +354,20 @@ export async function addSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
-  options: { applyCounterPromotions?: boolean } = {}
+  options: {
+    applyCounterPromotions?: boolean;
+    /** DEV-830: offline replay checks the sale unit against the setup at the signed sale time. */
+    saleUnitAt?: Date;
+  } = {}
 ) {
-  return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
+  return addSaleLineWithAllocation(
+    db,
+    scope,
+    input,
+    undefined,
+    options.applyCounterPromotions,
+    options.saleUnitAt
+  );
 }
 
 /** Internal customer-order path; never accepted by the counter's public input schema.
@@ -426,7 +437,8 @@ async function addSaleLineWithAllocation(
   scope: LedgerScope,
   input: AddSaleLineInput,
   reservation?: ReservedSaleAllocation,
-  applyCounterPromotions = false
+  applyCounterPromotions = false,
+  saleUnitAt?: Date
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -466,7 +478,7 @@ async function addSaleLineWithAllocation(
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
   // DEV-830 (F05): reserved customer-order and refill lines carry a multiplier the server
   // derived from the stored lot when it reserved them; every other line is checked here.
-  if (!reservation) await assertSaleUnitConversion(db, scope, input);
+  if (!reservation) await assertSaleUnitConversion(db, scope, input, saleUnitAt);
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.

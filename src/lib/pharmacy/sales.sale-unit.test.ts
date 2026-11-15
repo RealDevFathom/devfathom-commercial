@@ -200,3 +200,82 @@ describe('sale-unit multiplier derived from the stored pack setup (DEV-830 F05)'
     expect(vi.mocked(allocateForSale).mock.calls[0]![2]).toMatchObject({ requiredUnits: 50 });
   });
 });
+
+describe('offline replay checks the sale unit at the signed sale time (DEV-830)', () => {
+  // `strip-v2` replaced `strip-v1` before the sale, but the tablet level still points at
+  // `strip-v1`; `strip-v3` replaced `strip-v2` after the sale and before the replay.
+  const window = (from: string, to: string | null) => ({
+    effectiveFrom: new Date(from),
+    effectiveTo: to ? new Date(to) : null,
+  });
+  const revised = [
+    {
+      id: 'box',
+      level: 'BOX',
+      parentPackLevelId: null,
+      unitsPerParent: 1,
+      versionGroupId: 'g-box',
+      ...window('2025-01-01', null),
+    },
+    {
+      id: 'strip-v1',
+      level: 'STRIP',
+      parentPackLevelId: 'box',
+      unitsPerParent: 10,
+      versionGroupId: 'g-strip',
+      ...window('2025-01-01', '2026-01-01'),
+    },
+    {
+      id: 'strip-v2',
+      level: 'STRIP',
+      parentPackLevelId: 'box',
+      unitsPerParent: 10,
+      versionGroupId: 'g-strip',
+      ...window('2026-01-01', '2026-06-01'),
+    },
+    {
+      id: 'strip-v3',
+      level: 'STRIP',
+      parentPackLevelId: 'box',
+      unitsPerParent: 10,
+      versionGroupId: 'g-strip',
+      ...window('2026-06-01', null),
+    },
+    {
+      id: 'tablet',
+      level: 'UNIT',
+      parentPackLevelId: 'strip-v1',
+      unitsPerParent: 10,
+      versionGroupId: 'g-tablet',
+      ...window('2025-01-01', null),
+    },
+  ];
+  const stripLine = {
+    ...line,
+    saleUnit: 'STRIP' as const,
+    packLevelId: 'strip-v2',
+    canonicalUnitsPerSaleUnit: 10,
+  };
+
+  it('accepts a strip that was current when the offline sale was made', async () => {
+    const db = saleDb();
+    db.packLevel.findMany.mockResolvedValue(revised as never);
+    await addSaleLine(db as never, scope, stripLine, {
+      saleUnitAt: new Date('2026-03-01T12:00:00.000Z'),
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      canonicalUnits: 10,
+    });
+  });
+
+  it('still refuses that strip on a sale checked against the later setup', async () => {
+    const db = saleDb();
+    db.packLevel.findMany.mockResolvedValue(revised as never);
+    await expect(
+      addSaleLine(db as never, scope, stripLine, {
+        saleUnitAt: new Date('2026-09-01T12:00:00.000Z'),
+      })
+    ).rejects.toThrow(new PharmacySaleError('INVALID_SALE_UNIT'));
+    expectNoSideEffects(db);
+  });
+});

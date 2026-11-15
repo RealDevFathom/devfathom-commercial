@@ -348,6 +348,8 @@ export async function replayCounterCommand(
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
   const sale = await createSale(db, scope);
+  // DEV-830: a pack level revised after the signed sale must not refuse that sale.
+  const saleUnitAt = new Date(command.leasedReceipt.originalSaleAt);
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
       where: { id: line.medicineId, organizationId: scope.organizationId },
@@ -375,7 +377,7 @@ export async function replayCounterCommand(
     // DEV-830 (F05): the signed device never chooses the multiplier; it is checked
     // against the stored pack setup before any quota or stock is consumed.
     try {
-      await assertSaleUnitConversion(db, scope, line);
+      await assertSaleUnitConversion(db, scope, line, saleUnitAt);
     } catch (error) {
       if (error instanceof PharmacySaleError) throw new CounterTransportError('invalid_pack', 403);
       throw error;
@@ -385,11 +387,12 @@ export async function replayCounterCommand(
     if (!quota || quota.quotaUnits - quota.consumedUnits < units)
       throw new CounterTransportError('quota_exhausted', 409);
     await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
-    const created = await addSaleLine(db, scope, {
-      ...line,
-      saleId: sale.id,
-      idempotencyKey: `${command.idempotencyKey}:${index}`,
-    });
+    const created = await addSaleLine(
+      db,
+      scope,
+      { ...line, saleId: sale.id, idempotencyKey: `${command.idempotencyKey}:${index}` },
+      { saleUnitAt }
+    );
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -438,6 +441,38 @@ export async function replayCounterCommand(
     new Date()
   );
   return { saleId: sale.id, receiptNumber: command.leasedReceipt.receiptNumber, replayed: false };
+}
+
+/**
+ * DEV-830 (F04): replaying a queued sale opens a bill and debits stock in the device's
+ * branch, so the person replaying it needs what the online counter's `create` and
+ * `addLine` need: the canonical `pharmacy:counter` grant (deny wins) and an active
+ * assignment to that branch. A session ADMIN of the organization keeps every active
+ * branch, as online. Access lost while offline is refused with nothing written: the
+ * counter's queue pauses on the 403 and keeps the command for an assigned colleague to
+ * replay or a manager to reject.
+ */
+export async function assertReplayActorMayUseBranch(
+  db: ScopedDb,
+  user: Parameters<typeof subjectFromSession>[0] & { id: string; role?: string | null },
+  scope: LedgerScope
+): Promise<void> {
+  if (
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db, source: 'REST' }))
+  )
+    throw new CounterTransportError('forbidden', 403);
+  if (user.role === 'ADMIN') return;
+  const assignment = await db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: scope.branchId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (assignment?.branchId !== scope.branchId) throw new CounterTransportError('forbidden', 403);
 }
 
 const sessionSchema = z
@@ -559,6 +594,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           };
         }
         verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
+        if (operation === 'replay')
+          await assertReplayActorMayUseBranch(db, actor.session.user, ctx.scope);
         if (operation === 'lease') {
           const input = z
             .object({ size: z.number().int().positive().max(MAX_RECEIPT_LEASE_SIZE) })
