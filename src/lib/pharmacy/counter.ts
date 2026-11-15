@@ -518,6 +518,8 @@ export type CounterCartLine = {
   unitPriceMinor: number;
   proRataCeilingMinor: number;
   discountMinor: number;
+  /** #727: the automatic promotion that priced this line, as issued. */
+  promotionName?: string | null;
   lineTotalMinor: number;
   rx: boolean;
   controlled: boolean;
@@ -634,6 +636,7 @@ export async function readCounterCart(
       unitPriceMinor: line.unitPriceMinor,
       proRataCeilingMinor: line.proRataCeilingMinor,
       discountMinor: line.discountMinor,
+      promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
       controlled: line.medicine.controlled,
@@ -755,6 +758,7 @@ export async function readCounterReceipt(
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       discountMinor: line.discountMinor,
+      promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
     };
   });

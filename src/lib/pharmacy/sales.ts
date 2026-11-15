@@ -24,6 +24,7 @@ import { assertStoredPharmacyMayOperate } from './regulatory';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -269,8 +270,17 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
-export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
-  return addSaleLineWithAllocation(db, scope, input);
+/**
+ * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
+ * reserved customer orders keep the price they quoted, so they never opt in.
+ */
+export async function addSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  options: { applyCounterPromotions?: boolean } = {}
+) {
+  return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
 }
 
 /** Internal customer-order path; never accepted by the counter's public input schema.
@@ -290,7 +300,8 @@ async function addSaleLineWithAllocation(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
-  reservation?: ReservedSaleAllocation
+  reservation?: ReservedSaleAllocation,
+  applyCounterPromotions = false
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -385,14 +396,32 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
-  const discountMinor = input.discountMinor ?? 0;
+  const regulated = medicine.rx || medicine.restricted || medicine.controlled;
+  // #727: priced after allocation has finished waiting for its stock locks. A manual
+  // discount or complimentary line is never combined with an automatic promotion.
+  const promotionEvaluatedAt = new Date();
+  const promotion =
+    applyCounterPromotions && !input.discountKind && !input.discountMinor
+      ? await priceCounterPromotion(db, scope, {
+          medicineId: input.medicineId,
+          regulated,
+          grossMinor,
+          costMinor,
+          at: promotionEvaluatedAt,
+        })
+      : null;
+  const discountMinor = promotion?.discountMinor ?? input.discountMinor ?? 0;
+  const approvedByUserId = promotion?.promotion.createdByUserId ?? input.approvedByUserId;
+  const approvalPolicy = promotion
+    ? promotionApprovalPolicy(promotion.promotion.id)
+    : input.approvalPolicy;
   validateDiscount({
-    regulated: medicine.rx || medicine.restricted || medicine.controlled,
+    regulated,
     discountMinor,
     grossMinor,
     costMinor,
-    approvedByUserId: input.approvedByUserId,
-    approvalPolicy: input.approvalPolicy,
+    approvedByUserId,
+    approvalPolicy,
   });
   const line = await db.pharmacySaleLine.create({
     data: {
@@ -410,10 +439,12 @@ async function addSaleLineWithAllocation(
       grossMinor,
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
-      discountKind: input.discountKind,
+      discountKind: promotion ? 'PROMOTION' : input.discountKind,
       discountMinor,
-      approvalPolicy: input.approvalPolicy,
-      approvedByUserId: input.approvedByUserId,
+      approvalPolicy,
+      approvedByUserId,
+      promotionId: promotion?.promotion.id,
+      promotionName: promotion?.promotion.name,
       idempotencyKey: input.idempotencyKey,
     },
   });
@@ -435,7 +466,22 @@ async function addSaleLineWithAllocation(
       })
     )
   );
-  await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+  await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
+    saleLineId: line.id,
+    ...(promotion
+      ? {
+          promotionId: promotion.promotion.id,
+          promotionName: promotion.promotion.name,
+          discountMinor,
+          approvedByUserId: promotion.promotion.createdByUserId,
+          effectiveFrom: promotion.promotion.effectiveFrom.toISOString(),
+          effectiveTo: promotion.promotion.effectiveTo.toISOString(),
+          benefitBasisPoints: promotion.promotion.benefitBasisPoints,
+          benefitMinor: promotion.promotion.benefitMinor,
+          evaluatedAt: promotionEvaluatedAt.toISOString(),
+        }
+      : {}),
+  });
   return { line, allocation };
 }
 

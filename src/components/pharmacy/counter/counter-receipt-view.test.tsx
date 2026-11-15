@@ -513,3 +513,15 @@ it.each([true, false])(
     )).toBeInTheDocument();
   }
 );
+
+it('#727: shows the issued promotion name and saving under its line', () => {
+  const input = props();
+  Object.assign(input.receipt!.lines[0]!, {
+    discountMinor: 10,
+    lineTotalMinor: 90,
+    promotionName: 'Winter week',
+  });
+  Object.assign(input.receipt!.totals, { discountMinor: 10, netMinor: 90 });
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText('Promotion: Winter week (-0.10)')).toBeTruthy();
+});

@@ -57,6 +57,8 @@ export type CounterReceiptLine = {
   canonicalUnits: number;
   unitPriceMinor: number;
   discountMinor: number;
+  /** #727: the promotion name frozen on the line when it was priced; never the live rule. */
+  promotionName?: string | null;
   lineTotalMinor: number;
 };
 
@@ -107,6 +109,7 @@ type Strings = {
   lineTotal: string;
   gross: string;
   discount: string;
+  promotion: string;
   net: string;
   tendered: string;
   change: string;
@@ -141,6 +144,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     lineTotal: 'Amount',
     gross: 'Gross',
     discount: 'Discount',
+    promotion: 'Promotion',
     net: 'Total',
     tendered: 'Tendered',
     change: 'Change',
@@ -179,6 +183,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     lineTotal: 'رقم',
     gross: 'کل رقم',
     discount: 'رعایت',
+    promotion: 'پروموشن',
     net: 'قابلِ ادائیگی',
     tendered: 'ادا شدہ',
     change: 'واپسی',
@@ -294,6 +299,16 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   return budget > 0 ? `${identity.slice(0, budget)}… · ${tail}` : tail.slice(0, 160);
 }
 
+/** #727: descriptive savings only; the discount is already inside the line total. */
+export function receiptPromotionLabel(
+  line: Pick<CounterReceiptLine, 'promotionName' | 'discountMinor'>,
+  locale: CounterReceiptLocale
+): string | null {
+  if (!line.promotionName || line.discountMinor <= 0) return null;
+  const label = `${COUNTER_RECEIPT_STRINGS[locale].promotion}: ${line.promotionName} (-${formatMinor(line.discountMinor, locale)})`;
+  return label.length <= 160 ? label : label.slice(0, 160);
+}
+
 function footerFor(
   receipt: CounterReceipt,
   locale: CounterReceiptLocale,
@@ -360,10 +375,13 @@ export function buildCounterReceiptDocument(
     // The seam caps a document at 200 lines; a counter bill never reaches that,
     // and truncating silently would print a receipt that under-reports what was
     // dispensed, so an over-long bill is refused rather than trimmed.
-    lines: receipt.lines.map((line) => ({
-      quantity: line.quantity,
-      label: receiptLineLabel(line, locale),
-    })),
+    lines: receipt.lines.flatMap((line) => {
+      const promotion = receiptPromotionLabel(line, locale);
+      return [
+        { quantity: line.quantity, label: receiptLineLabel(line, locale) },
+        ...(promotion ? [{ quantity: 1, label: promotion }] : []),
+      ];
+    }),
     footer: footerFor(receipt, locale, options.reprint ?? false),
   };
 
