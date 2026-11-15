@@ -166,11 +166,13 @@ function domainError(error: unknown): never {
     const code =
       error.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : error.reason === 'CROSS_TENANT_REFERENCE' ||
-            error.reason === 'CROSS_BRANCH_REFERENCE' ||
-            error.reason === 'BLOCKED_STOCK'
-          ? 'FORBIDDEN'
-          : 'BAD_REQUEST';
+        : error.reason === 'IDEMPOTENCY_CONFLICT'
+          ? 'CONFLICT'
+          : error.reason === 'CROSS_TENANT_REFERENCE' ||
+              error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'BLOCKED_STOCK'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST';
     throw new TRPCError({ code, message: error.reason });
   }
   if (error instanceof PharmacyStockSignalError) {
@@ -1363,7 +1365,7 @@ export const pharmacyInventoryRouter = router({
       }
       try {
         // Both legs and the source lock commit together, so the units are never
-        // AVAILABLE at the origin and IN_TRANSIT at the destination at once.
+        // AVAILABLE at the origin and at the destination at once (DEV-608).
         return await ctx.db.$transaction(async (tx) =>
           transferStock(txDb(tx), await admittedScopeFor(ctx, input.branchId), {
             inventoryLotId: input.inventoryLotId,

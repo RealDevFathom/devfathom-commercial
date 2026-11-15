@@ -62,6 +62,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 import { Prisma } from '@/generated/prisma/client';
 import { moduleForProcedure } from '@/lib/module-catalog';
 import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 import { admittedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -2966,5 +2967,116 @@ describe('DEV-82 — live cold-chain sensor management', () => {
       caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_other' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+});
+
+// ── DEV-608 — who may move stock between locations in a branch ─────────────
+
+/**
+ * The pharmacy system roles whose real template grants reach `pharmacy:inventory`
+ * (owner through `pharmacy:*`). Every other template, Manager included, holds no
+ * inventory grant, so a location move is refused before any stock is read.
+ */
+const TRANSFER_ROLES = ['owner', 'owner-operator', 'inventory'];
+
+const transferRequest = () =>
+  caller().transfer({
+    branchId: 'branch_a',
+    inventoryLotId: 'lot_1',
+    fromStockLocationId: 'location_1',
+    toStockLocationId: 'location_2',
+    units: 1,
+    idempotencyKeyPrefix: 'move-1',
+  });
+
+describe('DEV-608 — location transfer role matrix', () => {
+  it('covers every pharmacy system role template', () => {
+    for (const key of TRANSFER_ROLES) {
+      expect(PHARMACY_ROLE_TEMPLATES.map((role) => role.key)).toContain(key);
+    }
+  });
+
+  it.each(PHARMACY_ROLE_TEMPLATES.map((role) => [role.key, role.capabilities] as const))(
+    '%s, on a branch it is assigned to, is admitted or refused by its template grants',
+    async (key, capabilities) => {
+      sessionRole = 'EMPLOYEE';
+      grant(capabilities.map(allow));
+
+      const outcome = await transferRequest().then(
+        () => null,
+        (error: { code?: string; message?: string }) => error
+      );
+
+      if (TRANSFER_ROLES.includes(key)) {
+        // Past the capability and branch rules: the (mocked, empty) ledger answers.
+        expect(outcome).toMatchObject({ code: 'NOT_FOUND' });
+        expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
+        expect(db.pharmacyStockMovement.findMany).toHaveBeenCalled();
+      } else {
+        expect(outcome).toMatchObject(CAPABILITY_REFUSAL);
+        expect(dataAccess()).toEqual([]);
+      }
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(TRANSFER_ROLES)(
+    'refuses %s on a branch it is not assigned to, before any stock access',
+    async (key) => {
+      sessionRole = 'EMPLOYEE';
+      grant(PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map(allow));
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(transferRequest()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it('refuses a cashier even on a branch the cashier is assigned to', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant(PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'cashier')!.capabilities.map(allow));
+
+    await expect(transferRequest()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(dataAccess()).toEqual([]);
+  });
+
+  it('answers a transfer retry with the first result instead of failing (CONFLICT on reuse)', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyStockMovement.findMany.mockResolvedValue([
+      {
+        id: 'out_1',
+        branchId: 'branch_a',
+        idempotencyKey: 'move-1:out',
+        kind: 'TRANSFER_OUT',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        quantityUnits: -1,
+      },
+      {
+        id: 'in_1',
+        branchId: 'branch_a',
+        idempotencyKey: 'move-1:in',
+        kind: 'TRANSFER_IN',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_2',
+        quantityUnits: 1,
+      },
+    ]);
+
+    await expect(transferRequest()).resolves.toMatchObject({
+      out: { id: 'out_1' },
+      received: { id: 'in_1' },
+    });
+    await expect(
+      caller().transfer({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        fromStockLocationId: 'location_1',
+        toStockLocationId: 'location_2',
+        units: 2,
+        idempotencyKeyPrefix: 'move-1',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'IDEMPOTENCY_CONFLICT' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
 });
