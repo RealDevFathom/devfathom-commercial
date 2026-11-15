@@ -56,6 +56,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+  // DEV-630: the server books money on today in the workspace zone only.
+  BUSINESS_DATE_NOT_CURRENT:
+    'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
   // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:

@@ -139,6 +139,8 @@ type DrawerPath = {
   name: string;
   run: (caller: Caller, branchId?: string) => Promise<unknown>;
   command: () => unknown;
+  /** Arguments the router passes after the input (DEV-630: today's business day only). */
+  options?: unknown[];
 };
 
 // DEV-31: a cashier on the counter grant opens an empty drawer and nothing else.
@@ -153,6 +155,7 @@ const drawerPaths: DrawerPath[] = [
         openingFloatMinor: 0,
       }),
     command: () => openPharmacyDrawer,
+    options: [{ requireCurrentBusinessDate: true }],
   },
 ];
 
@@ -169,6 +172,7 @@ const managerDrawerPaths: DrawerPath[] = [
         openingFloatMinor: 500,
       }),
     command: () => openPharmacyDrawer,
+    options: [{ requireCurrentBusinessDate: true }],
   },
   {
     name: 'drawerMovement',
@@ -267,7 +271,8 @@ describe('cash drawer authorization (DEV-279, DEV-659)', () => {
     expect(path.command()).toHaveBeenCalledWith(
       expect.anything(),
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      expect.objectContaining({ branchId: 'branch-a' })
+      expect.objectContaining({ branchId: 'branch-a' }),
+      ...(path.options ?? [])
     );
   });
 
@@ -487,7 +492,8 @@ describe('drawer cash control is manager or owner only (DEV-31)', () => {
     expect(path.command()).toHaveBeenCalledWith(
       expect.anything(),
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      expect.objectContaining({ branchId: 'branch-a' })
+      expect.objectContaining({ branchId: 'branch-a' }),
+      ...(path.options ?? [])
     );
   });
 
