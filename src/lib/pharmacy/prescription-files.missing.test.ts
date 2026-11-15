@@ -44,13 +44,13 @@ describe('loadPrescriptionFile when the stored image is unavailable', () => {
     );
   });
 
-  it('reads a missing local or Azure object as NOT_FOUND, as before', async () => {
+  it('reads a missing local object or any 404 as NOT_FOUND, as before', async () => {
     expect(await failureCode(Object.assign(new Error('gone'), { code: 'ENOENT' }))).toBe(
       'NOT_FOUND'
     );
-    expect(
-      await failureCode(Object.assign(new Error('gone'), { code: 'BlobNotFound', statusCode: 404 }))
-    ).toBe('NOT_FOUND');
+    expect(await failureCode(Object.assign(new Error('gone'), { statusCode: 404 }))).toBe(
+      'NOT_FOUND'
+    );
   });
 
   it('keeps any other storage failure an internal error', async () => {

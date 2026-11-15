@@ -738,6 +738,20 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       },
     });
 
+    tools.listStaffRoles = tool({
+      description:
+        'List this workspace’s staff role templates and IDs for inviteMember. ADMIN only.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!h.isAdmin) return { error: 'Only admins can list staff role templates.' };
+        return h.db.organizationRole.findMany({
+          where: { organizationId: ctx.organizationId },
+          orderBy: { name: 'asc' },
+          select: { id: true, key: true, name: true },
+        });
+      },
+    });
+
     // Invite a new member (mirrors team.inviteMember): create/refresh an INVITED
     // user with no password, mint a single-use token, email an accept link.
     tools.inviteMember = tool({
@@ -749,6 +763,15 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         // `format` keywords (400s the whole request). Validated in execute.
         email: z.string().describe('Their work email — the invite is sent here'),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).nullish().describe('Default EMPLOYEE'),
+        organizationRoleId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(128)
+          .nullish()
+          .describe(
+            'Staff role template ID from listStaffRoles. Omit or null to preserve a pending invite’s role.'
+          ),
         department: departmentKey,
         title: z.string().min(1).describe('Their job title, e.g. "Senior Engineer"'),
         phone: z.string().nullish(),
@@ -756,7 +779,17 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         skills: z.array(z.string()).nullish(),
       }),
       needsApproval: true,
-      execute: async ({ name, email, role, department, title, phone, bio, skills }) => {
+      execute: async ({
+        name,
+        email,
+        role,
+        organizationRoleId,
+        department,
+        title,
+        phone,
+        bio,
+        skills,
+      }) => {
         if (!h.isAdmin) return { error: 'Only admins can invite members.' };
         // D10: normalize BEFORE validating, so a padded or upper-cased address
         // the model echoed back from a chat message is accepted and stored in the
@@ -775,6 +808,16 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (!departmentRow) {
           return { error: `"${department}" is not an active department in this workspace.` };
+        }
+
+        const organizationRole = organizationRoleId
+          ? await h.db.organizationRole.findFirst({
+              where: { id: organizationRoleId, organizationId: ctx.organizationId },
+              select: { id: true, name: true },
+            })
+          : null;
+        if (organizationRoleId && !organizationRole) {
+          return { error: 'Invalid role template.' };
         }
 
         const existing = await h.db.user.findFirst({
@@ -803,6 +846,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const profile = {
           name,
           role: finalRole,
+          ...(organizationRole ? { organizationRoleId: organizationRole.id } : {}),
           department,
           title,
           phone: phone ?? null,
@@ -838,7 +882,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const mail = templates.inviteMember({
           name: user.name,
           inviterName: ctx.name ?? undefined,
-          role: `${titleCase(finalRole)} · ${titleCase(department)}`,
+          role: organizationRole?.name ?? `${titleCase(finalRole)} · ${titleCase(department)}`,
           workspace: 'DevFathom',
           acceptUrl: inviteUrl,
           expiresLabel: 'in 7 days',
@@ -863,7 +907,13 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           targetType: 'User',
           targetId: user.id,
           targetLabel: user.name,
-          metadata: { email: lowerEmail, role: finalRole, department, reInvite: !!existing },
+          metadata: {
+            email: lowerEmail,
+            role: finalRole,
+            department,
+            organizationRoleId: organizationRole?.id,
+            reInvite: !!existing,
+          },
         });
 
         return {

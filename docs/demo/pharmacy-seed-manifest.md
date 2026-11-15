@@ -142,7 +142,7 @@ helper contract semantics and namespace are unchanged. `PharmacyDraftRequest`
 adds an optional `integration` object containing existing `goodsReceiptId`,
 `stockLocationId`, `deviceId`, `drawerSessionId` and integer `cashReceivedMinor`.
 The default remains read-only; only the existing private disposable SQL fence
-accepts a reviewed digest/expiry. LAN/Azure and top-level `--apply` remain disabled.
+accepts a reviewed digest/expiry. LAN/staging and top-level `--apply` remain disabled.
 
 The root now composes its existing draft PO with accepted
 `executePreparedInventoryReceipt` (`postGoodsReceipt` / `receiveLot`), then the
@@ -243,7 +243,7 @@ integrated review must be routed by active Desktop after this proof.
 ## Historical revision: disposable draft and atomic receipt
 
 This section supersedes the historical offline-only limitations below for the
-**fresh disposable TEST target only**. LAN and Azure application remain disabled
+**fresh disposable TEST target only**. LAN and staging application remain disabled
 and unauthorized. No helper artifacts are integrated. No product service, schema,
 migration, dependency version, account, permission or clinical record is changed
 on an existing target.
@@ -477,14 +477,14 @@ bun --no-env-file scripts/seed-pharmacy-demo.ts
 # exit 2: EVIDENCE_REQUIRED; no file/database access
 
 bun --no-env-file scripts/seed-pharmacy-demo.ts --evidence /approved/location/lan.pharmacy-demo.json
-bun --no-env-file scripts/seed-pharmacy-demo.ts --evidence /approved/location/azure.pharmacy-demo.json
+bun --no-env-file scripts/seed-pharmacy-demo.ts --evidence /approved/location/staging.pharmacy-demo.json
 # exit 0 only means the supplied offline evidence passed validation
 
 bun --no-env-file scripts/seed-pharmacy-demo.ts --apply
 # exit 2: APPLY_DISABLED, before opening any evidence file
 ```
 
-Neither LAN nor Azure evidence exists in this package. Both require separate,
+Neither LAN nor staging evidence exists in this package. Both require separate,
 existing, explicitly approved Pharmacy workspace facts for `owner@chaichowk.pk`.
 A recommended workspace is not a provisioned workspace. Do not substitute the
 Restaurant workspace, a disposable E2E fixture, or real patient data.
@@ -498,7 +498,7 @@ sandbox. Errors omit input content, paths, IDs and underlying exception messages
 
 Required evidence:
 
-- Target environment `lan`, `azure-staging` or `disposable`, stable non-secret
+- Target environment `lan`, `staging` or `disposable`, stable non-secret
   target key, exact organization/branch/owner IDs, PHARMACY vertical, PKR currency,
   timezone, business date and explicit scenario instant.
 - Matching observed environment/target/organization/branch/currency/timezone,
@@ -563,19 +563,19 @@ must not implement live writes until these blockers are resolved.
 
 ## Function coverage
 
-| Function                                                | Source runner coverage                         | Live LAN   | Azure STAGING |
-| ------------------------------------------------------- | ---------------------------------------------- | ---------- | ------------- |
-| Target/owner/branch/configuration                       | Offline evidence validation only               | Unverified | Unverified    |
-| Catalog, medicine, presentation, pack                   | OWNER-INPUT; approved existing references only | UNSEEDED   | UNSEEDED      |
-| Purchasing, receiving, stock, transfers, counts         | UNSEEDED; inventory helper not integrated      | UNSEEDED   | UNSEEDED      |
-| Sales, returns, tenders, khata                          | UNSEEDED; finance helper not integrated        | UNSEEDED   | UNSEEDED      |
-| Journals, settlements, bank reconciliation              | UNSEEDED; no posted financial facts            | UNSEEDED   | UNSEEDED      |
-| Operational, financial, growth reports                  | UNSEEDED; no report outputs observed           | UNSEEDED   | UNSEEDED      |
-| Loyalty, refills, campaigns                             | UNSEEDED; retention helper not integrated      | UNSEEDED   | UNSEEDED      |
-| Prescription, dispensing, controlled drugs              | OWNER-INPUT; no approval impersonation         | UNSEEDED   | UNSEEDED      |
-| Safety, recalls, temperatures, regulatory               | OWNER-INPUT; no invented safety state          | UNSEEDED   | UNSEEDED      |
-| Providers, catalog crawl, fiscal, email/SMS             | OWNER-INPUT; external effects absent           | UNSEEDED   | UNSEEDED      |
-| Hardware, print, branch/receipt permissions, first sale | OWNER-INPUT; separate real-input acceptance    | UNSEEDED   | UNSEEDED      |
+| Function                                                | Source runner coverage                         | Live LAN   | STAGING    |
+| ------------------------------------------------------- | ---------------------------------------------- | ---------- | ---------- |
+| Target/owner/branch/configuration                       | Offline evidence validation only               | Unverified | Unverified |
+| Catalog, medicine, presentation, pack                   | OWNER-INPUT; approved existing references only | UNSEEDED   | UNSEEDED   |
+| Purchasing, receiving, stock, transfers, counts         | UNSEEDED; inventory helper not integrated      | UNSEEDED   | UNSEEDED   |
+| Sales, returns, tenders, khata                          | UNSEEDED; finance helper not integrated        | UNSEEDED   | UNSEEDED   |
+| Journals, settlements, bank reconciliation              | UNSEEDED; no posted financial facts            | UNSEEDED   | UNSEEDED   |
+| Operational, financial, growth reports                  | UNSEEDED; no report outputs observed           | UNSEEDED   | UNSEEDED   |
+| Loyalty, refills, campaigns                             | UNSEEDED; retention helper not integrated      | UNSEEDED   | UNSEEDED   |
+| Prescription, dispensing, controlled drugs              | OWNER-INPUT; no approval impersonation         | UNSEEDED   | UNSEEDED   |
+| Safety, recalls, temperatures, regulatory               | OWNER-INPUT; no invented safety state          | UNSEEDED   | UNSEEDED   |
+| Providers, catalog crawl, fiscal, email/SMS             | OWNER-INPUT; external effects absent           | UNSEEDED   | UNSEEDED   |
+| Hardware, print, branch/receipt permissions, first sale | OWNER-INPUT; separate real-input acceptance    | UNSEEDED   | UNSEEDED   |
 
 D07/D08/D11, 1354/1364 and real-input first-sale acceptance remain gated. No
 draft scenarios are integrated yet; any future draft-only rows must remain
@@ -593,7 +593,7 @@ Initial focused test command `bun test scripts/seed-pharmacy-demo.test.ts`:
 **51 passed, 0 failed, exit 0**. Only `.env.example` exists in this checkout;
 final commands explicitly disable automatic environment-file loading.
 Final focused command `bun --no-env-file test scripts/seed-pharmacy-demo.test.ts`:
-**53 passed, 0 failed, exit 0**, including both LAN and Azure staging offline
+**53 passed, 0 failed, exit 0**, including both LAN and staging offline
 evidence cases. This supersedes the initial 51-test count.
 
 Final scoped verification commands (all exit 0):
@@ -706,7 +706,7 @@ Unblock owner: active Codex Desktop routes the finance correction and independen
 review, then delivers exact accepted source to WHA-1388. Resume root composition
 and the assigned one-cluster integrated proof only after that delivery. Receiving,
 cash, reports, replay, rollback and concurrency integration remain unverified.
-LAN/Azure apply remains disabled; clinical, Rx, controlled, fiscal, provider,
+LAN/staging apply remains disabled; clinical, Rx, controlled, fiscal, provider,
 consent, outreach and mature retention coverage remain UNSEEDED/OWNER-INPUT.
 No live writes, authentication changes, provisioning, push, merge or deployment.
 Source-only recovery needs no database rollback; preserve other workers' files.

@@ -182,7 +182,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
               <button
                 onClick={handleCreate}
                 disabled={createNote.isPending}
-                className="ml-auto flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+                className="ml-auto flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-50"
               >
                 {createNote.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -227,7 +227,7 @@ export function NotesContent({ selectedId, projectId, clientId, embedded }: Note
                   <button
                     onClick={handleCreate}
                     disabled={createNote.isPending}
-                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-50"
                   >
                     <Plus className="h-3 w-3" /> New note
                   </button>
@@ -514,7 +514,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
               <button
                 onClick={handleSave}
                 disabled={updateNote.isPending}
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
                 title="Save (⌘S)"
               >
                 {updateNote.isPending ? (
@@ -1081,7 +1081,7 @@ function HistoryPanel({
                       }
                     }}
                     disabled={restore.isPending}
-                    className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-50"
                     title="Restore this version"
                   >
                     {restore.isPending ? (

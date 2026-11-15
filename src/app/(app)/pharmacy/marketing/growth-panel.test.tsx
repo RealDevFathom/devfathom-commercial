@@ -66,3 +66,24 @@ it.each(['CONFIGURATION', 'PROVIDER', 'TIMEOUT', 'OUTPUT'] as const)(
     }
   }
 );
+
+it('links to AI settings and asks for plain local days with sensible defaults', () => {
+  const { container } = render(
+    <GrowthPanel
+      branchId="synthetic-branch"
+      history={{ insights: [], reviews: [] }}
+      templates={[]}
+      timeZone="Asia/Karachi"
+    />
+  );
+  expect(screen.getByRole('link', { name: 'Turn on AI in Organization settings' })).toHaveAttribute(
+    'href',
+    '/organization'
+  );
+  expect(container).toHaveTextContent('contact DevFathom support');
+  expect(screen.getByLabelText('First day')).toHaveAttribute('type', 'date');
+  expect(screen.getByLabelText('First day')).not.toHaveValue('');
+  expect(screen.getByLabelText('Last day')).not.toHaveValue('');
+  expect(container).toHaveTextContent('Pakistan time (PKT)');
+  expect(container).not.toHaveTextContent(/\(UTC\)|Exclusive cutoff|configured provider/);
+});

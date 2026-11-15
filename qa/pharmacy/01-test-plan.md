@@ -25,7 +25,7 @@ In scope:
 Out of scope:
 
 - Restaurant, hospitality, and agency product journeys, except when they appear inside a pharmacy session.
-- Live Meta WhatsApp, live cameras, Azure, payments providers, email delivery, and production data.
+- Live Meta WhatsApp, live cameras, AWS, payments providers, email delivery, and production data.
 - Changing product code, migrations, or seeds. QA artifacts live only under `qa/pharmacy/`.
 
 ## 3. Environment

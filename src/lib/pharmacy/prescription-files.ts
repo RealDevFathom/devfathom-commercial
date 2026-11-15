@@ -132,11 +132,7 @@ export async function loadPrescriptionFile(organizationId: string, sourceFileRef
     raw = await getUpload(storageNamespace, `${id}.json`);
   } catch (error) {
     const missing = error as { code?: string; statusCode?: number };
-    if (
-      missing.code === 'ENOENT' ||
-      missing.code === 'BlobNotFound' ||
-      missing.statusCode === 404
-    ) {
+    if (missing.code === 'ENOENT' || missing.statusCode === 404) {
       throw new TRPCError({
         code: 'NOT_FOUND',
         message: 'Prescription image unavailable. Upload it again.',

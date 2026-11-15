@@ -75,3 +75,14 @@ it('allows retry after a refused approval PIN without claiming an unknown write'
     outcome: 'rejected',
   });
 });
+
+it('explains a receipt reversal refused because the stock moved on (DEV-610)', async () => {
+  await expect(fail(new Error('REVERSAL_STOCK_MOVED'), true)).resolves.toMatchObject({
+    message: expect.stringContaining('sold, transferred'),
+    outcome: 'rejected',
+  });
+  await expect(fail(new Error('REVERSAL_PACKS_OPENED'), true)).resolves.toMatchObject({
+    message: expect.stringContaining('opened into loose units'),
+    outcome: 'rejected',
+  });
+});

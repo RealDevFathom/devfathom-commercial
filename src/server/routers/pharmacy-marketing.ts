@@ -237,7 +237,8 @@ export const pharmacyMarketingRouter = router({
       if (!settings?.askFathomEnabled)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'AI insights are disabled. Manual campaigns remain available.',
+          message:
+            'AI insights are turned off for this company. Turn on Ask Fathom in Organization settings, then try again. Manual campaigns remain available.',
         });
       return buildPharmacyGrowthInput(db, resolved, input.from, input.cutoff);
     });

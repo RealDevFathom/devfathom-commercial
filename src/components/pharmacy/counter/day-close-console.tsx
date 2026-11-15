@@ -271,10 +271,23 @@ function DayCloseForm({
         )}
         <div className="mt-4 space-y-2" aria-label="Tender totals">
           {tenderTotals.map((row) => (
-            <p key={row.type} className="text-sm text-text-body">
-              <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
-            </p>
+            <div key={row.type} className="space-y-1">
+              <p className="text-sm text-text-body">
+                <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
+                {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
+              </p>
+              {row.confirmers?.length ? (
+                <ul className="ps-4 text-sm text-text-muted" aria-label={`${row.type} confirmed by`}>
+                  {row.confirmers.map((confirmer, index) => (
+                    <li key={confirmer.id ?? `${confirmer.name}-${index}`}>
+                      Confirmed by {confirmer.name} · {confirmer.count}{' '}
+                      {confirmer.count === 1 ? 'payment' : 'payments'} ·{' '}
+                      {formatMinor(confirmer.amountMinor)} {currency}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           ))}
         </div>
         {report ? (

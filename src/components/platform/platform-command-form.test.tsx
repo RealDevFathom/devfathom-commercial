@@ -276,4 +276,23 @@ describe('PlatformCommandForm', () => {
     expect(search).toHaveAttribute('aria-invalid', 'true');
     expect(search).toHaveAccessibleDescription('Choose a valid IANA timezone.');
   });
+  it('renders field help with the contrast-checked muted text token', () => {
+    render(
+      <PlatformCommandForm
+        action="operator.upsert"
+        fields={[
+          {
+            name: 'password',
+            label: 'Temporary password',
+            type: 'password',
+            help: 'At least 12 characters.',
+          },
+        ]}
+      />
+    );
+
+    const help = screen.getByText('At least 12 characters.');
+    expect(help).toHaveClass('text-text-muted');
+    expect(help).not.toHaveClass('text-text-faint');
+  });
 });
