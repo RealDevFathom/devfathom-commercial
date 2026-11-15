@@ -325,13 +325,27 @@ total cost`; margin % is `margin ÷ quoted total × 100` and is unavailable with
 - **Delivery panel:** Record the scheduled time, named driver, optional dispatch/delivery times,
   vehicle, and notes. These fields do not move the order lifecycle automatically; use the explicit
   status action.
-- **Stock at READY and cancellation:** Moving IN_PRODUCTION → READY posts negative
-  `RECIPE_CONSUMPTION` movements for stock-linked requirements to the branch's earliest-created
-  active stock location. If there is no active location, no linked stock item, or no recipe
-  requirement, nothing is posted for that part. The consumption command is idempotent. Cancelling
-  from READY or DELIVERED reverses the posted catering movements once as positive `SALE_REVERSAL`
-  movements. Cancelling before READY has no consumption to reverse; CLOSED orders cannot be
+- **Stock at READY and cancellation:** Confirmation requires the booking (start/end, pickup or
+  delivery, and an active **stock location** in the branch). Moving IN_PRODUCTION → READY posts negative
+  `RECIPE_CONSUMPTION` movements for stock-linked requirements to that selected stock location. If
+  there is no linked stock item or no recipe requirement, nothing is posted for that part. The
+  consumption command is idempotent. **Cancelling does not reverse stock automatically.** A
+  cancellation only changes the status and appends the event; any consumption already posted at
+  READY stays posted. Cancelling before READY has no consumption to reverse; CLOSED orders cannot be
   cancelled.
+- **Cancelled-order physical disposition:** After cancelling an order that consumed stock, classify
+  each consumed quantity against its original consumption movement, with a reason. Choose
+  `UNUSED_RETURN` when the goods are physically unused and back on the shelf: this posts a positive
+  `SALE_REVERSAL` movement to the original location and batch (the location must still be active).
+  Choose `WASTE` or `NO_RETURN` when the goods were spoiled, used, or not recoverable: the
+  classification is recorded but no stock is restored. Each disposition quantity must be positive,
+  and the total classified for one movement cannot exceed the original consumption. Replaying the
+  same idempotency key is safe; changing its payload is rejected. Orders that carry a historical
+  automatic reversal must be reconciled before a disposition can be recorded.
+- **Financial refund is separate:** Dispositions only move stock. Returning a deposit or other
+  payment to the customer is a separate money step following the normal refund rules (manager or
+  owner PIN). Recording an unused return does not refund money, and refunding money does not
+  restore stock.
 - **Common failure/recovery:** Resolve a missing active recipe version or exact unit conversion in
   Catalog before preparing or costing the event. Review quote, lines, portions, recipe costs,
   extras, production quantities, delivery assignment, and status before each transition; a skipped
@@ -342,8 +356,8 @@ total cost`; margin % is `margin ÷ quoted total × 100` and is unavailable with
 of PKR 260 per portion, PKR 6,000 labour, and PKR 3,200 transport. The quote is PKR 60,000;
 ingredient cost is `80 × 260 = PKR 20,800`, total cost is PKR 30,000, margin is PKR 30,000, and
 margin is 50%. If the active recipe needs 180 g chicken per portion, the production sheet groups it
-as 14,400 g; READY posts −14,400 g to the branch's earliest-created active stock location when
-chicken is stock-linked.
+as 14,400 g; READY posts −14,400 g to the order's selected stock location when chicken is
+stock-linked.
 
 ### 13. Execute SOPs and evidence
 
@@ -437,7 +451,7 @@ chicken is stock-linked.
 cost and 2 kg wastage has no recorded cost. The current weighted average is PKR 200/kg, so the
 report values the losses at PKR 660 and an estimated PKR 400: 5 kg and PKR 1,060 total, with one
 estimated movement. If opening stock was 20 kg, a 10 kg receipt and these 5 kg losses produce 10 kg
-inflow, 5 kg outflow, −5 kg net movement, and 25 kg closing quantity.
+inflow, 5 kg outflow, +5 kg net movement (10 − 5), and 25 kg closing quantity (20 + 5).
 
 #### Food-cost report
 
