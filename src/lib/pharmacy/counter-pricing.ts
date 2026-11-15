@@ -151,9 +151,14 @@ export function saleUnitOptions(input: {
  * to sell stock that is physically on the shelf. The medicine's pack setup is
  * still a priceable arrangement: every option is priced pro-rata from the lot's
  * printed MRP and frozen `unitsPerPack`, exactly as `addSaleLine` prices it on
- * the server. Only options that divide the received pack evenly are offered:
+ * the server. Only units that divide the received pack evenly are offered:
  * `priceFromLot` refuses a sale unit bigger than the pack it came in, and a
  * unit that does not divide the pack cannot be cut from it on the shelf.
+ *
+ * The toggle is anchored at the OUTERMOST setup level that divides every pack
+ * size, not at the setup's top: kinds are positional, so anchoring there keeps
+ * exactly one PACK and one UNIT (a 100-tablet box lot under a carton setup
+ * sells as box / strip / unit, never as two strips).
  *
  * Returns `[]` when the setup itself is ambiguous (no single top level, a level
  * with two children, a cycle) or no level divides the received pack.
@@ -175,22 +180,22 @@ export function setupSaleUnitOptions(input: {
   );
   if (roots.length !== 1) return [];
   const root = roots[0]!;
-  let options: SaleUnitOption[];
   try {
     const detached = input.packLevels.map((node) =>
       node.id === root.id ? { ...node, parentPackLevelId: null } : node
     );
-    options = saleUnitOptions({
+    const chain = chainFrom(detached, root.id);
+    const cumulative = setupCumulativeUnits(chain);
+    const anchor = cumulative.findIndex((units) => packSizes.every((size) => size % units === 0));
+    if (anchor === -1) return [];
+    return saleUnitOptions({
       packLevels: detached,
-      rootPackLevelId: root.id,
-      unitsPerPack: setupCanonicalUnits(detached, root.id),
+      rootPackLevelId: chain[anchor]!.id,
+      unitsPerPack: cumulative[anchor]!,
     });
   } catch {
     return [];
   }
-  return options.filter((option) =>
-    packSizes.every((size) => size % option.canonicalUnitsPerSaleUnit === 0)
-  );
 }
 
 /** A lot that cannot be sold in any unit of the medicine's setup, in shop words. */
@@ -210,7 +215,11 @@ export type CounterPackMismatch = {
  * when neither yields a sale unit is a plain-words mismatch reported.
  */
 export function resolveCounterSaleUnits(input: {
-  packLevels: readonly (PackLevelNode & { effectiveFrom?: Date; effectiveTo?: Date | null })[];
+  packLevels: readonly (PackLevelNode & {
+    effectiveFrom?: Date;
+    effectiveTo?: Date | null;
+    versionGroupId?: string;
+  })[];
   lotPackLevelId: string;
   lotPackLevelLabel: string | null;
   lotUnitsPerPack: number;
@@ -232,13 +241,27 @@ export function resolveCounterSaleUnits(input: {
     // Fall through to the medicine's own setup below.
   }
   const at = input.at.getTime();
-  const effective = input.packLevels.filter(
-    (node) =>
-      (node.effectiveFrom === undefined || node.effectiveFrom.getTime() <= at) &&
-      (node.effectiveTo === undefined ||
-        node.effectiveTo === null ||
-        node.effectiveTo.getTime() > at)
-  );
+  const isEffective = (node: (typeof input.packLevels)[number]) =>
+    (node.effectiveFrom === undefined || node.effectiveFrom.getTime() <= at) &&
+    (node.effectiveTo === undefined ||
+      node.effectiveTo === null ||
+      node.effectiveTo.getTime() > at);
+  // Revising a pack level closes it and creates its successor in the same
+  // version group without reparenting its children, so a child may still point
+  // at the closed version. Re-link it to the effective version of that parent.
+  const byId = new Map(input.packLevels.map((node) => [node.id, node]));
+  const effectiveByGroup = new Map<string, string>();
+  for (const node of input.packLevels) {
+    if (node.versionGroupId !== undefined && isEffective(node)) {
+      effectiveByGroup.set(node.versionGroupId, node.id);
+    }
+  }
+  const effective = input.packLevels.filter(isEffective).map((node) => {
+    const parent = node.parentPackLevelId === null ? undefined : byId.get(node.parentPackLevelId);
+    if (!parent || isEffective(parent) || parent.versionGroupId === undefined) return node;
+    const current = effectiveByGroup.get(parent.versionGroupId);
+    return current ? { ...node, parentPackLevelId: current } : node;
+  });
   const saleUnits = setupSaleUnitOptions({
     packLevels: effective,
     lotUnitsPerPack: input.lotUnitsPerPack,
@@ -255,23 +278,25 @@ export function resolveCounterSaleUnits(input: {
   };
 }
 
-/** Canonical units in one top-level pack of the setup, or a throw when malformed. */
-function setupCanonicalUnits(
-  packLevels: readonly PackLevelNode[],
-  rootPackLevelId: string
-): number {
-  const chain = chainFrom(packLevels, rootPackLevelId);
+/**
+ * Canonical units in one pack at each level of a setup chain, outermost first.
+ * A lone top level counts its own `unitsPerParent`; otherwise the leaf is one
+ * canonical unit and each level above multiplies its child's count.
+ */
+function setupCumulativeUnits(chain: readonly PackLevelNode[]): number[] {
   if (chain.length === 1) {
     assertPositiveInteger(chain[0]!.unitsPerParent);
-    return chain[0]!.unitsPerParent;
+    return [chain[0]!.unitsPerParent];
   }
-  let total = 1;
-  for (const node of chain.slice(1)) {
-    assertPositiveInteger(node.unitsPerParent);
-    total *= node.unitsPerParent;
+  const cumulative: number[] = new Array(chain.length).fill(1);
+  for (let index = chain.length - 2; index >= 0; index -= 1) {
+    const child = chain[index + 1]!;
+    assertPositiveInteger(child.unitsPerParent);
+    const total = cumulative[index + 1]! * child.unitsPerParent;
     if (!Number.isSafeInteger(total)) throw new PharmacyMedicineError('INVALID_CONVERSION');
+    cumulative[index] = total;
   }
-  return total;
+  return cumulative;
 }
 
 /**

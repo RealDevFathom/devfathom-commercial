@@ -375,11 +375,16 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
       at,
     });
     expect(resolved.packMismatch).toBeNull();
+    // Anchored at the strip, the outermost level that divides the lot: one PACK, one UNIT.
     expect(
-      resolved.saleUnits.map((option) => [option.kind, option.canonicalUnitsPerSaleUnit])
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.levelLabel,
+        option.canonicalUnitsPerSaleUnit,
+      ])
     ).toEqual([
-      ['STRIP', 10],
-      ['UNIT', 1],
+      ['PACK', 'STRIP', 10],
+      ['UNIT', 'UNIT', 1],
     ]);
     for (const option of resolved.saleUnits) {
       expect(() =>
@@ -412,7 +417,10 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
       dosageForm: 'Tablet',
       at,
     });
-    expect(resolved.saleUnits.map((option) => option.kind)).toEqual(['STRIP', 'UNIT']);
+    expect(resolved.saleUnits.map((option) => [option.kind, option.levelLabel])).toEqual([
+      ['PACK', 'STRIP'],
+      ['UNIT', 'UNIT'],
+    ]);
     for (const option of resolved.saleUnits) {
       for (const canonicalUnitsInPack of [100, 10]) {
         expect(() =>
@@ -424,6 +432,93 @@ describe('resolveCounterSaleUnits (DEV-724 pack mismatch fallback)', () => {
         ).not.toThrow();
       }
     }
+  });
+
+  it('anchors a four-level setup at the received box so kinds stay unique', () => {
+    const fourLevel: PackLevelNode[] = [
+      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+      { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 5 },
+      { id: 'strip', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 10 },
+      { id: 'unit', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 10 },
+    ];
+    const resolved = resolveCounterSaleUnits({
+      packLevels: fourLevel,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.packLevelId,
+        option.canonicalUnitsPerSaleUnit,
+      ])
+    ).toEqual([
+      ['PACK', 'box', 100],
+      ['STRIP', 'strip', 10],
+      ['UNIT', 'unit', 1],
+    ]);
+  });
+
+  it('re-links children of a revised pack level to its current version', () => {
+    // revisePackLevel closes `strip-v1` and creates `strip-v2` in the same
+    // version group; the unit level still points at the closed `strip-v1`.
+    const revised = [
+      {
+        id: 'box',
+        level: 'BOX',
+        parentPackLevelId: null,
+        unitsPerParent: 1,
+        versionGroupId: 'g-box',
+      },
+      {
+        id: 'strip-v1',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 5,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2025-01-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'strip-v2',
+        level: 'STRIP',
+        parentPackLevelId: 'box',
+        unitsPerParent: 10,
+        versionGroupId: 'g-strip',
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        effectiveTo: null,
+      },
+      {
+        id: 'unit',
+        level: 'UNIT',
+        parentPackLevelId: 'strip-v1',
+        unitsPerParent: 10,
+        versionGroupId: 'g-unit',
+      },
+    ];
+    const resolved = resolveCounterSaleUnits({
+      packLevels: revised,
+      lotPackLevelId: 'old-box',
+      lotPackLevelLabel: 'BOX',
+      lotUnitsPerPack: 100,
+      dosageForm: 'Tablet',
+      at,
+    });
+    expect(resolved.packMismatch).toBeNull();
+    expect(
+      resolved.saleUnits.map((option) => [
+        option.kind,
+        option.packLevelId,
+        option.canonicalUnitsPerSaleUnit,
+      ])
+    ).toEqual([
+      ['PACK', 'box', 100],
+      ['STRIP', 'strip-v2', 10],
+      ['UNIT', 'unit', 1],
+    ]);
   });
 
   it('ignores superseded pack versions when falling back to the setup', () => {

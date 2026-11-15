@@ -308,6 +308,7 @@ export async function searchCounterCatalog(
         presentationId: true,
         effectiveFrom: true,
         effectiveTo: true,
+        versionGroupId: true,
       },
     }),
     db.medicinePackMrp.findMany({
