@@ -715,6 +715,9 @@ function ScopedPharmacyCounterConsole({
       retry: false,
     }
   );
+  const sendWhatsAppReceipt = trpc.pharmacySales.counterReceiptWhatsApp.useMutation({
+    retry: false,
+  });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -3314,6 +3317,22 @@ function ScopedPharmacyCounterConsole({
               : null
           }
           onSettlementPresented={receiptPresented}
+          onSendWhatsApp={async (receiptSaleId) => {
+            try {
+              const sent = await sendWhatsAppReceipt.mutateAsync({
+                branchId,
+                saleId: receiptSaleId,
+                customerRequested: true,
+              });
+              return sent.outcome === 'DUPLICATE'
+                ? { ok: true, message: 'A WhatsApp receipt for this sale was already sent today.' }
+                : sent.outcome === 'FAILED'
+                  ? { ok: false, message: 'WhatsApp did not accept the receipt. Retry later.' }
+                  : { ok: true, message: 'WhatsApp receipt sent with a secure link.' };
+            } catch (error) {
+              return { ok: false, message: messageFrom(error) };
+            }
+          }}
         />
       </CounterOverlay>
       <p className="sr-only" aria-live="polite">

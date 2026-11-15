@@ -58,6 +58,13 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
 }));
+vi.mock('@/lib/pharmacy/hosted-receipt-service', () => ({
+  sendWhatsAppReceiptLink: vi.fn(async () => ({
+    outcome: 'SENT',
+    expiresAt: '2026-12-15T00:00:00.000Z',
+    rxProtected: false,
+  })),
+}));
 vi.mock('@/lib/pharmacy/receipt-print', () => ({
   PharmacyReceiptPrintError: class PharmacyReceiptPrintError extends Error {
     constructor(reason: string) {
@@ -82,6 +89,8 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
+import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
+import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
 import {
   changeSaleStatus,
   createSale,
@@ -200,6 +209,7 @@ const reads = () => [
   readPharmacyReceiptFormat,
   readPharmacyReceiptTaxIdentity,
   readDispensingLabelSources,
+  sendWhatsAppReceiptLink,
 ];
 
 beforeEach(() => {
@@ -332,6 +342,12 @@ const paths: {
     run: (caller, branchId = 'branch-a') =>
       caller.lookupReceiptByNumber({ branchId, receiptNumber: 7 }),
     allowed: [expect.objectContaining({ id: 'sale-a', receiptDeviceId: 'device-a' })],
+  },
+  {
+    name: 'counterReceiptWhatsApp',
+    run: (caller, branchId = 'branch-a') =>
+      caller.counterReceiptWhatsApp({ branchId, saleId: 'sale-a', customerRequested: true }),
+    allowed: { outcome: 'SENT', rxProtected: false },
   },
   {
     name: 'counterReceiptFormat',
@@ -1365,4 +1381,52 @@ it('DEV-295 authorizes the actual shipped Cashier template after canonical migra
   await expect(
     denied.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+describe('DEV-16 WhatsApp receipt request', () => {
+  it('sends only when the cashier confirms the customer asked', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceiptWhatsApp({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        customerRequested: false as true,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(sendWhatsAppReceiptLink).not.toHaveBeenCalled();
+  });
+
+  it('passes the authorized branch scope and acting user, and explains refusals', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await f
+      .caller()
+      .counterReceiptWhatsApp({ branchId: 'branch-a', saleId: 'sale-a', customerRequested: true });
+    expect(sendWhatsAppReceiptLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+        saleId: 'sale-a',
+        actorUserId: 'user-a',
+      })
+    );
+
+    vi.mocked(sendWhatsAppReceiptLink).mockRejectedValueOnce(new HostedReceiptError('NO_CONSENT'));
+    await expect(
+      f
+        .caller()
+        .counterReceiptWhatsApp({ branchId: 'branch-a', saleId: 'sale-a', customerRequested: true })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'This customer has not opted in to WhatsApp messages.',
+    });
+    vi.mocked(sendWhatsAppReceiptLink).mockRejectedValueOnce(
+      new HostedReceiptError('NOT_CONFIGURED')
+    );
+    await expect(
+      f
+        .caller()
+        .counterReceiptWhatsApp({ branchId: 'branch-a', saleId: 'sale-a', customerRequested: true })
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
 });

@@ -7,7 +7,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey =
+  | 'refillReminder'
+  | 'khataReminder'
+  /** DEV-16 utility template: branch, receipt no, total, method and a hosted link only. */
+  | 'receiptLink'
+  /** DEV-16 authentication template carrying a one-time code for an Rx hosted receipt. */
+  | 'receiptOtp';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 export type WhatsAppConfig = {
@@ -125,6 +131,8 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
       khataReminder:
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN') ??
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      receiptLink: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_LINK'),
+      receiptOtp: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_OTP'),
     },
     khataTemplates: {
       en:
@@ -269,6 +277,17 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
             type: 'body',
             parameters: input.parameters.map((text) => ({ type: 'text', text })),
           },
+          // Meta authentication templates repeat the code in their copy-code button.
+          ...(input.template === 'receiptOtp'
+            ? [
+                {
+                  type: 'button',
+                  sub_type: 'url',
+                  index: '0',
+                  parameters: [{ type: 'text', text: input.parameters[0] ?? '' }],
+                },
+              ]
+            : []),
         ],
       },
     });
