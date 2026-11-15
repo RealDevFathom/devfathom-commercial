@@ -152,7 +152,14 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: {
+    familyAccountId: string;
+    amountMinor: number;
+    occurredAt: Date;
+    /** Deterministic allocation id prefix; makes a retried collection replay safely. */
+    idPrefix?: string;
+    note?: string;
+  }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -192,6 +199,8 @@ export async function settleFamilyKhata(
     allocations.push(
       await db.pharmacyKhataEvent.create({
         data: {
+          ...(input.idPrefix ? { id: `${input.idPrefix}${allocations.length}` } : {}),
+          ...(input.note ? { note: input.note } : {}),
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           familyAccountId: input.familyAccountId,
@@ -413,4 +422,172 @@ export async function authorizeKhataCharge(
     });
   }
   return account;
+}
+
+export const KHATA_COLLECTION_ID_PREFIX = 'khata-collect:';
+const KHATA_REFUND_ID_PREFIX = 'khata-refund:';
+export const KHATA_LEDGER_LIST_LIMIT = 500;
+
+export type KhataLedgerRow = {
+  id: string;
+  displayName: string;
+  payerName: string;
+  phoneLast4: string | null;
+  balanceMinor: number;
+  creditLimitMinor: number;
+  lastPaymentAt: Date | null;
+  oldestOverdueAt: Date | null;
+};
+
+/**
+ * DEV-730 owner list: every active family account on one branch with its full-ledger
+ * balance, limit, last customer payment and oldest overdue charge. Refund reversals are
+ * ledger credits but not customer payments, so they never count as "last payment".
+ */
+export async function listKhataLedger(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  now: Date = new Date()
+): Promise<{ accounts: KhataLedgerRow[]; truncated: boolean }> {
+  const where = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const accounts = await db.pharmacyFamilyAccount.findMany({
+    where: { ...where, active: true },
+    select: {
+      id: true,
+      displayName: true,
+      creditLimitMinor: true,
+      payer: { select: { displayName: true, phoneLast4: true } },
+    },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+    take: KHATA_LEDGER_LIST_LIMIT + 1,
+  });
+  const visible = accounts.slice(0, KHATA_LEDGER_LIST_LIMIT);
+  const ids = visible.map((account) => account.id);
+  if (!ids.length) return { accounts: [], truncated: false };
+  const accountWhere = { ...where, familyAccountId: { in: ids } };
+  const [totals, payments, events] = await Promise.all([
+    db.pharmacyKhataEvent.groupBy({
+      by: ['familyAccountId', 'kind'],
+      where: accountWhere,
+      _sum: { amountMinor: true },
+    }),
+    db.pharmacyKhataEvent.groupBy({
+      by: ['familyAccountId'],
+      where: {
+        ...accountWhere,
+        kind: 'PAYMENT',
+        NOT: { id: { startsWith: KHATA_REFUND_ID_PREFIX } },
+      },
+      _max: { occurredAt: true },
+    }),
+    db.pharmacyKhataEvent.findMany({
+      where: {
+        ...accountWhere,
+        OR: [{ kind: 'CHARGE', dueAt: { lte: now } }, { kind: 'PAYMENT' }],
+      },
+      select: {
+        id: true,
+        familyAccountId: true,
+        kind: true,
+        amountMinor: true,
+        dueAt: true,
+        settlesChargeId: true,
+      },
+    }),
+  ]);
+  const balance = new Map<string, number>();
+  for (const row of totals)
+    balance.set(
+      row.familyAccountId,
+      (balance.get(row.familyAccountId) ?? 0) +
+        (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0)
+    );
+  const lastPayment = new Map(payments.map((row) => [row.familyAccountId, row._max.occurredAt]));
+  const paid = new Map<string, number>();
+  for (const event of events)
+    if (event.kind === 'PAYMENT' && event.settlesChargeId)
+      paid.set(event.settlesChargeId, (paid.get(event.settlesChargeId) ?? 0) + event.amountMinor);
+  const overdue = new Map<string, Date>();
+  for (const event of events) {
+    if (event.kind !== 'CHARGE' || !event.dueAt) continue;
+    if (event.amountMinor <= (paid.get(event.id) ?? 0)) continue;
+    const current = overdue.get(event.familyAccountId);
+    if (!current || event.dueAt < current) overdue.set(event.familyAccountId, event.dueAt);
+  }
+  return {
+    truncated: accounts.length > KHATA_LEDGER_LIST_LIMIT,
+    accounts: visible
+      .map((account) => ({
+        id: account.id,
+        displayName: account.displayName,
+        payerName: account.payer.displayName,
+        phoneLast4: account.payer.phoneLast4,
+        balanceMinor: balance.get(account.id) ?? 0,
+        creditLimitMinor: account.creditLimitMinor,
+        lastPaymentAt: lastPayment.get(account.id) ?? null,
+        oldestOverdueAt: overdue.get(account.id) ?? null,
+      }))
+      .sort((a, b) => b.balanceMinor - a.balanceMinor),
+  };
+}
+
+/**
+ * DEV-730 "Collect payment": one locked, append-only settlement against the oldest open
+ * charges. A retried submission with the same key replays the first result instead of
+ * posting a second payment.
+ */
+export async function collectKhataPayment(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  input: {
+    familyAccountId: string;
+    amountMinor: number;
+    method: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET';
+    idempotencyKey: string;
+  }
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
+  const account = await db.pharmacyFamilyAccount.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: input.familyAccountId,
+      active: true,
+    },
+    select: { id: true },
+  });
+  if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+  const idPrefix = `${KHATA_COLLECTION_ID_PREFIX}${account.id}:${input.idempotencyKey}:`;
+  const prior = await db.pharmacyKhataEvent.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId: account.id,
+      id: { startsWith: idPrefix },
+    },
+    select: { amountMinor: true },
+  });
+  if (prior.length) {
+    const paidMinor = prior.reduce((sum, row) => sum + row.amountMinor, 0);
+    return {
+      replayed: true,
+      paidMinor,
+      remainingBalanceMinor: await readKhataBalance(db, scope, account.id),
+    };
+  }
+  const result = await settleFamilyKhata(db, scope, {
+    familyAccountId: account.id,
+    amountMinor: input.amountMinor,
+    occurredAt: new Date(),
+    idPrefix,
+    note: `Collected · ${input.method}`,
+  });
+  return {
+    replayed: false,
+    paidMinor: result.paidMinor,
+    // Full-ledger balance, matching the list (dishonoured cheques stay owed).
+    remainingBalanceMinor: await readKhataBalance(db, scope, account.id),
+  };
 }
