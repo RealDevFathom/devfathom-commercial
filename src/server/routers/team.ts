@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { createMemberInvitation } from '@/lib/member-invitation';
+import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
@@ -229,12 +230,19 @@ export const teamRouter = router({
       const organizationRole = input.organizationRoleId
         ? await ctx.db.organizationRole.findFirst({
             where: { id: input.organizationRoleId, organizationId: workspaceId(ctx) },
-            select: { id: true, name: true },
+            select: { id: true, name: true, key: true },
           })
         : null;
       if (input.organizationRoleId && !organizationRole) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
       }
+      // SEC-I (DEV-827): the invite grants exactly what the chosen role's label says.
+      const roleRefusal = inviteRoleRefusal(
+        ctx.entitlements.vertical,
+        input.role,
+        organizationRole?.key ?? null
+      );
+      if (roleRefusal) throw new TRPCError({ code: 'BAD_REQUEST', message: roleRefusal });
       const profile = {
         name: input.name,
         role: input.role,

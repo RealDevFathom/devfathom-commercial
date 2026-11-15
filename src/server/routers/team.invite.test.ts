@@ -44,6 +44,7 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import { teamRouter } from './team';
+import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 
 const db = {
@@ -70,10 +71,10 @@ const db = {
     }),
 };
 
-function caller(activeSeats = 1) {
+function caller(activeSeats = 1, vertical?: string) {
   return router({ team: teamRouter }).createCaller({
     db,
-    entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50 },
+    entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50, vertical },
     session: {
       expires: 'later',
       user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
@@ -320,6 +321,94 @@ describe('team.inviteMember team:setRole gate', () => {
       expect.anything(),
       expect.anything()
     );
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+});
+
+// SEC-I (DEV-827): a pharmacy invite grants exactly what the chosen role's label says.
+describe('team.inviteMember pharmacy role labels', () => {
+  const pharmacyInvite = { ...invite, email: 'staff@pharmacy.pk', department: 'COUNTER' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(1);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+  });
+
+  const template = (key: string) =>
+    mocks.roleFindFirst.mockResolvedValue({ id: `role_${key}`, name: key, key });
+
+  it.each([
+    ['owner', 'ADMIN'],
+    ['owner', 'EMPLOYEE'],
+    ['owner-operator', 'ADMIN'],
+    ['owner-operator', 'EMPLOYEE'],
+  ] as const)('refuses to invite %s at %s', async (key, role) => {
+    template(key);
+    await expect(
+      caller(1, 'PHARMACY').inviteMember({
+        ...pharmacyInvite,
+        role,
+        organizationRoleId: `role_${key}`,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: INVITE_ROLE_NOT_OFFERED });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['manager', 'HR'],
+    ['manager', 'ADMIN'],
+    ['pharmacist', 'ADMIN'],
+    ['admin', 'EMPLOYEE'],
+  ] as const)('refuses %s with a %s base role', async (key, role) => {
+    template(key);
+    await expect(
+      caller(1, 'PHARMACY').inviteMember({
+        ...pharmacyInvite,
+        role,
+        organizationRoleId: `role_${key}`,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: INVITE_ROLE_MISMATCH });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['HR', 'ADMIN'] as const)('refuses %s with no pharmacy role', async (role) => {
+    await expect(
+      caller(1, 'PHARMACY').inviteMember({ ...pharmacyInvite, role })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: INVITE_ROLE_MISMATCH });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['manager', 'EMPLOYEE'],
+    ['admin', 'ADMIN'],
+  ] as const)('invites %s at exactly %s', async (key, role) => {
+    template(key);
+    await caller(1, 'PHARMACY').inviteMember({
+      ...pharmacyInvite,
+      role,
+      organizationRoleId: `role_${key}`,
+    });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ role, organizationRoleId: `role_${key}` }),
+      })
+    );
+  });
+
+  it('leaves the agency base role switch unconstrained', async () => {
+    template('owner');
+    await caller(1, 'AGENCY').inviteMember({
+      ...invite,
+      email: 'lead@company.com',
+      role: 'HR',
+      organizationRoleId: 'role_owner',
+    });
     expect(mocks.create).toHaveBeenCalledOnce();
   });
 });
