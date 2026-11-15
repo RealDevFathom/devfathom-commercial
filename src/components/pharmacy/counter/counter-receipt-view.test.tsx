@@ -558,3 +558,15 @@ it('DEV-16: surfaces a refused WhatsApp receipt and hides the control on an unse
   render(<CounterReceiptView {...unsettled} />);
   expect(screen.queryByRole('button', { name: 'Send WhatsApp receipt' })).toBeNull();
 });
+
+it('#727: shows the issued promotion name and saving under its line', () => {
+  const input = props();
+  Object.assign(input.receipt!.lines[0]!, {
+    discountMinor: 10,
+    lineTotalMinor: 90,
+    promotionName: 'Winter week',
+  });
+  Object.assign(input.receipt!.totals, { discountMinor: 10, netMinor: 90 });
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText('Promotion: Winter week (-0.10)')).toBeTruthy();
+});

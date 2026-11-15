@@ -163,6 +163,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterReceiptWhatsApp',
         'openDrawer',
         'captureDemand',
+        'setDemandOutcome',
         'declineSubstitute',
         'linkCustomer',
         'khataSignup',
@@ -491,6 +492,7 @@ beforeEach(() => {
     'counterReceiptBrowserPrintFailed',
     'openDrawer',
     'captureDemand',
+    'setDemandOutcome',
     'declineSubstitute',
     'linkCustomer',
     'khataSignup',
@@ -2135,8 +2137,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   it('adds no line to an open bill once the drawer is closed elsewhere (DEV-725)', async () => {
     openTheDrawer();
     let resolveSearch:
-      | ((result: { rows: CounterSearchRow[]; truncated: boolean }) => void)
-      | undefined;
+      ((result: { rows: CounterSearchRow[]; truncated: boolean }) => void) | undefined;
     mocks.searchFetch.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -3072,21 +3073,24 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
-  it.each([0, 10])('explains missing sale units using the selected row stock (%s)', (onHandUnits) => {
-    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() =>
-      mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [], onHandUnits }))
-    );
-    if (onHandUnits === 0) {
-      expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
-      expect(screen.queryByText(/pack setup does not match/)).not.toBeInTheDocument();
-    } else {
-      expect(screen.getByText(/pack setup does not match/)).toHaveAttribute('role', 'status');
-      expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
+  it.each([0, 10])(
+    'explains missing sale units using the selected row stock (%s)',
+    (onHandUnits) => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() =>
+        mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [], onHandUnits }))
+      );
+      if (onHandUnits === 0) {
+        expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
+        expect(screen.queryByText(/pack setup does not match/)).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByText(/pack setup does not match/)).toHaveAttribute('role', 'status');
+        expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
+      }
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     }
-    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
-    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
-  });
+  );
 
   it('clears the shortage draft and records only the replacement quantity', async () => {
     mocks.mutations.captureDemand!.mockResolvedValue({});
@@ -3111,6 +3115,39 @@ describe('DEV-618 counter composition', () => {
       )
     );
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('DEV-81 offers optional outcome chips after a shortage and records one tap', async () => {
+    mocks.mutations.captureDemand!.mockResolvedValue({ id: 'demand-a' });
+    mocks.mutations.setDemandOutcome!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls
+        .at(-1)![0]
+        .onSelect(barcodeRow({ saleUnits: [], onHandUnits: 0 }))
+    );
+    fireEvent.change(screen.getByLabelText('Requested tablets'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record shortage: 3 tablets' }));
+    await waitFor(() =>
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ quantity: 3, requestedQty: 3, reason: 'STOCKOUT' })
+      )
+    );
+    const chips = await screen.findByRole('region', { name: 'What happened to the short line' });
+    expect(chips).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Substitute taken' }));
+    await waitFor(() =>
+      expect(mocks.mutations.setDemandOutcome).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          branchId: 'branch-a',
+          demandId: 'demand-a',
+          outcome: 'SUBSTITUTE_TAKEN',
+        })
+      )
+    );
+    expect(
+      screen.queryByRole('region', { name: 'What happened to the short line' })
+    ).not.toBeInTheDocument();
   });
 
   it('stages real metadata and quantity, switches units with F3/F4/F5, and submits the chosen batch with F6', async () => {

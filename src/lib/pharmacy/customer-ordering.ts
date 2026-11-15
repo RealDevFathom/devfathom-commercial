@@ -90,7 +90,7 @@ export function isCustomerOrderableMedicine(medicine: {
   );
 }
 
-async function activateBranchScope(
+export async function activateBranchScope(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>
 ) {
@@ -180,7 +180,7 @@ export async function listStorefrontCatalog(
   }));
 }
 
-async function reservationCandidates(
+export async function reservationCandidates(
   db: ScopedDb,
   scope: LedgerScope,
   medicineId: string,

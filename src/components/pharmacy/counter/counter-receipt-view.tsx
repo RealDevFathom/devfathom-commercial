@@ -20,6 +20,7 @@ import {
   formatMinor,
   formatReceiptDate,
   receiptCashReceived,
+  receiptPromotionLabel,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -634,6 +635,11 @@ export function CounterReceiptView({
                   </span>
                 </div>
                 <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
+                {receiptPromotionLabel(line, locale) ? (
+                  <p className="break-words tabular-nums text-text-muted">
+                    {receiptPromotionLabel(line, locale)}
+                  </p>
+                ) : null}
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
                     key={line.allocations![index]!.allocationId}

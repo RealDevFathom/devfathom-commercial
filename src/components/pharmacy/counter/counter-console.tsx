@@ -31,14 +31,11 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import {
-  CounterCartPanel,
-  CounterLotOverride,
-  type CounterLotOverrideValue,
-} from './counter-cart';
+import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterLostSaleChips, type LostSaleChoice } from './counter-lost-sale-chips';
 import {
   CounterReceiptView,
   type CounterReceiptPresentationResult,
@@ -504,6 +501,12 @@ function ScopedPharmacyCounterConsole({
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const online = useBrowserOnline();
+  // DEV-81: the short line whose optional outcome chips are showing.
+  const [lostSaleCapture, setLostSaleCapture] = useState<{
+    branchId: string;
+    demandId: string;
+    requested: string;
+  } | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -781,6 +784,7 @@ function ScopedPharmacyCounterConsole({
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
+  const setDemandOutcome = trpc.pharmacySales.setDemandOutcome.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
@@ -1670,7 +1674,9 @@ function ScopedPharmacyCounterConsole({
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined || input.approvalCode !== undefined
+            input.familyAccountId ||
+            input.payerName !== undefined ||
+            input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
                   paidMinor > 0 ? `:after:${paidMinor}` : ''
@@ -1894,9 +1900,11 @@ function ScopedPharmacyCounterConsole({
     setPending('captureDemand');
     setNotice(null);
     try {
-      await captureDemand.mutateAsync({
+      const demand = await captureDemand.mutateAsync({
         branchId,
         ...(saleId ? { saleId } : {}),
+        ...(deviceId ? { terminalId: deviceId } : {}),
+        requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
         ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
         requestedText: requested,
         saleUnit: 'UNIT',
@@ -1918,6 +1926,7 @@ function ScopedPharmacyCounterConsole({
         tone: 'success',
         message: `Recorded a shortage of ${capturedUnits} ${plural(counterUnitNoun(activeRow?.dosageForm), capturedUnits)} for ${requested}.`,
       });
+      if (demand?.id) setLostSaleCapture({ branchId, demandId: demand.id, requested });
       focusSearch();
     } catch (error) {
       setNotice({ tone: 'danger', message: messageFrom(error) });
@@ -1930,6 +1939,7 @@ function ScopedPharmacyCounterConsole({
     branchId,
     busy,
     captureDemand,
+    deviceId,
     focusSearch,
     query,
     quantity,
@@ -1939,6 +1949,21 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits,
     shortfallUnits,
   ]);
+
+  // DEV-81: an outcome tap is fire-and-forget; it never sets `pending`, so the
+  // counter (search, cart, tender) stays usable while it saves.
+  const chooseLostSaleOutcome = useCallback(
+    (choice: LostSaleChoice) => {
+      const capture = lostSaleCapture;
+      setLostSaleCapture(null);
+      if (!capture) return;
+      setDemandOutcome
+        .mutateAsync({ branchId: capture.branchId, demandId: capture.demandId, ...choice })
+        .catch((error: unknown) => setNotice({ tone: 'warning', message: messageFrom(error) }));
+    },
+    [lostSaleCapture, setDemandOutcome]
+  );
+  const dismissLostSaleChips = useCallback(() => setLostSaleCapture(null), []);
 
   const declineVisibleSubstitutes = useCallback(async () => {
     if (!activeRow || busy || quantity === null) return;
@@ -2577,6 +2602,14 @@ function ScopedPharmacyCounterConsole({
                     ) : null}
                   </div>
                 </div>
+              ) : null}
+              {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
+                <CounterLostSaleChips
+                  key={lostSaleCapture.demandId}
+                  requested={lostSaleCapture.requested}
+                  onChoose={chooseLostSaleOutcome}
+                  onDismiss={dismissLostSaleChips}
+                />
               ) : null}
 
               {drawerRequired ? (

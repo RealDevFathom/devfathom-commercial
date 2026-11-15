@@ -17,6 +17,9 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 export const REFUND_PIN_POLICY = 'PHARMACY_REFUND_MANAGER_PIN';
 export const REFUND_FORBIDDEN = 'Only a manager or owner can refund.';
 export const REFUND_PIN_BLOCKED = 'Refund not recorded. Enter your manager or owner PIN.';
+/** DEV-621: a sale return restocks stock and posts the refund liability, so it needs the same approval. */
+export const RETURN_FORBIDDEN = 'Only a manager or owner can record a return.';
+export const RETURN_PIN_BLOCKED = 'Enter your manager or owner PIN.';
 
 export function actorMayRefund(
   db: ScopedDb,

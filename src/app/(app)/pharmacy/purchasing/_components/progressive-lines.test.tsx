@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { ProgressiveLines } from './progressive-lines';
+import { REVEAL_LINES_EVENT, ProgressiveLines } from './progressive-lines';
 
 const lines = [0, 1].map((index) => ({
   selector: (
@@ -46,5 +46,20 @@ describe('progressive purchasing lines', () => {
   it('shows fields for a preselected scanned pack', () => {
     render(<ProgressiveLines lines={[{ ...lines[0], selected: true }]} />);
     expect(screen.getByLabelText('Quantity 1')).toBeVisible();
+  });
+
+  it('mounts the lines a reader asks for before the reveal returns (DEV-679)', () => {
+    const { container } = render(
+      <form aria-label="Purchase">
+        <ProgressiveLines lines={lines} />
+      </form>
+    );
+    expect(screen.queryByLabelText('Medicine 2')).toBeNull();
+    container
+      .querySelector('[data-progressive-lines]')!
+      .dispatchEvent(new CustomEvent(REVEAL_LINES_EVENT, { detail: { count: 5 } }));
+    // Synchronously mounted, and never more lines than exist.
+    expect(screen.getByLabelText('Medicine 2')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Add line' })).toBeNull();
   });
 });
