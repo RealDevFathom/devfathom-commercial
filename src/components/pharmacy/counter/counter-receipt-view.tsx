@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
 import type { CounterEvidenceView } from '@/lib/pharmacy/counter-evidence';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
@@ -48,6 +49,9 @@ export type CounterReceiptPresentationResult = {
   printStatus: 'manual' | 'dialog-requested' | 'manual-required';
 };
 
+/** DEV-16: what the counter reports after asking the server to send a WhatsApp receipt. */
+export type CounterWhatsAppReceiptResult = { ok: boolean; message: string };
+
 export type CounterReceiptViewProps = {
   receipt: CounterReceipt | null;
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -73,7 +77,75 @@ export type CounterReceiptViewProps = {
   settlement?: CounterReceiptSettlement | null;
   /** Clear the event here; keep this view mounted across bills to retain deduplication. */
   onSettlementPresented?: (result: CounterReceiptPresentationResult) => void;
+  /** DEV-16: send the settled receipt's neutral WhatsApp link, on the customer's request. */
+  onSendWhatsApp?: (saleId: string) => Promise<CounterWhatsAppReceiptResult>;
 };
+
+/**
+ * DEV-16: the cashier confirms the customer asked for a WhatsApp receipt, then
+ * sends it. The server enforces opt-in, the phone on file and neutral text.
+ */
+function CounterWhatsAppReceipt({
+  saleId,
+  onSend,
+}: {
+  saleId: string;
+  onSend: (saleId: string) => Promise<CounterWhatsAppReceiptResult>;
+}) {
+  const [requested, setRequested] = useState<{ saleId: string } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<(CounterWhatsAppReceiptResult & { saleId: string }) | null>(
+    null
+  );
+  const confirmed = requested?.saleId === saleId;
+  const shown = result?.saleId === saleId ? result : null;
+
+  async function send() {
+    setSending(true);
+    try {
+      setResult({ saleId, ...(await onSend(saleId)) });
+    } catch {
+      setResult({ saleId, ok: false, message: 'The WhatsApp receipt could not be sent. Retry.' });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-border-subtle bg-surface-sunken p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex min-h-11 items-center gap-2 text-sm text-text-body">
+          <Checkbox
+            checked={confirmed}
+            disabled={sending}
+            onCheckedChange={(checked) => setRequested(checked ? { saleId } : null)}
+          />
+          Customer asked for a WhatsApp receipt
+        </label>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11"
+          disabled={!confirmed || sending}
+          onClick={() => void send()}
+        >
+          {sending ? 'Sending WhatsApp receipt…' : 'Send WhatsApp receipt'}
+        </Button>
+      </div>
+      <p className="text-xs text-text-muted">
+        The message shows only the branch, receipt number, total, payment method and a secure link.
+      </p>
+      {shown ? (
+        <p
+          role={shown.ok ? 'status' : 'alert'}
+          className={shown.ok ? 'text-sm text-text-muted' : 'text-sm text-destructive'}
+        >
+          {shown.message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 type ThermalJob =
   | { state: 'sending' }
@@ -225,6 +297,7 @@ export function CounterReceiptView({
   branchId,
   settlement,
   onSettlementPresented,
+  onSendWhatsApp,
 }: CounterReceiptViewProps) {
   const [labelError, setLabelError] = useState<{ saleId: string; message: string } | null>(null);
   const [thermal, setThermal] = useState<{ key: string; job: ThermalJob } | null>(null);
@@ -448,6 +521,10 @@ export function CounterReceiptView({
           <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
         )}
       </div>
+
+      {onSendWhatsApp && settled ? (
+        <CounterWhatsAppReceipt saleId={receipt.saleId} onSend={onSendWhatsApp} />
+      ) : null}
 
       {labelError?.saleId === receipt.saleId ? (
         <p role="alert" className="text-sm text-destructive">

@@ -7,7 +7,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'portalSignInCode';
+export type WhatsAppTemplateKey =
+  | 'refillReminder'
+  | 'khataReminder'
+  /** DEV-16 utility template: branch, receipt no, total, method and a hosted link only. */
+  | 'receiptLink'
+  /** DEV-15 authentication template: the customer app sign-in code only. */
+  | 'portalSignInCode';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 /**
@@ -144,6 +150,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
       // DEV-15: an approved Meta AUTHENTICATION template (one code parameter, copy-code button).
       portalSignInCode: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE'),
+      receiptLink: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_LINK'),
     },
     khataTemplates: {
       en:
