@@ -25,7 +25,7 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
 }));
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
-import { addSaleLine } from '@/lib/pharmacy/sales';
+import { addSaleLine, PharmacySaleError } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import { recordTrpcAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
@@ -135,8 +135,34 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 
     await f.caller.addLine(line);
 
-    // No FEFO-override label; only the tip's always-on skipInput flag (keeps PINs out of audit rows).
-    expect(lastAudit().detail).toEqual({ skipInput: true });
+    // No FEFO-override label; only the always-on skipInput flag (keeps PINs out of audit
+    // rows) and the bill the add targeted (DEV-712).
+    expect(lastAudit().detail).toEqual({
+      skipInput: true,
+      targetType: 'PharmacySale',
+      targetId: 'sale-1',
+      metadata: { branchId: 'branch-1' },
+    });
+  });
+
+  // DEV-712: a refused add on a settled bill was audited with no trace of the bill.
+  it('names the bill on a refused add without recording the input', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockRejectedValue(new PharmacySaleError('INVALID_STATE'));
+
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'INVALID_STATE',
+    });
+
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('FAILURE');
+    expect(audit.detail).toEqual({
+      skipInput: true,
+      targetType: 'PharmacySale',
+      targetId: 'sale-1',
+      metadata: { branchId: 'branch-1' },
+    });
   });
 
   it.each([

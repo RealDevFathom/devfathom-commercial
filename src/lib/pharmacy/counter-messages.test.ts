@@ -4,9 +4,12 @@ import {
   COUNTER_ERROR_MESSAGES,
   COUNTER_GENERIC_ERROR_MESSAGE,
   COUNTER_UNKNOWN_ERROR_MESSAGE,
+  counterBillMovedOn,
   counterErrorMessage,
+  counterErrorTone,
 } from './counter-messages';
 import { PharmacyLoyaltyError } from './customer-loyalty';
+import { PharmacySaleError } from './sales';
 import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
 
@@ -70,6 +73,11 @@ describe('counterErrorMessage', () => {
       'MOCK_PROVIDER_IN_RELEASE',
       'OPEN_DRAWER',
       'REOPEN_REASON_REQUIRED',
+      // DEV-712: these three fell through to "Refresh and try again".
+      'INVALID_MANUAL_CAPTURE',
+      'INVALID_RECEIPT_LEASE',
+      'LEASE_REQUIRES_SETTLEMENT',
+      'DAY_CLOSED',
     ] as const;
 
     for (const reason of settlementReasons) {
@@ -102,5 +110,54 @@ describe('counterErrorMessage', () => {
       expect(message, `${reason} is not a sentence`).toMatch(/[a-z]/);
       expect(message, `${reason} reads as a code`).not.toMatch(/^[A-Z][A-Z0-9_]*$/);
     }
+  });
+});
+
+/**
+ * DEV-712: after payment the counter told the cashier the bill "has already
+ * moved on. Refresh the counter and try again" in a red banner — for a routine
+ * state the counter now resolves itself.
+ */
+describe('counter notices after a bill moves on (DEV-712)', () => {
+  it('never sends the operator to refresh for a settled bill', () => {
+    for (const reason of ['INVALID_STATE', 'SALE_NOT_OPEN'] as const) {
+      const message = counterErrorMessage(new Error(reason));
+      expect(message).not.toMatch(/refresh/i);
+      expect(message).toMatch(/next bill/);
+    }
+  });
+
+  it('recognises only the refusals that mean the bill is no longer open', () => {
+    expect(counterBillMovedOn(new PharmacySaleError('INVALID_STATE'))).toBe(true);
+    expect(counterBillMovedOn(new PharmacySettlementError('SALE_NOT_OPEN'))).toBe(true);
+    expect(counterBillMovedOn(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(false);
+    expect(counterBillMovedOn(new Error('That bill is closed.'))).toBe(false);
+    expect(counterBillMovedOn('INVALID_STATE')).toBe(false);
+  });
+
+  it('shows routine state as information, not danger', () => {
+    for (const reason of ['INVALID_STATE', 'SALE_NOT_OPEN', 'DRAWER_NOT_OPEN', 'NOT_FOUND'])
+      expect(counterErrorTone(new Error(reason)), reason).toBe('info');
+  });
+
+  it('keeps danger for controlled-drug, unsafe-stock and money-reconciliation refusals', () => {
+    for (const reason of [
+      'COAUTH_REQUIRED',
+      'CONSENT_REQUIRED',
+      'SALE_BATCH_RECALLED',
+      'IDEMPOTENCY_CONFLICT',
+    ])
+      expect(counterErrorTone(new Error(reason)), reason).toBe('danger');
+  });
+
+  it('keeps an unknown or prose refusal as danger, so a safety denial is never quietened', () => {
+    expect(counterErrorTone(new Error('SOME_FUTURE_REASON'))).toBe('danger');
+    expect(counterErrorTone(new Error('Controlled medicine needs a pharmacist.'))).toBe('danger');
+    expect(counterErrorTone(null)).toBe('danger');
+  });
+
+  it('shows a correctable mapped refusal as a warning', () => {
+    expect(counterErrorTone(new Error('OVER_TENDER'))).toBe('warning');
+    expect(counterErrorTone(new Error('INVALID_MANUAL_CAPTURE'))).toBe('warning');
   });
 });

@@ -616,7 +616,12 @@ describe('PharmacyCounterConsole tender recovery', () => {
         saleId: 'sale-a',
         amountMinor: 12550,
         type,
-        idempotencyKey: `counter-tender:sale-a:${type}:12550`,
+        // DEV-712: the key also carries this attempt's own ID.
+        idempotencyKey: expect.stringMatching(
+          new RegExp(
+            `^counter-tender:sale-a:${type}:12550:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+          )
+        ),
       })
     );
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
@@ -2254,6 +2259,119 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(mocks.rxPanelProps.mock.lastCall![0].controlled!.pin).toBe('');
     }
   );
+});
+
+describe('DEV-712 the counter advances to a new bill after payment', () => {
+  const settled = () =>
+    cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+
+  function scan(value = '123456') {
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+  }
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-b' });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  it('pays, then puts the very next scan on a new bill without a refresh', async () => {
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    mocks.refetch.mockImplementation(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.receiptRefetch).toHaveBeenCalled());
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.create).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      quotation: false,
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleId: 'sale-b', medicineId: 'med-barcode' })
+    );
+    expect(mocks.mutations.addLine).not.toHaveBeenCalledWith(
+      expect.objectContaining({ saleId: 'sale-a' })
+    );
+  });
+
+  it('re-reads a bill the server says moved on and carries the scan to a new bill', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.addLine.mock.calls.map(([input]) => input.saleId)).toEqual([
+      'sale-a',
+      'sale-b',
+    ]);
+    expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    const notice = await screen.findByText(
+      'That bill is already paid or closed. Start the next bill to keep selling.'
+    );
+    expect(notice.closest('[role="status"]')).not.toBeNull();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a second payment of the same type and amount instead of replaying the first', async () => {
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText('Payment recorded.');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    enterPayment();
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(2));
+    const [first, second] = mocks.mutations.tender!.mock.calls.map(([input]) => input);
+    expect(first.idempotencyKey).toMatch(/^counter-tender:sale-a:CASH:12550:[0-9a-f-]{36}$/);
+    expect(second.idempotencyKey).toMatch(/^counter-tender:sale-a:CASH:12550:[0-9a-f-]{36}$/);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it('never abandons a bill whose payment outcome is still unknown', async () => {
+    mocks.queries.counterCart!.data = settled();
+    persistTenderAttempt(savedAttempt());
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(/Payment outcome is unknown/);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {

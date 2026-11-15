@@ -45,7 +45,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
-  INVALID_STATE: 'This bill has already moved on. Refresh the counter and try again.',
+  // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
+  // itself, so the sentence never sends the operator to refresh.
+  INVALID_STATE: 'That bill is already paid or closed. Start the next bill to keep selling.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -58,7 +60,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
-  SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
+  SALE_NOT_OPEN:
+    'That bill is already paid or closed, so it cannot take another payment. Start the next bill.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
   OVER_TENDER: 'That payment is more than the amount still due on this bill.',
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
@@ -69,7 +72,71 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  INVALID_MANUAL_CAPTURE:
+    'The payer name or transaction reference is missing or not allowed for this branch. Check the transfer details and try again.',
+  INVALID_RECEIPT_LEASE:
+    "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
+  LEASE_REQUIRES_SETTLEMENT:
+    'An offline bill must be paid in full in one payment. Enter the full amount due.',
 };
+
+/**
+ * DEV-712: how loudly a refusal is shown. Routine state — a bill that already
+ * moved on, a drawer still closed, a short search — is a neutral `info` notice.
+ * `danger` is kept for what the operator must not miss: controlled-drug and
+ * unsafe-stock blocks, and a payment whose outcome or amount is in doubt.
+ * Any other mapped reason is a `warning` the operator can correct. A failure
+ * this module does not know stays `danger`: it may be a safety refusal raised
+ * as prose (a controlled-medicine denial), which must not be quietened.
+ */
+export type CounterNoticeTone = 'info' | 'warning' | 'danger';
+
+const COUNTER_INFO_REASONS = new Set([
+  'INVALID_STATE',
+  'SALE_NOT_OPEN',
+  'NOT_FOUND',
+  'DRAWER_NOT_OPEN',
+  'OPEN_DRAWER',
+  'DAY_CLOSED',
+  'INVALID_QUERY',
+  'INVALID_QUANTITY',
+  'INVALID_UNITS',
+  'INVALID_AMOUNT',
+  'INVALID_RECEIPT_LEASE',
+  'LEASE_REQUIRES_SETTLEMENT',
+]);
+
+const COUNTER_DANGER_REASONS = new Set([
+  // Controlled-drug and unsafe-stock blocks.
+  'COAUTH_REQUIRED',
+  'CONSENT_REQUIRED',
+  'BLOCKED_STOCK',
+  'SALE_BATCH_RECALLED',
+  'SALE_BATCH_QUARANTINED',
+  'SALE_BATCH_EXPIRED',
+  'SALE_BATCH_BLOCKED',
+  // Money whose outcome or amount does not reconcile.
+  'IDEMPOTENCY_CONFLICT',
+  'REFUND_EXCEEDS_TENDER',
+]);
+
+export function counterErrorTone(error: unknown): CounterNoticeTone {
+  const reason = error instanceof Error ? error.message : '';
+  if (COUNTER_INFO_REASONS.has(reason)) return 'info';
+  if (COUNTER_DANGER_REASONS.has(reason)) return 'danger';
+  return COUNTER_ERROR_MESSAGES[reason] ? 'warning' : 'danger';
+}
+
+/**
+ * DEV-712: the refusal a write gets when its bill was already settled, voided or
+ * held. The counter answers it by re-reading the bill and opening a fresh one.
+ */
+export function counterBillMovedOn(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === 'INVALID_STATE' || error.message === 'SALE_NOT_OPEN')
+  );
+}
 
 /**
  * A reason code as the aggregates raise it: SCREAMING_SNAKE_CASE, no spaces.
