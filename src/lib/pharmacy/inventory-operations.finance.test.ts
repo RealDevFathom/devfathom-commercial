@@ -82,7 +82,7 @@ describe('approveCount journals each variance', () => {
 
   it('posts one entry per non-zero variance line, after the count is APPROVED', async () => {
     const db = countDb();
-    await approveCount(db as unknown as ScopedDb, scope, 'count_1', 'approve');
+    await approveCount(db as unknown as ScopedDb, scope, 'count_1', 'approve', 'Shelf recount');
 
     expect(finance.postCountAdjustmentEntry.mock.calls).toEqual([
       [db, scope, { countLineId: 'line_short', at: APPROVED_AT }],
@@ -97,7 +97,7 @@ describe('approveCount journals each variance', () => {
   it('fails the approval when a variance cannot be journalled', async () => {
     finance.postCountAdjustmentEntry.mockRejectedValue(new Error('UNBALANCED'));
     await expect(
-      approveCount(countDb() as unknown as ScopedDb, scope, 'count_1', 'approve')
+      approveCount(countDb() as unknown as ScopedDb, scope, 'count_1', 'approve', 'Shelf recount')
     ).rejects.toThrow('UNBALANCED');
   });
 });

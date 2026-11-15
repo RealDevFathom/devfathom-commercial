@@ -2372,6 +2372,9 @@ model PharmacyInventoryCount {
   varianceThreshold Int
   createdById       String
   approvedById      String?
+  /// DEV-682: why the approved variance happened, recorded by the person who
+  /// confirmed it. Required whenever any line's counted units differ from book.
+  varianceReason    String?
   createdAt         DateTime                     @default(now())
   approvedAt        DateTime?
   lines             PharmacyInventoryCountLine[]
