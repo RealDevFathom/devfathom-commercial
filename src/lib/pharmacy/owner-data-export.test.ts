@@ -357,6 +357,21 @@ describe('loadOwnerDataExportRows', () => {
     expect(saleWhere.status).toEqual({ in: ['COMPLETED', 'VOID'] });
   });
 
+  it('reads the picked dates on the organization clock, not UTC', async () => {
+    const db = fakeDb();
+    await loadOwnerDataExportRows(
+      db as never,
+      'org-a',
+      { from: '2026-01-01', to: '2026-01-31' },
+      'Asia/Karachi'
+    );
+    const saleWhere = db.pharmacySale.findMany.mock.calls[0]![0].where;
+    expect(saleWhere.completedAt).toMatchObject({
+      gte: new Date('2025-12-31T19:00:00.000Z'),
+      lt: new Date('2026-01-31T19:00:00.000Z'),
+    });
+  });
+
   it('exports balances, stock and the controlled register as the register shows it', async () => {
     const rows = await loadOwnerDataExportRows(fakeDb() as never, 'org-a', {
       from: null,
