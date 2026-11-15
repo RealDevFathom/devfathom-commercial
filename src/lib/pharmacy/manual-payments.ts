@@ -73,6 +73,8 @@ export const manualCardCaptureSchema = z.object({
 }).strict();
 
 const confirmerSchema = z.object({
+  /** The confirming user's id; absent on reports saved before it was recorded. */
+  id: z.string().min(1).optional(),
   name: z.string().min(1),
   count: z.number().int().positive().safe(),
   amountMinor: z.number().int().nonnegative().safe(),
@@ -104,7 +106,8 @@ export function aggregateTenderTotals(
     if (!tender.confirmedById) continue;
     entry.confirmers ??= new Map();
     const name = confirmerNames.get(tender.confirmedById) ?? 'Unknown user';
-    const confirmer = entry.confirmers.get(tender.confirmedById) ?? { name, count: 0, amountMinor: 0 };
+    const confirmer = entry.confirmers.get(tender.confirmedById) ??
+      { id: tender.confirmedById, name, count: 0, amountMinor: 0 };
     confirmer.count += 1;
     confirmer.amountMinor += tender.amountMinor;
     entry.confirmers.set(tender.confirmedById, confirmer);
@@ -116,6 +119,6 @@ export function aggregateTenderTotals(
       ...value,
       netMinor: value.amountMinor - value.refundMinor,
       ...(confirmers ? { confirmers: [...confirmers.values()]
-        .sort((a, b) => a.name.localeCompare(b.name)) } : {}),
+        .sort((a, b) => a.name.localeCompare(b.name) || a.id!.localeCompare(b.id!)) } : {}),
     })));
 }

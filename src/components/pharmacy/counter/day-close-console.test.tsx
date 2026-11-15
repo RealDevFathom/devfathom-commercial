@@ -162,6 +162,26 @@ describe('day-close console', () => {
     expect(screen.queryByRole('list', { name: 'CASH confirmed by' })).not.toBeInTheDocument();
   });
 
+  it('DEV-713 lists two confirmers who share a name as separate rows', () => {
+    mocks.close = {
+      id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, grossSalesMinor: 300,
+      refundTotalMinor: 0, netSalesMinor: 300, cashExpectedMinor: 0, cashCountedMinor: 0,
+      cashVarianceMinor: 0, isFinal: true,
+      tenderTotals: [
+        { type: 'CARD', amountMinor: 300, refundMinor: 0, netMinor: 300, confirmers: [
+          { id: 'u1', name: 'Ali', count: 1, amountMinor: 100 },
+          { id: 'u2', name: 'Ali', count: 1, amountMinor: 200 },
+        ] },
+      ],
+    };
+    render(<PharmacyDayCloseConsole />);
+    const rows = screen.getAllByText(/^Confirmed by Ali/);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Confirmed by Ali · 1 payment · 1.00 USD',
+      'Confirmed by Ali · 1 payment · 2.00 USD',
+    ]);
+  });
+
   it('uses the organization currency in a recorded close and the printable Z-report', () => {
     const recorded = {
       id: 'c1',

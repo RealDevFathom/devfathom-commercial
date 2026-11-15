@@ -193,13 +193,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       type === 'CASH' && cashReceivedMinor !== null && amountMinor !== null && !cashShort
         ? cashReceivedMinor - amountMinor
         : null;
-    // Unknown settings (loading or failed) keep wallets visible but fail closed;
-    // known settings offer only the wallets this branch has enabled.
+    // Wallets are offered only once loaded settings show this branch enabled them.
+    // The current type stays listed so a restored attempt remains visible.
     const options = TENDER_TYPES.filter(
       (entry) =>
         entry.value === type ||
         (entry.offered &&
-          (!isManualTender(entry.value) || !manualSettings || Boolean(manualSettings[entry.value])))
+          (!isManualTender(entry.value) ||
+            (!manualSettingsLoading &&
+              !manualSettingsError &&
+              Boolean(manualSettings?.[entry.value]))))
     );
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);

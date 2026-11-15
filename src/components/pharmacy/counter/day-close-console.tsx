@@ -245,8 +245,8 @@ function DayCloseForm({
               </p>
               {row.confirmers?.length ? (
                 <ul className="ps-4 text-sm text-text-muted" aria-label={`${row.type} confirmed by`}>
-                  {row.confirmers.map((confirmer) => (
-                    <li key={confirmer.name}>
+                  {row.confirmers.map((confirmer, index) => (
+                    <li key={confirmer.id ?? `${confirmer.name}-${index}`}>
                       Confirmed by {confirmer.name} · {confirmer.count}{' '}
                       {confirmer.count === 1 ? 'payment' : 'payments'} ·{' '}
                       {formatMinor(confirmer.amountMinor)} {currency}

@@ -161,8 +161,19 @@ describe('#710 Raast / wallet counter controls', () => {
   it.each([{ manualSettingsLoading: true }, { manualSettingsError: true }, {}])(
     'fails closed for unavailable merchant settings (%j)',
     (state) => {
-      setup(state);
-      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+      const settings = { RAAST: { destination: '', allowReferenceSkip: false } };
+      const { unmount } = setup({
+        ...state,
+        manualSettings:
+          'manualSettingsLoading' in state || 'manualSettingsError' in state ? settings : undefined,
+      });
+      // DEV-713: no wallet is offered until loaded settings show it is enabled.
+      const values = screen.getAllByRole('option').map((option) => option.getAttribute('value'));
+      for (const wallet of ['RAAST', 'JAZZCASH', 'EASYPAISA']) expect(values).not.toContain(wallet);
+      unmount();
+      // A restored wallet attempt stays visible but cannot be paid.
+      setup({ ...state, initialDraft: { type: 'RAAST', amount: '', cashReceived: '' } });
+      expect(screen.getByLabelText('Tender')).toHaveValue('RAAST');
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     }
   );
@@ -244,25 +255,20 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['BANK_TRANSFER'])(
-    'keeps rejected %s selection and amount',
-    async (type) => {
-      const onTender = vi
-        .fn()
-        .mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
-      setup({ onTender });
-      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
-      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-      await screen.findByText('Payment refused.');
-      expect(screen.getByLabelText('Tender')).toHaveValue(type);
-      expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-      expect(onTender).toHaveBeenCalledExactlyOnceWith(
-        { type, amountMinor: 12550 },
-        { amount: '125.50', cashReceived: '' }
-      );
-    }
-  );
+  it.each(['BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(screen.getByLabelText('Tender')).toHaveValue(type);
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      { type, amountMinor: 12550 },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
 });
 
 describe('DEV-713 manual card tender', () => {

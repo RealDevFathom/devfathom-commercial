@@ -79,11 +79,22 @@ describe('DEV-713 manual card and optional merchant details', () => {
       { type: 'JAZZCASH', amountMinor: 70, confirmedById: 'gone' },
     ], [], names)).toEqual([
       { type: 'CARD', amountMinor: 1300, refundMinor: 0, netMinor: 1300, confirmers: [
-        { name: 'Ayesha', count: 1, amountMinor: 250 }, { name: 'Bilal', count: 2, amountMinor: 1050 },
+        { id: 'u1', name: 'Ayesha', count: 1, amountMinor: 250 }, { id: 'u2', name: 'Bilal', count: 2, amountMinor: 1050 },
       ] },
       { type: 'CASH', amountMinor: 500, refundMinor: 0, netMinor: 500 },
       { type: 'JAZZCASH', amountMinor: 70, refundMinor: 0, netMinor: 70, confirmers: [
-        { name: 'Unknown user', count: 1, amountMinor: 70 },
+        { id: 'gone', name: 'Unknown user', count: 1, amountMinor: 70 },
+      ] },
+    ]);
+  });
+  it('keeps two confirmers with the same name apart', () => {
+    expect(aggregateTenderTotals([
+      { type: 'CARD', amountMinor: 10, confirmedById: 'b' },
+      { type: 'CARD', amountMinor: 20, confirmedById: 'a' },
+    ], [])).toEqual([
+      { type: 'CARD', amountMinor: 30, refundMinor: 0, netMinor: 30, confirmers: [
+        { id: 'a', name: 'Unknown user', count: 1, amountMinor: 20 },
+        { id: 'b', name: 'Unknown user', count: 1, amountMinor: 10 },
       ] },
     ]);
   });
