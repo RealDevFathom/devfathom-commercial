@@ -2913,22 +2913,61 @@ async function runCommand(
       };
     }
     case 'organization.user.password': {
-      const input = z.object({ id, password: z.string().min(12).max(256) }).parse(payload);
+      const input = z
+        .object({ id, password: z.string().min(12).max(256), reason: sensitiveReason })
+        .parse(payload);
       const password = await hash(input.password, 12);
+      // The operator chose this password, so it is a one-time credential only:
+      // the user must replace it at the next sign-in (same contract as a tenant
+      // admin reset), and every existing session is revoked.
       const saved = await db.user.update({
         where: { id: input.id },
         data: {
           password,
-          passwordChangedAt: new Date(),
+          passwordChangedAt: null,
+          mustChangePassword: true,
           tokenVersion: { increment: 1 },
         },
+        select: { id: true, organizationId: true, email: true, role: true },
       });
+      // The tenant learns about the reset in the same transaction, like support
+      // access: the target user and every tenant administrator get a notice
+      // naming the operator and the reason, or the reset does not happen.
+      const administrators = await db.user.findMany({
+        where: {
+          organizationId: saved.organizationId,
+          role: 'ADMIN',
+          status: { in: ['ACTIVE', 'ON_LEAVE'] },
+        },
+        select: { id: true },
+      });
+      const recipients = [...new Set([saved.id, ...administrators.map((admin) => admin.id)])];
+      await db.notification.createMany({
+        data: recipients.map((userId) => ({
+          organizationId: saved.organizationId,
+          userId,
+          type: 'platform_password_reset',
+          title: 'Password reset by DevFathom',
+          message: `${actor.name} (DevFathom platform) reset the password for ${saved.email}. A new password must be chosen at the next sign-in. Reason: ${input.reason}`,
+          entityType: 'User',
+          entityId: saved.id,
+        })),
+      });
+      const audit = {
+        id: saved.id,
+        email: saved.email,
+        role: saved.role,
+        passwordReset: true,
+        mustChangePassword: true,
+        sessionsRevoked: true,
+        notifiedUserIds: recipients,
+      };
       return {
         targetType: 'User',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        data: { id: saved.id, passwordReset: true },
-        audit: { id: saved.id, passwordReset: true },
+        data: { id: saved.id, passwordReset: true, mustChangePassword: true },
+        audit,
       };
     }
     // PROP-04 G2 — break-glass property recovery. The tenant write policy on
