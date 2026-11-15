@@ -75,3 +75,53 @@ describe('assistant createInvoice numbering', () => {
     expect(db.invoice.create).not.toHaveBeenCalled();
   });
 });
+
+describe('assistant invoice adjustments', () => {
+  it('persists and returns tax and discount using the sum of rounded line amounts', async () => {
+    const { tx, tool } = setup();
+    const result = await tool.execute({
+      clientName: 'Acme',
+      items: [
+        { description: 'First', quantity: 1, unitPrice: 1.005 },
+        { description: 'Second', quantity: 3, unitPrice: 0.335 },
+      ],
+      tax: 0.005,
+      discount: 1.005,
+      dueDate: '2026-12-31',
+    });
+    const expected = { subtotal: 2.02, tax: 0.01, discount: 1.01, total: 1.02 };
+    expect(tx.invoice.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining(expected) })
+    );
+    expect(result).toMatchObject(expected);
+  });
+
+  it.each([2.03, 10_000_000_000])(
+    'refuses an excessive discount %s without inserting',
+    async (discount) => {
+      const { tx, tool } = setup();
+      expect(
+        await tool.execute({
+          clientName: 'Acme',
+          items: [{ description: 'Work', quantity: 1, unitPrice: 2.02 }],
+          tax: 100,
+          discount,
+          dueDate: '2026-12-31',
+        })
+      ).toHaveProperty('error');
+      expect(tx.invoice.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('defaults an omitted discount to zero', async () => {
+    const { tx, tool } = setup();
+    await tool.execute({
+      clientName: 'Acme',
+      items: [{ description: 'Work', quantity: 1, unitPrice: 10 }],
+      dueDate: '2026-12-31',
+    });
+    expect(tx.invoice.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ discount: 0, total: 10 }) })
+    );
+  });
+});

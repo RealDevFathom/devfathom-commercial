@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   openBills: undefined as { open: number; held: number } | undefined,
   /** The rail capability read (DEV-127): who it answered for and what it granted. */
   accessUserId: 'owner',
+  accessOrganizationId: 'org',
+  accessInput: vi.fn(),
   accessCapabilities: [] as string[],
   accessLoading: false,
   accessError: null as { message: string; data?: { code: string } } | null,
@@ -56,7 +58,8 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacyAccess: {
       navigation: {
-        useQuery: (_input: unknown, options: { enabled: boolean }) => {
+        useQuery: (input: unknown, options: { enabled: boolean }) => {
+          mocks.accessInput(input);
           mocks.accessOptions(options);
           if (!options.enabled) return { isLoading: false, data: undefined };
           if (mocks.accessError)
@@ -67,7 +70,7 @@ vi.mock('@/lib/trpc', () => ({
                 isLoading: false,
                 data: {
                   userId: mocks.accessUserId,
-                  organizationId: 'org',
+                  organizationId: mocks.accessOrganizationId,
                   capabilities: mocks.accessCapabilities,
                 },
               };
@@ -161,6 +164,8 @@ beforeEach(() => {
   mocks.extraDrawers = [];
   mocks.openBills = undefined;
   mocks.accessUserId = 'owner';
+  mocks.accessOrganizationId = 'org';
+  mocks.accessInput.mockReset();
   mocks.accessCapabilities = [];
   mocks.accessLoading = false;
   mocks.accessError = null;
@@ -368,6 +373,15 @@ describe('day-close console', () => {
     mocks.accessUserId = 'someone-else';
     mocks.accessCapabilities = ['pharmacy:close'];
     render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Day close unavailable')).toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('ignores a day-close grant answered for another workspace (DEV-240)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessOrganizationId = 'previous-org';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    render(<PharmacyDayCloseConsole />);
+    expect(mocks.accessInput).toHaveBeenLastCalledWith({ userId: 'owner', organizationId: 'org' });
     expect(screen.getByText('Day close unavailable')).toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
   });

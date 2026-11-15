@@ -83,8 +83,16 @@ export function OwnerImportWizard() {
           <nav aria-label="Import progress"><ol className="flex flex-wrap gap-3 text-sm text-text-muted">
             {['Upload', 'Map columns', 'Review and commit'].map((step, index) => <li key={step} aria-current={index === (preview ? 2 : sheet ? 1 : 0) ? 'step' : undefined} className={index === (preview ? 2 : sheet ? 1 : 0) ? 'font-semibold text-text-strong' : ''}>{index + 1}. {step}</li>)}
           </ol></nav>
-          {error && <div role="alert" id="import-error" className="rounded-sm border border-destructive p-4 text-sm text-destructive">{error}</div>}
-          <SectionCard title="1. Upload the opening count" titleLevel={2}>
+          {error && <div role="alert" id="import-error" className="space-y-3 rounded-sm border border-destructive p-4 text-sm text-destructive">
+            <p>{error}</p>
+            <p className="text-text-body">{preview
+              ? 'If the connection failed, retry Commit opening stock with the same reviewed file to recover its receipt safely. If validation refused the commit, run the dry-run diff again and review the rows.'
+              : sheet
+                ? 'No inventory has changed. Review the column mapping or choose a corrected file, then run the dry-run diff again.'
+                : 'No inventory has changed. Check the file format against the CSV template, then choose the corrected file.'}</p>
+            {!preview && <ImportCorrectionLinks hasMapping={Boolean(sheet)} />}
+          </div>}
+          <SectionCard id="import-upload" tabIndex={-1} title="1. Upload the opening count" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use single units (tablets, capsules, ml); printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large stock files may use several files with distinct medicine/batch/pack rows.</p>
             <div className="mb-5 flex flex-wrap gap-3">
               <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(OPENING_TEMPLATE)}`} download="pharmacy-opening-stock.csv" className={buttonVariants({ variant: 'secondary' })}>Download CSV template</a>
@@ -112,7 +120,7 @@ export function OwnerImportWizard() {
             <p id="upload-help" className="mt-3 text-sm text-text-muted">Up to 1 MiB, {IMPORT_MAX_ROWS} stock rows and 40 columns. XLSX: one populated worksheet with plain values. Preserve barcode leading zeroes using text cells. CSV: UTF-8, comma separated.</p>
             {busy && <p role="status" className="mt-3 text-sm text-text-muted">{commit.isPending ? 'Posting stock and valuation…' : dryRun.isPending ? 'Checking the dry-run diff…' : 'Reading and checking your upload…'}</p>}
           </SectionCard>
-          {sheet && source && <SectionCard title="2. Map your columns" titleLevel={2}>
+          {sheet && source && <SectionCard id="import-mapping" tabIndex={-1} title="2. Map your columns" titleLevel={2}>
             <p className="mb-5 break-words text-sm text-text-muted">{source.fileName} · {sheet.rowCount} stock rows. Review every suggested mapping. Unmapped extra columns do not affect stock.</p>
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {IMPORT_FIELDS.map(([field, label, required]) => <label key={field} className="min-w-0 space-y-2 text-sm text-text-body"><span id={`import-label-${field}`}>{label}{required ? ' *' : ' (optional)'}</span>
@@ -136,6 +144,10 @@ export function OwnerImportWizard() {
               <p>No inventory has changed during this dry run. Rejected rows are excluded from these totals. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.</p>
             </div>
             {preview.blockers.length > 0 && <ul className="mb-4 list-disc space-y-2 pl-5 text-sm text-destructive">{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
+            {!preview.canCommit && <div className="mb-5 space-y-3 text-sm text-text-body">
+              <p>Fix the listed errors in your source file or column mapping, then run the dry-run diff again. For an unmatched pack, check Medicine catalogue and packs above. Nothing can be committed until every blocker is resolved.</p>
+              <ImportCorrectionLinks hasMapping />
+            </div>}
             <Table><caption className="sr-only">Opening stock rows, count differences, cost warnings and blocking validation errors</caption>
               <TableHeader><TableRow>
                 <TableHead>Row / source</TableHead><TableHead>Medicine / pack / batch</TableHead><TableHead>Expiry</TableHead><TableHead numeric>Current</TableHead><TableHead numeric>Exported</TableHead><TableHead numeric>Counted / added</TableHead><TableHead numeric>Proposed total</TableHead><TableHead numeric>Variance</TableHead><TableHead>Validation</TableHead>
@@ -166,4 +178,11 @@ export function OwnerImportWizard() {
         </>}
     </main>
   );
+}
+
+function ImportCorrectionLinks({ hasMapping }: { hasMapping: boolean }) {
+  return <div className="flex flex-wrap gap-3">
+    {hasMapping && <a href="#import-mapping" className={buttonVariants({ variant: 'secondary', size: 'touch' })}>Review column mapping</a>}
+    <a href="#import-upload" className={buttonVariants({ variant: 'secondary', size: 'touch' })}>Choose a corrected file</a>
+  </div>;
 }
