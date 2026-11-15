@@ -90,14 +90,26 @@ export async function POST(
   if (terminalEvent && !terminalEventSchema.safeParse(parsed.data.payload).success) {
     return NextResponse.json({ error: 'Invalid terminal event.' }, { status: 400 });
   }
-  const verificationStatus = terminalEvent
+  let db: ReturnType<typeof createTenantDb> | null = null;
+  const tenantDb = () => (db ??= createTenantDb(organization.id));
+  // A source with a terminal provider config is a configured payment source: every
+  // envelope from it must carry a valid signature, whatever its event type. An
+  // unsigned or forged one is rejected outright, so it can never be stored (and
+  // never occupy an event id). Terminal events are always verified.
+  const mustBeSigned =
+    terminalEvent ||
+    (await tenantDb().restaurantTerminalProviderConfig.findFirst({
+      where: { source: source.data },
+      select: { id: true },
+    })) !== null;
+  const verificationStatus = mustBeSigned
     ? verifyTerminalSignature(source.data, rawBody, signature, timestamp)
     : undefined;
   // Reject before insert so a bad signature cannot occupy the event-id unique key.
-  if (terminalEvent && verificationStatus === 'FAILED') {
+  if (verificationStatus === 'FAILED') {
     return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
   }
-  const result = await recordInboundWebhook(createTenantDb(organization.id), {
+  const result = await recordInboundWebhook(tenantDb(), {
     source: source.data,
     externalEventId: parsed.data.externalEventId,
     eventType: parsed.data.eventType ?? null,

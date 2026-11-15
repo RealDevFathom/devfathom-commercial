@@ -39,7 +39,8 @@
  * does. In production a missing AUTH_SECRET leaves no way to verify anything,
  * so every ledgered write is refused.
  *
- * Hashing. The tool input is never stored: it can contain a new password. Ids
+ * Hashing. The tool input is never stored: it can contain secrets (the assistant's
+ * password reset no longer takes a password, but other tools may). Ids
  * and payload hashes are SHA-256 over canonical JSON, keyed (HMAC-SHA-256) with a
  * subkey of AUTH_SECRET when it is set, so a database reader cannot test guesses
  * against a stored hash.
