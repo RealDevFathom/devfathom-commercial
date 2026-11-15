@@ -59,6 +59,7 @@ import {
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
+import { useBrowserOnline } from './use-browser-online';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -502,6 +503,7 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const online = useBrowserOnline();
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -756,6 +758,9 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  // DEV-641: only a request React Query is holding for the connection is queued.
+  // A dispatched payment or its post-acceptance bill read is not waiting to send.
+  const paymentQueued = pending === 'tender' && tender.isPaused;
   const allocateBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrint.useMutation({
     retry: false,
   });
@@ -2484,6 +2489,35 @@ function ScopedPharmacyCounterConsole({
           </Button>
         </div>
       </header>
+      {online ? null : (
+        <div
+          role="status"
+          aria-live="polite"
+          data-counter-offline=""
+          className="mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+        >
+          <StatusPill status="offline" tone="warning" label="Offline" />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="font-medium text-text-strong">
+              {paymentQueued
+                ? 'Offline — the payment will be sent when the connection returns.'
+                : pending === 'tender'
+                  ? 'Offline — this payment is waiting for the server to confirm it.'
+                  : 'Offline — this counter cannot reach the server.'}
+            </p>
+            <p className="text-text-body">
+              {paymentQueued
+                ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
+                : pending === 'tender'
+                  ? 'Keep this bill open and do not take the money again until the connection returns.'
+                  : 'Search, bill changes and payments wait until the connection returns.'}
+            </p>
+          </div>
+          {paymentQueued ? (
+            <StatusPill status="queued" tone="warning" label="1 payment waiting" />
+          ) : null}
+        </div>
+      )}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
           <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
@@ -3037,6 +3071,7 @@ function ScopedPharmacyCounterConsole({
           state={billState}
           blocked={blocked}
           pending={pending === 'tender'}
+          queued={paymentQueued}
           disabled={busy || !saleId}
           initialDraft={
             restoredAttempt
