@@ -442,6 +442,47 @@ describe('Restaurant menu-import console', () => {
       expect(screen.getByText('Printed: Lagre Rs. 2,600')).toBeInTheDocument();
     });
 
+    it('restores the extracted sizes after the reviewer removed them all', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: sizes,
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Fajita Pizza' }));
+      expect(screen.getByText('No sizes will be imported.')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Restore extracted sizes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          decision: 'ACCEPTED',
+          variants: [
+            { name: 'Small 9"', priceAmount: '1200.00' },
+            { name: 'Large 15"', priceAmount: '2600.00' },
+          ],
+        })
+      );
+    });
+
     it('explains why an import with unconfirmed sizes is not ready', () => {
       mocks.summary.mockReturnValue({
         data: summary({ PENDING: 0, ACCEPTED: 1, sizesUnconfirmed: 1, readyToCommit: false }),

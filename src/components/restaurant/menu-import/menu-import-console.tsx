@@ -283,7 +283,7 @@ function editorFor(line: ImportLine): LineEditor {
   };
 }
 
-function variantDraftsFor(line: ImportLine): VariantDraft[] {
+function variantDraftsFor(line: ImportLine, fromExtraction = false): VariantDraft[] {
   const extracted = sizesFrom(line.extractedVariants);
   // Mirrors the server: a confirmed size is linked to its printed size by name,
   // or by an unchanged figure after the reviewer corrected the name.
@@ -295,7 +295,10 @@ function variantDraftsFor(line: ImportLine): VariantDraft[] {
       extracted.find((printed) => sameAmount(printed.amount, size.amount));
     return match ? `Printed: ${match.name} ${match.raw ?? match.amount ?? ''}`.trim() : null;
   };
-  const source = line.reviewedVariants !== null ? sizesFrom(line.reviewedVariants) : extracted;
+  const source =
+    line.reviewedVariants !== null && !fromExtraction
+      ? sizesFrom(line.reviewedVariants)
+      : extracted;
   return source.map((size) => ({
     name: size.name,
     priceAmount: size.amount ?? '',
@@ -1219,48 +1222,62 @@ function LineEditorPanel({
             </p>
             {editor.variants.length === 0 ? (
               <p className="text-xs text-text-faint">No sizes will be imported.</p>
-            ) : (
-              editor.variants.map((variant, index) => (
-                <div key={index} className="space-y-1.5">
-                  <p className="text-xs text-text-muted">
-                    <Extracted value={variant.printed} fallback="Added by the reviewer." />
-                  </p>
-                  <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)_auto]">
-                    <Field label={`Size ${index + 1} name`}>
-                      <Input
-                        value={variant.name}
-                        onChange={(event) => setVariant(index, { name: event.target.value })}
+            ) : null}
+            {editor.variants.length === 0
+              ? null
+              : editor.variants.map((variant, index) => (
+                  <div key={index} className="space-y-1.5">
+                    <p className="text-xs text-text-muted">
+                      <Extracted value={variant.printed} fallback="Added by the reviewer." />
+                    </p>
+                    <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)_auto]">
+                      <Field label={`Size ${index + 1} name`}>
+                        <Input
+                          value={variant.name}
+                          onChange={(event) => setVariant(index, { name: event.target.value })}
+                          disabled={busy}
+                          maxLength={120}
+                        />
+                      </Field>
+                      <Field label={`Size ${index + 1} price`}>
+                        <Input
+                          value={variant.priceAmount}
+                          onChange={(event) =>
+                            setVariant(index, { priceAmount: event.target.value })
+                          }
+                          inputMode="decimal"
+                          disabled={busy}
+                        />
+                      </Field>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Remove size ${index + 1}`}
                         disabled={busy}
-                        maxLength={120}
-                      />
-                    </Field>
-                    <Field label={`Size ${index + 1} price`}>
-                      <Input
-                        value={variant.priceAmount}
-                        onChange={(event) => setVariant(index, { priceAmount: event.target.value })}
-                        inputMode="decimal"
-                        disabled={busy}
-                      />
-                    </Field>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Remove size ${index + 1}`}
-                      disabled={busy}
-                      onClick={() =>
-                        set(
-                          'variants',
-                          editor.variants.filter((_, at) => at !== index)
-                        )
-                      }
-                    >
-                      Remove
-                    </Button>
+                        onClick={() =>
+                          set(
+                            'variants',
+                            editor.variants.filter((_, at) => at !== index)
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                ))}
+            {extractedSizes.length > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => set('variants', variantDraftsFor(line, true))}
+              >
+                Restore extracted sizes
+              </Button>
+            ) : null}
           </fieldset>
         ) : null}
         <Field
