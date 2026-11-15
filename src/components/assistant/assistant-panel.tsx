@@ -451,7 +451,7 @@ function MessageBubble({
         {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
-              <p key={i} className="whitespace-pre-wrap break-words text-current">
+              <p key={i} dir="auto" className="whitespace-pre-wrap break-words text-start text-current">
                 {part.text}
               </p>
             ) : (
