@@ -21,6 +21,7 @@ import {
   setStaffProfileStatus,
   updateStaffProfile,
   type CreateStaffProfileInput,
+  type CreateStaffProfileOptions,
   type UpdateStaffProfileInput,
 } from './staff';
 
@@ -125,17 +126,18 @@ async function assertOperatorCapacity(tx: ScopedDb, limit: number): Promise<void
 export async function createStaffProfileWithinCommercialLimit(
   db: ScopedDb,
   limits: Readonly<Record<string, number>>,
-  input: CreateStaffProfileInput
+  input: CreateStaffProfileInput,
+  options: CreateStaffProfileOptions = {}
 ) {
   if (input.status !== undefined && input.status !== 'ACTIVE') {
-    return createStaffProfile(db, input);
+    return createStaffProfile(db, input, options);
   }
   const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
   return db.$transaction(async (tx) => {
     const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
     await assertOperatorCapacity(scopedTx, operatorsMax);
-    return createStaffProfile(scopedTx, input);
+    return createStaffProfile(scopedTx, input, options);
   });
 }
 

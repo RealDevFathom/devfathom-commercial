@@ -148,6 +148,9 @@ function fixture(
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [] as { branchId: string }[]),
     },
+    pharmacyRegisteredDevice: {
+      findMany: vi.fn(async () => [] as { id: string; branchId: string; name: string }[]),
+    },
     pharmacySale: {
       findMany: vi.fn(async () => [
         {

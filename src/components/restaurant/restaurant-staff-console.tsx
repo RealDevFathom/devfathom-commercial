@@ -34,6 +34,7 @@ import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from './restaurant-branch-select';
 import { RestaurantDeviceSelect } from './restaurant-device-select';
+import { RestaurantStaffInviteDialog } from './restaurant-staff-invite-dialog';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type StaffProfile = RouterOutputs['restaurantStaff']['list'][number];
@@ -85,6 +86,7 @@ export function RestaurantStaffConsole() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
   const [branchFilter, setBranchFilter] = useState('');
   const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [linkByEmail, setLinkByEmail] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
@@ -263,9 +265,14 @@ export function RestaurantStaffConsole() {
         description="Manage restaurant staff profiles, access status, and operator credentials."
         actions={
           restaurantEnabled && !permissionDenied ? (
-            <Button className="min-h-11" onClick={openCreate}>
-              Add staff member
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" className="min-h-11" onClick={() => setInviteOpen(true)}>
+                Invite staff member
+              </Button>
+              <Button className="min-h-11" onClick={openCreate}>
+                Add staff member
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -437,6 +444,17 @@ export function RestaurantStaffConsole() {
           )}
         </SectionCard>
       )}
+
+      {/* DEV-253: mounted only while open, so closing resets the invite form. */}
+      {inviteOpen ? (
+        <RestaurantStaffInviteDialog
+          onOpenChange={setInviteOpen}
+          branches={branches}
+          branchesLoading={branchesQuery.isLoading}
+          branchesError={Boolean(branchesQuery.error)}
+          onInvited={refreshStaff}
+        />
+      ) : null}
 
       {/* Mounted only while open, so closing resets its draft state with no effect. */}
       {jobRolesStaff ? (
