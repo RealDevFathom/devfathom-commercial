@@ -312,7 +312,8 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(screen.getByLabelText('Amount')).toBeDisabled();
     await act(async () => resolve({ status: 'accepted', message: 'Payment recorded.' }));
     expect(screen.getByLabelText('Amount')).toHaveValue('');
-    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+    // DEV-499: the typed 200.00 is cleared; the field follows the balance due again.
+    expect(screen.getByLabelText('Cash received')).toHaveValue('250.00');
     expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
   });
 
@@ -1039,6 +1040,131 @@ describe('#722 split tender rows', () => {
     chooseTender('KHATA');
     await screen.findByText(/exceeds the family credit limit/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-499 tender speed', () => {
+  it('prefills exact cash and takes it with Enter on the panel F9 focuses', async () => {
+    const { props } = setup();
+    const cash = screen.getByLabelText('Cash received');
+    expect(cash).toHaveValue('250.00');
+    expect(screen.getByText('Change').parentElement).toHaveTextContent('0.00');
+    // A split amount moves the prefill with it until the cashier types cash.
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    expect(cash).toHaveValue('125.50');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '' } });
+    const panel = cash.closest('[tabindex="-1"]') as HTMLElement;
+    panel.focus();
+    fireEvent.keyDown(panel, { key: 'Enter' });
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'CASH', amountMinor: 25000 },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('sets Cash received from quick-cash buttons and shows the change', async () => {
+    const { props } = setup({ balanceMinor: 70000 });
+    const quick = within(screen.getByRole('group', { name: 'Quick cash' }));
+    expect(quick.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Exact',
+      '500',
+      '1000',
+      '5000',
+    ]);
+    // A note smaller than the amount due cannot pay it.
+    expect(quick.getByRole('button', { name: '500' })).toBeDisabled();
+    fireEvent.click(quick.getByRole('button', { name: '1000' }));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('1000.00');
+    expect(screen.getByText('Change').parentElement).toHaveTextContent('300.00');
+    fireEvent.click(quick.getByRole('button', { name: '5000' }));
+    expect(screen.getByText('Change').parentElement).toHaveTextContent('4300.00');
+    fireEvent.click(quick.getByRole('button', { name: 'Exact' }));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('700.00');
+    fireEvent.click(quick.getByRole('button', { name: '1000' }));
+    fireEvent.keyDown(screen.getByLabelText('Cash received'), { key: 'Enter' });
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'CASH', amountMinor: 70000, cashReceivedMinor: 100000 },
+        { amount: '', cashReceived: '1000.00' }
+      )
+    );
+  });
+
+  it('does not prefill or offer quick cash on a locked bill, and Enter on a button does not pay', () => {
+    const { props } = setup({ disabled: true });
+    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+    for (const button of within(screen.getByRole('group', { name: 'Quick cash' })).getAllByRole(
+      'button'
+    ))
+      expect(button).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText('Cash received'), { key: 'Enter' });
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it('keeps Enter on a tender button for the button, not for payment', () => {
+    const { props } = setup();
+    fireEvent.keyDown(tenderButton('CARD'), { key: 'Enter' });
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it('never offers legacy Credit, and names each wallet provider on its own button', () => {
+    setup({
+      manualSettings: {
+        RAAST: { destination: '', allowReferenceSkip: false },
+        JAZZCASH: { destination: '', allowReferenceSkip: false },
+        EASYPAISA: { destination: '', allowReferenceSkip: false },
+      },
+    });
+    expect(tenderButtons().map((button) => button.textContent)).toEqual([
+      'Cash',
+      'Card',
+      'Bank transfer',
+      'Khata',
+      'JazzCash',
+      'Easypaisa',
+      'Raast',
+    ]);
+    expect(screen.queryByText(/Credit/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'])(
+    'takes %s in three steps: provider, transaction ID, Enter',
+    async (type) => {
+      const { props } = setup({
+        manualSettings: { [type]: { destination: 'Till 123', allowReferenceSkip: false } },
+        khataSignupPatient: { patientId: 'patient-a', displayName: 'Ayesha Khan' },
+      });
+      chooseTender(type);
+      const reference = screen.getByLabelText('Transaction ID (last 4–6 digits)');
+      expect(reference).toHaveFocus();
+      expect(screen.getByLabelText('Payer’s name')).toHaveValue('Ayesha Khan');
+      fireEvent.change(reference, { target: { value: '1234' } });
+      fireEvent.keyDown(reference, { key: 'Enter' });
+      await waitFor(() =>
+        expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+          { type, amountMinor: 25000, payerName: 'Ayesha Khan', providerRef: '1234' },
+          { amount: '', cashReceived: '' }
+        )
+      );
+    }
+  );
+
+  it('asks for the wallet payer first when the bill has no patient', () => {
+    const { props } = setup({
+      manualSettings: { RAAST: { destination: 'Till 123', allowReferenceSkip: false } },
+    });
+    chooseTender('RAAST');
+    const payer = screen.getByLabelText('Payer’s name');
+    expect(payer).toHaveValue('');
+    expect(payer).toHaveFocus();
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      target: { value: '1234' },
+    });
+    fireEvent.keyDown(payer, { key: 'Enter' });
     expect(props.onTender).not.toHaveBeenCalled();
   });
 });

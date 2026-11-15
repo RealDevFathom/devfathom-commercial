@@ -733,9 +733,9 @@ export async function freshPharmacyFirstSale(
     const due = await amount.getAttribute('placeholder');
     expect(due).toMatch(/^\d+\.\d{2}$/);
     expect(Number(due)).toBeGreaterThan(0);
-    await amount.fill(due!);
-    await page.getByLabel('Cash received', { exact: true }).fill(due!);
-    await click(page.getByRole('button', { name: 'Take payment', exact: true }));
+    // DEV-499: Cash received is prefilled with the balance due; Enter takes it.
+    await expect(page.getByLabel('Cash received', { exact: true })).toHaveValue(due!);
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
     await noRawIdEntry(page);
     expect(fourXx).toEqual([]);

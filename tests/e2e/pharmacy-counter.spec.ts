@@ -144,15 +144,15 @@ async function setQuantity(page: Page, quantity: number) {
   await field.press('Tab');
 }
 
+/**
+ * DEV-499: exact cash is two steps. F9 opens payment with Cash received already
+ * set to the balance due and focus on the panel; Enter takes the payment.
+ */
 async function tenderCash(page: Page, amount: string) {
   await page.keyboard.press('F9');
-  const amountField = page.getByLabel('Amount');
-  await amountField.focus();
-  await amountField.fill(amount);
-  const received = page.getByLabel('Cash received');
-  await received.focus();
-  await received.fill(amount);
-  await pressControl(page.getByRole('button', { name: 'Take payment' }));
+  await expect(page.getByLabel('Cash received')).toHaveValue(amount);
+  await expect(page.getByText('Change', { exact: true }).locator('..')).toContainText('0.00');
+  await page.keyboard.press('Enter');
 }
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
