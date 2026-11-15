@@ -89,12 +89,18 @@ function receiptLine(lot: LotInput) {
     stockLocationId: 'loc_shelf',
     quarantineLocationId: rejected > 0 ? 'loc_quarantine' : null,
     unitCostMinor: 100,
+    receivedPacks: lot.received / (lot.unitsPerPack ?? 10),
+    bonusPacks: (lot.bonus ?? 0) / (lot.unitsPerPack ?? 10),
     receivedCanonicalUnits: lot.received,
     bonusCanonicalUnits: lot.bonus ?? 0,
     acceptedCanonicalUnits: lot.received + (lot.bonus ?? 0) - rejected,
     rejectedCanonicalUnits: rejected,
     rejectionReason: rejected > 0 ? 'Crushed carton' : null,
     invoicedPricePerPackMinor: lot.invoicedPricePerPackMinor ?? LIST_PRICE,
+    discountBps: 0,
+    taxBps: 0,
+    taxCreditable: false,
+    allocatedOrderChargeMinor: 0,
     gs1Warnings: [] as string[],
   };
 }
@@ -168,6 +174,10 @@ function receiptDb(input: {
       }),
     },
     pharmacyPurchaseOrderLine: {
+      // PUR-03: posting prices each lot from its order's lines.
+      findMany: vi.fn(({ where }: { where: { purchaseOrderId: string } }) =>
+        Promise.resolve(where.purchaseOrderId === purchaseOrderId ? orderLines : [])
+      ),
       findFirst: vi.fn(({ where }: { where: { id: string; organizationId: string } }) =>
         Promise.resolve(
           where.organizationId === SCOPE.organizationId

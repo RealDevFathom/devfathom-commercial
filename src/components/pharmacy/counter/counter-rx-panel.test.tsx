@@ -275,6 +275,15 @@ describe('CounterRxPanel checks', () => {
     expect(callbacks.onSelectPatient).toHaveBeenCalledWith('patient-1');
   });
 
+  it('points an unmatched patient search at the add patient and prescriber forms (DEV-626)', () => {
+    render(<CounterRxPanel {...props({ query: 'Nobody', state: 'ready' })} />);
+    const link = screen.getByRole('link', {
+      name: /Add the patient or prescriber in Prescriptions/,
+    });
+    expect(link).toHaveAttribute('href', '/pharmacy/prescriptions#prescription-directory');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
   it('preserves pharmacist witness requirements and emergency authorization callbacks', () => {
     const controlled = authorization();
     const { rerender } = render(<CounterRxPanel {...props({ controlled })} />);

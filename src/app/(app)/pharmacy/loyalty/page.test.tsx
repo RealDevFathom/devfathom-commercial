@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
@@ -6,6 +6,11 @@ const mocks = vi.hoisted(() => ({
   customers: vi.fn(),
   history: vi.fn(),
   setReminderLanguage: vi.fn(),
+  replace: vi.fn(),
+}));
+vi.mock('next/navigation', async () => ({
+  ...(await vi.importActual<typeof import('next/navigation')>('next/navigation')),
+  useRouter: () => ({ replace: mocks.replace }),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./loyalty-router', () => ({ pharmacyLoyaltyRouter: { createCaller: () => mocks } }));
@@ -15,7 +20,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main' }]);
   mocks.customers.mockResolvedValue({
-    customers: [{ id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234' }],
+    customers: [
+      { id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234', pointsBalance: 14 },
+    ],
     hasMore: false,
   });
   mocks.history.mockResolvedValue({
@@ -41,22 +48,45 @@ beforeEach(() => {
     })),
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 async function show(params: Record<string, string> = {}) {
   render(await LoyaltyPage({ searchParams: Promise.resolve(params) }));
 }
 describe('ordinary loyalty history page', () => {
-  it('offers labelled search and explicit account selection', async () => {
+  it('opens on the customer list with balances instead of an empty selection box', async () => {
     await show();
     expect(screen.getByLabelText('Branch')).toBeInTheDocument();
-    expect(screen.getByLabelText('Customer name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name, phone or loyalty number')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('type', 'submit');
     expect(screen.getByRole('link', { name: /Retail customer/ })).toHaveAttribute(
       'href',
       expect.stringContaining('customerId=customer-a')
     );
-    expect(screen.getByText('Choose an account')).toBeInTheDocument();
+    const row = screen.getByRole('link', { name: /Retail customer/ }).closest('tr')!;
+    expect(row).toHaveTextContent('ending 1234');
+    expect(row).toHaveTextContent('customer-a');
+    expect(row).toHaveTextContent('14');
+    expect(screen.queryByText('Choose an account')).not.toBeInTheDocument();
+    expect(mocks.customers).toHaveBeenCalledWith({ branchId: 'branch-a', query: '' });
     expect(mocks.history).not.toHaveBeenCalled();
+  });
+  it('searches as the user types without a submit', async () => {
+    vi.useFakeTimers();
+    await show({ branchId: 'branch-a' });
+    fireEvent.change(screen.getByLabelText('Name, phone or loyalty number'), {
+      target: { value: 'Ahmed' },
+    });
+    expect(mocks.replace).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(mocks.replace).toHaveBeenCalledTimes(1);
+    expect(mocks.replace).toHaveBeenCalledWith('/pharmacy/loyalty?branchId=branch-a&query=Ahmed', {
+      scroll: false,
+    });
   });
   it('renders signed events, reversal sources and selection-preserving pagination', async () => {
     await show({ customerId: 'customer-a', query: 'Retail' });
