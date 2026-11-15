@@ -122,4 +122,21 @@ describe('TopbarBreadcrumbs hydration', () => {
     expect(container).not.toHaveTextContent('Sop');
     await act(async () => root.unmount());
   });
+  it('uses pharmacy navigation labels for the current destination', async () => {
+    const pages = menu.filter((item) => item.group === 'Pharmacy');
+    const container = document.createElement('nav');
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    for (const page of pages) {
+      navigation.pathname = page.href;
+      await act(async () => root.render(<TopbarBreadcrumbs />));
+      expect(container.querySelector('[aria-current="page"]'), page.href).toHaveTextContent(
+        page.label
+      );
+    }
+    await act(async () => root.unmount());
+  });
 });

@@ -249,6 +249,11 @@ Active state must be unambiguous through fill/position and text, not color alone
 items use a smooth shared pill; mobile items use the grouped drawer grammar. Preserve keyboard
 focus and `aria-current`.
 
+Restaurant and pharmacy desktop navigation group admitted destinations into Sell, Stock, Buy,
+Reports, and Settings menus, omitting empty groups. Shared menu primitives retain keyboard focus and
+Escape behavior; the active group uses the Studio pill and the current destination is named in its
+menu. Menu links preserve workspace scroll. The existing mobile drawer keeps its vertical groups.
+
 ## 7. Page recipes
 
 ### Dashboard

@@ -272,7 +272,13 @@ export async function freshPharmacyFirstSale(
     await target.click();
   };
   const setup = async (actor: Page) => {
-    await click(actor.getByRole('link', { name: /Onboarding$/ }));
+    // Onboarding sits in the desktop navigation's Settings menu.
+    await click(
+      actor
+        .getByRole('navigation', { name: 'Primary navigation' })
+        .getByRole('button', { name: /^Settings/ })
+    );
+    await click(actor.getByRole('menuitem', { name: /^Onboarding/ }));
     await expect(actor).toHaveURL(new URL('/pharmacy', tenantOrigin).href);
     await expect(actor.locator('[data-slot="readiness-checklist"]')).toBeVisible();
     await noRawIdEntry(actor);

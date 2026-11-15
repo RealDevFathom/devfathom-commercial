@@ -348,7 +348,11 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await signInProvisionedTenant(page, sharedBaseUrl!, tenant);
 
   // Reached by clicking, not by typing a URL: the nav must actually offer it.
-  await page.getByRole('link', { name: 'Onboarding' }).click();
+  await page
+    .getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('button', { name: /^Settings/ })
+    .click();
+  await page.getByRole('menuitem', { name: 'Onboarding' }).click();
   await expect(page).toHaveURL(/\/pharmacy(?:\?|$)/, { timeout: 60_000 });
 
   // Scoped to the checklist itself: the activation panel above it renders its

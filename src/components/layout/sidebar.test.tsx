@@ -1,9 +1,9 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
-import { Sidebar, TopNavigation } from './sidebar';
+import { Sidebar, TopNavigation, visibleNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
@@ -26,9 +26,16 @@ const railQuery = vi.hoisted(() => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ href, children, onClick, ...props }: React.ComponentProps<'a'>) => (
+  default: ({
+    href,
+    children,
+    onClick,
+    scroll,
+    ...props
+  }: React.ComponentProps<'a'> & { scroll?: boolean }) => (
     <a
       href={String(href)}
+      data-preserve-scroll={scroll === false || undefined}
       {...props}
       onClick={(event) => {
         event.preventDefault();
@@ -99,7 +106,7 @@ const enabledModules = [
   'audit',
 ];
 
-function restaurantLinks(role = 'ADMIN') {
+function renderRestaurantNavigation(role = 'ADMIN', granted = ['restaurant-core']) {
   vi.mocked(useSessionMock).mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
   render(
     <EntitlementsProvider
@@ -108,7 +115,7 @@ function restaurantLinks(role = 'ADMIN') {
         vertical: 'RESTAURANT',
         seatLimit: 10,
         activeSeats: 1,
-        enabledModules: ['restaurant-core'],
+        enabledModules: granted,
         modules: [],
         limits: {},
       }}
@@ -116,7 +123,12 @@ function restaurantLinks(role = 'ADMIN') {
       <TopNavigation />
     </EntitlementsProvider>
   );
-  return screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+}
+
+async function restaurantLinks(role = 'ADMIN') {
+  renderRestaurantNavigation(role);
+  fireEvent.click(screen.getByRole('button', { name: /^Sell/ }));
+  return (await screen.findAllByRole('menuitem')).map((link) => link.getAttribute('href'));
 }
 
 function links(vertical?: EntitlementView['vertical'], granted: string[] = enabledModules) {
@@ -144,10 +156,10 @@ describe('TopNavigation vertical visibility', () => {
     usePathnameMock.mockReturnValue('/dashboard');
   });
 
-  it('shows Delivery only to Restaurant administrators', () => {
-    expect(restaurantLinks()).toContain('/restaurant/delivery');
+  it('shows Delivery only to Restaurant administrators', async () => {
+    expect(await restaurantLinks()).toContain('/restaurant/delivery');
     cleanup();
-    expect(restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
+    expect(await restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
   });
 
   it('uses accessible body text for inactive navigation numbers', () => {
@@ -184,6 +196,138 @@ describe('TopNavigation vertical visibility', () => {
     cleanup();
     expect(links('RESTAURANT', [])).not.toContain('/notes');
   });
+});
+
+describe('Restaurant desktop navigation groups', () => {
+  const modules = [
+    'restaurant-core',
+    'restaurant-pos',
+    'restaurant-menu',
+    'restaurant-inventory',
+    'restaurant-purchasing',
+    'restaurant-sop',
+    'restaurant-loyalty',
+    'restaurant-insights',
+    'restaurant-integrations',
+  ];
+
+  beforeEach(() => usePathnameMock.mockReturnValue('/restaurant/inventory/items'));
+
+  it.each(['ADMIN', 'MEMBER'])(
+    'groups every admitted destination once for %s without changing permissions',
+    async (role) => {
+      renderRestaurantNavigation(role, modules);
+      const triggers = screen.getAllByRole('button');
+      expect(triggers.map((button) => button.textContent)).toEqual([
+        'Sell',
+        'Stock',
+        'Buy',
+        'Reports',
+        'Settings',
+      ]);
+      const hrefs: (string | null)[] = [];
+      for (const trigger of triggers) {
+        fireEvent.click(trigger);
+        const items = await screen.findAllByRole('menuitem');
+        hrefs.push(...items.map((item) => item.getAttribute('href')));
+        for (const item of items) expect(item).toHaveAttribute('data-preserve-scroll', 'true');
+        fireEvent.keyDown(items[0]!, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      }
+      const expected = visibleNavigation(
+        { vertical: 'RESTAURANT', enabledModules: modules },
+        role
+      ).map((item) => item.href);
+      expect(hrefs).toHaveLength(expected.length);
+      expect(new Set(hrefs)).toEqual(new Set(expected));
+    }
+  );
+
+  it('marks the active group and destination, opens by keyboard and restores focus on Escape', async () => {
+    renderRestaurantNavigation('ADMIN', modules);
+    const trigger = screen.getByRole('button', { name: 'Stock: Inventory' });
+    expect(trigger).toHaveAttribute('aria-current', 'true');
+    expect(trigger).toHaveClass('bg-primary');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const inventory = await screen.findByRole('menuitem', { name: 'Inventory Current' });
+    expect(inventory).toHaveAttribute('aria-current', 'page');
+    expect(inventory).toHaveAttribute('href', '/restaurant/inventory');
+    await waitFor(() => expect(inventory).toHaveFocus());
+
+    fireEvent.keyDown(inventory, { key: 'Escape' });
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('omits empty groups and module-disabled destinations', async () => {
+    renderRestaurantNavigation('ADMIN', ['restaurant-core']);
+    expect(screen.queryByRole('button', { name: /^Stock/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Buy' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reports' }));
+    expect(await screen.findByRole('menuitem', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/restaurant/reports'
+    );
+    expect(screen.queryByRole('menuitem', { name: 'Advanced Insights' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Pharmacy desktop navigation groups', () => {
+  // Procurement and reports are off, so Buy is empty for everyone and Reports for non-admins.
+  const modules = [
+    'pharmacy-core',
+    'pharmacy-counter',
+    'pharmacy-inventory',
+    'pharmacy-finance',
+    'pharmacy-dispensing',
+    'pharmacy-crm',
+  ];
+
+  beforeEach(() => usePathnameMock.mockReturnValue('/pharmacy/counter'));
+
+  it.each([
+    ['ADMIN', ['Sell', 'Stock', 'Reports', 'Settings']],
+    ['MEMBER', ['Sell', 'Stock', 'Settings']],
+  ])(
+    'groups every admitted destination once for %s and omits empty groups',
+    async (role, groups) => {
+      useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+      render(
+        <EntitlementsProvider
+          value={{
+            organizationId: 'pharmacy-1',
+            vertical: 'PHARMACY',
+            seatLimit: 10,
+            activeSeats: 1,
+            enabledModules: modules,
+            modules: [],
+            limits: {},
+          }}
+        >
+          <TopNavigation />
+        </EntitlementsProvider>
+      );
+      expect(screen.queryAllByRole('link')).toHaveLength(0);
+      const triggers = screen.getAllByRole('button');
+      expect(triggers.map((button) => button.textContent)).toEqual(groups);
+      const hrefs: (string | null)[] = [];
+      for (const trigger of triggers) {
+        fireEvent.click(trigger);
+        const items = await screen.findAllByRole('menuitem');
+        hrefs.push(...items.map((item) => item.getAttribute('href')));
+        for (const item of items) expect(item).toHaveAttribute('data-preserve-scroll', 'true');
+        fireEvent.keyDown(items[0]!, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      }
+      const expected = visibleNavigation(
+        { vertical: 'PHARMACY', enabledModules: modules },
+        role
+      ).map((item) => item.href);
+      expect(hrefs).toHaveLength(expected.length);
+      expect(new Set(hrefs)).toEqual(new Set(expected));
+    }
+  );
 });
 
 describe.each(['ltr', 'rtl'])('%s mobile drawer placement', (dir) => {
@@ -271,28 +415,65 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     return onNavigate;
   }
 
-  it('renders named, focusable destinations with Chat disabled', () => {
+  async function closeMenu() {
+    const [item] = screen.queryAllByRole('menuitem');
+    if (item) fireEvent.keyDown(item, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  }
+
+  /** Mobile links render inline; desktop destinations sit in closed menus, so open each one. */
+  async function destinationItems() {
+    if (surface === 'mobile') return screen.getAllByRole('link');
+    const items: HTMLElement[] = [];
+    for (const trigger of screen.getAllByRole('button')) {
+      fireEvent.click(trigger);
+      items.push(...(await screen.findAllByRole('menuitem')));
+      await closeMenu();
+    }
+    return items;
+  }
+
+  async function destinationHrefs() {
+    return (await destinationItems()).map((item) => item.getAttribute('href'));
+  }
+
+  /** Finds a destination by name, leaving the desktop menu that holds it open. */
+  async function destination(name: RegExp) {
+    if (surface === 'mobile') return screen.getByRole('link', { name });
+    for (const trigger of screen.getAllByRole('button')) {
+      fireEvent.click(trigger);
+      await screen.findAllByRole('menuitem');
+      const item = screen.queryByRole('menuitem', { name });
+      if (item) return item;
+      await closeMenu();
+    }
+    throw new Error(`No destination named ${name}`);
+  }
+
+  it('renders named, focusable destinations with Chat disabled', async () => {
     const onNavigate = renderNavigation();
     for (const [label, href] of destinations) {
-      const link = screen.getByRole('link', { name: (name) => name.endsWith(label) });
+      const link = await destination(new RegExp(`${label}$`));
       expect(link).toHaveAttribute('href', href);
-      expect(link.tabIndex).toBe(0);
+      // Desktop menus use a roving tab stop: the focused item becomes the tab stop.
+      if (surface === 'mobile') expect(link.tabIndex).toBe(0);
       link.focus();
       expect(link).toHaveFocus();
+      if (surface === 'desktop') await waitFor(() => expect(link.tabIndex).toBe(0));
       fireEvent.click(link);
+      await closeMenu();
     }
     if (surface === 'mobile') expect(onNavigate).toHaveBeenCalledTimes(destinations.length);
     expect(screen.queryByRole('link', { name: /Chat$/ })).not.toBeInTheDocument();
+    expect(await destinationHrefs()).not.toContain('/chat');
   });
 
   it.each(destinations)(
     'hides disabled %s without hiding other licensed destinations',
-    (label, href, module) => {
+    async (label, href, module) => {
       renderNavigation({ granted: [...pharmacyModules.filter((key) => key !== module), 'chat'] });
-      expect(
-        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
-      ).not.toBeInTheDocument();
-      const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      const hrefs = await destinationHrefs();
       expect(hrefs).not.toContain(href);
       for (const [, otherHref] of destinations) {
         if (otherHref !== href) expect(hrefs).toContain(otherHref);
@@ -301,38 +482,40 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   );
 
-  it('keeps operational links for non-admins while finance and setup stay admin-only', () => {
+  it('keeps operational links for non-admins while finance and setup stay admin-only', async () => {
     renderNavigation({ role: 'MEMBER' });
-    for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
-      expect(
-        screen.getByRole('link', { name: (name) => name.endsWith(label) })
-      ).toBeInTheDocument();
+    const hrefs = await destinationHrefs();
+    // Inventory, Purchasing and Reports & Insights.
+    for (const href of ['/pharmacy/inventory', '/pharmacy/purchasing', '/pharmacy/reports']) {
+      expect(hrefs).toContain(href);
     }
-    for (const label of [
-      'Finance',
-      'Onboarding',
-      'Medicine catalog',
-      'Regulatory profile',
-      'Branch assignments',
+    // Finance, Onboarding, Medicine catalog, Regulatory profile and Branch assignments.
+    for (const href of [
+      '/pharmacy/finance',
+      '/pharmacy',
+      '/pharmacy/medicines',
+      '/pharmacy/regulatory',
+      '/pharmacy/settings/branches',
     ]) {
-      expect(
-        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
-      ).not.toBeInTheDocument();
+      expect(hrefs).not.toContain(href);
     }
   });
 
-  it('offers a cashier without procurement or reports neither destination (#979)', () => {
+  it('offers a cashier without procurement or reports neither destination (#979)', async () => {
     renderNavigation({ role: 'MEMBER', capabilities: [] });
-    expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
-    for (const label of ['Purchasing', 'Reports & Insights', 'Day close', 'Team']) {
-      expect(
-        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
-      ).not.toBeInTheDocument();
+    const hrefs = await destinationHrefs();
+    expect(hrefs).toContain('/pharmacy/inventory');
+    for (const href of [
+      '/pharmacy/purchasing',
+      '/pharmacy/reports',
+      '/pharmacy/counter/close',
+      '/team',
+    ]) {
+      expect(hrefs).not.toContain(href);
     }
   });
 
-  // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
-  // that does no procurement work is offered the Purchasing destination.
+  // The rail answer is the ABAC-resolved capability list.
   it.each([
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
@@ -340,20 +523,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['inventory', ['pharmacy:inventory']],
     ['auditor', ['reports:operational']],
     ['finance', ['reports:financial']],
-  ] as const)('offers the %s role no Purchasing destination (#979)', (_role, capabilities) => {
-    renderNavigation({ role: 'MEMBER', capabilities: [...capabilities] });
-    expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
-    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
-    expect(hrefs.filter((href) => href.startsWith('/pharmacy/purchasing'))).toEqual([]);
-  });
-
-  it('ignores a cached capability answer for another signed-in identity (#979)', () => {
-    renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
-    for (const label of ['Purchasing', 'Reports & Insights']) {
-      expect(
-        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
-      ).not.toBeInTheDocument();
+  ] as const)(
+    'offers the %s role no Purchasing destination (#979)',
+    async (_role, capabilities) => {
+      renderNavigation({ role: 'MEMBER', capabilities: [...capabilities] });
+      const hrefs = await destinationHrefs();
+      expect(hrefs.filter((href) => href?.startsWith('/pharmacy/purchasing'))).toEqual([]);
     }
+  );
+
+  it('ignores a cached capability answer for another signed-in identity (#979)', async () => {
+    renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
+    const hrefs = await destinationHrefs();
+    expect(hrefs).not.toContain('/pharmacy/purchasing');
+    expect(hrefs).not.toContain('/pharmacy/reports');
   });
 
   it('denies unlicensed Pharmacy navigation without removing baseline access', () => {
@@ -376,7 +559,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   );
 
-  it('isolates Pharmacy from mis-provisioned Restaurant and Agency licenses', () => {
+  it('isolates Pharmacy from mis-provisioned Restaurant and Agency licenses', async () => {
     renderNavigation({
       granted: [
         ...pharmacyModules,
@@ -387,7 +570,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         'finance',
       ],
     });
-    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    const hrefs = await destinationHrefs();
     expect(hrefs.some((href) => href?.startsWith('/restaurant'))).toBe(false);
     for (const href of ['/pos', '/projects', '/finance']) expect(hrefs).not.toContain(href);
     expect(hrefs).toContain('/pharmacy/finance');
@@ -398,16 +581,24 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/purchasing/returns', 'Purchasing'],
     ['/pharmacy/finance', 'Finance'],
     ['/pharmacy/inventory', 'Inventory'],
-  ])('marks only the longest matching destination current at %s', (pathname, label) => {
+  ])('marks only the longest matching destination current at %s', async (pathname, label) => {
     renderNavigation({ pathname });
-    expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toHaveAttribute(
-      'aria-current',
-      'page'
-    );
+    if (surface === 'desktop') {
+      const current = screen
+        .getAllByRole('button')
+        .filter((trigger) => trigger.getAttribute('aria-current') === 'true');
+      expect(current).toHaveLength(1);
+      expect(current[0]).toHaveAccessibleName(new RegExp(`: ${label}$`));
+    }
+    // On desktop the current destination's menu item reads "<label> Current".
+    const name = new RegExp(surface === 'mobile' ? `${label}$` : `^${label} Current$`);
+    expect(await destination(name)).toHaveAttribute('aria-current', 'page');
+    await closeMenu();
     expect(
-      screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page')
+      (await destinationItems()).filter((link) => link.getAttribute('aria-current') === 'page')
     ).toHaveLength(1);
-    expect(screen.getByRole('link', { name: /Onboarding$/ })).not.toHaveAttribute('aria-current');
+    expect(await destination(/Onboarding$/)).not.toHaveAttribute('aria-current');
+    await closeMenu();
   });
 });
 

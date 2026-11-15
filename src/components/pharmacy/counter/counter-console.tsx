@@ -556,6 +556,11 @@ function ScopedPharmacyCounterConsole({
     { branchId, query: submittedQuery },
     { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
   );
+  const searchFailed =
+    searchCurrent &&
+    !searchQuery.isFetching &&
+    !searchQuery.isPlaceholderData &&
+    searchQuery.isError;
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -622,9 +627,11 @@ function ScopedPharmacyCounterConsole({
   const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
     retry: false,
   });
-  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation({
-    retry: false,
-  });
+  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation(
+    {
+      retry: false,
+    }
+  );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -864,10 +871,9 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
       ? lastReceipt.receipt
       : null;
-  const currentReceipt =
-    !receiptAccessDenied
-      ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
-      : null;
+  const currentReceipt = !receiptAccessDenied
+    ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
+    : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
 
   const refreshTenderBill = useCallback(
@@ -2364,6 +2370,7 @@ function ScopedPharmacyCounterConsole({
                       disabled={busy}
                       placeholder="Brand, generic or barcode"
                       aria-describedby="counter-search-help"
+                      aria-invalid={searchFailed || undefined}
                       onChange={(event) => {
                         scannerRevision.current += 1;
                         setQuery(event.target.value);
@@ -2389,7 +2396,11 @@ function ScopedPharmacyCounterConsole({
                         }
                         void runSearch();
                       }}
-                      className="h-12"
+                      className={
+                        searchFailed
+                          ? 'h-12'
+                          : 'h-12 focus-visible:border-border-strong focus-visible:ring-text-muted'
+                      }
                     />
                     <p id="counter-search-help" className="text-xs text-text-muted">
                       {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
@@ -2659,7 +2670,11 @@ function ScopedPharmacyCounterConsole({
                 >
                   Preview receipt
                 </Button>
-                <Button variant="outline" className="h-11 w-full" onClick={() => void printReceipt()}>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void printReceipt()}
+                >
                   Print · {formatBinding(keymap.bindings.printReceipt)}
                 </Button>
               </div>

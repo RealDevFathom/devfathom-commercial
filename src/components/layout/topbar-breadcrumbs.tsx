@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
 import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
+import { navigation } from './sidebar';
 
 export const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -62,6 +63,9 @@ export function TopbarBreadcrumbs() {
     const href = `/${segments.slice(0, index + 1).join('/')}`;
     return {
       label:
+        (href.startsWith('/pharmacy') && (href !== '/pharmacy' || index === segments.length - 1)
+          ? navigation.find((item) => item.href === href)?.label
+          : undefined) ||
         routeLabels[href] ||
         breadcrumbLabels[segment] ||
         segment.charAt(0).toUpperCase() + segment.slice(1),
