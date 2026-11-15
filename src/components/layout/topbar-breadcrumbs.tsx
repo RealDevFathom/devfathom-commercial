@@ -34,6 +34,7 @@ export const routeLabels: Record<string, string> = {
   // Pharmacy accounts pages use their page headings in the breadcrumb.
   '/pharmacy/accounts/account-activity-bridge': 'Account activity bridge',
   '/pharmacy/accounts/account-code-reference': 'Account code reference',
+  '/pharmacy/accounts/ap-aging': 'Supplier expense invoice aging',
   '/pharmacy/accounts/balance-sheet': 'Balance sheet',
   '/pharmacy/accounts/cash-flow': 'Classified cash-flow projection',
   '/pharmacy/accounts/cheque-maturity': 'Recorded cheque maturity',
