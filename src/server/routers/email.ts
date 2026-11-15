@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
+import type { Session } from 'next-auth';
 import { router, protectedProcedure } from '../trpc';
 import { adapterForMailbox } from '@/lib/email/adapter';
 import { syncMailbox } from '@/lib/email/sync';
@@ -19,6 +20,47 @@ import { encryptToken, isEmailCryptoConfigured } from '@/lib/email/crypto';
  */
 
 const providerInput = z.enum(['GMAIL', 'OUTLOOK']);
+
+// --- OAuth connect state (F11 / DEV-833) --------------------------------------
+//
+// The connect `state` is persisted (as a hash) bound to the provider, user,
+// tenant and sign-in session that started it, and consumed exactly once before
+// any code exchange. An authorization code delivered to anyone else — another
+// user, another workspace, another sign-in — is refused before a mailbox row is
+// written, so a forged callback cannot attach someone else's mailbox.
+
+const OAUTH_STATE_TTL_MS = 10 * 60_000;
+const INVALID_OAUTH_STATE =
+  'This connection link is invalid or has expired. Start the connection again from Email.';
+
+function hashOAuthState(state: string) {
+  return createHash('sha256').update(state).digest('hex');
+}
+
+/** A stable fingerprint of the signed-in session this connect belongs to. */
+function oauthSessionBinding(ctx: {
+  session: Pick<Session, 'user'>;
+  organization: { id: string } | null;
+}) {
+  const user = ctx.session.user;
+  const organizationId = ctx.organization?.id ?? user.organizationId;
+  return createHash('sha256')
+    .update(
+      [
+        organizationId,
+        user.id,
+        user.supportSessionId ?? '',
+        user.passwordAuthenticatedAt ?? '',
+      ].join('|')
+    )
+    .digest('hex');
+}
+
+function sameBinding(stored: string, current: string) {
+  const a = Buffer.from(stored);
+  const b = Buffer.from(current);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // --- ownership guards (the IDOR keystone for email) -------------------------
 
@@ -53,27 +95,67 @@ export const emailRouter = router({
   // Step 1 of connect: hand back a consent URL for the popup. No user config.
   connectStart: protectedProcedure
     .input(z.object({ provider: providerInput }))
-    .mutation(({ input }) => {
-      const state = `${input.provider}:${randomBytes(16).toString('hex')}`;
+    .mutation(async ({ ctx, input }) => {
+      const state = `${input.provider}:${randomBytes(32).toString('base64url')}`;
+      let url: string;
       try {
-        return { url: buildConsentUrl(input.provider, state), state };
+        url = buildConsentUrl(input.provider, state);
       } catch (e) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: (e as Error).message,
         });
       }
+      await ctx.db.mailboxOAuthState.create({
+        data: {
+          userId: ctx.session.user.id,
+          provider: input.provider,
+          stateHash: hashOAuthState(state),
+          sessionBinding: oauthSessionBinding(ctx),
+          expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
+        },
+      });
+      return { url, state };
     }),
 
   // Step 2: exchange the code, store an encrypted refresh token, kick off sync.
   connectCallback: protectedProcedure
-    .input(z.object({ provider: providerInput, code: z.string().min(1) }))
+    .input(
+      z.object({
+        provider: providerInput,
+        code: z.string().min(1),
+        state: z.string().min(1).max(512),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       if (!isEmailCryptoConfigured()) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Email credential encryption is not configured on the server.',
         });
+      }
+
+      // F11: the state must be one this user, tenant and session started for
+      // this provider, unexpired and unused. Checked and consumed before the
+      // code is exchanged or any mailbox is written.
+      const pending = await ctx.db.mailboxOAuthState.findFirst({
+        where: {
+          stateHash: hashOAuthState(input.state),
+          userId: ctx.session.user.id,
+          provider: input.provider,
+          usedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      });
+      if (!pending || !sameBinding(pending.sessionBinding, oauthSessionBinding(ctx))) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: INVALID_OAUTH_STATE });
+      }
+      const consumed = await ctx.db.mailboxOAuthState.updateMany({
+        where: { id: pending.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (consumed.count !== 1) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: INVALID_OAUTH_STATE });
       }
 
       let exchanged;

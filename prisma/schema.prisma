@@ -3646,6 +3646,7 @@ model User {
   resignationsReviewed        Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
   mailboxes                   Mailbox[]
+  mailboxOAuthStates          MailboxOAuthState[]
   ssoTickets                  TenantSsoTicket[]
   // MEET-01
   meetingParticipants         MeetingParticipant[]
@@ -5601,6 +5602,28 @@ model Mailbox {
   @@map("mailboxes")
 }
 
+// F11 / DEV-833: a mailbox OAuth connect is honored only for the user, tenant,
+// session and provider that started it. Only a hash of the state is stored, and
+// each row is consumed once.
+model MailboxOAuthState {
+  id             String      @id @default(cuid())
+  organizationId String      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  provider       MailboxType
+  stateHash      String      @unique
+  sessionBinding String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([organizationId, expiresAt])
+  @@map("mailbox_oauth_states")
+}
+
 // A synced message belonging to a Mailbox. Provider-agnostic shape; bodies are
 // backfilled lazily on first open to keep the initial inbox paint fast.
 model EmailMessage {
@@ -5726,6 +5749,7 @@ model Organization {
   supportSessions                           PlatformSupportSession[]
   auditLogs                                 PlatformAuditLog[]
   ssoStates                                 OrganizationSsoState[]
+  mailboxOAuthStates                        MailboxOAuthState[]
   ssoTickets                                TenantSsoTicket[]
   insightLoyaltyLiabilities                 InsightLoyaltyLiability[]
   restaurantNotificationWebhook             RestaurantNotificationWebhook?
