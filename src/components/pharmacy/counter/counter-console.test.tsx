@@ -2443,6 +2443,41 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(sent.refSerial).toBeUndefined();
   });
 
+  it('keeps a field re-entered for the new patient with the same value', async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.onSelectPatient('patient-a');
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('rxSerialWritten', true);
+    });
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('rxSerialWritten', true);
+      props.controlled!.onChange('pin', '1234');
+      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+    });
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.addLine!.mock.calls[0]![0].controlledAuthorization).toMatchObject({
+      patientId: 'patient-b',
+      staffProfileId: 'pharmacist-a',
+      rxSerialWritten: true,
+      prescriptionLineId: 'rx-line-b',
+    });
+  });
+
   it("never carries the paid bill's patient onto the next bill", async () => {
     controlledScanSetup();
     mocks.queries.counterPatientPanel = patientPanel('patient-a');

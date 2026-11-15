@@ -220,19 +220,20 @@ const EMPTY_CONTROLLED_AUTH = {
   refSerial: '',
 };
 
+type ControlledAuthField = keyof typeof EMPTY_CONTROLLED_AUTH;
+
 /**
- * DEV-712: keep only the authorization fields entered after the bill closed.
- * A field still holding the closed bill's value (its prescriber, Rx serial,
- * emergency flag or pharmacist) is reset, so it never follows a new patient.
+ * DEV-712: keep only the authorization fields the operator edited after the
+ * bill closed — including one re-entered with the same value. Every other
+ * field (the closed bill's prescriber, Rx serial, emergency flag or
+ * pharmacist) is reset, so it never follows a new patient.
  */
 function freshControlledAuth(
   current: typeof EMPTY_CONTROLLED_AUTH,
-  closed: typeof EMPTY_CONTROLLED_AUTH
+  edited: ReadonlySet<ControlledAuthField>
 ): typeof EMPTY_CONTROLLED_AUTH {
   const fresh = { ...EMPTY_CONTROLLED_AUTH };
-  for (const key of Object.keys(fresh) as (keyof typeof fresh)[]) {
-    if (current[key] !== closed[key]) Object.assign(fresh, { [key]: current[key] });
-  }
+  for (const key of edited) Object.assign(fresh, { [key]: current[key] });
   return fresh;
 }
 
@@ -431,12 +432,12 @@ function ScopedPharmacyCounterConsole({
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const paymentAttempt = useRef<{ saleId: string; id: string } | null>(null);
-  // The patient and controlled authorization on the bill when it was first seen
-  // paid or voided (DEV-712).
+  // The patient on the bill when it was first seen paid or voided, and the
+  // authorization fields the operator has edited since then (DEV-712).
   const closedBillPatient = useRef<{
     saleId: string;
     patientId: string | null;
-    auth: typeof EMPTY_CONTROLLED_AUTH;
+    editedAuth: Set<ControlledAuthField>;
   } | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -820,8 +821,8 @@ function ScopedPharmacyCounterConsole({
   const currentBillClosed = billClosed(cart, saleId);
   useEffect(() => {
     if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
-      closedBillPatient.current = { saleId, patientId, auth: controlledAuth };
-  }, [controlledAuth, currentBillClosed, patientId, saleId]);
+      closedBillPatient.current = { saleId, patientId, editedAuth: new Set() };
+  }, [currentBillClosed, patientId, saleId]);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
@@ -1182,7 +1183,7 @@ function ScopedPharmacyCounterConsole({
       if (replaceClosedBill) {
         const closed = closedBillPatient.current;
         if (closed?.saleId === saleId && closed.patientId !== patientId) {
-          billAuth = freshControlledAuth(controlledAuth, closed.auth);
+          billAuth = freshControlledAuth(controlledAuth, closed.editedAuth);
           setActiveSale(null);
           setControlledAuth(billAuth);
         } else {
@@ -2980,6 +2981,7 @@ function ScopedPharmacyCounterConsole({
                       setPatientAddressDraft(typeof value === 'string' ? value : '');
                       return;
                     }
+                    closedBillPatient.current?.editedAuth.add(field);
                     setControlledAuth((current) => {
                       if (field === 'emergency' || field === 'rxSerialWritten') {
                         return { ...current, [field]: value === true };
