@@ -8,6 +8,7 @@ import {
   grossMargin,
   grossMarginComparison,
   leakageReport,
+  ledgerCurrencies,
   marginComparisonPeriods,
   perpetualValuation,
   unallocatedInventoryValue,
@@ -119,25 +120,47 @@ const ledgerReportProcedure = adminProcedure
     return next({ ctx: { ...ctx, reportScope: { organizationId, branchId: branch.id } } });
   });
 
-/** The tenant's configured currency (e.g. PKR), only for the organization in scope. */
-function organizationCurrency(ctx: TRPCContext, organizationId: string): string | null {
-  const currency = ctx.organization?.id === organizationId ? ctx.organization.currency : null;
-  return currency && /^[A-Z]{3}$/.test(currency) ? currency : null;
+type ReportCurrency = {
+  currency: string | null;
+  currencyStatus:
+    | 'posted_entry_currency'
+    | 'organization_setting'
+    | 'mixed_posted_currencies'
+    | 'not_recorded_by_ledger_reader';
+};
+
+/**
+ * Currency for summed ledger amounts: the currency the contributing entries
+ * were posted in. Mixed currencies are never relabelled as one. With no
+ * contributing entries, the organization's own setting (e.g. PKR) is used.
+ */
+function reportCurrency(
+  ctx: TRPCContext,
+  organizationId: string,
+  posted: readonly string[]
+): ReportCurrency {
+  if (posted.length > 1) return { currency: null, currencyStatus: 'mixed_posted_currencies' };
+  if (posted.length === 1) return { currency: posted[0], currencyStatus: 'posted_entry_currency' };
+  const setting = ctx.organization?.id === organizationId ? ctx.organization.currency : null;
+  return setting && /^[A-Z]{3}$/.test(setting)
+    ? { currency: setting, currencyStatus: 'organization_setting' }
+    : { currency: null, currencyStatus: 'not_recorded_by_ledger_reader' };
 }
+
+const VALUATION_ACCOUNTS = ['INVENTORY', 'INVENTORY_IN_TRANSIT'] as const;
+const MARGIN_ACCOUNTS = ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'] as const;
+const LEAKAGE_ACCOUNTS = ['SALES_DISCOUNT', 'INVENTORY_WRITE_OFF', 'INVENTORY_SHRINKAGE'] as const;
 
 function ledgerMetadata(
   reportScope: { organizationId: string; branchId: string },
   definition: string,
-  currency: string | null = null
+  currency: ReportCurrency = { currency: null, currencyStatus: 'not_recorded_by_ledger_reader' }
 ) {
   return {
     scope: reportScope,
     timezone: 'UTC' as const,
     moneyUnit: 'integer_minor' as const,
-    currency,
-    currencyStatus: currency
-      ? ('organization_setting' as const)
-      : ('not_recorded_by_ledger_reader' as const),
+    ...currency,
     definition,
     source: 'finance_journal_lines' as const,
     coverage: {
@@ -215,9 +238,14 @@ export const pharmacyFinanceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const at = new Date(input.at);
-      const [rows, unallocatedValueMinor] = await Promise.all([
+      const [rows, unallocatedValueMinor, currencies] = await Promise.all([
         perpetualValuation(ctx.db, ctx.reportScope, at),
         unallocatedInventoryValue(ctx.db, ctx.reportScope, at),
+        ledgerCurrencies(ctx.db, ctx.reportScope, {
+          accountCodes: VALUATION_ACCOUNTS,
+          to: at,
+          inclusive: true,
+        }),
       ]);
       const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
         branches: rows.map((row) => row.branchId),
@@ -230,7 +258,7 @@ export const pharmacyFinanceRouter = router({
         ...ledgerMetadata(
           ctx.reportScope,
           'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Stock posted without a lot (such as opening stock entered as one branch total) is reported separately. Missing unit cost remains unknown.',
-          organizationCurrency(ctx, ctx.reportScope.organizationId)
+          reportCurrency(ctx, ctx.reportScope.organizationId, currencies)
         ),
         period: { at, bounds: 'through_inclusive' as const },
         rows,
@@ -243,7 +271,10 @@ export const pharmacyFinanceRouter = router({
     .input(reportPeriod.safeExtend({ by: z.enum(['line', 'batch', 'product', 'branch']) }))
     .query(async ({ ctx, input }) => {
       const period = { from: new Date(input.from), to: new Date(input.to) };
-      const rows = await grossMargin(ctx.db, ctx.reportScope, { ...period, by: input.by });
+      const [rows, currencies] = await Promise.all([
+        grossMargin(ctx.db, ctx.reportScope, { ...period, by: input.by }),
+        ledgerCurrencies(ctx.db, ctx.reportScope, { accountCodes: MARGIN_ACCOUNTS, ...period }),
+      ]);
       const keys = rows.map((row) => row.key);
       const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
         branches: input.by === 'branch' ? keys : [],
@@ -254,7 +285,7 @@ export const pharmacyFinanceRouter = router({
         ...ledgerMetadata(
           ctx.reportScope,
           'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.',
-          organizationCurrency(ctx, ctx.reportScope.organizationId)
+          reportCurrency(ctx, ctx.reportScope.organizationId, currencies)
         ),
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
@@ -265,7 +296,10 @@ export const pharmacyFinanceRouter = router({
 
   leakageReport: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
     const period = { from: new Date(input.from), to: new Date(input.to) };
-    const rows = await leakageReport(ctx.db, ctx.reportScope, period);
+    const [rows, currencies] = await Promise.all([
+      leakageReport(ctx.db, ctx.reportScope, period),
+      ledgerCurrencies(ctx.db, ctx.reportScope, { accountCodes: LEAKAGE_ACCOUNTS, ...period }),
+    ]);
     const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
       branches: rows.map((row) => row.branchId),
       medicines: rows.map((row) => row.medicineId),
@@ -274,7 +308,7 @@ export const pharmacyFinanceRouter = router({
       ...ledgerMetadata(
         ctx.reportScope,
         'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.',
-        organizationCurrency(ctx, ctx.reportScope.organizationId)
+        reportCurrency(ctx, ctx.reportScope.organizationId, currencies)
       ),
       period: { ...period, bounds: '[from,to)' as const },
       rows,

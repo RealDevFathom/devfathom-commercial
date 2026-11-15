@@ -113,6 +113,30 @@ export async function unallocatedInventoryValue(
   return BigInt(row?.valueMinor ?? 0);
 }
 
+/**
+ * Currencies the journal entries behind a report were posted in. Amounts in
+ * these reports are summed across entries, so the report can only name a
+ * currency when every contributing entry shares it.
+ */
+export async function ledgerCurrencies(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { accountCodes: readonly string[]; from?: Date; to: Date; inclusive?: boolean }
+): Promise<string[]> {
+  const rows = await db.$queryRaw<{ currency: string }[]>(Prisma.sql`
+    SELECT DISTINCT entry."currency"::text AS "currency"
+      FROM "finance_journal_lines" line
+      JOIN "finance_journal_entries" entry
+        ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."accountCode"::text IN (${Prisma.join(input.accountCodes)})
+       ${input.from ? Prisma.sql`AND entry."occurredAt" >= ${input.from}` : Prisma.empty}
+       ${input.inclusive ? Prisma.sql`AND entry."occurredAt" <= ${input.to}` : Prisma.sql`AND entry."occurredAt" < ${input.to}`}
+       ${branchFilter(scope)}
+     ORDER BY 1`);
+  return rows.map((row) => row.currency);
+}
+
 export type MarginDimension = 'line' | 'batch' | 'product' | 'branch';
 
 export type MarginRow = {

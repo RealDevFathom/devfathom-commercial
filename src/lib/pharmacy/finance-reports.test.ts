@@ -4,6 +4,7 @@ import {
   explainGrossMargin,
   grossMarginComparison,
   marginComparisonPeriods,
+  ledgerCurrencies,
   unallocatedInventoryValue,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
@@ -143,5 +144,41 @@ describe('inventory posted without a lot', () => {
         new Date()
       )
     ).resolves.toBe(BigInt(0));
+  });
+});
+
+describe('report currency source', () => {
+  it('lists distinct posted currencies for the accounts, window and branch', async () => {
+    const $queryRaw = vi.fn(async () => [{ currency: 'PKR' }, { currency: 'USD' }]);
+    const from = new Date('2026-10-01T00:00:00Z');
+    const to = new Date('2026-11-01T00:00:00Z');
+    const currencies = await ledgerCurrencies(
+      { $queryRaw } as unknown as ScopedDb,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      { accountCodes: ['SALES_REVENUE', 'COST_OF_GOODS_SOLD'], from, to }
+    );
+    expect(currencies).toEqual(['PKR', 'USD']);
+    const query = ($queryRaw.mock.calls[0] as unknown as [{ sql: string; values: unknown[] }])[0];
+    expect(query.sql).toContain('SELECT DISTINCT entry."currency"');
+    expect(query.sql).toContain('entry."occurredAt" < ');
+    expect(query.values).toEqual([
+      'org_1',
+      'SALES_REVENUE',
+      'COST_OF_GOODS_SOLD',
+      from,
+      to,
+      'branch_1',
+    ]);
+  });
+
+  it('includes the valuation instant itself', async () => {
+    const $queryRaw = vi.fn(async () => []);
+    await ledgerCurrencies(
+      { $queryRaw } as unknown as ScopedDb,
+      { organizationId: 'org_1' },
+      { accountCodes: ['INVENTORY'], to: new Date(), inclusive: true }
+    );
+    const query = ($queryRaw.mock.calls[0] as unknown as [{ sql: string }])[0];
+    expect(query.sql).toContain('entry."occurredAt" <= ');
   });
 });

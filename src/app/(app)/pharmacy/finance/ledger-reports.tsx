@@ -82,8 +82,10 @@ function Metadata({ report, branchName }: { report: Report; branchName: string }
       </p>
       <p>
         {report.currency
-          ? `Amounts in ${report.currency}, your organization's currency setting.`
-          : 'Currency unknown: your organization has no currency setting.'}
+          ? `Amounts in ${report.currency}${report.currencyStatus === 'organization_setting' ? ", your organization's currency setting" : ', the currency these entries were posted in'}.`
+          : report.currencyStatus === 'mixed_posted_currencies'
+            ? 'Currency unknown: these entries were posted in more than one currency, so totals are not labelled with one.'
+            : 'Currency unknown: your organization has no currency setting.'}
       </p>
       <p>{report.definition}</p>
       <p>

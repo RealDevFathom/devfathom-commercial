@@ -122,7 +122,7 @@ async function journalTenderTypes(
     refundIds.length
       ? db.pharmacyRefund.findMany({
           where: { organizationId, id: { in: refundIds } },
-          select: { id: true, originalTender: { select: { type: true } } },
+          select: { id: true, drawerSessionId: true, originalTender: { select: { type: true } } },
         })
       : [],
     tenderIds.length
@@ -133,7 +133,15 @@ async function journalTenderTypes(
       : [],
   ]);
   const bySource = new Map<string, string>([
-    ...refunds.map((row) => [`PHARMACY_REFUND:${row.id}`, row.originalTender.type] as const),
+    // Match postTenderRefundEntry: a refund paid from a cash drawer (including
+    // a card/wallet refund settled by manual cash fallback) left as cash.
+    ...refunds.map(
+      (row) =>
+        [
+          `PHARMACY_REFUND:${row.id}`,
+          row.drawerSessionId ? 'CASH' : row.originalTender.type,
+        ] as const
+    ),
     ...tenders.map((row) => [`PHARMACY_TENDER:${row.id}`, row.type] as const),
   ]);
   return new Map(

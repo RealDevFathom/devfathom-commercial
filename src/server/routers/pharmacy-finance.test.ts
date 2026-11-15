@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   margin: vi.fn(),
   leakage: vi.fn(),
   unallocated: vi.fn(),
+  currencies: vi.fn(),
   lotFindMany: vi.fn(),
   batchFindMany: vi.fn(),
   medicineFindMany: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   grossMargin: mocks.margin,
   leakageReport: mocks.leakage,
   unallocatedInventoryValue: mocks.unallocated,
+  ledgerCurrencies: mocks.currencies,
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -93,6 +95,7 @@ beforeEach(() => {
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
   mocks.comparison.mockResolvedValue({ differenceMinor: 42 });
   mocks.unallocated.mockResolvedValue(BigInt(0));
+  mocks.currencies.mockResolvedValue([]);
   for (const lookup of [
     mocks.branchFindMany,
     mocks.lotFindMany,
@@ -347,6 +350,40 @@ describe('ledger report names and currency', () => {
   it('reports the organization currency instead of currency unknown', async () => {
     const result = await caller('ADMIN', pkr).grossMargin({ ...input, by: 'batch' });
     expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'organization_setting' });
+  });
+
+  it('labels amounts with the currency their entries were posted in, not the setting', async () => {
+    mocks.currencies.mockResolvedValue(['PKR']);
+    const usd = { organization: { id: 'org_1', currency: 'USD' } as TRPCContext['organization'] };
+    const result = await caller('ADMIN', usd).grossMargin({ ...input, by: 'batch' });
+    expect(result).toMatchObject({ currency: 'PKR', currencyStatus: 'posted_entry_currency' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'],
+        from: new Date(input.from),
+        to: new Date(input.to),
+      }
+    );
+  });
+
+  it('never labels summed amounts from mixed currencies with one currency', async () => {
+    mocks.currencies.mockResolvedValue(['PKR', 'USD']);
+    const result = await caller('ADMIN', pkr).perpetualValuation({
+      branchId: 'branch_1',
+      at: input.to,
+    });
+    expect(result).toMatchObject({ currency: null, currencyStatus: 'mixed_posted_currencies' });
+    expect(mocks.currencies).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      {
+        accountCodes: ['INVENTORY', 'INVENTORY_IN_TRANSIT'],
+        to: new Date(input.to),
+        inclusive: true,
+      }
+    );
   });
 
   it('never reports another organization or malformed currency', async () => {
