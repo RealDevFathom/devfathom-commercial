@@ -1023,6 +1023,13 @@ enum PharmacyDrapMatchStatus {
   NO_MATCH
 }
 
+/// DEV-692: every parsed DRAP recall alert waits for a person before any stock moves.
+enum PharmacyDrapReviewStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  DISMISSED
+}
+
 enum PharmacyPriceChangeStatus {
   PROPOSED
   CONFIRMED
@@ -2505,8 +2512,11 @@ model PharmacyRecallNotice {
   @@map("pharmacy_recall_notices")
 }
 
-/// ECO-01: immutable receipt of a regulator notice. `adapter` is deliberately
-/// limited to FILE or MANUAL until the licensed-feed owner decision is made.
+/// ECO-01: immutable receipt of a regulator notice. `adapter` is FILE, MANUAL
+/// or DRAP_WEB (DEV-692: the daily recall-alert page fetch, off unless enabled).
+/// A RECALL receipt is a draft: `reviewStatus` stays PENDING_REVIEW until a
+/// person confirms it (which opens the recall and quarantines stock) or
+/// dismisses it with a reason.
 model PharmacyDrapIngest {
   id                String                           @id @default(cuid())
   organizationId    String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -2515,9 +2525,14 @@ model PharmacyDrapIngest {
   kind              PharmacyDrapNoticeKind
   payloadHash       String
   priceNotice       Json?
+  recallPayload     Json?
   matchStatus       PharmacyDrapMatchStatus
   matchDetails      Json
   recallNoticeId    String?
+  reviewStatus      PharmacyDrapReviewStatus?
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
   ingestedById      String
   createdAt         DateTime                         @default(now())
   recallNotice      PharmacyRecallNotice?            @relation(fields: [organizationId, recallNoticeId], references: [organizationId, id], onDelete: Restrict)
@@ -2528,7 +2543,23 @@ model PharmacyDrapIngest {
   @@unique([organizationId, id])
   @@unique([organizationId, sourceReference, kind])
   @@unique([organizationId, recallNoticeId])
+  @@index([organizationId, kind, reviewStatus])
   @@map("pharmacy_drap_ingests")
+}
+
+/// DEV-692: one row per organization and business day the DRAP recall-alert
+/// page was fetched and ingested, so the five-minute cron fetches once a day.
+model PharmacyDrapRecallFeedRun {
+  id             String       @id @default(cuid())
+  organizationId String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessDate   DateTime     @db.Date
+  alertsSeen     Int
+  draftsCreated  Int
+  completedAt    DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "pharmacy_drap_recall_feed_runs_organization_fkey")
+
+  @@unique([organizationId, businessDate])
+  @@map("pharmacy_drap_recall_feed_runs")
 }
 
 model PharmacyPriceChangeProposal {
@@ -5539,6 +5570,7 @@ enum RestaurantActivationAcknowledgementKind {
 
 model Organization {
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
+  pharmacyDrapRecallFeedRuns    PharmacyDrapRecallFeedRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]
   pharmacyMessageLogs           PharmacyMessageLog[]
   pharmacyHostedReceipts        PharmacyHostedReceipt[]
