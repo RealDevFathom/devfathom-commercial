@@ -1490,6 +1490,15 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { billId, tender: { type: 'CASH', amount: '10.00', cashReceived: '10.00' } },
       });
       expect(tender.json.settled).toBe(true);
+      // Day close refuses active orders, so finish the paid order the way the
+      // terminal does before the drawer and day are closed.
+      const orderClosed = await call(deps.routes.orderClose, {
+        secret: ctx.posDay.secret,
+        session: token,
+        key: uniqueKey('dorderclose'),
+        body: { orderId },
+      });
+      expect(orderClosed.status, JSON.stringify(orderClosed.json)).toBe(200);
       const close = await call(deps.routes.drawerClose, {
         secret: ctx.posDay.secret,
         session: token,

@@ -162,6 +162,7 @@ function gatedCalls(
           stockLocationId: 'missing',
           units: 1,
           witnessId: 'missing',
+          witnessPin: '2468',
           reason: 'Damaged',
           evidenceRef: 'photo',
           idempotencyKey: `write-off-${key}`,

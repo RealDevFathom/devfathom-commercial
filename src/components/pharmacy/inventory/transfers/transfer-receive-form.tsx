@@ -75,7 +75,23 @@ export function TransferReceiveForm({
             ))}
           </select>
         </label>
-        <label className="text-sm md:col-span-2">
+        <label className="text-sm">
+          Witness PIN
+          <Input
+            autoComplete="off"
+            className="mt-1"
+            inputMode="numeric"
+            maxLength={8}
+            name="witnessPin"
+            pattern="[0-9]{4,8}"
+            type="password"
+          />
+          <span className="mt-1 block text-xs text-text-muted">
+            The witness enters their own PIN. Only colleagues assigned to this branch with a PIN are
+            listed.
+          </span>
+        </label>
+        <label className="text-sm">
           Evidence reference
           <Input
             className="mt-1"

@@ -411,8 +411,9 @@ export default async function PharmacyReportsPage({
           note: varianceNotComputed ? 'Not computed · no final day close in period' : undefined,
         },
         { label: 'Refunds', figure: money(metrics.refundsMinor), flag: kpiFlags.refundsMinor },
-        { label: 'Open stock signals', figure: metrics.openStockSignals },
-        { label: 'Recommended orders', figure: metrics.recommendedOrders },
+        // DEV-729: null means stock signals were never worked out for this scope, not zero.
+        { label: 'Open stock signals', figure: metrics.openStockSignals ?? 'Not calculated yet' },
+        { label: 'Recommended orders', figure: metrics.recommendedOrders ?? 'Not calculated yet' },
         { label: 'Expiry ≤30d', figure: money(metrics.expiryValueMinor30) },
         { label: 'Expiry ≤90d', figure: money(metrics.expiryValueMinor90) },
       ]
