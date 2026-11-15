@@ -162,3 +162,15 @@ export function tenantHostUrl(slug: string, path = '/login'): string | null {
     LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
   return `${protocol}://${slug}.${baseDomain}${path}`;
 }
+
+/** Recovery must leave a mistyped tenant host, never link back into its login loop. */
+export function sharedSignInUrl(hostValue: string | null | undefined): string | null {
+  const host = normalizeHost(hostValue);
+  if (host === 'localhost' || host.endsWith('.localhost')) {
+    const authority = hostValue?.split(',')[0]?.trim() ?? '';
+    const port = authority.match(/:(\d+)$/)?.[1];
+    return `http://app.localhost${port ? `:${port}` : ''}/login`;
+  }
+  // The reserved app label is always a shared host under the configured base.
+  return tenantHostUrl('app');
+}

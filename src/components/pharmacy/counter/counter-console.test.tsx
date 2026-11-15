@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   receiptProps: vi.fn(),
   printReceipt: vi.fn(),
   queryOptions: vi.fn(),
+  queryInputs: vi.fn(),
   outcomeQuery: vi.fn(),
   searchQuery: vi.fn(),
   searchSetData: vi.fn(),
@@ -73,8 +74,9 @@ vi.mock('@/lib/trpc', async () => {
       names.map((name) => [
         name,
         {
-          useQuery: (_input: unknown, options?: unknown) => {
+          useQuery: (input: unknown, options?: unknown) => {
             mocks.queryOptions(name, options);
+            mocks.queryInputs(name, input, options);
             return mocks.queries[name];
           },
           useMutation: (options: unknown) => {
@@ -616,6 +618,52 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByText('Settled')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+  });
+});
+
+describe('PharmacyCounterConsole split tender (#722)', () => {
+  it('sends two equal cash rows as distinct payments and lists each recorded row', async () => {
+    const cash = (index: number) => ({
+      tenderId: `cash-${index}`,
+      type: 'CASH',
+      amountMinor: 12500,
+    });
+    mocks.mutations.tender!.mockImplementation(async () => {
+      const count = mocks.mutations.tender!.mock.calls.length;
+      return { ...accepted(count === 2 ? 0 : 12500), tenderId: `cash-${count - 1}` };
+    });
+    mocks.refetch.mockImplementation(async () => {
+      const count = mocks.mutations.tender!.mock.calls.length;
+      mocks.queries.counterCart!.data = cart({
+        status: count === 2 ? 'COMPLETED' : 'OPEN',
+        receiptNumber: count === 2 ? 42 : null,
+        tenders: Array.from({ length: count }, (_, index) => cash(index)),
+        totals: {
+          grossMinor: 25000,
+          discountMinor: 0,
+          netMinor: 25000,
+          tenderedMinor: count * 12500,
+        },
+      });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(1));
+    expect(screen.queryByText('Settled')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await screen.findByText('Settled');
+    expect(mocks.mutations.tender!.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      'counter-tender:sale-a:CASH:12500',
+      'counter-tender:sale-a:CASH:12500:after:12500',
+    ]);
+    // The settled receipt drawer hides the panel from assistive tech; the rows remain.
+    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
   });
 });
 
@@ -3461,3 +3509,55 @@ it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('PharmacyCounterConsole fast typing (DEV-42)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function enabledSearches() {
+    return mocks.queryInputs.mock.calls
+      .filter(
+        ([name, , options]) =>
+          name === 'counterSearch' && (options as { enabled?: boolean })?.enabled
+      )
+      .map(([, input]) => (input as { query: string }).query);
+  }
+
+  it('keeps every typed character while results refresh and debounces the search', () => {
+    vi.useFakeTimers();
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText<HTMLInputElement>('Scan or search');
+    const typed = 'panadol';
+
+    // The cashier pauses after "pa": the debounced search fires once.
+    fireEvent.change(search, { target: { value: 'p' } });
+    fireEvent.change(search, { target: { value: 'pa' } });
+    act(() => vi.advanceTimersByTime(300));
+    expect(enabledSearches().at(-1)).toBe('pa');
+    const searchesBeforeBurst = enabledSearches().length;
+
+    // Then types the rest quickly while the "pa" results refetch and land.
+    for (let index = 3; index <= typed.length; index += 1) {
+      const value = typed.slice(0, index);
+      fireEvent.change(search, { target: { value } });
+      mocks.queries.counterSearch = {
+        ...query({ rows: [], truncated: false }),
+        isFetching: index % 2 === 1,
+      };
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() => vi.advanceTimersByTime(40));
+      expect(search.value).toBe(value);
+    }
+
+    // No search runs for the partial words typed inside the debounce window.
+    expect(enabledSearches().slice(searchesBeforeBurst)).toEqual([]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(search.value).toBe(typed);
+    const burst = enabledSearches().slice(searchesBeforeBurst);
+    expect(burst.length).toBeGreaterThan(0);
+    expect(new Set(burst)).toEqual(new Set([typed]));
+  });
+});

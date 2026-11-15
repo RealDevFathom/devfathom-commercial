@@ -1091,6 +1091,12 @@ export default async function PharmacyReportsPage({
                   Opt in per branch. Times use your workspace timezone. Capture history is always
                   stored; WhatsApp remains disabled until a provider integration is implemented.
                 </p>
+                <p className="mt-2 text-sm text-text-muted">
+                  Each digest opens with a five-line briefing: sales and cash, estimated lost demand
+                  and walk-outs, the top gap with its purchase status, recovered sales, and expiry
+                  at risk with khata due. A seven-day summary is added once a week. Item names for
+                  the top gap appear only here; the owner WhatsApp version carries figures only.
+                </p>
                 {digestMessage === 'saved' ? (
                   <p className="mt-3 text-sm text-success" role="status">
                     Digest settings saved.

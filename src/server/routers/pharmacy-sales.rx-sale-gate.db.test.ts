@@ -8,6 +8,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { workspaceToday } from '@/lib/timezone';
 import {
   pharmacyRegulatoryFixture,
   retirePharmacyRegulatoryRules,
@@ -35,7 +36,8 @@ const ids = {
   roleDenied: `user_r518_rdeny_${suffix}`,
 };
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
-const businessDate = new Date('2026-10-22T00:00:00.000Z');
+// DEV-630: drawers and tenders book on the workspace's current business day (UTC here).
+const businessDate = new Date(`${workspaceToday('UTC')}T00:00:00.000Z`);
 const deviceFor = (userId: string) => `device-${userId}`;
 /** DEV-725: bills start on a counter device with an OPEN drawer; the pharmacist opens this one. */
 const counterDevice = () => deviceFor(ids.pharmacist);

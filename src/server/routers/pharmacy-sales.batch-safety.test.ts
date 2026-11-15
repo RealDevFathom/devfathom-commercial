@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // #633: a batch recalled, quarantined or expired after add-to-cart refuses the tender in a
 // transaction that rolls back. The router must say so as a typed FORBIDDEN carrying the
@@ -35,6 +35,7 @@ function caller(granted = true) {
     $transaction: vi.fn(
       async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
     ),
+    organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
@@ -62,6 +63,16 @@ function caller(granted = true) {
     audit: { detail: {} },
   } as unknown as TRPCContext).pharmacySales;
 }
+
+// DEV-630: money writes book on the branch's current business day, so the clock is
+// pinned to the fixture's day (14:00 in Karachi).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-22T09:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
