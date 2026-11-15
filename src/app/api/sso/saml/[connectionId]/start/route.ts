@@ -54,7 +54,7 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     response.cookies.set(
       SSO_BROWSER_BINDING_COOKIE,
       binding.value,
-      ssoBrowserBindingCookieOptions()
+      ssoBrowserBindingCookieOptions(request)
     );
     return response;
   } catch (error) {

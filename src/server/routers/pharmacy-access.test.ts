@@ -1,10 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ can: vi.fn(), counterAccess: vi.fn(), closeAccess: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  can: vi.fn(),
+  counterAccess: vi.fn(),
+  closeAccess: vi.fn(),
+  managerReportBranches: vi.fn(),
+}));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('./pharmacy-sales', () => ({
   canAccessPharmacyCounter: mocks.counterAccess,
   canClosePharmacyDay: mocks.closeAccess,
+}));
+// The reports decision: the ABAC grant reaches every branch, otherwise a
+// Manager's assigned branches (DEV-505).
+vi.mock('./pharmacy-reports', () => ({
+  pharmacyReportAccess: async (ctx: { db: unknown; session: { user: unknown } }) =>
+    (await mocks.can(ctx.session.user, 'reports:operational', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+      ? 'ALL'
+      : mocks.managerReportBranches(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -48,6 +64,7 @@ beforeEach(() => {
   mocks.can.mockReset().mockResolvedValue(false);
   mocks.counterAccess.mockReset().mockResolvedValue(false);
   mocks.closeAccess.mockReset().mockResolvedValue(false);
+  mocks.managerReportBranches.mockReset().mockResolvedValue([]);
 });
 
 describe('#979 pharmacy rail capability read', () => {
@@ -118,6 +135,23 @@ describe('#979 pharmacy rail capability read', () => {
         session: expect.objectContaining({ user: expect.objectContaining({ id: 'pharmacist' }) }),
       })
     );
+  });
+
+  // DEV-505: a Manager without `reports:operational` is offered Reports only when
+  // their reports are scoped to at least one assigned branch.
+  it('advertises Reports to a Manager with an assigned branch, not one without', async () => {
+    const manager = caller({ id: 'manager', role: 'EMPLOYEE' });
+    expect((await manager.navigation()).capabilities).not.toContain('reports:operational');
+    mocks.managerReportBranches.mockResolvedValue(['branch-a']);
+    mocks.closeAccess.mockResolvedValue(true);
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) => action === 'pharmacy:procurement'
+    );
+    expect((await manager.navigation()).capabilities).toEqual([
+      'pharmacy:procurement',
+      'reports:operational',
+      'pharmacy:close',
+    ]);
   });
 });
 

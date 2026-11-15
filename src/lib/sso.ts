@@ -36,18 +36,30 @@ export function hashSsoBrowserBinding(value: string) {
 
 /**
  * The SAML response is a cross-site form POST from the IdP, which a
- * `SameSite=Lax` cookie never accompanies, so in production the binding cookie
- * is `SameSite=None; Secure`. It is scoped to the SSO routes only.
+ * `SameSite=Lax` cookie never accompanies, so the binding cookie is
+ * `SameSite=None; Secure` in production and on any other deployment the
+ * browser reaches over HTTPS (staging, previews). Only plain-HTTP local
+ * development, where browsers reject `SameSite=None` without `Secure`, falls
+ * back to `SameSite=Lax`. It is scoped to the SSO routes only.
  */
-export function ssoBrowserBindingCookieOptions() {
-  const production = process.env.NODE_ENV === 'production';
+export function ssoBrowserBindingCookieOptions(request: Request) {
+  const secure = process.env.NODE_ENV === 'production' || isSecureRequest(request);
   return {
     httpOnly: true,
-    secure: production,
-    sameSite: production ? ('none' as const) : ('lax' as const),
+    secure,
+    sameSite: secure ? ('none' as const) : ('lax' as const),
     path: '/api/sso',
     maxAge: SSO_TRANSACTION_TTL_MS / 1000,
   };
+}
+
+/** Whether the browser reached this request over HTTPS (proxy-aware). */
+function isSecureRequest(request: Request): boolean {
+  try {
+    return publicRequestOrigin(request).startsWith('https://');
+  } catch {
+    return new URL(request.url).protocol === 'https:';
+  }
 }
 
 /** The binding value this browser presented, or null when it holds none. */

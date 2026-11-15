@@ -1,5 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
-import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
+import { pharmacyPromotionInput, promotionCreatorMayManage } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
 import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
 import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
@@ -75,6 +75,7 @@ import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
 import { Prisma } from '@/generated/prisma/client';
 import { randomUUID } from 'node:crypto';
 import {
@@ -149,6 +150,7 @@ import {
   optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  linkRestockRecoveries,
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
@@ -182,6 +184,7 @@ import {
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
+import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
   LOST_SALE_OUTCOMES,
   LostSalesError,
@@ -990,6 +993,31 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
 }
 
 /**
+ * DEV-505: the branches `requireCloseAccess` would let this actor close, so the
+ * day-close screen offers only those (DEV-127's `canClosePharmacyDay` answers
+ * the rail and the console gate from the same rule). An administrator or a
+ * `pharmacy:close` holder reaches every active branch; a Manager
+ * (`pharmacy:manage`) only the active branches they are assigned to, unless
+ * `pharmacy:close` is explicitly denied. Everyone else gets none. Each close
+ * still re-runs `requireCloseAccess` on its branch.
+ */
+export async function dayCloseBranchIds(ctx: TRPCContext): Promise<'ALL' | string[]> {
+  const user = ctx.session?.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !user ||
+    !organizationId ||
+    user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    return [];
+  if (user.role === 'ADMIN') return 'ALL';
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (await can(subjectFromSession(user), 'pharmacy:close', undefined, options)) return 'ALL';
+  return managerBranchIds(ctx, 'pharmacy:close');
+}
+
+/**
  * DEV-290: the password route is the signed-in operator approving their own over-limit
  * charge, so the second-person rule applies: it is allowed only for an owner or manager
  * (`pharmacy:manage`) who is genuinely the sole active owner/manager. Everyone else needs a
@@ -1339,9 +1367,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          linkCustomerToSale(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => linkCustomerToSale(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -1363,7 +1391,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           // DEV-630: a points tender settles the sale, so it books on today too.
@@ -2184,13 +2213,35 @@ export const pharmacySalesRouter = router({
           branchId,
           saleId: z.string().min(1),
           action: z.enum(['hold', 'resume', 'convertQuotation', 'void']),
-          reason: z.string().trim().min(1).optional(),
+          reason: z.string().trim().min(1).max(500).optional(),
+          // DEV-508: a counter void must say why, from the fixed reason codes.
+          voidReason: saleVoidReasonSchema.optional(),
           controlledWitness: z
             .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
             .strict()
             .optional(),
         })
         .strict()
+        .superRefine((value, issue) => {
+          if (value.action === 'void' && !value.voidReason)
+            issue.addIssue({
+              code: 'custom',
+              path: ['voidReason'],
+              message: 'Choose a reason for this void.',
+            });
+          if (value.action === 'void' && value.reason !== undefined)
+            issue.addIssue({
+              code: 'custom',
+              path: ['reason'],
+              message: 'A void takes its reason from voidReason.',
+            });
+          if (value.action !== 'void' && value.voidReason)
+            issue.addIssue({
+              code: 'custom',
+              path: ['voidReason'],
+              message: 'Only a void takes a void reason.',
+            });
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {
@@ -2198,6 +2249,7 @@ export const pharmacySalesRouter = router({
           try {
             const db = txDb(tx);
             const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+            const voidReason = input.action === 'void' ? input.voidReason : undefined;
             return await changeSaleStatus(
               db,
               scope,
@@ -2209,8 +2261,16 @@ export const pharmacySalesRouter = router({
                 actorIsManager:
                   input.action === 'void' && (await actorMayRefund(db, ctx.session!.user)),
               },
-              input.reason,
-              input.controlledWitness
+              voidReason ? saleVoidReasonText(voidReason) : input.reason,
+              input.controlledWitness,
+              ...(voidReason
+                ? [
+                    {
+                      voidReasonCode: voidReason.code,
+                      ...(voidReason.note ? { voidNote: voidReason.note } : {}),
+                    },
+                  ]
+                : [])
             );
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
@@ -2717,10 +2777,35 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await promotionScope(ctx, input.branchId);
-      return ctx.db.pharmacyPromotion.findMany({
+      const rows = await ctx.db.pharmacyPromotion.findMany({
         where: { organizationId: scope.organizationId, branchId: scope.branchId },
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         take: 200,
+      });
+      // QA-8: the counter skips a promotion whose creator no longer qualifies; say so here.
+      const qualifies = new Map<string, boolean>();
+      for (const row of rows) {
+        if (!qualifies.has(row.createdByUserId))
+          qualifies.set(
+            row.createdByUserId,
+            await promotionCreatorMayManage(
+              ctx.db,
+              scope.organizationId,
+              scope.branchId,
+              row.createdByUserId
+            )
+          );
+      }
+      return rows.map((row) => {
+        const creatorQualifies = qualifies.get(row.createdByUserId) === true;
+        return {
+          ...row,
+          creatorQualifies,
+          inactiveReason:
+            row.active && !creatorQualifies
+              ? ('The creator no longer holds the manage right for this branch.' as const)
+              : null,
+        };
       });
     }),
   /**
@@ -2939,9 +3024,7 @@ export const pharmacySalesRouter = router({
       try {
         // DEV-817: restock interests hang off demand events; the counter's gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), scope, input)
-        );
+        return await ctx.db.$transaction(async (tx) => addRestockInterest(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -2987,6 +3070,18 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /** DEV-79: link notified requests to the sale that recovered them (also run by the job). */
+  linkRestockRecoveries: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          linkRestockRecoveries(txDb(tx), await scopeFor(ctx, input.branchId))
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   restockRecoveryReport: protectedProcedure
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
@@ -3019,13 +3114,29 @@ export const pharmacySalesRouter = router({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
 
-  /** The branches this counter may open a bill against, with the money format. */
+  /**
+   * The branches this counter may open a bill against, with the money format.
+   * DEV-830 (F04): the caller's active assignments, as the counter's gate admits them;
+   * a session ADMIN of this organization keeps every active branch.
+   */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const user = ctx.session.user;
+    const orgAdmin = user.role === 'ADMIN' && user.organizationId === organizationId;
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
+        where: {
+          organizationId,
+          active: true,
+          ...(orgAdmin
+            ? {}
+            : {
+                branchAssignments: {
+                  some: { organizationId, userId: user.id, active: true },
+                },
+              }),
+        },
         select: { id: true, code: true, name: true, city: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
@@ -3041,6 +3152,43 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+    };
+  }),
+
+  /**
+   * DEV-505: the branches the day-close screen offers, from the same decision as
+   * `requireCloseAccess`. A Manager sees only their assigned branches; a member
+   * with no day-close reach is refused, so the screen never offers a branch the
+   * close itself would refuse.
+   */
+  dayCloseBranches: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const allowed = await dayCloseBranchIds(ctx);
+    if (allowed !== 'ALL' && !allowed.length)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Day-close permission is required to reconcile and close a day.',
+      });
+    const [branches, organization] = await Promise.all([
+      ctx.db.pharmacyBranch.findMany({
+        where: {
+          organizationId,
+          active: true,
+          ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
+        },
+        select: { id: true, code: true, name: true, city: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+      ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { currency: true, timezone: true },
+      }),
+    ]);
+    return {
+      branches,
+      currency: organization?.currency ?? 'PKR',
+      timezone: workspaceTimezone(organization?.timezone),
     };
   }),
 

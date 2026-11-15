@@ -9,7 +9,7 @@ import {
 const crmLicensed = vi.hoisted(() => ({ value: true }));
 vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({})),
-  hasModule: vi.fn(() => crmLicensed.value),
+  hasModule: vi.fn((_view: unknown, key: string) => key === 'pharmacy-crm' && crmLicensed.value),
 }));
 
 const users: Record<string, Record<string, unknown>> = {

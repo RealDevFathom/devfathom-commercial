@@ -7,7 +7,7 @@ vi.mock('./regulatory', async () => ({
 vi.mock('@/lib/entitlements', async () => ({
   ...(await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements')),
   resolveOrganizationEntitlements: vi.fn(async () => ({})),
-  hasModule: vi.fn(() => true),
+  hasModule: vi.fn((_view: unknown, key: string) => key === 'pharmacy-crm'),
 }));
 vi.mock('./stock-ledger', async () => ({
   ...(await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger')),
@@ -47,8 +47,30 @@ const promotion = {
   createdByUserId: 'manager-a',
 };
 
-function counterDb(medicine: Record<string, unknown> = {}, promotions = [promotion]) {
+function counterDb(
+  medicine: Record<string, unknown> = {},
+  promotions = [promotion],
+  creator: Record<string, unknown> | null = {
+    id: 'manager-a',
+    organizationId: 'org-a',
+    status: 'ACTIVE',
+    role: 'ADMIN',
+  }
+) {
   return {
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ branchId: string } | null>>(async () => ({
+        branchId: 'branch-a',
+      })),
+    },
+    user: {
+      findFirst: vi.fn(async () => creator),
+      // The creating manager's `pharmacy:manage` grant is re-checked on every application.
+      findUnique: vi.fn(async () => ({
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+      })),
+    },
     pharmacySale: {
       findFirst: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN', lines: [] })),
       updateMany: vi.fn(async () => ({ count: 1 })),
@@ -72,6 +94,12 @@ function counterDb(medicine: Record<string, unknown> = {}, promotions = [promoti
           unitCostMinor: 50,
           batch: { batchNumber: 'B-1' },
         },
+      ]),
+    },
+    // DEV-830: the stored pack setup the server derives the line multiplier from.
+    packLevel: {
+      findMany: vi.fn(async () => [
+        { id: 'pack-a', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
       ]),
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
@@ -146,6 +174,68 @@ describe('addSaleLine counter promotion hook (#727)', () => {
         approvedByUserId: 'manager-a',
         evaluatedAt: NOW.toISOString(),
       },
+    });
+  });
+
+  it.each([
+    [
+      'is deactivated',
+      { id: 'manager-a', organizationId: 'org-a', status: 'SUSPENDED', role: 'ADMIN' },
+    ],
+    ['is gone', null],
+  ])('does not apply a promotion whose creator %s (QA-8)', async (_label, change) => {
+    const db = counterDb({}, [promotion], change);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      discountKind: undefined,
+      promotionId: undefined,
+    });
+  });
+
+  it('does not apply a promotion whose creator lost the manage capability (QA-8)', async () => {
+    const db = counterDb();
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: null,
+      permissionOverrides: [],
+    } as never);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
+    });
+  });
+
+  it('does not apply a promotion whose creator was unassigned from the branch (QA-8)', async () => {
+    const db = counterDb({}, [promotion], {
+      id: 'manager-a',
+      organizationId: 'org-a',
+      status: 'ACTIVE',
+      role: 'EMPLOYEE',
+    });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
+    });
+  });
+
+  it('skips the promotion, never blocks the line, when the creator lookup fails (QA-8)', async () => {
+    const db = counterDb();
+    db.user.findFirst.mockRejectedValue(new Error('db down'));
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
     });
   });
 
