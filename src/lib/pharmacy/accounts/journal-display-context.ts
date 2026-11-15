@@ -1,5 +1,6 @@
 import 'server-only';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyRefundTenderLabel, pharmacyTenderLabel } from '../tender-labels';
 
 type Entry = { sourceKind: string; sourceId: string; actorId: string };
 
@@ -28,13 +29,18 @@ export async function journalDisplayContext<T extends Entry>(
     tenderIds.length
       ? db.pharmacyTender.findMany({
           where: { ...scope, id: { in: tenderIds } },
-          select: { id: true, sale },
+          select: { id: true, type: true, sale },
         })
       : [],
     refundIds.length
       ? db.pharmacyRefund.findMany({
           where: { ...scope, id: { in: refundIds } },
-          select: { id: true, sale },
+          select: {
+            id: true,
+            drawerSessionId: true,
+            originalTender: { select: { type: true } },
+            sale,
+          },
         })
       : [],
     returnIds.length
@@ -71,10 +77,17 @@ export async function journalDisplayContext<T extends Entry>(
   ] as const) {
     for (const row of rows) bills.set(`${kind}:${row.id}`, row.saleLine.sale.receiptNumber);
   }
+  // Name the tender a payment or refund settled through, never its internal ID.
+  const tenderNames = new Map<string, string | null>();
+  for (const row of tenders)
+    tenderNames.set(`PHARMACY_TENDER:${row.id}`, pharmacyTenderLabel(row.type));
+  for (const row of refunds)
+    tenderNames.set(`PHARMACY_REFUND:${row.id}`, pharmacyRefundTenderLabel(row));
   const names = new Map(users.map((user) => [user.id, user.name]));
   return entries.map((entry) => ({
     ...entry,
     billNumber: bills.get(`${entry.sourceKind}:${entry.sourceId}`) ?? null,
     userName: names.get(entry.actorId)?.trim() || null,
+    tenderName: tenderNames.get(`${entry.sourceKind}:${entry.sourceId}`) ?? null,
   }));
 }
