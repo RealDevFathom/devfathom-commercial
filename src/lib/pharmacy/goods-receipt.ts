@@ -50,6 +50,7 @@ import {
   matchReceiptLine,
   PharmacyReceivingError,
   receiptLineAllocatedChargeMinor,
+  receiptLineUnitCostMinor,
   type MatchException,
   type OrderedTerms,
 } from './receiving';
@@ -196,17 +197,17 @@ export async function lockReceivablePurchaseOrder(
  * with. The order's freight and other charges are allocated across its lines
  * exactly as the order's landed cost shows them, and `termsFor` hands each
  * delivered lot its order line's rebate and its share of that line's charge.
- * The share is cumulative from the paid units already drafted or posted against
- * the line and advances lot by lot, so a split, over-delivered or concurrently
- * drafted line never capitalises its charge more than once. Drafting a receipt and re-verifying a prepared
- * draft both cost through here, so they always agree.
+ * The share is cumulative from the paid units already posted against the line
+ * and advances lot by lot, so a split or over-delivered line never capitalises
+ * its charge more than once. Drafting prices a receipt through here as a
+ * preview; posting prices it again under the order's row lock, so receipts
+ * drafted side by side, or a draft that never posts, cannot double-count or
+ * strand a charge.
  */
 export async function orderReceiptCostTerms(
   db: ScopedDb,
   organizationId: string,
-  order: { id: string; freightMinor: number; otherChargesMinor: number },
-  /** A draft being re-verified: its own lines are the ones being costed. */
-  excludeGoodsReceiptId?: string
+  order: { id: string; freightMinor: number; otherChargesMinor: number }
 ) {
   const orderLines = new Map(
     (
@@ -243,15 +244,13 @@ export async function orderReceiptCostTerms(
 
   const paidUnitsReceived = new Map<string, number>();
   if (charges.size > 0) {
-    // Drafts count too: each stamps its cost when it is created, under the
-    // order's row lock, and posting copies that cost to the lot. Two drafts
-    // open at once must not both take the same share of the charge.
+    // Only posted receipts have put their share into stock. A draft's stamped
+    // cost is a preview: postGoodsReceipt settles it under the order's lock.
     for (const earlier of await db.pharmacyGoodsReceiptLine.findMany({
       where: {
         organizationId,
         purchaseOrderLineId: { in: [...charges.keys()] },
-        goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
-        ...(excludeGoodsReceiptId ? { goodsReceiptId: { not: excludeGoodsReceiptId } } : {}),
+        goodsReceipt: { status: 'POSTED' },
       },
       select: { purchaseOrderLineId: true, receivedCanonicalUnits: true },
     })) {
@@ -322,6 +321,8 @@ export async function postGoodsReceipt(
     branchId: string | null;
     supplierId: string;
     status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+    freightMinor: number;
+    otherChargesMinor: number;
   } | null = null;
   if (receipt.purchaseOrderId) {
     const [lockedOrder] = await db.$queryRaw<
@@ -330,8 +331,10 @@ export async function postGoodsReceipt(
         branchId: string | null;
         supplierId: string;
         status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+        freightMinor: number;
+        otherChargesMinor: number;
       }>
-    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+    >`SELECT id, "branchId", "supplierId", status, "freightMinor", "otherChargesMinor" FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
     purchaseOrder = lockedOrder ?? null;
     if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
     if (purchaseOrder.supplierId !== receipt.supplierId) {
@@ -419,10 +422,29 @@ export async function postGoodsReceipt(
     });
   }
 
+  // PUR-03: the landed cost is settled here, under the order's row lock, from
+  // the receipts that have actually posted, so each order line's freight and
+  // other charges reach stock exactly once in posting order.
+  const orderCostTerms = purchaseOrder
+    ? await orderReceiptCostTerms(db, scope.organizationId, purchaseOrder)
+    : null;
+
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
 
   for (const line of receipt.lines) {
+    const unitCostMinor = orderCostTerms
+      ? receiptLineUnitCostMinor({
+          receivedPacks: line.receivedPacks,
+          bonusPacks: line.bonusPacks,
+          canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+          invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+          discountBps: line.discountBps,
+          taxBps: line.taxBps,
+          taxCreditable: line.taxCreditable,
+          ...orderCostTerms.termsFor(line.purchaseOrderLineId, line.receivedCanonicalUnits),
+        })
+      : line.unitCostMinor;
     const batch = await resolveManufacturingBatch(db, scope, {
       medicineId: line.medicineId,
       batchNumber: line.batchNumber,
@@ -440,7 +462,7 @@ export async function postGoodsReceipt(
       // invoice and batch collide on the ledger's own uniqueness rule rather
       // than silently duplicating stock.
       supplierInvoiceRef: `${receipt.supplierInvoiceRef}#${line.lineNumber}`,
-      unitCostMinor: line.unitCostMinor,
+      unitCostMinor,
       printedMrpMinor: line.printedMrpMinor,
       receivedExpiresAt: batch.expiresAt,
       receivedExpiryPrecision: line.expiryPrecision,
@@ -464,6 +486,7 @@ export async function postGoodsReceipt(
       where: { id: line.id },
       data: {
         inventoryLotId: posted.lot.id,
+        ...(unitCostMinor !== line.unitCostMinor ? { unitCostMinor } : {}),
         ...(near && !line.gs1Warnings.includes(near.code)
           ? { gs1Warnings: [...line.gs1Warnings, near.code] }
           : {}),

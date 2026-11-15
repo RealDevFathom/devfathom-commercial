@@ -93,9 +93,14 @@ function receiptDb(line: {
             stockLocationId: 'loc',
             unitCostMinor: 10,
             lineNumber: 1,
+            receivedPacks: (line.accepted + line.rejected) / 10,
+            bonusPacks: 0,
             receivedCanonicalUnits: line.accepted + line.rejected,
             bonusCanonicalUnits: 0,
             invoicedPricePerPackMinor: 100,
+            discountBps: 0,
+            taxBps: 0,
+            taxCreditable: false,
             purchaseOrderLineId: null,
             quarantineLocationId: line.rejected > 0 ? 'quar' : null,
             rejectionReason: line.rejected > 0 ? 'Expired' : null,
@@ -111,6 +116,8 @@ function receiptDb(line: {
       create: vi.fn().mockResolvedValue({ id: 'batch' }),
     },
     pharmacyGoodsReceiptLine: { update: lineUpdate },
+    // PUR-03: posting prices each lot from its order's lines; none are referenced here.
+    pharmacyPurchaseOrderLine: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyReceivingException: {
       create: vi.fn().mockResolvedValue({ id: 'ex', kind: 'DAMAGE', detail: '' }),
     },

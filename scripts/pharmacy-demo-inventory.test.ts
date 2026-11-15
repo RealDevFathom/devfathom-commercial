@@ -610,15 +610,6 @@ describe('shared inventory contract and prepared receiving composition', () => {
       unmetPrerequisites: ['UNRECONCILED_BATCH_COLLISION'],
     });
     expect(receiveLot).not.toHaveBeenCalled();
-    // The draft being verified is not an earlier delivery of its own order line.
-    const receiptLines = (
-      p.tx as unknown as { pharmacyGoodsReceiptLine: { findMany: ReturnType<typeof vi.fn> } }
-    ).pharmacyGoodsReceiptLine.findMany;
-    expect(receiptLines).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ goodsReceiptId: { not: 'prepared-receipt' } }),
-      })
-    );
   });
 
   it('refuses a prepared cost that leaves out the order rebate and freight', async () => {

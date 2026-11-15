@@ -1495,7 +1495,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(second).toMatchObject({ unitCostMinor: 1_000 });
   });
 
-  it('counts paid units already drafted or posted against the order line before allocating its charge', async () => {
+  it('counts paid units already posted against the order line before allocating its charge', async () => {
     chargedOrder(10_000);
     db.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
       { purchaseOrderLineId: 'poline_a', receivedCanonicalUnits: 60 },
@@ -1512,7 +1512,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         where: {
           organizationId: 'org_a',
           purchaseOrderLineId: { in: ['poline_a'] },
-          goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
+          goodsReceipt: { status: 'POSTED' },
         },
       })
     );
