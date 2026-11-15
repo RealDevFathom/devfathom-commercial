@@ -37,6 +37,8 @@ import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
+import { CounterVoidDialog } from './counter-void-dialog';
+import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
 import { readActiveBill, rememberActiveBill, type ActiveBillScope } from './active-bill-storage';
 import { CounterLostSaleChips, type LostSaleChoice } from './counter-lost-sale-chips';
 import {
@@ -125,6 +127,7 @@ import {
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
+import { counterLabel } from '@/lib/pharmacy/counter-label';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
@@ -551,6 +554,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  // DEV-508: Void and Shift+F4 open a reason-and-confirm dialog; nothing is voided until confirmed.
+  const [voidOpen, setVoidOpen] = useState(false);
   const online = useBrowserOnline();
   // DEV-81: the short line whose optional outcome chips are showing.
   const [lostSaleCapture, setLostSaleCapture] = useState<{
@@ -1751,7 +1756,7 @@ function ScopedPharmacyCounterConsole({
   );
 
   const runTransition = useCallback(
-    async (action: 'hold' | 'resume' | 'void', reason?: string) => {
+    async (action: 'hold' | 'resume' | 'void', voidReason?: SaleVoidReason) => {
       const target = action === 'resume' ? heldSaleId : saleId;
       if (!target || busy) return;
       setPending(action);
@@ -1761,7 +1766,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           saleId: target,
           action,
-          reason,
+          ...(action === 'void' ? { voidReason } : {}),
         });
         if (action === 'hold') {
           setHeldSaleId(target);
@@ -1835,7 +1840,7 @@ function ScopedPharmacyCounterConsole({
 
   // DEV-623: void an OPEN or HELD bill from the list; its stock goes back on sale.
   const voidOpenBill = useCallback(
-    async (bill: CounterOpenBill) => {
+    async (bill: CounterOpenBill, voidReason: SaleVoidReason) => {
       if (busy) return false;
       setPending('void');
       setNotice(null);
@@ -1844,7 +1849,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           saleId: bill.saleId,
           action: 'void',
-          reason: 'Voided from open bills.',
+          voidReason,
         });
         if (result && typeof result === 'object' && 'blocked' in result) {
           setNotice({ tone: 'warning', message: String(result.blocked) });
@@ -1863,16 +1868,7 @@ function ScopedPharmacyCounterConsole({
         void refetchOpenBills();
       }
     },
-    [
-      branchId,
-      busy,
-      heldSaleId,
-      refetchOpenBills,
-      refreshCart,
-      saleId,
-      setActiveSale,
-      transition,
-    ]
+    [branchId, busy, heldSaleId, refetchOpenBills, refreshCart, saleId, setActiveSale, transition]
   );
 
   const loadKhataAccounts = useCallback(async () => {
@@ -2554,7 +2550,7 @@ function ScopedPharmacyCounterConsole({
           void captureShortfall();
           return;
         case 'voidSale':
-          void runTransition('void', 'Voided from the counter.');
+          if (saleId && cart?.status === 'OPEN') setVoidOpen(true);
           return;
       }
     },
@@ -2562,11 +2558,13 @@ function ScopedPharmacyCounterConsole({
       activeRow,
       addToCart,
       captureShortfall,
+      cart?.status,
       focusSearch,
       openChecks,
       openPayment,
       printReceipt,
       runTransition,
+      saleId,
     ]
   );
 
@@ -3005,6 +3003,21 @@ function ScopedPharmacyCounterConsole({
                   onRetry={() => void drawerQuery.refetch()}
                   cashiers={actorIsManager ? drawerCashiers.data : undefined}
                   currentUserId={accountId}
+                  context={{
+                    branch: (() => {
+                      const branch = branches.find((entry) => entry.id === branchId);
+                      return branch ? `${branch.name} · ${branch.code}` : null;
+                    })(),
+                    counter: counterLabel(deviceId),
+                    businessDay: new Date(
+                      `${workspaceToday(workspaceZone)}T00:00:00.000Z`
+                    ).toLocaleDateString('en-GB', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                      timeZone: 'UTC',
+                    }),
+                  }}
                   onOpen={(openingFloatMinor, operatingCashierId) => {
                     setPending('drawer');
                     setNotice(null);
@@ -3463,11 +3476,20 @@ function ScopedPharmacyCounterConsole({
                 variant="outline"
                 className="h-11 px-2 text-xs text-destructive"
                 disabled={busy || !saleId || cart?.status !== 'OPEN'}
-                onClick={() => void runTransition('void', 'Voided from the counter.')}
+                onClick={() => setVoidOpen(true)}
               >
                 Void
               </Button>
             </div>
+            <CounterVoidDialog
+              open={voidOpen && Boolean(saleId)}
+              onOpenChange={setVoidOpen}
+              busy={busy}
+              onConfirm={(reason) => {
+                setVoidOpen(false);
+                void runTransition('void', reason);
+              }}
+            />
           </SectionCard>
         </aside>
       </div>

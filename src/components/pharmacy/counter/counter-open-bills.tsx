@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
+import { CounterVoidDialog } from './counter-void-dialog';
 
 export type CounterOpenBill = {
   saleId: string;
@@ -28,7 +30,7 @@ type Props = {
   disabled: boolean;
   onRefresh: () => void;
   onResume: (bill: CounterOpenBill) => Promise<boolean>;
-  onVoid: (bill: CounterOpenBill) => Promise<boolean>;
+  onVoid: (bill: CounterOpenBill, reason: SaleVoidReason) => Promise<boolean>;
 };
 
 function openedLabel(bill: CounterOpenBill): string {
@@ -57,7 +59,8 @@ export function CounterOpenBills({
   onVoid,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [confirmVoid, setConfirmVoid] = useState<string | null>(null);
+  // DEV-508: the bill whose void is being confirmed, with a reason, in the void dialog.
+  const [confirmVoid, setConfirmVoid] = useState<CounterOpenBill | null>(null);
   const count = bills?.length ?? 0;
   return (
     <>
@@ -146,38 +149,15 @@ export function CounterOpenBills({
                       >
                         {current ? 'On this counter' : 'Resume'}
                       </Button>
-                      {confirmVoid === bill.saleId ? (
-                        <>
-                          <Button
-                            variant="destructive"
-                            className="h-11"
-                            disabled={disabled}
-                            onClick={() => {
-                              void onVoid(bill).then(() => setConfirmVoid(null));
-                            }}
-                          >
-                            Confirm void
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="h-11"
-                            disabled={disabled}
-                            onClick={() => setConfirmVoid(null)}
-                          >
-                            Keep bill
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          className="h-11"
-                          disabled={disabled || paid}
-                          aria-describedby={paid ? paidReason : undefined}
-                          onClick={() => setConfirmVoid(bill.saleId)}
-                        >
-                          Void
-                        </Button>
-                      )}
+                      <Button
+                        variant="outline"
+                        className="h-11"
+                        disabled={disabled || paid}
+                        aria-describedby={paid ? paidReason : undefined}
+                        onClick={() => setConfirmVoid(bill)}
+                      >
+                        Void
+                      </Button>
                     </div>
                     {paid ? (
                       <p id={paidReason} className="text-sm text-text-muted">
@@ -190,6 +170,19 @@ export function CounterOpenBills({
               })}
             </ul>
           )}
+          {/* Nested in the list dialog so focus returns to it on close. */}
+          <CounterVoidDialog
+            open={confirmVoid !== null}
+            onOpenChange={(next) => {
+              if (!next) setConfirmVoid(null);
+            }}
+            busy={disabled}
+            onConfirm={(reason) => {
+              const bill = confirmVoid;
+              if (!bill) return;
+              void onVoid(bill, reason).then(() => setConfirmVoid(null));
+            }}
+          />
         </DialogContent>
       </Dialog>
     </>

@@ -204,6 +204,89 @@ export type CounterPackMismatch = {
   setup: string | null;
 };
 
+/** A pack level as stored, with the version window the counter reads. */
+type DatedPackLevelNode = PackLevelNode & {
+  effectiveFrom?: Date;
+  effectiveTo?: Date | null;
+  versionGroupId?: string;
+};
+
+/**
+ * The levels in effect at `at`. Revising a pack level closes it and creates its
+ * successor in the same version group without reparenting its children, so a
+ * child may still point at the closed version. It is re-linked to the effective
+ * version of that parent.
+ */
+function effectivePackLevels<T extends DatedPackLevelNode>(
+  packLevels: readonly T[],
+  at: Date
+): T[] {
+  const time = at.getTime();
+  const isEffective = (node: T) =>
+    (node.effectiveFrom === undefined || node.effectiveFrom.getTime() <= time) &&
+    (node.effectiveTo === undefined ||
+      node.effectiveTo === null ||
+      node.effectiveTo.getTime() > time);
+  const byId = new Map(packLevels.map((node) => [node.id, node]));
+  const effectiveByGroup = new Map<string, string>();
+  for (const node of packLevels) {
+    if (node.versionGroupId !== undefined && isEffective(node)) {
+      effectiveByGroup.set(node.versionGroupId, node.id);
+    }
+  }
+  return packLevels.filter(isEffective).map((node) => {
+    const parent = node.parentPackLevelId === null ? undefined : byId.get(node.parentPackLevelId);
+    if (!parent || isEffective(parent) || parent.versionGroupId === undefined) return node;
+    const current = effectiveByGroup.get(parent.versionGroupId);
+    return current ? { ...node, parentPackLevelId: current } : node;
+  });
+}
+
+/**
+ * DEV-830 (F05): the canonical base units one sale unit at `packLevelId` holds,
+ * derived from the stored pack setup alone. Both arrangements the counter can
+ * offer are read: the full hierarchy (`saleUnitOptions`) and the setup in effect
+ * at `at` (`setupSaleUnitOptions`). A broken or ambiguous chain offers nothing.
+ * The server compares a requested multiplier with these counts, so a request
+ * cannot sell a pack while charging and debiting a single unit.
+ */
+export function packLevelCanonicalUnits(input: {
+  packLevels: readonly DatedPackLevelNode[];
+  packLevelId: string;
+  at: Date;
+}): number[] {
+  const counts = new Set<number>();
+  const read = (levels: readonly PackLevelNode[]) => {
+    try {
+      const chain = chainFrom(levels, input.packLevelId);
+      if (chain.length > 1) {
+        counts.add(setupCumulativeUnits(chain)[0]!);
+        return;
+      }
+      // A lone top level counts its own units; a leaf under a parent is one unit.
+      const units = chain[0]!.parentPackLevelId === null ? chain[0]!.unitsPerParent : 1;
+      assertPositiveInteger(units);
+      counts.add(units);
+    } catch {
+      // Not derivable from this arrangement.
+    }
+  };
+  read(input.packLevels);
+  const effective = effectivePackLevels(input.packLevels, input.at);
+  const ids = new Set(effective.map((node) => node.id));
+  const roots = effective.filter(
+    (node) => node.parentPackLevelId === null || !ids.has(node.parentPackLevelId)
+  );
+  read(
+    roots.length === 1
+      ? effective.map((node) =>
+          node.id === roots[0]!.id ? { ...node, parentPackLevelId: null } : node
+        )
+      : effective
+  );
+  return [...counts];
+}
+
 /**
  * The counter's sale units for one lot (DEV-724).
  *
@@ -240,28 +323,7 @@ export function resolveCounterSaleUnits(input: {
   } catch {
     // Fall through to the medicine's own setup below.
   }
-  const at = input.at.getTime();
-  const isEffective = (node: (typeof input.packLevels)[number]) =>
-    (node.effectiveFrom === undefined || node.effectiveFrom.getTime() <= at) &&
-    (node.effectiveTo === undefined ||
-      node.effectiveTo === null ||
-      node.effectiveTo.getTime() > at);
-  // Revising a pack level closes it and creates its successor in the same
-  // version group without reparenting its children, so a child may still point
-  // at the closed version. Re-link it to the effective version of that parent.
-  const byId = new Map(input.packLevels.map((node) => [node.id, node]));
-  const effectiveByGroup = new Map<string, string>();
-  for (const node of input.packLevels) {
-    if (node.versionGroupId !== undefined && isEffective(node)) {
-      effectiveByGroup.set(node.versionGroupId, node.id);
-    }
-  }
-  const effective = input.packLevels.filter(isEffective).map((node) => {
-    const parent = node.parentPackLevelId === null ? undefined : byId.get(node.parentPackLevelId);
-    if (!parent || isEffective(parent) || parent.versionGroupId === undefined) return node;
-    const current = effectiveByGroup.get(parent.versionGroupId);
-    return current ? { ...node, parentPackLevelId: current } : node;
-  });
+  const effective = effectivePackLevels(input.packLevels, input.at);
   const saleUnits = setupSaleUnitOptions({
     packLevels: effective,
     lotUnitsPerPack: input.lotUnitsPerPack,

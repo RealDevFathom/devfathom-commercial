@@ -57,6 +57,9 @@ export const pharmacyDispensingRouter = router({
   // Pharmacy Safety holder (the same pair the rail offers it to). Only a
   // dispensing pharmacist may record evidence (`recordSubstitution`), so the
   // read says which of the two this caller is.
+  // QA-7: patient records are a separate permission. The patient (id and name
+  // only, per DEV-832) is read and returned only for a caller holding
+  // `pharmacy:prescriptions`, the patient-record permission `readPatient` enforces.
   substitutionWorkspace: auditedProtectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session!.user;
     const subject = subjectFromSession(user);
@@ -72,21 +75,34 @@ export const pharmacyDispensingRouter = router({
         message: 'You do not have permission for this action.',
       });
     }
-    return {
-      canRecord,
-      lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
-        orderBy: { requestedAt: 'desc' },
-        include: {
-          line: {
-            include: {
-              medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
-              presentation: true,
-              prescription: { include: { patient: queuePatient } },
+    const canViewPatients = await can(subject, 'pharmacy:prescriptions', undefined, options);
+    const orderBy = { requestedAt: 'desc' } as const;
+    const medicine = { include: { presentations: { orderBy: { presentation: 'asc' } } } } as const;
+    // Without that permission the patient relation is never read and every line
+    // carries `patient: null`.
+    const lines = canViewPatients
+      ? await ctx.db.pharmacyPharmacistReviewItem.findMany({
+          orderBy,
+          include: {
+            line: {
+              include: {
+                medicine,
+                presentation: true,
+                prescription: { include: { patient: queuePatient } },
+              },
             },
           },
-        },
-      }),
-    };
+        })
+      : (
+          await ctx.db.pharmacyPharmacistReviewItem.findMany({
+            orderBy,
+            include: { line: { include: { medicine, presentation: true, prescription: true } } },
+          })
+        ).map((item) => ({
+          ...item,
+          line: { ...item.line, prescription: { ...item.line.prescription, patient: null } },
+        }));
+    return { canRecord, canViewPatients, lines };
   }),
   enqueueReview: dispense
     .input(

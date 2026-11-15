@@ -27,7 +27,12 @@ export type CounterOpenDrawerStepProps = {
   currentUserId?: string;
   /** `operatingCashierId` is sent only when someone other than the opener runs the till. */
   onOpen: (openingFloatMinor: number, operatingCashierId?: string) => void;
+  /** DEV-508: where and when this drawer opens, so the cashier can check before confirming. */
+  context?: { branch: string | null; counter: string | null; businessDay: string };
 };
+
+/** DEV-508: common opening floats. Choosing one only fills the field; Open drawer confirms. */
+export const OPENING_FLOAT_QUICK_AMOUNTS = ['0', '1000', '2000', '5000'] as const;
 
 /**
  * DEV-725: the first step of a shift. Until this counter device has an OPEN
@@ -44,6 +49,7 @@ export function CounterOpenDrawerStep({
   cashiers,
   currentUserId,
   onOpen,
+  context,
 }: CounterOpenDrawerStepProps) {
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -75,6 +81,27 @@ export function CounterOpenDrawerStep({
           open.
         </p>
       </div>
+      {context ? (
+        <dl
+          aria-label="Drawer details"
+          className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"
+        >
+          {(
+            [
+              ['Branch', context.branch],
+              ['Counter', context.counter],
+              ['Business day', context.businessDay],
+            ] as const
+          ).map(([term, value]) =>
+            value ? (
+              <div key={term} className="min-w-0">
+                <dt className="text-xs text-text-muted">{term}</dt>
+                <dd className="truncate text-text-strong">{value}</dd>
+              </div>
+            ) : null
+          )}
+        </dl>
+      ) : null}
       {deviceUnavailable ? (
         <p
           role="alert"
@@ -146,6 +173,24 @@ export function CounterOpenDrawerStep({
           Open drawer
         </Button>
       </div>
+      <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
+        {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
+          <Button
+            key={amount}
+            type="button"
+            variant="outline"
+            className="h-11 font-mono tabular-nums"
+            aria-pressed={openingCash === amount}
+            disabled={disabled}
+            onClick={() => setOpeningCash(amount)}
+          >
+            {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-text-muted">
+        An opening cash above 0 needs a manager or owner. Enter 0 when the drawer is empty.
+      </p>
       {chooseCashier ? (
         <p className="text-sm text-text-muted">
           Only the cashier who runs the till, or a manager or owner, can take cash into it.
