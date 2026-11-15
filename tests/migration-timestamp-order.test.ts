@@ -4,13 +4,20 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // QA-12 / DEV-813. Migrations that existed when this rule was adopted are
-// frozen in the fixture (never rename or re-stamp them: they may already be
-// applied). Every migration added afterwards must be stamped later than the
-// newest legacy one, have a unique timestamp, and be wrapped in BEGIN/COMMIT.
+// frozen in tests/fixtures/legacy-migration-names.txt (never rename or re-stamp
+// them: they may already be applied). Every migration added afterwards is
+// appended to the ordered ledger tests/fixtures/new-migration-order.txt. It
+// must be stamped later than the newest legacy migration AND later than every
+// migration before it in the ledger, have a unique timestamp, be wrapped in
+// BEGIN/COMMIT, and be written to be safe to re-run.
 const MIGRATIONS_DIR = 'prisma/migrations';
-const legacy = readFileSync('tests/fixtures/legacy-migration-names.txt', 'utf8')
-  .split('\n')
-  .filter(Boolean);
+const readList = (file: string) =>
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'));
+const legacy = readList('tests/fixtures/legacy-migration-names.txt');
+const ledger = readList('tests/fixtures/new-migration-order.txt');
 const legacySet = new Set(legacy);
 const newestLegacy = legacy.map((n) => n.slice(0, 14)).sort().at(-1)!;
 
@@ -29,9 +36,17 @@ describe('migration timestamp order and wrapping rules', () => {
     for (const name of all) expect(name).toMatch(/^\d{14}(_[a-z0-9_]+)?$/);
   });
 
-  it('stamps new migrations after every existing migration', () => {
-    for (const name of added) {
-      expect(name.slice(0, 14) > newestLegacy, `${name} must be later than ${newestLegacy}`).toBe(true);
+  it('lists every new migration in the ordered ledger, and nothing else', () => {
+    expect(new Set(ledger).size, 'duplicate ledger entry').toBe(ledger.length);
+    expect(ledger.slice().sort()).toEqual(added);
+  });
+
+  it('stamps new migrations strictly later than all legacy and earlier ledger entries', () => {
+    let previous = newestLegacy;
+    for (const name of ledger) {
+      const ts = name.slice(0, 14);
+      expect(ts > previous, `${name} must be later than ${previous}`).toBe(true);
+      previous = ts;
     }
   });
 
@@ -50,6 +65,27 @@ describe('migration timestamp order and wrapping rules', () => {
       const body = sql.replace(/^(\s*--[^\n]*\n)+/, '').trim();
       expect(body, `${name} must start with BEGIN;`).toMatch(/^BEGIN;/);
       expect(body, `${name} must end with COMMIT;`).toMatch(/COMMIT;$/);
+    }
+  });
+
+  it('writes new migrations to be safe to re-run', () => {
+    for (const name of added) {
+      const sql = readFileSync(join(MIGRATIONS_DIR, name, 'migration.sql'), 'utf8')
+        // guarded DO blocks and comments handle their own idempotency
+        .replace(/DO\s+(\$[a-z_]*\$)[\s\S]*?\1/gi, '')
+        .replace(/--[^\n]*/g, '');
+      expect(sql, `${name}: CREATE TABLE/INDEX/SEQUENCE needs IF NOT EXISTS`).not.toMatch(
+        /CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|SEQUENCE)\s+(?!IF\s+NOT\s+EXISTS)/i
+      );
+      expect(sql, `${name}: ADD COLUMN needs IF NOT EXISTS`).not.toMatch(
+        /ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/i
+      );
+      for (const m of sql.matchAll(/CREATE\s+POLICY\s+("?[\w]+"?)/gi)) {
+        expect(
+          new RegExp(`DROP\\s+POLICY\\s+IF\\s+EXISTS\\s+${m[1]}`, 'i').test(sql),
+          `${name}: CREATE POLICY ${m[1]} needs a matching DROP POLICY IF EXISTS`
+        ).toBe(true);
+      }
     }
   });
 });
