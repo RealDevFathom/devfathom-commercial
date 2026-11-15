@@ -30,6 +30,8 @@ const reservation = {
     { inventoryLotId: 'split', stockLocationId: 'shelf-a', units: 1 },
   ],
 };
+// Sale posting resolves each lot's MRP rounding rule by (pack level, batch).
+const lotIdentity = { packLevelId: 'pack', batch: { batchNumber: 'B-1' } };
 function fixture() {
   return {
     $queryRaw: vi
@@ -59,9 +61,11 @@ function fixture() {
           printedMrpMinor: 100,
           unitsPerPack: 1,
           unitCostMinor: 50,
+          ...lotIdentity,
         }))
       ),
     },
+    medicinePackMrp: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacySaleLine: { create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })) },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
@@ -71,8 +75,8 @@ describe('internal reserved checkout allocation', () => {
   it('bills each mixed-MRP allocation at its own lot price', async () => {
     const db = fixture();
     db.pharmacyInventoryLot.findMany.mockResolvedValue([
-      { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 50 },
-      { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 50 },
+      { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 50, ...lotIdentity },
+      { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 50, ...lotIdentity },
     ]);
     const result = await addReservedSaleLine(
       db as never,
@@ -200,6 +204,7 @@ describe('internal reserved checkout allocation', () => {
         printedMrpMinor: 100,
         unitsPerPack: 1,
         unitCostMinor: 101,
+        ...lotIdentity,
       }))
     );
     await expect(

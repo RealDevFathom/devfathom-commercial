@@ -298,8 +298,14 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'QUARANTINE' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
+  // Damaged holds can only leave inventory; they are never released back to sale.
+  const damaged = lots.flatMap((lot) =>
+    lot.balances
+      .filter((balance) => balance.disposition === 'DAMAGED' && balance.onHandUnits > 0)
+      .map((balance) => ({ lot, balance }))
+  );
   const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
-  const writeOffPositions = [...available, ...quarantined];
+  const writeOffPositions = [...available, ...quarantined, ...damaged];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -369,7 +375,8 @@ export default async function PharmacyInventoryPage({
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
-          disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
+          disposition: field(data, 'position').split(':')[2] as
+            'AVAILABLE' | 'QUARANTINE' | 'DAMAGED',
         });
       else if (action === 'release-quarantine')
         await actionCaller.releaseQuarantinedPart({

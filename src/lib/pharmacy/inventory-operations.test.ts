@@ -95,3 +95,87 @@ describe('writeOff witness validation', () => {
     });
   });
 });
+
+describe('writeOff from a manual damaged hold', () => {
+  it('debits the DAMAGED balance that quarantinePart({ damaged: true }) credits', async () => {
+    const db = database({ id: input.witnessId });
+
+    await writeOff(db as unknown as ScopedDb, scope, { ...input, disposition: 'DAMAGED' });
+
+    expect(db.pharmacyStockBalance.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        disposition: 'DAMAGED',
+      },
+    });
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'WRITE_OFF',
+        disposition: 'DAMAGED',
+        quantityUnits: -input.units,
+        looseUnitDelta: -5,
+        sealedPackDelta: -0,
+      }),
+    });
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        movementId: 'movement_1',
+        witnessId: input.witnessId,
+        evidenceRef: input.evidenceRef,
+      }),
+    });
+  });
+
+  it('refuses when the damaged hold is short', async () => {
+    const db = database({ id: input.witnessId });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 2, looseUnits: 2 });
+
+    await expect(
+      writeOff(db as unknown as ScopedDb, scope, { ...input, disposition: 'DAMAGED' })
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('writeOff pack arrangement', () => {
+  it('keeps whole sealed packs when the shelf holds more than a pack of loose units', async () => {
+    const db = database({ id: input.witnessId });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 35,
+      sealedPacks: 2,
+      looseUnits: 15,
+    });
+
+    await writeOff(db as unknown as ScopedDb, scope, {
+      ...input,
+      units: 20,
+      disposition: 'DAMAGED',
+    });
+
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        quantityUnits: -20,
+        sealedPackDelta: -1,
+        looseUnitDelta: -10,
+      }),
+    });
+  });
+
+  it('refuses a removal that would need a sealed pack broken', async () => {
+    const db = database({ id: input.witnessId });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 13,
+      sealedPacks: 1,
+      looseUnits: 3,
+    });
+
+    await expect(
+      writeOff(db as unknown as ScopedDb, scope, { ...input, units: 5 })
+    ).rejects.toMatchObject({ reason: 'INVALID_ARRANGEMENT' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});

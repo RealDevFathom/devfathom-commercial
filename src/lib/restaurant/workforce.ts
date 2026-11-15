@@ -628,6 +628,11 @@ export async function appendTimeAdjustment(
     if (projectedClockIn && projectedClockOut && projectedClockOut < projectedClockIn) {
       throw new WorkforceError('Clock-out cannot be before clock-in.', 'INVALID');
     }
+    // Employees cannot punch a cancelled shift, so a correction must never
+    // leave one on the clock; cancellation refuses open attendance likewise.
+    if (shift.status === 'CANCELLED' && projectedClockIn && !projectedClockOut) {
+      throw new WorkforceError('A cancelled shift cannot be left clocked in.', 'CONFLICT');
+    }
     for (const item of shift.breaks) {
       const projectedStart =
         input.breakId === item.id && input.kind === 'BREAK_START'

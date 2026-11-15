@@ -17,6 +17,7 @@ export class FamilyKhataError extends Error {
       | 'OWNER_ACTION_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
+      | 'REFERENCE_REQUIRED'
   ) {
     super(reason);
   }
@@ -152,7 +153,7 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; note?: string }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -200,6 +201,7 @@ export async function settleFamilyKhata(
           occurredAt: input.occurredAt,
           settlesChargeId: item.charge.id,
           actorId: scope.actorId,
+          note: input.note,
         },
       })
     );
@@ -277,11 +279,18 @@ export async function applyKhataLimitDecision(
 export async function readKhataBalance(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  familyAccountId: string
+  familyAccountId: string,
+  /** Balance as it stood at this instant; omitted means the whole ledger. */
+  asOf?: Date
 ) {
   const totals = await db.pharmacyKhataEvent.groupBy({
     by: ['kind'],
-    where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      familyAccountId,
+      ...(asOf ? { occurredAt: { lte: asOf } } : {}),
+    },
     _sum: { amountMinor: true },
   });
   return totals.reduce(

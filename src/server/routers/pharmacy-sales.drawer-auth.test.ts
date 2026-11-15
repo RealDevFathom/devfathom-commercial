@@ -135,13 +135,32 @@ type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
 
 const settlement = () => [openPharmacyDrawer, recordPharmacyCashMovement, closePharmacyDrawer];
 
-const drawerPaths: {
+type DrawerPath = {
   name: string;
   run: (caller: Caller, branchId?: string) => Promise<unknown>;
   command: () => unknown;
-}[] = [
+};
+
+// DEV-31: a cashier on the counter grant opens an empty drawer and nothing else.
+const drawerPaths: DrawerPath[] = [
   {
     name: 'openDrawer',
+    run: (caller, branchId = 'branch-a') =>
+      caller.openDrawer({
+        branchId,
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        openingFloatMinor: 0,
+      }),
+    command: () => openPharmacyDrawer,
+  },
+];
+
+// DEV-31: declaring a float, moving cash in or out and closing a drawer with its
+// count are manager or owner actions (`pharmacy:manage`).
+const managerDrawerPaths: DrawerPath[] = [
+  {
+    name: 'openDrawer with a float',
     run: (caller, branchId = 'branch-a') =>
       caller.openDrawer({
         branchId,
@@ -399,6 +418,167 @@ describe('cash drawer authorization (DEV-279, DEV-659)', () => {
       });
     }
   );
+});
+
+const MANAGE: Rule = { capability: 'pharmacy:manage', effect: 'ALLOW' };
+
+/** Each case holds a manager ALLOW that admits on its own, and a DENY that must win. */
+const managerDenyWins: { name: string; role: Rule[]; overrides: Rule[] }[] = [
+  {
+    name: 'a role DENY beats a user ALLOW',
+    role: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    overrides: [MANAGE],
+  },
+  {
+    name: 'a user DENY beats a role ALLOW',
+    role: [MANAGE],
+    overrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+  },
+  {
+    name: 'a role wildcard DENY beats a user ALLOW',
+    role: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+    overrides: [MANAGE],
+  },
+  {
+    name: 'a user all-capability DENY beats a role ALLOW',
+    role: [MANAGE],
+    overrides: [{ capability: '*', effect: 'DENY' }],
+  },
+  {
+    name: 'a role DENY on the legacy pharmacy.manage alias beats a user ALLOW',
+    role: [{ capability: 'pharmacy.manage', effect: 'DENY' }],
+    overrides: [MANAGE],
+  },
+  {
+    name: 'a user DENY on pharmacy:counter still binds a manager',
+    role: [MANAGE, COUNTER],
+    overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+  },
+];
+
+describe('drawer cash control is manager or owner only (DEV-31)', () => {
+  it.each(managerDrawerPaths)(
+    '$name refuses an assigned cashier holding only the counter grant',
+    async (path) => {
+      const f = fixture([COUNTER, { capability: 'pharmacy:orders', effect: 'ALLOW' }], {
+        assigned: ['branch-a'],
+      });
+      await expect(path.run(f.caller())).rejects.toMatchObject(NO_PERMISSION);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      for (const command of settlement()) expect(command).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)(
+    '$name refuses a pharmacist holding the counter and day-close grants',
+    async (path) => {
+      const f = fixture([COUNTER, { capability: 'pharmacy:close', effect: 'ALLOW' }], {
+        assigned: ['branch-a'],
+      });
+      await expect(path.run(f.caller())).rejects.toMatchObject(NO_PERMISSION);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)('$name allows an assigned manager', async (path) => {
+    const f = fixture([MANAGE], { assigned: ['branch-a'] });
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+    expect(path.command()).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ branchId: 'branch-a' })
+    );
+  });
+
+  it.each(managerDrawerPaths)(
+    '$name admits a manager grant held only as a user override',
+    async (path) => {
+      const f = fixture([], { overrides: [MANAGE], assigned: ['branch-a'] });
+      await expect(path.run(f.caller())).resolves.toBeDefined();
+      expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(
+    managerDrawerPaths.flatMap((path) =>
+      ['*', 'pharmacy:*'].map((capability) => ({ ...path, capability }))
+    )
+  )('$name accepts the owner’s $capability grant', async ({ run, capability }) => {
+    const f = fixture([{ capability, effect: 'ALLOW' }], { assigned: ['branch-a'] });
+    await expect(run(f.caller())).resolves.toBeDefined();
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(managerDrawerPaths)('$name lets a solo owner use any branch, audited', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:*', effect: 'ALLOW' }], { role: 'ADMIN' });
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(f.context.audit.detail).toMatchObject({
+      targetType: 'PharmacyBranch',
+      targetId: 'branch-a',
+      metadata: { reason: 'org-admin-receipt-access-without-branch-assignment' },
+    });
+  });
+
+  it.each(managerDrawerPaths)(
+    '$name does not let a session ADMIN without a manager grant through',
+    async (path) => {
+      const f = fixture([COUNTER], { role: 'ADMIN' });
+      await expect(path.run(f.caller())).rejects.toMatchObject(NO_PERMISSION);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)(
+    '$name does not accept the legacy pharmacy.manage alias as manager authority',
+    async (path) => {
+      const f = fixture([{ capability: 'pharmacy.manage', effect: 'ALLOW' }], {
+        assigned: ['branch-a'],
+      });
+      await expect(path.run(f.caller())).rejects.toMatchObject(NO_PERMISSION);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)('$name denies a manager with no branch assignment', async (path) => {
+    const f = fixture([MANAGE]);
+    await expect(path.run(f.caller())).rejects.toMatchObject(OUTSIDE);
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(managerDrawerPaths)(
+    '$name denies a manager assigned only to another branch',
+    async (path) => {
+      const f = fixture([MANAGE], { assigned: ['branch-b'] });
+      await expect(path.run(f.caller())).rejects.toMatchObject(OUTSIDE);
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)(
+    '$name refuses another tenant’s branch before reading the member',
+    async (path) => {
+      const f = fixture([MANAGE], { assigned: ['foreign-branch'] });
+      await expect(path.run(f.caller(), 'foreign-branch')).rejects.toMatchObject(OUTSIDE);
+      expect(f.db.user.findUnique).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(managerDrawerPaths)('$name denies an inactive manager', async (path) => {
+    const f = fixture([MANAGE], { assigned: ['branch-a'], memberStatus: 'SUSPENDED' });
+    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    managerDrawerPaths.flatMap((path) => managerDenyWins.map((rules) => ({ ...path, rules })))
+  )('$name: $rules.name', async ({ run, rules }) => {
+    const f = fixture(rules.role, { overrides: rules.overrides, assigned: ['branch-a'] });
+    await expect(run(f.caller())).rejects.toMatchObject(NO_PERMISSION);
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    for (const command of settlement()) expect(command).not.toHaveBeenCalled();
+  });
 });
 
 const cashTender = (caller: Caller) =>

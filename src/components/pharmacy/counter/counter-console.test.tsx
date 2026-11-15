@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -158,6 +160,7 @@ vi.mock('@/lib/trpc', async () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'refundAccess',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -371,8 +374,29 @@ function renderPayment(element: Parameters<typeof render>[0]) {
   return result;
 }
 
+const TENDER_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  CARD: 'Card',
+  BANK_TRANSFER: 'Bank transfer',
+  KHATA: 'Khata',
+  JAZZCASH: 'JazzCash',
+  EASYPAISA: 'Easypaisa',
+  RAAST: 'Raast',
+};
+
+function tenderButton(type: string) {
+  return within(screen.getByRole('group', { name: 'Tender', hidden: true })).getByRole('button', {
+    name: TENDER_LABELS[type],
+    hidden: true,
+  });
+}
+
+function chooseTender(type: string) {
+  fireEvent.click(tenderButton(type));
+}
+
 function enterPayment(type = 'CASH') {
-  fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+  chooseTender(type);
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
@@ -424,9 +448,11 @@ beforeEach(() => {
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'refundAccess',
   ])
     mocks.queries[name] = query();
-  mocks.queries.drawerStatus = query({ openDrawer: null });
+  // A counter taking cash has an open drawer; tests about a closed drawer say so.
+  mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-default' } });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
   });
@@ -578,7 +604,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
       revision: 0,
     });
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    chooseTender('RAAST');
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
     fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
@@ -614,7 +640,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     enterPayment(type);
     await screen.findByText(/Payment was not accepted/);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-    expect(screen.getByLabelText('Tender')).toHaveValue(type);
+    expect(tenderButton(type)).toHaveAttribute('aria-pressed', 'true');
     if (type === 'CASH') expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
     expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -1548,7 +1574,7 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
 describe('PharmacyCounterConsole Khata wiring', () => {
   it('persists and dispatches the selected family with no password fields', async () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
@@ -1601,7 +1627,7 @@ describe('PharmacyCounterConsole Khata wiring', () => {
       close: vi.fn(),
     } as never);
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
     await waitFor(() => expect(print).toHaveBeenCalledOnce());
@@ -1629,7 +1655,7 @@ it.each([404, 200])(
       })
     );
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
@@ -1653,6 +1679,41 @@ it.each([404, 200])(
 );
 
 describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
+  beforeEach(() => {
+    mocks.queries.drawerStatus = query({ openDrawer: null });
+  });
+
+  it('DEV-714: a closed drawer flags only Cash and still takes a bank transfer', async () => {
+    const message = COUNTER_CASH_DRAWER_CLOSED_MESSAGE;
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(tenderButton('CASH')).toHaveAccessibleDescription(message);
+    expect(tenderButton('BANK_TRANSFER')).not.toHaveAccessibleDescription();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    const take = screen.getByRole('button', { name: 'Take payment', hidden: true });
+    expect(take).toBeDisabled();
+    enterPayment('BANK_TRANSFER');
+    await waitFor(() =>
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: 'BANK_TRANSFER', amountMinor: 12550 })
+      )
+    );
+  });
+
+  it('DEV-714: re-reads the drawer status each time payment opens', () => {
+    const drawerStatus = query({ openDrawer: null });
+    mocks.queries.drawerStatus = drawerStatus;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(drawerStatus.refetch).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV-714: an unknown drawer status does not flag Cash', () => {
+    mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(tenderButton('CASH')).not.toHaveAccessibleDescription();
+  });
+
   const openDrawer = {
     id: 'drawer-open',
     businessDate: new Date('2026-10-20T00:00:00.000Z'),
@@ -2415,6 +2476,19 @@ describe('PharmacyCounterConsole browser print audit', () => {
   });
 });
 describe('DEV-618 counter composition', () => {
+  it('shows the auto-print copy only beside the auto-print checkbox, reworded', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    const dialog = screen.getByRole('dialog', { name: 'Payment' });
+    const checkbox = within(dialog).getByRole('checkbox', {
+      description: 'Opens the print window after each payment on this computer.',
+    });
+    expect(checkbox).toHaveAttribute('id', 'counter-auto-print');
+    expect(within(dialog).getAllByText(/print window/i)).toHaveLength(1);
+    expect(dialog).not.toHaveTextContent('This counter session only');
+    expect(dialog).not.toHaveTextContent('Physical printing is not confirmed');
+  });
+
   it.each(['F9', 'desktop', 'phone'])('uses the same payment flow from %s', async (entry) => {
     const scroll = vi.fn();
     const previous = HTMLElement.prototype.scrollIntoView;

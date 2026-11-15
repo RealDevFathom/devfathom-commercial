@@ -208,6 +208,30 @@ function DayCloseForm({
       (d.status === 'OPEN' ? cashMinor(counts[d.id] ?? '') : d.countedMinor) !== d.expectedMinor
   );
   const busy = close.isPending || preview.isFetching;
+  // The counted total runs live from whatever has been entered so far, so a
+  // partly counted day shows its running sum rather than nothing; the variance
+  // waits for every drawer, because a partial count against the full expected
+  // cash would read as a shortfall that is not there.
+  const uncounted = data.drawers
+    .map((d, i) => ({ d, n: i + 1 }))
+    .filter(({ d }) => d.status === 'OPEN' && cashMinor(counts[d.id] ?? '') === null)
+    .map(({ n }) => n);
+  const anyCounted =
+    data.drawers.some((d) => d.status !== 'OPEN') || uncounted.length < open.length;
+  // Why the close button is disabled, in the order the operator has to fix it.
+  const blockers = report
+    ? []
+    : [
+        uncounted.length
+          ? `Enter the counted cash for drawer ${uncounted.join(', ')}.`
+          : hasVariance && !note.trim()
+            ? 'Add a variance note: a drawer count differs from expected cash.'
+            : '',
+        confirmed
+          ? ''
+          : 'Tick the confirmation that every drawer is counted and the lock is permanent.',
+        preview.isFetching && !close.isPending ? 'Wait for the preview to finish refreshing.' : '',
+      ].filter(Boolean);
   return (
     <div className="space-y-6">
       <SectionCard
@@ -223,7 +247,10 @@ function DayCloseForm({
         <dl className="grid gap-4 sm:grid-cols-3">
           {[
             ['Expected cash', formatMinor(expected)],
-            ['Counted cash', valid || report ? formatMinor(counted) : 'Awaiting count'],
+            [
+              'Counted cash',
+              valid || report || anyCounted ? formatMinor(counted) : 'Awaiting count',
+            ],
             ['Variance', valid || report ? formatMinor(variance) : 'Awaiting count'],
           ].map(([label, value]) => (
             <div key={label}>
@@ -236,6 +263,12 @@ function DayCloseForm({
             </div>
           ))}
         </dl>
+        {!report && !valid && anyCounted && (
+          <p className="mt-2 text-sm text-text-muted" role="status">
+            Running total so far: {open.length - uncounted.length} of {open.length} open{' '}
+            {open.length === 1 ? 'drawer' : 'drawers'} counted.
+          </p>
+        )}
         <div className="mt-4 space-y-2" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <div key={row.type} className="space-y-1">
@@ -261,6 +294,12 @@ function DayCloseForm({
           <div className="mt-4 space-y-3">
             <p role="status">
               Day closed. New tenders and drawer changes for this business date are blocked.
+            </p>
+            <p>
+              The lock is permanent: nobody, including the owner, can reopen this business day for
+              payments, refunds or drawer changes. Record anything late on an open business day.
+              Someone with day-close permission can re-record this close report with a reason, but
+              that never reopens the day.
             </p>
             <p>
               {report.supersedesCloseId || report.sequence > 1 ? 'Reopen reason' : 'Variance note'}:{' '}
@@ -371,6 +410,19 @@ function DayCloseForm({
                 Required when any drawer count differs from expected cash.
               </span>
             </label>
+            <div
+              className="space-y-1 rounded-md border border-warning/30 bg-warning/10 p-4 text-sm text-text-strong"
+              role="note"
+              aria-label="Locking is permanent"
+            >
+              <p className="font-medium">Locking this day cannot be undone.</p>
+              <p>
+                Once locked, nobody, including the owner, can reopen {date} for new payments,
+                refunds or drawer changes. Record anything late on an open business day. Someone
+                with day-close permission can later re-record the close report with a reason, but
+                that never reopens the day.
+              </p>
+            </div>
             <label className="flex items-start gap-3">
               <input
                 className="mt-1 size-5"
@@ -379,7 +431,7 @@ function DayCloseForm({
                 disabled={busy}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
-              I have counted every drawer. Close and lock this day against new tenders.
+              I have counted every drawer and understand that locking this day is permanent.
             </label>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
             <div className="flex flex-wrap gap-3">
@@ -387,6 +439,7 @@ function DayCloseForm({
                 className="min-h-11"
                 type="submit"
                 disabled={busy || !valid || !confirmed || (hasVariance && !note.trim())}
+                aria-describedby={blockers.length ? 'day-close-blocked' : undefined}
               >
                 {close.isPending ? 'Closing day…' : 'Close and lock day'}
               </Button>
@@ -405,6 +458,16 @@ function DayCloseForm({
                 Refresh preview
               </Button>
             </div>
+            {blockers.length > 0 && (
+              <div id="day-close-blocked" className="text-sm text-text-muted" role="status">
+                <p>To close and lock this day:</p>
+                <ul className="list-disc pl-5">
+                  {blockers.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </form>
         )}
       </SectionCard>

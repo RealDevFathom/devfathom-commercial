@@ -44,6 +44,7 @@ import {
   type CounterReceiptPresentationResult,
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
+import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
@@ -566,9 +567,10 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
+  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
-    { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
+    { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
@@ -1034,6 +1036,14 @@ function ScopedPharmacyCounterConsole({
     if (!paymentOpen) return;
     tenderRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [paymentOpen]);
+
+  // DEV-714: the tender panel holds cash while the drawer reads closed, so a
+  // cached "closed" (e.g. the drawer was opened in another tab on this device)
+  // is re-read from the server each time payment opens.
+  const refetchDrawer = drawerQuery.refetch;
+  useEffect(() => {
+    if (paymentOpen && drawerQueryEnabled) void refetchDrawer();
+  }, [paymentOpen, drawerQueryEnabled, refetchDrawer]);
 
   const runSearch = useCallback(
     async (submittedQuery?: string) => {
@@ -2253,6 +2263,13 @@ function ScopedPharmacyCounterConsole({
               deviceId={counterDeviceId}
               businessDate={todayBusinessDate}
             />
+            <CounterKhataPaymentPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={todayBusinessDate}
+            />
             <Link
               className={buttonVariants({
                 variant: 'outline',
@@ -2783,8 +2800,7 @@ function ScopedPharmacyCounterConsole({
             Automatically open print dialog after payment
           </Label>
           <p id="counter-auto-print-help" className="text-xs text-text-muted">
-            This counter session only. Requires a newly settled bill and issued receipt. Physical
-            printing is not confirmed.
+            Opens the print window after each payment on this computer.
           </p>
         </div>
         {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
@@ -2803,6 +2819,7 @@ function ScopedPharmacyCounterConsole({
           ref={tenderRef}
           confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
+          drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
           manualSettingsLoading={manualSettings.isLoading}
           manualSettingsError={manualSettings.isError}
           onReloadManualSettings={() => void manualSettings.refetch()}
