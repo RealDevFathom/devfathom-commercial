@@ -19,9 +19,10 @@ active provider, the order, the models per tier and the caps without a deploy.
   runtime through its AWS role. They are never in the task definition, the container
   environment, CloudFormation or the logs.
 - **Bedrock.** Bedrock uses the same AWS role and no static AWS keys.
-- **Azure.** Azure is never used for routed AI. Azure OpenAI stays in the code only as a
-  legacy selector, together with `groq`, `google` and `vertex`. None of them is ever the
-  default, and none is ever part of the fallback chain.
+- **Azure.** Azure is not supported, and `AI_PROVIDER=azure` is rejected as an invalid
+  provider.
+- **Legacy selectors.** `groq`, `google` and `vertex` stay in the code only as legacy
+  selectors. None of them is ever the default, and none is ever part of the fallback chain.
 - **Production.** The AWS template turns AI off in production unless `AiProvider` is set
   explicitly. Staging defaults to the routed chain.
 
@@ -52,14 +53,14 @@ breaker), `model-defaults.ts` (defaults, prices and env names), `tiers.ts` (feat
 
 ### `AI_PROVIDER`
 
-| Value                               | Behaviour                                                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| unset or empty                      | **Off** (reason `DISABLED`), even when keys or a Bedrock region are present. AI is never on by default; set `auto` or a provider name to turn it on. |
-| `auto`                              | Routed chain. With none configured, AI is unavailable (reason `NOT_CONFIGURED`).                                                                     |
-| `anthropic`, `openai`, `bedrock`    | Routed chain with that provider first. The others still follow as fallbacks, unless a SuperAdmin turns fallback off.                                 |
-| `disabled`                          | Hard off. The SuperAdmin settings cannot turn AI back on.                                                                                            |
-| `azure`, `groq`, `google`, `vertex` | Legacy single-provider path. It bypasses routing, caps, the SuperAdmin settings and the spend ledger.                                                |
-| anything else                       | AI unavailable (reason `INVALID_PROVIDER`).                                                                                                          |
+| Value                            | Behaviour                                                                                                                                            |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unset or empty                   | **Off** (reason `DISABLED`), even when keys or a Bedrock region are present. AI is never on by default; set `auto` or a provider name to turn it on. |
+| `auto`                           | Routed chain. With none configured, AI is unavailable (reason `NOT_CONFIGURED`).                                                                     |
+| `anthropic`, `openai`, `bedrock` | Routed chain with that provider first. The others still follow as fallbacks, unless a SuperAdmin turns fallback off.                                 |
+| `disabled`                       | Hard off. The SuperAdmin settings cannot turn AI back on.                                                                                            |
+| `groq`, `google`, `vertex`       | Legacy single-provider path. It bypasses routing, caps, the SuperAdmin settings and the spend ledger.                                                |
+| anything else, including `azure` | AI unavailable (reason `INVALID_PROVIDER`).                                                                                                          |
 
 On AWS, the template parameter `AiProvider` defaults to empty, which means the environment
 default: `auto` in staging and `disabled` in production. Production AI stays off until its
@@ -175,8 +176,8 @@ default to **190, 190 and 300 USD**. A SuperAdmin cap wins over the environment.
 
 ## Precedence
 
-1. `AI_PROVIDER=disabled` turns AI off. A legacy selector (`azure`, `groq`, `google`,
-   `vertex`) uses the legacy path, and nothing below applies to it.
+1. `AI_PROVIDER=disabled` turns AI off. A legacy selector (`groq`, `google`, `vertex`) uses
+   the legacy path, and nothing below applies to it.
 2. SuperAdmin mode `Disabled` turns routed AI off.
 3. **First provider:** a SuperAdmin force mode (`ForceAnthropic`, `ForceOpenAI`,
    `ForceBedrock`). Otherwise `AI_PROVIDER=anthropic|openai|bedrock`. Otherwise the first in
@@ -321,10 +322,9 @@ or shows a key.
 
 ## Legacy providers
 
-`AI_PROVIDER=azure` (deprecated), `groq`, `google` or `vertex` selects one fixed model,
-`AI_MODEL`, which has no default. That model's settings are:
+`AI_PROVIDER=groq`, `google` or `vertex` selects one fixed model, `AI_MODEL`, which has no
+default. That model's settings are:
 
-- `azure`: `AZURE_OPENAI_RESOURCE_NAME`, authenticated with Azure identity.
 - `groq`: `GROQ_API_KEY`.
 - `google`: `GOOGLE_GENERATIVE_AI_API_KEY`.
 - `vertex`: `GOOGLE_VERTEX_API_KEY`, or `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION`.
