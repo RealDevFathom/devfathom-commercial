@@ -50,7 +50,6 @@ export class PharmacyBookkeepingError extends Error {
       | 'MISSING_REASON'
       | 'RECONCILIATION_MISMATCH'
       | 'INVALID_CHEQUE'
-      | 'COUNTER_KHATA_RECEIPT'
   ) {
     super(reason);
     this.name = 'PharmacyBookkeepingError';
@@ -176,17 +175,6 @@ export async function postBookkeepingTransaction(
   });
 }
 
-/**
- * DEV-731: a counter khata repayment also settled the khata ledger and (for cash) paid
- * into a drawer. A journal-only reversal would leave both claiming the money arrived,
- * so these receipts are refused here and the finance workspace does not offer it.
- */
-export const KHATA_REPAYMENT_KEY_PREFIX = 'khata-repayment:';
-
-export function isCounterKhataRepayment(transaction: { idempotencyKey: string }) {
-  return transaction.idempotencyKey.startsWith(KHATA_REPAYMENT_KEY_PREFIX);
-}
-
 export async function reverseBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
@@ -200,13 +188,15 @@ export async function reverseBookkeepingTransaction(
       branchId: scope.branchId,
       id: input.transactionId,
     },
-    include: { bankMatches: { where: { reversedAt: null } } },
+    include: { bankMatches: { where: { reversedAt: null } }, allocations: true },
   });
   if (!transaction?.journalEntryId) throw new PharmacyBookkeepingError('NOT_FOUND');
   if (transaction.status === 'REVERSED') return transaction;
   if (transaction.status !== 'POSTED') throw new PharmacyBookkeepingError('INVALID_STATE');
-  if (isCounterKhataRepayment(transaction))
-    throw new PharmacyBookkeepingError('COUNTER_KHATA_RECEIPT');
+  // A khata repayment also settled the khata ledger and the drawer. Reversing only its
+  // journal entry would leave those records wrong, so it is refused here.
+  if (transaction.allocations.some((allocation) => allocation.sourceKind === 'CUSTOMER_KHATA'))
+    throw new PharmacyBookkeepingError('INVALID_STATE');
   const reversal = await reverseJournalEntry(db, scope, {
     entryId: transaction.journalEntryId,
     reason: input.reason,
