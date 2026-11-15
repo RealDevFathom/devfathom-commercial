@@ -1251,6 +1251,12 @@ export default async function PharmacyInventoryPage({
 
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Recalls and quarantine" eyebrow="INV-08">
+          <p className="mb-4 text-sm text-text-muted">
+            DRAP recall alerts wait for a person before any stock moves.{' '}
+            <Link className="underline underline-offset-4" href="/pharmacy/inventory/drap-recalls">
+              Review DRAP recall alerts
+            </Link>
+          </p>
           {lots.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
