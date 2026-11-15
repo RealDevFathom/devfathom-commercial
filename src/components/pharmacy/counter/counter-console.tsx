@@ -32,7 +32,6 @@ import {
 } from './tender-attempt-storage';
 
 import {
-  COUNTER_OVERRIDE_APPROVAL_POLICY,
   CounterCartPanel,
   CounterLotOverride,
   type CounterLotOverrideValue,
@@ -48,12 +47,14 @@ import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
+import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
   CounterTenderPanel,
   type CounterTenderType,
   type CounterTenderResult,
   type CounterTenderBillState,
+  type KhataSignupInput,
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
@@ -93,7 +94,11 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  looseSaleUnitOption,
+  previewSaleLine,
+  type SaleUnitKind,
+} from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
   formatReceiptDate,
@@ -299,6 +304,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      keymapPreviewAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
@@ -337,12 +343,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  keymapPreviewAuthorized = false,
   safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  keymapPreviewAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
   accountEmail: string;
@@ -519,7 +527,10 @@ function ScopedPharmacyCounterConsole({
   }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
-  const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
+  const keymap =
+    keymapQuery.data && (keymapQuery.data.preset.confirmed || keymapPreviewAuthorized)
+      ? keymapQuery.data
+      : resolveCounterKeymap({ preset: 'devfathom' });
   // Preserve operator overrides before offering a receipt-only shortcut.
   const lastReceiptShift = !matchCounterAction(keymap.bindings, { key: 'r', altKey: true })
     ? false
@@ -624,9 +635,11 @@ function ScopedPharmacyCounterConsole({
   const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
     retry: false,
   });
-  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation({
-    retry: false,
-  });
+  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation(
+    {
+      retry: false,
+    }
+  );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -635,6 +648,7 @@ function ScopedPharmacyCounterConsole({
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
@@ -866,10 +880,9 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
       ? lastReceipt.receipt
       : null;
-  const currentReceipt =
-    !receiptAccessDenied
-      ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
-      : null;
+  const currentReceipt = !receiptAccessDenied
+    ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
+    : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
 
   const refreshTenderBill = useCallback(
@@ -1195,10 +1208,10 @@ function ScopedPharmacyCounterConsole({
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
+                // #520: the server resolves who approved the override; the counter never names one.
                 override: {
                   inventoryLotId: overrideLotId,
                   reason: batchOverride.reason.trim(),
-                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
                 },
               }
             : {}),
@@ -1351,6 +1364,31 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  // A signup started on one bill must not link its customer to another branch or bill.
+  const counterScopeRef = useRef('');
+  useEffect(() => {
+    counterScopeRef.current = `${branchId}:${saleId ?? ''}`;
+  }, [branchId, saleId]);
+  const signUpKhata = useCallback(
+    async (input: KhataSignupInput) => {
+      if (!saleId) throw new Error('Open a bill');
+      const startedIn = `${branchId}:${saleId}`;
+      let result;
+      try {
+        result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      } catch (error) {
+        throw new Error(messageFrom(error));
+      }
+      if (counterScopeRef.current !== startedIn) return;
+      setCustomerId(result.customerId);
+      setNotice({ tone: 'success', message: 'Khata account opened and linked to this bill.' });
+    },
+    [branchId, khataSignup, saleId]
+  );
+  const khataSignupPatient = useMemo(
+    () => (patient ? { patientId: patient.patientId, displayName: patient.displayName } : null),
+    [patient]
+  );
   const reauthenticateOwner = useCallback(
     async (password: string, totp: string) => {
       const response = await fetch('/api/login', {
@@ -1905,14 +1943,27 @@ function ScopedPharmacyCounterConsole({
         case 'selectLooseUnit': {
           const kind: SaleUnitKind =
             action === 'selectPackUnit' ? 'PACK' : action === 'selectStripUnit' ? 'STRIP' : 'UNIT';
-          if (activeRow?.saleUnits.some((option) => option.kind === kind)) {
-            setSaleUnit(kind);
-          } else {
-            setNotice({
-              tone: 'warning',
-              message: `This medicine is not sold by ${kind.toLowerCase()}.`,
-            });
+          const options = activeRow?.saleUnits ?? [];
+          const option =
+            kind === 'UNIT'
+              ? looseSaleUnitOption(options)
+              : (options.find((entry) => entry.kind === kind) ?? null);
+          if (option) {
+            setSaleUnit(option.kind);
+            return;
           }
+          setNotice({
+            tone: 'warning',
+            message: !activeRow
+              ? 'Select a medicine before choosing a unit.'
+              : options.length === 0
+                ? 'This medicine has no sellable unit. Check its pack setup or capture the demand.'
+                : kind === 'UNIT'
+                  ? `No loose unit is sellable for this medicine. Sell by ${options
+                      .map((entry) => entry.levelLabel.toLowerCase())
+                      .join(' or ')}.`
+                  : `This medicine is not sold by ${kind.toLowerCase()}.`,
+          });
           return;
         }
         case 'addToCart':
@@ -2025,6 +2076,7 @@ function ScopedPharmacyCounterConsole({
   const keymapLegend = (
     <CounterKeymapLegend
       keymap={keymap}
+      allowUnconfirmed={keymapPreviewAuthorized}
       saving={saveKeymap.isPending}
       disabled={pending === 'tender'}
       error={saveKeymap.error ? messageFrom(saveKeymap.error) : null}
@@ -2035,16 +2087,7 @@ function ScopedPharmacyCounterConsole({
   );
 
   if (branchesQuery.isLoading) {
-    return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
-          <p className="text-sm text-text-muted" role="status">
-            Loading branches…
-          </p>
-        </SectionCard>
-      </div>
-    );
+    return <CounterSkeleton />;
   }
 
   if (branchesQuery.isError) {
@@ -2676,7 +2719,11 @@ function ScopedPharmacyCounterConsole({
                 >
                   Preview receipt
                 </Button>
-                <Button variant="outline" className="h-11 w-full" onClick={() => void printReceipt()}>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void printReceipt()}
+                >
                   Print · {formatBinding(keymap.bindings.printReceipt)}
                 </Button>
               </div>
@@ -2824,6 +2871,8 @@ function ScopedPharmacyCounterConsole({
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
           printKhataStatement={printKhataStatement}
+          signUpKhata={signUpKhata}
+          khataSignupPatient={khataSignupPatient}
           balanceMinor={balanceMinor}
           state={billState}
           blocked={blocked}

@@ -6,7 +6,10 @@ import {
   fieldError,
   provinceName,
   regulatoryProfileInput,
+  regulatoryVersionStatusLabel,
   ruleSetOptions,
+  rulesNotPublishedMessage,
+  sameProvince,
 } from './regulatory-profile-form';
 
 const valid = {
@@ -88,9 +91,9 @@ describe('branch regulatory profile input', () => {
     expect(fieldsOf({ ...valid, premisesPhone: '1'.repeat(61) }).premisesPhone).toEqual([
       'A phone number is at most 60 characters.',
     ]);
-    expect(
-      regulatoryProfileInput.safeParse({ ...valid, premisesPhone: 421234567 }).success
-    ).toBe(false);
+    expect(regulatoryProfileInput.safeParse({ ...valid, premisesPhone: 421234567 }).success).toBe(
+      false
+    );
   });
 
   it('puts a date-format failure on the date field, naming the format in plain words', () => {
@@ -152,6 +155,40 @@ describe('branch regulatory profile input', () => {
     expect(provinceName('PK-PB')).toBe('Punjab');
     expect(provinceName('PK-ICT')).toBe('Islamabad Capital Territory');
     expect(provinceName('PK-ZZ')).toBe('PK-ZZ');
+  });
+
+  it('names a branch province stored without its country prefix (#977)', () => {
+    expect(provinceName('SD')).toBe('Sindh');
+    expect(sameProvince('SD', 'PK-SD')).toBe(true);
+    expect(sameProvince('pk-sd', 'PK-SD')).toBe(true);
+    expect(sameProvince('PK-SD', 'PK-PB')).toBe(false);
+  });
+
+  it("says a branch province's rules are not published, by name (#977)", () => {
+    expect(rulesNotPublishedMessage('PK-SD')).toMatch(/^Sindh rules are not published yet\./);
+    expect(rulesNotPublishedMessage('SD')).not.toContain('Punjab');
+  });
+
+  it('labels only a closed version superseded (#977)', () => {
+    const now = new Date('2026-11-15T00:00:00.000Z');
+    const from = new Date('2026-11-01T00:00:00.000Z');
+    expect(
+      regulatoryVersionStatusLabel({ inForce: true, effective: true, effectiveFrom: from }, now)
+    ).toBe('In force');
+    // The open version on provisional rules or the wrong province: not in force,
+    // and certainly not superseded by anything.
+    expect(
+      regulatoryVersionStatusLabel({ inForce: false, effective: true, effectiveFrom: from }, now)
+    ).toBe('Not in force');
+    expect(
+      regulatoryVersionStatusLabel({ inForce: false, effective: false, effectiveFrom: from }, now)
+    ).toBe('Superseded');
+    expect(
+      regulatoryVersionStatusLabel(
+        { inForce: false, effective: false, effectiveFrom: '2026-12-01T00:00:00.000Z' },
+        now
+      )
+    ).toBe('Scheduled');
   });
 
   it('offers a sentence, not an enum, for every fiscal status', () => {

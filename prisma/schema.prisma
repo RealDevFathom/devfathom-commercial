@@ -3646,7 +3646,9 @@ model Payment {
   paidAt         DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // DEV-166: the INCOME ledger entry this payment posted, so revenue reports see it.
+  transaction Transaction?
 
   @@index([invoiceId])
   @@index([organizationId])
@@ -3664,12 +3666,16 @@ model Transaction {
   projectId      String?
   clientId       String?
   receiptUrl     String?
+  // DEV-166: set on the INCOME entry an invoice payment posts; removing the
+  // payment removes its revenue entry with it.
+  paymentId      String?          @unique
   date           DateTime
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   client  Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([date])
@@ -12976,6 +12982,10 @@ model PharmacyGoodsReceipt {
   qualifiedPersonUserId  String?
   /// AI-03: document-level OCR proposals and their source boxes.
   ocrDraftEvidence       Json?
+  /// DEV-77: freight the supplier billed on this invoice. Like a non-creditable
+  /// tax it is part of what is owed on the invoice and of each lot's landed unit
+  /// cost, spread across the lines by their cost; never revenue.
+  freightMinor           Int                        @default(0)
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
 
@@ -13025,6 +13035,8 @@ model PharmacyGoodsReceiptLine {
   discountBps               Int                     @default(0)
   taxBps                    Int                     @default(0)
   taxCreditable             Boolean                 @default(false)
+  /// DEV-77: this line's share of the receipt freight, already inside unitCostMinor.
+  allocatedFreightMinor     Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).
   unitCostMinor             Int

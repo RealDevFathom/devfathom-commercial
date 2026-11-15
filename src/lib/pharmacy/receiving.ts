@@ -25,6 +25,7 @@
  * canonical units are their projection, never an independently supplied number.
  */
 import {
+  allocateByWeight,
   assertSupplierEligible,
   PharmacyPurchasingError,
   type SupplierCompliancePolicy,
@@ -250,17 +251,22 @@ export type ReceiptLineCostInput = {
   taxBps?: number;
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
+  /**
+   * This line's share of the freight the supplier billed on the invoice.
+   * Money only: it is spread over the same received + bonus units.
+   */
+  allocatedChargeMinor?: number;
 };
 
 /**
- * PUR-03 on the receiving side: the cost of one canonical unit, as it is
- * stamped onto the inventory lot.
- *
- * Bonus packs appear only in the divisor, so free goods always lower the unit
- * cost and never add money — an all-bonus line costs nothing per unit rather
- * than dividing by a quantity it did not pay for.
+ * The money one receipt line puts into stock before any receipt-level charge:
+ * invoiced packs less discount, plus a non-creditable tax. Bonus packs never
+ * appear here — they are quantity only.
  */
-export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
+function receiptLineCost(input: ReceiptLineCostInput): {
+  costMinor: number;
+  canonicalUnits: number;
+} {
   const {
     receivedPacks,
     bonusPacks,
@@ -289,16 +295,65 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
   }
 
   const canonicalUnits = (receivedPacks + bonusPacks) * canonicalUnitsPerPack;
+  assertUnits(canonicalUnits);
   if (canonicalUnits === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
-  // A delivery that is entirely free costs nothing per unit. There is no
+  // A delivery that is entirely free costs nothing of its own. There is no
   // paid quantity to spread, so there is nothing to divide.
-  if (receivedPacks === 0) return 0;
+  if (receivedPacks === 0) return { costMinor: 0, canonicalUnits };
 
   const grossMinor = receivedPacks * invoicedPricePerPackMinor;
   assertMoney(grossMinor);
   const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
   const taxMinor = divideRoundHalfUp(netMinor * taxBps, BPS);
-  return divideRoundHalfUp(netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits);
+  return { costMinor: netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits };
+}
+
+/**
+ * PUR-03 on the receiving side: the landed cost of one canonical unit, as it
+ * is stamped onto the inventory lot.
+ *
+ * Bonus packs appear only in the divisor, so free goods always lower the unit
+ * cost and never add money — a 10+1 scheme costs paid/11 per unit, and an
+ * all-bonus line costs nothing per unit beyond any freight it carries.
+ */
+export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
+  const allocatedChargeMinor = input.allocatedChargeMinor ?? 0;
+  assertMoney(allocatedChargeMinor);
+  const { costMinor, canonicalUnits } = receiptLineCost(input);
+  const landedMinor = costMinor + allocatedChargeMinor;
+  assertMoney(landedMinor);
+  return divideRoundHalfUp(landedMinor, canonicalUnits);
+}
+
+export type ReceiptLandedCost = {
+  /** This line's share of the receipt freight, in whole minor units. */
+  allocatedFreightMinor: number;
+  /** Landed cost of one canonical unit, carried onto the lot. */
+  unitCostMinor: number;
+};
+
+/**
+ * DEV-77: the landed cost per lot for a whole receipt. Freight billed on the
+ * supplier invoice is treated like a non-creditable tax: owed on the invoice
+ * and part of stock cost. It is spread across the lines by each line's own
+ * cost (largest remainder, so the parts sum to the freight exactly), then
+ * every line's money — invoice net, non-creditable tax and freight share — is
+ * divided over its received AND bonus units. A receipt with no freight costs
+ * exactly as it always did.
+ */
+export function receiptLandedCosts(input: {
+  lines: readonly ReceiptLineCostInput[];
+  freightMinor?: number;
+}): readonly ReceiptLandedCost[] {
+  const freightMinor = input.freightMinor ?? 0;
+  assertMoney(freightMinor);
+  if (input.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+  const costs = input.lines.map((line) => receiptLineCost(line).costMinor);
+  const shares = allocateByWeight(freightMinor, costs);
+  return input.lines.map((line, index) => ({
+    allocatedFreightMinor: shares[index]!,
+    unitCostMinor: receiptLineUnitCostMinor({ ...line, allocatedChargeMinor: shares[index]! }),
+  }));
 }
 
 // ---------------------------------------------------------------------------

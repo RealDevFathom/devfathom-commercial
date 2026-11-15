@@ -5,6 +5,7 @@ import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
+import { PharmacyStaffHome } from './pharmacy-staff-home';
 import {
   PHARMACIST_LANDING_CAPABILITIES,
   PharmacistHome,
@@ -17,6 +18,7 @@ import { loadHotelLanding } from '@/lib/hotel/landing';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
+import { canOpenPharmacyCommandCentre, loadPharmacyStaffHome } from '@/lib/pharmacy/staff-home';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -84,12 +86,37 @@ export default async function DashboardPage({
     ? pharmacistLanding(pharmacyCapabilities, ssr?.entitlements.enabledModules)
     : null;
   if (signInLanding && pharmacist?.home) redirect(pharmacist.home);
-  // DEV-602: a member who is neither a report holder nor a pharmacist (the
-  // cashier template) gets a pharmacy home, not the owner title and layout
-  // editor. Unknown access (a failed read) keeps the server-gated command centre.
+  // DEV-602: should DEV-20's staff home below be unavailable, a member who holds no
+  // operational-reports grant (the cashier template) still gets a pharmacy home, never the
+  // owner title and layout editor. The administrator keeps the command centre, as in DEV-20,
+  // and unknown access (a failed read) keeps the server-gated command centre.
   const reportAccess = pharmacyCapabilities
-    ? pharmacyCapabilities.includes('reports:operational')
+    ? user?.role === 'ADMIN' || pharmacyCapabilities.includes('reports:operational')
     : undefined;
+
+  // DEV-20: after DEV-95's pharmacist home, only the owner/administrator or a manager who holds
+  // the operational-reports grant gets the Owner command centre. Every other pharmacy member
+  // lands on their own staff home, decided here on the server from their grants, never from a
+  // client-side flag. Like DEV-95, an unavailable access read falls back to the command centre,
+  // whose own report reads stay server-gated.
+  const pharmacyStaffHome =
+    pharmacy && organizationId && user && !pharmacist
+      ? await withTenantDb(organizationId, async (db) =>
+          (await canOpenPharmacyCommandCentre(db, user))
+            ? null
+            : loadPharmacyStaffHome(
+                db,
+                organizationId,
+                user,
+                ssr?.entitlements.enabledModules ?? []
+              )
+        ).catch((error: unknown) => {
+          console.error('[dashboard] pharmacy staff home unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : null;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -132,6 +159,8 @@ export default async function DashboardPage({
         />
       ) : pharmacy && pharmacist ? (
         <PharmacistHome tools={pharmacist.tools} />
+      ) : pharmacyStaffHome ? (
+        <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (
         <PharmacyDashboardContent role={ssr.session?.user?.role} reportAccess={reportAccess} />
       ) : restaurant ? (
