@@ -28,6 +28,7 @@ import {
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
 } from '@/lib/pharmacy/action-error-message';
+import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -231,6 +232,25 @@ export default async function PharmacyInventoryPage({
         include: {
           batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
           balances: { include: { location: true } },
+          // DEV-727: the received pack hierarchy, so stock reads as boxes + strips.
+          packLevel: {
+            select: {
+              presentation: {
+                select: {
+                  dosageForm: true,
+                  packLevels: {
+                    where: { organizationId },
+                    select: {
+                      id: true,
+                      level: true,
+                      parentPackLevelId: true,
+                      unitsPerParent: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       }),
       ctx.db.pharmacyInventoryCount.findMany({
@@ -596,8 +616,14 @@ export default async function PharmacyInventoryPage({
                       />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {balance.onHandUnits} units · {balance.sealedPacks} sealed +{' '}
-                      {balance.looseUnits} loose
+                      {lotStockBreakdown({
+                        onHandUnits: balance.onHandUnits,
+                        rootPackLevelId: lot.packLevelId,
+                        unitsPerPack: lot.unitsPerPack,
+                        packLevels: lot.packLevel?.presentation.packLevels,
+                        dosageForm: lot.packLevel?.presentation.dosageForm,
+                      })}{' '}
+                      · {balance.sealedPacks} sealed + {balance.looseUnits} loose
                     </TableCell>
                     <TableCell className="whitespace-normal align-top text-right">
                       <BreakPackForm

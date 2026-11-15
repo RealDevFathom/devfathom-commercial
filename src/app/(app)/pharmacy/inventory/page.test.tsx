@@ -322,6 +322,46 @@ describe('Inventory pack-action integration', () => {
     expect(screen.queryByText(/awaiting verification/i)).not.toBeInTheDocument();
   });
 
+  it('shows available stock as boxes + strips with the tablet total (DEV-727)', async () => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        packLevelId: 'box',
+        unitsPerPack: 100,
+        packLevel: {
+          presentation: {
+            dosageForm: 'Tablet',
+            packLevels: [
+              { id: 'box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
+              { id: 'strip', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 10 },
+              { id: 'tab', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 10 },
+            ],
+          },
+        },
+        balances: [{ ...available, onHandUnits: 570, sealedPacks: 5, looseUnits: 70 }],
+      },
+    ]);
+    await show();
+    expect(screen.getByText('5 boxes + 7 strips (570 tabs) · 5 sealed + 70 loose')).toBeVisible();
+    expect(screen.queryByText(/570 units/)).not.toBeInTheDocument();
+    expect(lots).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          packLevel: {
+            select: {
+              presentation: {
+                select: {
+                  dosageForm: true,
+                  packLevels: expect.objectContaining({ where: { organizationId: 'org' } }),
+                },
+              },
+            },
+          },
+        }),
+      })
+    );
+  });
+
   it.each(['RECALLED', 'QUARANTINED'])('disables batch state %s', async (state) => {
     lots.mockResolvedValue([{ ...lot, batch: { ...lot.batch, state } }]);
     await show();
