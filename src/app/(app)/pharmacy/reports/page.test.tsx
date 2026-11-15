@@ -550,4 +550,69 @@ describe('pharmacy report catalog filters', () => {
       expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
     }
   });
+
+  describe('KPI review flags and unavailable values (DEV-733)', () => {
+    const kpi = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="stat"]')).find(
+        (stat) => stat.querySelector('.eyebrow')?.textContent === label
+      )!;
+    const withMetrics = (metrics: Record<string, number | null>) =>
+      commandCentre.mockResolvedValueOnce({
+        freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
+        metrics: {
+          salesMinor: 212_197,
+          marginMinor: 2500,
+          cashMinor: 6000,
+          cashVarianceMinor: 0,
+          refundsMinor: 0,
+          openStockSignals: 1,
+          recommendedOrders: 1,
+          expiryValueMinor30: 0,
+          expiryValueMinor90: 0,
+          ...metrics,
+        },
+      } as never);
+
+    it('flags an abnormal refund ratio and a cash variance in amber with a visible label', async () => {
+      withMetrics({ refundsMinor: 82_797, cashVarianceMinor: -400 });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+      const refunds = kpi('Refunds');
+      expect(refunds).toHaveAttribute('data-flagged', 'true');
+      expect(refunds.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(within(refunds).getByText('Review')).toBeVisible();
+      expect(
+        within(refunds).getByText(
+          'Refunds are 39.02% of sales, at or above the 10.00% review threshold.'
+        )
+      ).toBeVisible();
+
+      const variance = kpi('Cash variance');
+      expect(variance).toHaveAttribute('data-flagged', 'true');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR -4.00');
+      expect(variance.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(within(variance).getByText('Review')).toBeVisible();
+    });
+
+    it('leaves normal figures unflagged', async () => {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      for (const label of ['Refunds', 'Cash variance', 'Sales']) {
+        expect(kpi(label)).not.toHaveAttribute('data-flagged');
+        expect(kpi(label).querySelector('.stat-figure')).not.toHaveClass('text-warning');
+      }
+    });
+
+    it('shows a cash variance with no final close as not computed, never 0.00', async () => {
+      withMetrics({ cashVarianceMinor: null });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+      const variance = kpi('Cash variance');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('—');
+      expect(variance).not.toHaveTextContent('0.00');
+      expect(
+        within(variance).getByText('Not computed · no final day close in period')
+      ).toBeVisible();
+      expect(variance).not.toHaveAttribute('data-flagged');
+    });
+  });
 });

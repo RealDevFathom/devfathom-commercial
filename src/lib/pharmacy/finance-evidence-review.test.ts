@@ -391,7 +391,9 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
     const { sql, values } = calls[0]!;
-    const closeSql = sql.slice(sql.indexOf('COALESCE((SELECT SUM(c."cashVarianceMinor")'));
+    const closeStart = sql.indexOf('(SELECT SUM(c."cashVarianceMinor")');
+    expect(closeStart).toBeGreaterThan(-1);
+    const closeSql = sql.slice(closeStart);
     expect(closeSql).toContain('c."branchId" IN (?)');
     expect(closeSql).toContain('c."businessDate">=? AND c."businessDate"<?');
     expect(closeSql).toContain('c."isFinal"=true');
@@ -401,7 +403,9 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(closeSql).toContain('newer."businessDate"=c."businessDate"');
     expect(closeSql).toContain('newer."sequence">c."sequence"');
     expect(closeSql).not.toContain('newer."isFinal"');
-    expect(closeSql).toContain('),0)::int AS "cashVarianceMinor"');
+    // DEV-733: no final close in the period means "not computed" (null), never a coalesced 0.
+    expect(closeSql).toContain('"sequence">c."sequence"))::int AS "cashVarianceMinor"');
+    expect(sql).not.toContain('COALESCE((SELECT SUM(c."cashVarianceMinor")');
     expect(values.slice(-3)).toEqual([
       BRANCH,
       new Date('2026-03-01T00:00:00.000Z'),
