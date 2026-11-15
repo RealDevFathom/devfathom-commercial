@@ -2358,6 +2358,69 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
+  function controlledScanSetup() {
+    const row = barcodeRow();
+    mocks.searchQuery.mockResolvedValue({
+      rows: [{ ...row, restriction: { ...row.restriction, controlled: true } }],
+      truncated: false,
+    });
+  }
+
+  function patientPanel(patientId: string) {
+    return query({
+      patientId,
+      displayName: `Patient ${patientId}`,
+      address: 'Patient address',
+      dispensingConsent: true,
+      prescriptions: [],
+      cnic: null,
+      phone: null,
+    });
+  }
+
+  function authorize() {
+    const props = mocks.rxPanelProps.mock.lastCall![0];
+    props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+    props.controlled!.onChange('pin', '1234');
+    props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+  }
+
+  it('keeps a patient picked for the next customer after the bill was paid', async () => {
+    controlledScanSetup();
+    mocks.queries.counterCart!.data = settled();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => authorize());
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        saleId: 'sale-b',
+        controlledAuthorization: expect.objectContaining({ patientId: 'patient-b' }),
+      })
+    );
+  });
+
+  it("never carries the paid bill's patient onto the next bill", async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    act(() => authorize());
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan();
+
+    await screen.findByText(/Controlled medicine needs the patient address/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it('keeps a bill held on another screen instead of replacing it', async () => {
     mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
     mocks.refetch.mockImplementationOnce(async () => {

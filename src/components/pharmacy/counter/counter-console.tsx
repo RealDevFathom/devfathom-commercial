@@ -415,6 +415,8 @@ function ScopedPharmacyCounterConsole({
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const paymentAttempt = useRef<{ saleId: string; id: string } | null>(null);
+  // The patient on the bill when it was first seen paid or voided (DEV-712).
+  const closedBillPatient = useRef<{ saleId: string; patientId: string | null } | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -794,6 +796,11 @@ function ScopedPharmacyCounterConsole({
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
+  const currentBillClosed = billClosed(cart, saleId);
+  useEffect(() => {
+    if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
+      closedBillPatient.current = { saleId, patientId };
+  }, [currentBillClosed, patientId, saleId]);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
@@ -1144,12 +1151,19 @@ function ScopedPharmacyCounterConsole({
       setNotice(null);
       // DEV-712: once a bill is paid (or voided) the next scan starts a new bill.
       // A pending, unresolved payment attempt keeps its bill until it is resolved.
+      // The closed bill's patient and authorization are cleared; a patient the
+      // operator picked for the next customer after the bill closed is kept.
       let billPatient = patient;
       const replaceClosedBill =
         Boolean(saleId) && !attemptRef.current && billClosed(cartQuery.data, saleId);
       if (replaceClosedBill) {
-        clearBill();
-        billPatient = null;
+        const closed = closedBillPatient.current;
+        if (closed?.saleId === saleId && closed.patientId !== patientId) {
+          setActiveSale(null);
+        } else {
+          clearBill();
+          billPatient = null;
+        }
       }
       try {
         let activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
@@ -1285,12 +1299,14 @@ function ScopedPharmacyCounterConsole({
       lotOverride,
       openChecks,
       openSale,
+      patientId,
       preview,
       quantity,
       quantityText,
       refreshCart,
       saleId,
       selectedOption,
+      setActiveSale,
       utils,
     ]
   );
