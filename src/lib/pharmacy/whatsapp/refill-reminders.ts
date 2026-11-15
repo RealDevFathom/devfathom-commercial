@@ -452,7 +452,11 @@ export async function processDueSubscriptionRefillReminders(
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = cycle."organizationId"
-            AND log."dedupeKey" = 'refill-subscription:' || cycle."id"
+            -- SMS fallback claims the same reminder under an 'sms:' prefix.
+            AND log."dedupeKey" IN (
+              'refill-subscription:' || cycle."id",
+              'sms:refill-subscription:' || cycle."id"
+            )
         )
       ORDER BY cycle."dueAt", cycle."id"
       LIMIT ${limit}

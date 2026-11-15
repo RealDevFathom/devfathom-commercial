@@ -21,7 +21,8 @@ import {
   refillCycleCampaignKey,
 } from './refill-subscription-rules';
 
-import { addSaleLine, createSale } from './sales';
+import { assertRxSaleAllowed } from './rx-sale-gate';
+import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
 export {
@@ -477,9 +478,14 @@ export async function approveRefillCycle(
 ) {
   await activateBranchScope(db, scope);
   const cycle = await lockCycle(db, scope, cycleId);
-  if (cycle.status !== 'AWAITING_PHARMACIST' || !cycle.requiresPharmacist) {
-    throw new RefillSubscriptionError('INVALID_STATE');
-  }
+  const awaiting = cycle.status === 'AWAITING_PHARMACIST' && cycle.requiresPharmacist;
+  // A medicine reclassified as prescription-only after its cycle opened still needs
+  // a pharmacist before checkout; let that RESERVED cycle take the same approval.
+  const reclassified =
+    cycle.status === 'RESERVED' &&
+    !cycle.approvedAt &&
+    (await subscribableMedicine(db, scope.organizationId, cycle.subscription)).rx;
+  if (!awaiting && !reclassified) throw new RefillSubscriptionError('INVALID_STATE');
   const approver = (await db.user.findFirst({
     where: {
       id: approval.approvedByUserId,
@@ -508,6 +514,7 @@ export async function approveRefillCycle(
     where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
     data: {
       status: 'RESERVED',
+      requiresPharmacist: true,
       approvedByUserId: approval.approvedByUserId,
       approvalPolicy: REFILL_CYCLE_APPROVAL_POLICY,
       approvalCredentialId: approval.credentialId,
@@ -609,13 +616,32 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
   }
   if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
-  if (cycle.requiresPharmacist && (!cycle.approvedByUserId || !cycle.approvedAt)) {
+  const { subscription } = cycle;
+  const medicine = await subscribableMedicine(db, scope.organizationId, subscription);
+  // Both the flag snapshotted at opening and the medicine's current schedule count:
+  // a medicine reclassified as prescription-only since still needs its pharmacist.
+  const prescriptionOnly = cycle.requiresPharmacist || medicine.rx;
+  if (prescriptionOnly && (!cycle.approvedByUserId || !cycle.approvedAt)) {
     throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
   }
-  const { subscription } = cycle;
-  await subscribableMedicine(db, scope.organizationId, subscription);
+  // The counter's own Rx gate (#518): only a dispenser may put an Rx line on a sale.
+  await assertRxSaleAllowed(db, scope, [medicine]);
   const unitsPerPack = cycle.canonicalUnits / subscription.packsPerCycle;
   if (!Number.isSafeInteger(unitsPerPack) || unitsPerPack <= 0) {
+    throw new RefillSubscriptionError('INVALID_STATE');
+  }
+  // Hand over exactly the lots this cycle holds, never a fresh FEFO pick.
+  const held = await db.pharmacyRestockReservation.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'RESERVED',
+      interest: { campaignKey: refillCycleCampaignKey(cycle.id) },
+    },
+    select: { inventoryLotId: true, stockLocationId: true, reservedUnits: true },
+    orderBy: { id: 'asc' },
+  });
+  if (held.reduce((total, row) => total + row.reservedUnits, 0) !== cycle.canonicalUnits) {
     throw new RefillSubscriptionError('INVALID_STATE');
   }
   await settleCycleReservations(db, scope, cycle.id, 'CONSUMED');
@@ -624,16 +650,30 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: { customerId: subscription.customerId },
   });
-  await addSaleLine(db, scope, {
-    saleId: sale.id,
-    medicineId: subscription.medicineId,
-    presentationId: subscription.presentationId,
-    packLevelId: subscription.packLevelId,
-    saleUnit: 'PACK',
-    quantity: subscription.packsPerCycle,
-    canonicalUnitsPerSaleUnit: unitsPerPack,
-    idempotencyKey: `refill-cycle:${cycle.id}`,
-  });
+  await addReservedSaleLine(
+    db,
+    scope,
+    {
+      saleId: sale.id,
+      medicineId: subscription.medicineId,
+      presentationId: subscription.presentationId,
+      packLevelId: subscription.packLevelId,
+      saleUnit: 'PACK',
+      quantity: subscription.packsPerCycle,
+      canonicalUnitsPerSaleUnit: unitsPerPack,
+      idempotencyKey: `refill-cycle:${cycle.id}`,
+    },
+    {
+      allocations: held.map((row) => ({
+        inventoryLotId: row.inventoryLotId,
+        stockLocationId: row.stockLocationId,
+        units: row.reservedUnits,
+      })),
+      // A cycle hold has no clock of its own; the lots are revalidated under lock now.
+      expiresAt: new Date(Date.now() + 60_000),
+      pharmacistApprovedRx: prescriptionOnly,
+    }
+  );
   await db.pharmacyRefillSubscriptionCycle.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
     data: { status: 'CHECKOUT_STARTED', counterSaleId: sale.id },

@@ -9,7 +9,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 }));
 vi.mock('./sales', () => ({
   createSale: vi.fn(async () => ({ id: 'sale-1' })),
-  addSaleLine: vi.fn(async () => ({})),
+  addReservedSaleLine: vi.fn(async () => ({})),
 }));
 
 import { can } from '@/lib/abac';
@@ -28,7 +28,7 @@ import {
   startRefillCycleCheckout,
   verifyRefillCyclePharmacistPin,
 } from './refill-subscriptions';
-import { addSaleLine, createSale } from './sales';
+import { addReservedSaleLine, createSale } from './sales';
 
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'cashier' };
 const DUE = new Date('2026-12-01T05:00:00.000Z');
@@ -131,6 +131,10 @@ function fakeDb(
     pharmacyRestockReservation: {
       create: record('reservation.create'),
       updateMany: record('reservation.updateMany', { count: 1 }),
+      findMany: async () => [
+        { inventoryLotId: 'lot-1', stockLocationId: 'loc-1', reservedUnits: 20 },
+        { inventoryLotId: 'lot-2', stockLocationId: 'loc-1', reservedUnits: 10 },
+      ],
     },
     pharmacySale: { update: record('sale.update') },
     user: {
@@ -364,7 +368,8 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
     ).rejects.toBeInstanceOf(RefillCycleApprovalDenied);
   });
 
-  it('hands an approved cycle to the counter as the subscriber’s sale', async () => {
+  it('hands an approved cycle to the counter with exactly the lots it holds', async () => {
+    vi.mocked(can).mockResolvedValue(true);
     const approved = {
       ...awaiting,
       status: 'RESERVED',
@@ -377,10 +382,17 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       replayed: false,
       paymentMode: 'KHATA',
     });
-    expect(addSaleLine).toHaveBeenCalledWith(
+    expect(addReservedSaleLine).toHaveBeenCalledWith(
       db,
       scope,
-      expect.objectContaining({ quantity: 3, canonicalUnitsPerSaleUnit: 10, saleUnit: 'PACK' })
+      expect.objectContaining({ quantity: 3, canonicalUnitsPerSaleUnit: 10, saleUnit: 'PACK' }),
+      expect.objectContaining({
+        pharmacistApprovedRx: true,
+        allocations: [
+          { inventoryLotId: 'lot-1', stockLocationId: 'loc-1', units: 20 },
+          { inventoryLotId: 'lot-2', stockLocationId: 'loc-1', units: 10 },
+        ],
+      })
     );
     expect(writes).toContainEqual([
       'reservation.updateMany',
@@ -390,6 +402,60 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       'sale.update',
       expect.objectContaining({ data: { customerId: 'cust-1' } }),
     ]);
+  });
+
+  it('refuses a cashier without the dispensing grant at an Rx checkout', async () => {
+    vi.mocked(can).mockResolvedValue(false);
+    const approved = {
+      ...awaiting,
+      status: 'RESERVED',
+      approvedByUserId: 'pharmacist',
+      approvedAt: new Date(),
+    };
+    const { db } = fakeDb({ cycle: approved, medicine: medicine({ rx: true }) });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toThrow(
+      /pharmacist dispensing permission/
+    );
+    expect(createSale).not.toHaveBeenCalled();
+  });
+
+  describe('a medicine reclassified as prescription-only after the cycle opened', () => {
+    const openedAsOtc = {
+      ...awaiting,
+      status: 'RESERVED',
+      requiresPharmacist: false,
+    };
+
+    it('refuses checkout until a pharmacist approves', async () => {
+      vi.mocked(can).mockResolvedValue(true);
+      const { db } = fakeDb({ cycle: openedAsOtc, medicine: medicine({ otc: false, rx: true }) });
+      await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
+        reason: 'PHARMACIST_APPROVAL_REQUIRED',
+      });
+      expect(createSale).not.toHaveBeenCalled();
+    });
+
+    it('takes the same PIN approval, which marks the cycle as prescription-only', async () => {
+      vi.mocked(can).mockResolvedValue(true);
+      const { db } = fakeDb({ cycle: openedAsOtc, medicine: medicine({ otc: false, rx: true }) });
+      await expect(
+        approveRefillCycle(db as never, scope, 'cycle-1', {
+          approvedByUserId: 'pharmacist',
+          credentialId: 'cred-1',
+        })
+      ).resolves.toMatchObject({ requiresPharmacist: true, approvedByUserId: 'pharmacist' });
+    });
+
+    it('still refuses approval of an OTC cycle that needs none', async () => {
+      vi.mocked(can).mockResolvedValue(true);
+      const { db } = fakeDb({ cycle: openedAsOtc });
+      await expect(
+        approveRefillCycle(db as never, scope, 'cycle-1', {
+          approvedByUserId: 'pharmacist',
+          credentialId: 'cred-1',
+        })
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    });
   });
 });
 

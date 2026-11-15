@@ -19,6 +19,7 @@ import {
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import { PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
   approveRefillCycle,
   cancelRefillSubscription,
@@ -74,6 +75,8 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyDeliveryError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  if (error instanceof PharmacyRxSaleDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof RefillCycleApprovalDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof RefillSubscriptionError) {
