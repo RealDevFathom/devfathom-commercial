@@ -434,6 +434,8 @@ export type ReceivedTerms = {
   /** DEV-691: the batch and expiry printed on the packs that arrived. */
   batchNumber?: string;
   printedExpiry?: Date;
+  /** DEV-691: a MONTH expiry is good through the last day of the printed month. */
+  expiryPrecision?: 'DAY' | 'MONTH';
   /** DEV-691: the captured distributor bill line, when there is one. */
   billed?: BilledTerms | null;
 };
@@ -443,6 +445,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Batch numbers compare without case or spacing: `ab 12` on a bill is `AB12` on the pack. */
 function normalizedBatch(value: string): string {
   return value.replace(/\s+/g, '').toUpperCase();
+}
+
+/** The last instant the stock is good: the end of the printed month for MONTH precision. */
+function effectiveExpiry(printed: Date, precision: 'DAY' | 'MONTH' | undefined): Date {
+  if (precision !== 'MONTH') return printed;
+  return new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1) - 1);
 }
 
 /** Distributor bills print a month; two expiries agree when their month agrees. */
@@ -619,7 +627,8 @@ export function matchReceiptLine(input: {
       received.receivedAt
     ) {
       const earliest = new Date(received.receivedAt.getTime() + ordered.minimumExpiryDays * DAY_MS);
-      if (received.printedExpiry.getTime() < earliest.getTime()) {
+      const goodUntil = effectiveExpiry(received.printedExpiry, received.expiryPrecision);
+      if (goodUntil.getTime() < earliest.getTime()) {
         reasons.push(
           `Order asks for at least ${ordered.minimumExpiryDays} days of shelf life; the packs expire ` +
             `${received.printedExpiry.toISOString().slice(0, 10)}.`
@@ -740,16 +749,20 @@ export function receiptDebitNoteLines(input: {
     });
   }
 
+  // Never claim back more packs than the bill charged for: a claim is bounded by
+  // what was billed, so a bill for fewer packs than arrived limits it.
+  const claimablePacks =
+    line.billedPacks != null ? Math.min(line.receivedPacks, line.billedPacks) : line.receivedPacks;
   const wrong = byKind.get('BATCH_CONFLICT') ?? byKind.get('EXPIRY_CONFLICT');
-  if (wrong && line.receivedPacks > 0) {
+  if (wrong && claimablePacks > 0) {
     drafts.push({
       reason: 'WRONG_ITEM',
       sourceKind: wrong.kind,
-      detail: `${line.receivedPacks} packs do not match the bill or order: ${wrong.detail}`,
-      packs: line.receivedPacks,
+      detail: `${claimablePacks} packs do not match the bill or order: ${wrong.detail}`,
+      packs: claimablePacks,
       pricePerPackMinor: line.invoicedPricePerPackMinor,
       amountMinor: billedAmountMinor(
-        line.receivedPacks,
+        claimablePacks,
         line.invoicedPricePerPackMinor,
         line.discountBps,
         line.taxBps
@@ -762,21 +775,16 @@ export function receiptDebitNoteLines(input: {
       price.expectedMinor != null &&
       price.observedMinor != null &&
       price.observedMinor > price.expectedMinor &&
-      line.receivedPacks > 0
+      claimablePacks > 0
     ) {
       const overPerPack = price.observedMinor - price.expectedMinor;
       drafts.push({
         reason: 'PRICE_OVERCHARGE',
         sourceKind: 'PRICE_CONFLICT',
-        detail: `${line.receivedPacks} packs invoiced ${overPerPack} above the ordered price per pack.`,
-        packs: line.receivedPacks,
+        detail: `${claimablePacks} packs invoiced ${overPerPack} above the ordered price per pack.`,
+        packs: claimablePacks,
         pricePerPackMinor: overPerPack,
-        amountMinor: billedAmountMinor(
-          line.receivedPacks,
-          overPerPack,
-          line.discountBps,
-          line.taxBps
-        ),
+        amountMinor: billedAmountMinor(claimablePacks, overPerPack, line.discountBps, line.taxBps),
       });
     }
   }

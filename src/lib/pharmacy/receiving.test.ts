@@ -712,6 +712,48 @@ describe('DEV-691 — GRN, purchase order and distributor bill three-way match',
     ).toEqual([]);
   });
 
+  it('judges a MONTH expiry by the end of its printed month (review)', () => {
+    // Received 15 Nov 2026 with 120 days required: the floor is 15 Mar 2027.
+    const march = { ...RECEIVED, printedExpiry: new Date('2027-03-01T00:00:00Z'), billed: null };
+    expect(
+      matchReceiptLine({ ordered: ORDERED, received: { ...march, expiryPrecision: 'MONTH' } })
+    ).toEqual([]);
+    expect(
+      matchReceiptLine({
+        ordered: ORDERED,
+        received: { ...march, expiryPrecision: 'DAY' },
+      }).map((exception) => exception.kind)
+    ).toEqual(['EXPIRY_CONFLICT']);
+  });
+
+  it('never claims more packs than the bill charged for (review)', () => {
+    const exceptions = matchReceiptLine({
+      ordered: ORDERED,
+      received: {
+        ...RECEIVED,
+        batchNumber: 'XY-99',
+        billed: { ...RECEIVED.billed, paidPacks: 8 },
+      },
+    });
+    expect(receiptDebitNoteLines({ exceptions, line: { ...LINE, billedPacks: 8 } })).toEqual([
+      expect.objectContaining({ reason: 'WRONG_ITEM', packs: 8, amountMinor: 8_000 }),
+    ]);
+    expect(receiptDebitNoteLines({ exceptions, line: { ...LINE, billedPacks: 0 } })).toEqual([]);
+
+    const over = matchReceiptLine({
+      ordered: ORDERED,
+      received: { ...RECEIVED, invoicedPricePerPackMinor: 1_150 },
+    });
+    expect(
+      receiptDebitNoteLines({
+        exceptions: over,
+        line: { ...LINE, billedPacks: 6, invoicedPricePerPackMinor: 1_150 },
+      })
+    ).toEqual([
+      expect.objectContaining({ reason: 'PRICE_OVERCHARGE', packs: 6, amountMinor: 900 }),
+    ]);
+  });
+
   it('claims nothing for damage, which leaves through a purchase return', () => {
     const exceptions = matchReceiptLine({
       ordered: ORDERED,

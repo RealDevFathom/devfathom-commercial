@@ -421,6 +421,7 @@ export async function postGoodsReceipt(
         receivedPacks: line.receivedPacks,
         batchNumber: line.batchNumber,
         printedExpiry: line.printedExpiry,
+        expiryPrecision: line.expiryPrecision,
         billed: {
           paidPacks: line.billedPacks,
           batchNumber: line.billedBatchNumber,
