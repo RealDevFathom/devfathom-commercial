@@ -22,6 +22,14 @@ const cell = (value: unknown) => {
   const text = value == null ? '' : String(value);
   return `"${(/^[\s]*[=+@-]/.test(text) ? "'" + text : text).replaceAll('"', '""')}"`;
 };
+const POLICY_SOURCE_LABELS: Readonly<Record<string, string>> = {
+  drap: 'DRAP notice',
+  manual: 'Manual price',
+};
+
+/** 'drap' → 'DRAP notice'; an unknown source reads generically, never as the stored code. */
+export const policySourceLabel = (source: string) => POLICY_SOURCE_LABELS[source] ?? 'Other source';
+
 export function pricesCsv(data: PriceData) {
   const header = [
     'Medicine',
@@ -170,7 +178,7 @@ export function PriceNoticesView({
                       </div>
                     </td>
                     <td className="p-3">
-                      {r.source}
+                      {policySourceLabel(r.source)}
                       <div className="whitespace-nowrap text-text-muted">
                         {r.effectiveDate.toISOString().slice(0, 10)}
                       </div>

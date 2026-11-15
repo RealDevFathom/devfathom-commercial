@@ -217,7 +217,9 @@ describe('pharmacy report catalog filters', () => {
         searchParams: Promise.resolve({ section: 'sales', branch: 'b1' }),
       })
     );
-    const detail = screen.getByRole('heading', { name: 'Sales and margin for the selected period' });
+    const detail = screen.getByRole('heading', {
+      name: 'Sales and margin for the selected period',
+    });
     expect(detail.closest('[id="sales"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
       'href',
@@ -341,7 +343,10 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
-    expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
+    expect(screen.getByText('Source:').parentElement).toHaveTextContent('sales');
+    expect(screen.getByText('Source:').parentElement).not.toHaveTextContent('pharmacy_sales');
+    expect(screen.getByText('Access:').parentElement).toHaveTextContent('Financial reports');
+    expect(screen.queryByText(/reports:financial/)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(

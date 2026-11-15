@@ -955,7 +955,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
             <ExportLink section="payments" branch={exportBranch} from={from} to={to} />
           ) : undefined
         }
-        eyebrow="reports:financial"
+        eyebrow="Financial reports"
         title="Payments & tax"
         titleLevel={2}
       >

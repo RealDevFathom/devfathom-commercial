@@ -24,7 +24,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
-import { plainReportSource } from '@/lib/pharmacy/report-labels';
+import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -1016,7 +1016,9 @@ export default async function PharmacyReportsPage({
                           <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
                             <div>
                               <dt className="inline font-semibold">Source: </dt>
-                              <dd className="inline">{contract.source ?? 'Not available'}</dd>
+                              <dd className="inline">
+                                {plainReportSource(contract.source) ?? 'Not recorded'}
+                              </dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold">Scope: </dt>
@@ -1027,8 +1029,10 @@ export default async function PharmacyReportsPage({
                               </dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold">Permission: </dt>
-                              <dd className="inline">{contract.permission}</dd>
+                              <dt className="inline font-semibold">Access: </dt>
+                              <dd className="inline">
+                                {plainReportPermission(contract.permission)}
+                              </dd>
                             </div>
                           </dl>
                           {contract.drillThrough ? (

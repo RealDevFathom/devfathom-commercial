@@ -118,6 +118,81 @@ function rawIsoInJsx(file: string, content: string): number[] {
   return lines;
 }
 
+const LABEL_PROPS = new Set(['eyebrow', 'title', 'label', 'description', 'detail', 'sub', 'hint']);
+const RAW_DATA_FIELDS = new Set(['permission', 'tableName', 'table']);
+/**
+ * On pharmacy owner screens a `source` field carries metric-contract table names
+ * (`pharmacy_sales + pharmacy_sale_lines`), so it must go through plainReportSource.
+ */
+const SOURCE_TABLE_DIRS = [
+  'src/app/(app)/pharmacy',
+  'src/app/(app)/dashboard',
+  'src/components/pharmacy',
+];
+const sourceCarriesTables = (file: string) =>
+  SOURCE_TABLE_DIRS.some(
+    (dir) => path.relative(ROOT, file).startsWith(dir) || file.startsWith(dir)
+  );
+
+/**
+ * Raw keys that reach the screen without passing through a string the guard can
+ * read: a bare permission key or table name used as a visible label prop
+ * (`eyebrow="reports:financial"`), or a `.source` / `.permission` field rendered
+ * straight from data (`{contract.permission}`) instead of through a plain-words helper.
+ */
+function rawKeysInJsx(file: string, content: string): string[] {
+  const source = ts.createSourceFile(
+    file,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  const found: string[] = [];
+  const at = (node: ts.Node) =>
+    source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+  const rawField = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) return rawField(node.expression);
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    )
+      return rawField(node.left);
+    if (ts.isConditionalExpression(node))
+      return rawField(node.whenTrue) || rawField(node.whenFalse);
+    return (
+      (ts.isPropertyAccessExpression(node) || ts.isPropertyAccessChain(node)) &&
+      (RAW_DATA_FIELDS.has(node.name.text) ||
+        (node.name.text === 'source' && sourceCarriesTables(file)))
+    );
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxAttribute(node) && LABEL_PROPS.has(node.name.getText(source)) && node.initializer) {
+      const init = node.initializer;
+      const text = ts.isStringLiteral(init)
+        ? init.text
+        : ts.isJsxExpression(init) && init.expression && ts.isStringLiteralLike(init.expression)
+          ? init.expression.text
+          : null;
+      if (text !== null && (BARE_KEY.test(text) || TABLE_NAME.test(text)))
+        found.push(`${at(node)} ${node.name.getText(source)}=${JSON.stringify(text)}`);
+      if (ts.isJsxExpression(init) && init.expression && rawField(init.expression))
+        found.push(`${at(node)} ${node.name.getText(source)}={${init.expression.getText(source)}}`);
+    }
+    if (
+      ts.isJsxExpression(node) &&
+      (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent)) &&
+      node.expression &&
+      rawField(node.expression)
+    ) {
+      found.push(`${at(node)} {${node.expression.getText(source)}}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
   return files.flatMap((file) =>
     userFacingText(file, readFileSync(file, 'utf8'))
@@ -153,6 +228,33 @@ describe('owner UI copy guard', () => {
         )
       );
     expect(found).toEqual([]);
+  });
+
+  it('renders no raw permission key, table name or data source field as a label', () => {
+    const found = files
+      .filter((file) => file.endsWith('.tsx'))
+      .flatMap((file) =>
+        rawKeysInJsx(file, readFileSync(file, 'utf8')).map(
+          (hit) => `${path.relative(ROOT, file)}:${hit}`
+        )
+      );
+    expect(found).toEqual([]);
+  });
+
+  it('flags a bare key eyebrow and raw source/permission fields, not helper output', () => {
+    const sample = `export const A = ({ c }: { c: { source: string; permission: string } }) => (
+      <Card eyebrow="reports:financial" title="Sales">
+        <dd>{c.source}</dd><dd>{c.permission ?? 'none'}</dd><dd>{plain(c.source)}</dd>
+        <Stat label="finance_journal_lines" sub={c.permission} />
+      </Card>
+    );`;
+    expect(rawKeysInJsx('src/components/pharmacy/x.tsx', sample)).toEqual([
+      '2 eyebrow="reports:financial"',
+      '3 {c.source}',
+      "3 {c.permission ?? 'none'}",
+      '4 label="finance_journal_lines"',
+      '4 sub={c.permission}',
+    ]);
   });
 
   it('flags ISO text in JSX children but not in attributes', () => {
