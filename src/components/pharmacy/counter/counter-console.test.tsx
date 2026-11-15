@@ -3901,6 +3901,23 @@ describe('PharmacyCounterConsole open bills (DEV-623)', () => {
     await waitFor(() => expect(cartReads()).toContain('sale-b'));
   });
 
+  it('offers no void for a bill that still holds payment, and says why', async () => {
+    mocks.queries.openBills = query([{ ...listed('sale-b', 'OPEN'), tenderedMinor: 10000 }]);
+
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open bills (1)' }));
+    const list = await screen.findByRole('list', { name: 'Open and held bills' });
+
+    const voidButton = within(list).getByRole('button', { name: 'Void' });
+    expect(voidButton).toBeDisabled();
+    expect(voidButton).toHaveAccessibleDescription(
+      'Payment was taken on this bill. A manager or owner must refund it before the bill can be voided.'
+    );
+    fireEvent.click(voidButton);
+    expect(within(list).queryByRole('button', { name: 'Confirm void' })).not.toBeInTheDocument();
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+  });
+
   it('voids a stranded bill from Open bills only after confirmation', async () => {
     mocks.queries.openBills = query([listed('sale-b', 'OPEN')]);
     mocks.mutations.transition!.mockResolvedValue({ id: 'sale-b', status: 'VOID' });

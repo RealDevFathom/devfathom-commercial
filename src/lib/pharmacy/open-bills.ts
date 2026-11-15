@@ -15,6 +15,7 @@ export type OpenBill = {
   /** Canonical units this bill has taken off the shelf until it is paid or voided. */
   reservedUnits: number;
   netMinor: number;
+  /** Paid and not refunded. While above zero the server refuses to void the bill. */
   tenderedMinor: number;
   /** Opened from a customer order rather than at the counter. */
   customerOrder: boolean;
@@ -50,7 +51,7 @@ export async function listOpenBills(db: ScopedDb, scope: LedgerScope): Promise<O
           canonicalUnits: true,
         },
       },
-      tenders: { select: { amountMinor: true } },
+      tenders: { select: { amountMinor: true, refunds: { select: { amountMinor: true } } } },
     },
   });
   const creatorIds = [...new Set(sales.map((sale) => sale.createdByUserId))];
@@ -70,7 +71,13 @@ export async function listOpenBills(db: ScopedDb, scope: LedgerScope): Promise<O
     lineCount: sale.lines.length,
     reservedUnits: sale.lines.reduce((units, line) => units + line.canonicalUnits, 0),
     netMinor: saleTotalMinor(sale.lines),
-    tenderedMinor: sale.tenders.reduce((paid, tender) => paid + tender.amountMinor, 0),
+    tenderedMinor: sale.tenders.reduce(
+      (paid, tender) =>
+        paid +
+        tender.amountMinor -
+        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
+      0
+    ),
     customerOrder: sale.customerOrder !== null,
   }));
 }

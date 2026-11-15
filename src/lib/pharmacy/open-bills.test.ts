@@ -57,7 +57,11 @@ describe('listOpenBills (DEV-623)', () => {
             canonicalUnits: 10,
           },
         ],
-        tenders: [{ amountMinor: 500 }],
+        // A split payment: one part refunded in full, one still held.
+        tenders: [
+          { amountMinor: 500, refunds: [] },
+          { amountMinor: 300, refunds: [{ amountMinor: 300 }] },
+        ],
       },
       {
         id: 'sale-held',

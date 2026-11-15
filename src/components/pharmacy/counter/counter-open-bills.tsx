@@ -98,6 +98,9 @@ export function CounterOpenBills({
             <ul className="grid gap-3" aria-label="Open and held bills">
               {bills!.map((bill) => {
                 const current = bill.saleId === activeSaleId;
+                // The server refuses this void too; the money must be refunded first.
+                const paid = bill.tenderedMinor > 0;
+                const paidReason = `refund-first-${bill.saleId}`;
                 return (
                   <li
                     key={bill.saleId}
@@ -168,13 +171,20 @@ export function CounterOpenBills({
                         <Button
                           variant="outline"
                           className="h-11"
-                          disabled={disabled}
+                          disabled={disabled || paid}
+                          aria-describedby={paid ? paidReason : undefined}
                           onClick={() => setConfirmVoid(bill.saleId)}
                         >
                           Void
                         </Button>
                       )}
                     </div>
+                    {paid ? (
+                      <p id={paidReason} className="text-sm text-text-muted">
+                        Payment was taken on this bill. A manager or owner must refund it before the
+                        bill can be voided.
+                      </p>
+                    ) : null}
                   </li>
                 );
               })}
