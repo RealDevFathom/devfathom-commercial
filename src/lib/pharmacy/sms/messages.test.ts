@@ -24,6 +24,23 @@ describe('utilitySmsBody', () => {
     expect(urdu).not.toBe(english);
   });
 
+  it('DEV-76: adds the due date and Raast destination to a khata reminder in both languages', () => {
+    const content = {
+      kind: 'KHATA_REMINDER',
+      balance: 'Rs 2,500.00',
+      dueDate: '10 Oct 2026',
+      payTo: 'Raast PK36\nSCBL https://evil.example/x 0001',
+    } as const;
+    for (const language of ['en', 'ur'] as const) {
+      const body = utilitySmsBody(content, language);
+      expect(body).toContain('10 Oct 2026');
+      expect(body).toContain('Raast PK36 SCBL 0001');
+      expect(body).not.toContain('https://');
+      expect(body.split('\n')).toHaveLength(2);
+    }
+    expect(utilitySmsBody(content, 'en')).toContain('due 10 Oct 2026');
+  });
+
   it('keeps placeholders single-line and link-free', () => {
     const body = utilitySmsBody(
       { kind: 'ORDER_READY', reference: 'AB12CD', branch: 'Main\nhttps://evil.example/x branch' },
