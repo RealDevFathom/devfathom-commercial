@@ -526,6 +526,54 @@ describe('pharmacy report catalog filters', () => {
     }
   );
 
+  // DEV-845: observed demand is a manager or owner report; others never see an error for it.
+  it.each([{ branch: 'b1' }, {}])(
+    'hides observed demand from a reports viewer without the manager capability (%o)',
+    async (searchParams) => {
+      actor.role = 'EMPLOYEE';
+      demandAggregate.mockClear();
+      reportAccess.can.mockImplementation(
+        async (...args: unknown[]) => args[1] !== 'pharmacy:manage'
+      );
+
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve(searchParams) }));
+
+      expect(reportAccess.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_1' }),
+        'pharmacy:manage',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(demandAggregate).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'Observed unmet demand' })).toBeNull();
+      expect(screen.queryByText(/Demand unavailable/)).toBeNull();
+      expect(screen.queryByText(/Choose one authorized branch to view recorded/)).toBeNull();
+    }
+  );
+
+  it('hides observed demand when the demand report refuses the viewer', async () => {
+    demandAggregate.mockClear();
+    demandAggregate.mockRejectedValueOnce(
+      new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' })
+    );
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+    expect(demandAggregate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('heading', { name: 'Observed unmet demand' })).toBeNull();
+    expect(screen.queryByText(/Demand unavailable/)).toBeNull();
+  });
+
+  it('shows observed demand to a manager, and a real failure as an alert', async () => {
+    demandAggregate.mockClear();
+    demandAggregate.mockRejectedValueOnce(new Error('Database unavailable'));
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+
+    expect(screen.getByRole('heading', { name: 'Observed unmet demand' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/Demand unavailable/);
+  });
+
   it('links signals without staff attribution to the supported audit search filter', async () => {
     signalStaff.userId = undefined;
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));

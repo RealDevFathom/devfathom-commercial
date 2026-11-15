@@ -49,6 +49,8 @@ function fixture(rules: Rule[]) {
         .mockResolvedValue({ organizationRole: { permissions: rules }, permissionOverrides: [] }),
     },
     pharmacyBranch: { findMany: vi.fn().mockResolvedValue([{ id: 'branch-a' }]) },
+    // DEV-845: the staff member is assigned to the branch.
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment-a' }) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
     ),

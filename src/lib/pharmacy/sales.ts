@@ -1579,6 +1579,16 @@ export async function demandAggregate(
   };
 }
 
+/** Campaign-key prefixes owned by server lifecycles (refill cycles, customer orders). */
+export const RESERVED_RESTOCK_CAMPAIGN_PREFIXES = ['refill-cycle:', 'order:'] as const;
+
+export function isReservedRestockCampaignKey(campaignKey: string | null | undefined) {
+  const key = campaignKey?.trim().toLowerCase();
+  return Boolean(
+    key && RESERVED_RESTOCK_CAMPAIGN_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
 export async function addRestockInterest(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1593,6 +1603,9 @@ export async function addRestockInterest(
 ) {
   if (!Number.isSafeInteger(input.quantityUnits) || input.quantityUnits <= 0)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-845: refill-cycle and order holds are settled only by their own lifecycle;
+  // a counter interest may not borrow their keys.
+  if (isReservedRestockCampaignKey(input.campaignKey)) throw new PharmacySaleError('INVALID_STATE');
   const demand = await db.unfulfilledDemandEvent.findFirst({
     where: {
       id: input.demandEventId,
@@ -1728,12 +1741,18 @@ export async function captureSafeRestockArrival(
         inventoryLotId: lot.id,
         idempotencyKey: `restock:${interest.id}:${lot.id}`,
       },
+      // DEV-845: `destination` is the customer's phone; the sender reads it on the server.
+      select: { id: true, status: true },
     });
     await db.pharmacyRestockInterest.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
       data: { status: 'NOTIFIED' },
     });
-    captured.push({ interestId: interest.id, reservation, notification });
+    captured.push({
+      interestId: interest.id,
+      reservation,
+      notification: { id: notification.id, status: notification.status, hasContact: true },
+    });
   }
   return captured;
 }

@@ -257,15 +257,32 @@ export default async function PharmacyReportsPage({
     !invalidRange &&
     ![query.branch, query.from, query.to].some(Array.isArray) &&
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
-  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+  // DEV-845: observed demand is a manager or owner report. Hide the section for
+  // anyone else rather than showing them the procedure's refusal as an error.
+  let demandVisible =
+    !!user &&
+    (await can(subjectFromSession(user), 'pharmacy:manage', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }));
+  if (
+    demandVisible &&
+    demandScopeValid &&
+    branch &&
+    branchResult.branches.some((item) => item.id === branch)
+  ) {
     try {
       // Event timestamps: bound the selected business dates on the workspace clock.
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
         branchId: branch,
         ...workspaceDateRange(from, to, timeZone),
       });
-    } catch {
-      demandError = true;
+    } catch (error) {
+      // A counter DENY or a branch outside the manager's assignment is a refusal, not a failure.
+      if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code))
+        demandVisible = false;
+      else demandError = true;
     }
   }
   // DEV-14: owner-adjustable assumptions; the server validates the bounds again.
@@ -565,13 +582,15 @@ export default async function PharmacyReportsPage({
         money={money}
         financial={catalog.permissions.financial}
       />
-      <ObservedDemand
-        timeZone={timeZone}
-        report={demand}
-        failed={demandError}
-        selected={!!branch}
-        financial={catalog.permissions.financial}
-      />
+      {demandVisible ? (
+        <ObservedDemand
+          timeZone={timeZone}
+          report={demand}
+          failed={demandError}
+          selected={!!branch}
+          financial={catalog.permissions.financial}
+        />
+      ) : null}
       <StaffingSuggestions
         timeZone={timeZone}
         report={staffing}
