@@ -207,7 +207,7 @@ suite('family Khata restricted PostgreSQL', () => {
       khata.authorizeKhataCharge(
         db,
         a,
-        { ...a, amountMinor: 200, ownerOverride: true },
+        { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Paying on Friday' },
         { authorized: true, passwordAuthenticatedAt: Date.now() }
       )
     );
@@ -217,7 +217,10 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      reasons: expect.objectContaining({
+        ownerAuthorizedByUserId: 'owner',
+        overrideReason: 'Paying on Friday',
+      }),
     });
     await expect(
       inScope(a, (db) =>
