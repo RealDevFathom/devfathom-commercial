@@ -44,6 +44,9 @@ DEFAULT_ORGANIZATION_ID=org_devfathom
 SEED_PASSWORD=<local-seed-password>
 ```
 
+`SEED_PASSWORD` is mandatory: the seed refuses to run without it (or `ADMIN_PASSWORD`). Set both
+`PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`, or the seed creates no platform operator.
+
 Generate local secrets with:
 
 ```bash
@@ -97,7 +100,9 @@ bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
-Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
+Prisma, the seed, and the `prisma/*.ts` admin scripts read variables already exported in the
+shell first, then `.env.local`, then `.env`, so `.env.local` alone is enough. If no database URL
+is found, they exit with an error naming the variable and the files searched. After migrate, grant the application role
 access to the objects the migration role owns:
 
 ```sql

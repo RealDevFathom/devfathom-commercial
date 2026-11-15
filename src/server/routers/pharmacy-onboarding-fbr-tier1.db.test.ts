@@ -90,6 +90,24 @@ const notTier1 = {
   annualTurnoverRupees: 15_000_000,
 };
 
+/**
+ * Age or reshape this run's own audit rows to stand in for older history.
+ * `audit_logs` is append-only for every role (DEV-155), so the table owner
+ * lifts the guard for this one statement inside a transaction and restores it.
+ */
+async function rewriteAuditFixture(statement: string, params: unknown[]) {
+  try {
+    await owner.query('BEGIN');
+    await owner.query('ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_append_only');
+    await owner.query(statement, params);
+    await owner.query('ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_append_only');
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK');
+    throw error;
+  }
+}
+
 describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
   beforeAll(async () => {
     ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
@@ -124,9 +142,8 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
     const organizations = [organizationId, otherOrganizationId];
     try {
       await owner.query('BEGIN');
-      await owner.query('DELETE FROM audit_logs WHERE "organizationId" = ANY($1)', [
-        organizations,
-      ]);
+      // Audit rows are append-only (DEV-155) and stay behind under this run's
+      // unique organization ids; deleting their actors only clears `actorId`.
       await owner.query('DELETE FROM users WHERE "organizationId" = ANY($1)', [organizations]);
       await owner.query('DELETE FROM organization_departments WHERE "organizationId" = ANY($1)', [
         organizations,
@@ -231,7 +248,7 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
   });
 
   it('asks again once twelve months have passed', async () => {
-    await owner.query(
+    await rewriteAuditFixture(
       `UPDATE audit_logs SET "createdAt" = "createdAt" - interval '13 months'
         WHERE "organizationId" = $1 AND action = 'pharmacy.fbrTier1Check'`,
       [organizationId]
@@ -244,7 +261,7 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
   });
 
   it('re-evaluates legacy negative answers as Unsure without losing their history', async () => {
-    await owner.query(
+    await rewriteAuditFixture(
       `UPDATE audit_logs SET input = input::jsonb - 'bankCardPos' - 'otherNotifiedCategory'
         WHERE "organizationId" = $1 AND action = 'pharmacy.fbrTier1Check'`,
       [organizationId]

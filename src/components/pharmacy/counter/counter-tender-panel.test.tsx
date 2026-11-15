@@ -316,6 +316,27 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
   });
 
+  it('DEV-641: says a queued payment waits for the connection', async () => {
+    let resolve!: (value: CounterTenderResult) => void;
+    const onTender = vi.fn(
+      () =>
+        new Promise<CounterTenderResult>((done) => {
+          resolve = done;
+        })
+    );
+    const { props, rerender } = setup({ onTender, queued: true });
+    expect(screen.getByRole('status')).not.toHaveTextContent(/Offline/);
+    enterCash();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Offline — this payment will be sent when the connection returns. Keep this bill open and do not take the money again.'
+    );
+    rerender(<CounterTenderPanel {...props} onTender={onTender} queued={false} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Taking payment… Keep this bill open.');
+    await act(async () => resolve({ status: 'accepted', message: 'Payment recorded.' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
+  });
+
   it('keeps cash change prominent after acceptance until the next bill mounts', async () => {
     const { rerender, props } = setup({ balanceMinor: 5000 });
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '100.00' } });

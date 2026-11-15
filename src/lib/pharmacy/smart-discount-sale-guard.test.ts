@@ -57,8 +57,19 @@ function saleDb(discountPolicy: unknown) {
         id: 'medicine-a',
         saleable: true,
         rx: false,
+        otc: false,
         restricted: false,
         controlled: false,
+        productFamily: 'FRONT_SHOP',
+      })),
+    },
+    pharmacyVoucher: {
+      findFirst: vi.fn(async () => ({
+        id: 'voucher-a',
+        discountMinor: 200,
+        eligibleCategories: ['NON_DRUG'],
+        issuedByUserId: 'owner-a',
+        validUntil: null,
       })),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => [lot]) },
@@ -115,5 +126,34 @@ describe('DEV-66 minimum-margin guard on the sale path', () => {
       approvalPolicy: undefined,
     });
     expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+  });
+
+  describe('DEV-27 voucher redemption', () => {
+    const voucherLine = {
+      saleId: 'sale-a',
+      medicineId: 'medicine-a',
+      presentationId: 'presentation-a',
+      packLevelId: 'pack-box',
+      saleUnit: 'UNIT' as const,
+      quantity: 10,
+      canonicalUnitsPerSaleUnit: 1,
+      idempotencyKey: 'line-voucher',
+      voucherId: 'voucher-a',
+    };
+
+    it('refuses a voucher that would breach the configured minimum margin', async () => {
+      // The stored voucher takes 200 off 1000: above cost 700, below the 934 floor.
+      const db = saleDb({ minMarginBps: 2_500 });
+      await expect(addSaleLine(db as never, scope, voucherLine)).rejects.toThrow(
+        'MARGIN_GUARDRAIL'
+      );
+      expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    });
+
+    it('redeems the same voucher under the default cost floor', async () => {
+      const db = saleDb(null);
+      const { line } = await addSaleLine(db as never, scope, voucherLine);
+      expect(line).toMatchObject({ discountKind: 'VOUCHER', discountMinor: 200 });
+    });
   });
 });

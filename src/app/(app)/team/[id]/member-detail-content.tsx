@@ -648,7 +648,7 @@ function ResetPasswordForm({
           <button
             onClick={() => resetPassword.mutate({ id: memberId, newPassword })}
             disabled={newPassword.length < 8 || resetPassword.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {resetPassword.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -851,7 +851,7 @@ function EditMemberForm({
               })
             }
             disabled={updateMember.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {updateMember.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1193,7 +1193,7 @@ const PerformanceNotesBlock = memo(function PerformanceNotesBlock({
                 if (draft.trim()) addNote.mutate({ userId, content: draft.trim() });
               }}
               disabled={!draft.trim() || addNote.isPending}
-              className="self-end flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              className="self-end flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
             >
               {addNote.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -1,4 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { counterLabel } from '@/lib/pharmacy/counter-label';
 import {
   authorizeCounterApproval,
   confirmCounterApproval,
@@ -313,6 +314,7 @@ async function approvedLineInput(
     canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     discountKind: input.discountKind,
     discountMinor: input.discountMinor,
+    voucherId: input.voucherId,
     idempotencyKey: input.idempotencyKey,
   };
   const { override } = input;
@@ -1625,6 +1627,9 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
+          // DEV-27: a voucher is redeemed by its stored id; the server sets the amount and
+          // enforces the voucher's eligible categories. A client cannot label a voucher.
+          voucherId: z.string().trim().min(1).max(128).optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           discountApproval: counterApprovalPin.optional(),
           override: z
@@ -2086,7 +2091,27 @@ export const pharmacySalesRouter = router({
         take: 50,
       });
       const otherBranches = [...assigned].filter((id) => id !== scope.branchId);
-      if (!otherBranches.length || active.length === 50) return active;
+      const withLabels = async <T extends { branchId: string; receiptDeviceId: string | null }>(
+        rows: T[]
+      ) => {
+        const ids = [
+          ...new Set(rows.flatMap((row) => (row.receiptDeviceId ? [row.receiptDeviceId] : []))),
+        ];
+        const devices = ids.length
+          ? await ctx.db.pharmacyRegisteredDevice.findMany({
+              where: { organizationId: scope.organizationId, id: { in: ids } },
+              select: { id: true, branchId: true, name: true },
+            })
+          : [];
+        return rows.map((row) => ({
+          ...row,
+          counterLabel: counterLabel(
+            row.receiptDeviceId,
+            devices.find((d) => d.id === row.receiptDeviceId && d.branchId === row.branchId)?.name
+          ),
+        }));
+      };
+      if (!otherBranches.length || active.length === 50) return withLabels(active);
       const others = await ctx.db.pharmacySale.findMany({
         where: {
           organizationId: scope.organizationId,
@@ -2098,7 +2123,7 @@ export const pharmacySalesRouter = router({
         orderBy: [{ completedAt: 'desc' }, { id: 'asc' }],
         take: 50 - active.length,
       });
-      return [...active, ...others];
+      return withLabels([...active, ...others]);
     }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
@@ -2677,7 +2702,9 @@ export const pharmacySalesRouter = router({
   /** Allocate a browser/OS receipt copy. A separate call records dialog handoff. */
   counterReceiptBrowserPrint: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2723,7 +2750,9 @@ export const pharmacySalesRouter = router({
   /** Failed browser preflight is durable evidence, without claiming a copy. */
   counterReceiptBrowserPrintFailed: auditedProtectedProcedure
     .input(
-      z.object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) }).strict()
+      z
+        .object({ branchId, saleId: z.string().min(1).max(128), locale: z.enum(['en', 'ur']) })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
@@ -2896,7 +2925,10 @@ export const pharmacySalesRouter = router({
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       if (!COUNTER_KEYMAP_PRESETS[input.preset].confirmed && ctx.session.user.role !== 'ADMIN') {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'This preset is not available to staff.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'This preset is not available to staff.',
+        });
       }
       try {
         const resolved = resolveCounterKeymap({

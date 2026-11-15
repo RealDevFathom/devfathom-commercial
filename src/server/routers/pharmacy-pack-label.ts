@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   configuredPackLabelOcrAdapterName,
   PackLabelOcrError,
+  parsePrintedPrice,
   proposePackLabelFields,
   resolvePackLabelOcrAdapter,
   type PackLabelOcrAdapter,
@@ -15,6 +16,7 @@ import {
   decodeBoundedImageBase64,
   MAX_PRESCRIPTION_FILE_BYTES,
 } from '@/lib/pharmacy/prescription-files';
+import { currentPackPrice } from '@/lib/pharmacy/pricing';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { rateLimit } from '@/lib/rate-limit';
 import { annotateAudit } from '../audit';
@@ -22,9 +24,11 @@ import { auditedProtectedProcedure, publicProcedure, router } from '../trpc';
 
 /**
  * DEV-752: read batch and expiry off ONE photographed medicine pack while
- * receiving against a purchase-order line. The result is a PROPOSAL the
- * receiver edits and confirms into the existing capture fields; nothing here
- * drafts a goods receipt, touches stock, prices or the medicine register.
+ * receiving against a purchase-order line. DEV-770 adds the printed retail
+ * price (MRP), compared with the pack's current MRP on record. The result is a
+ * PROPOSAL the receiver edits and confirms into the existing capture fields;
+ * nothing here drafts a goods receipt, touches stock, prices or the medicine
+ * register: the current price is only read.
  *
  * Medicine, pack and conversion come from the purchase-order line the receiver
  * chose, never from the photo. The photo is validated, stripped of metadata,
@@ -176,11 +180,9 @@ export const pharmacyPackLabelRouter = router({
       const photoSha256 = createHash('sha256').update(bytes).digest('hex');
       const content = await readerImage(bytes);
 
-      let proposal: PackLabelProposal;
+      let extraction: Awaited<ReturnType<PackLabelOcrAdapter['extract']>>;
       try {
-        proposal = proposePackLabelFields(
-          await adapter.extract({ content, mimeType: 'image/jpeg', organizationId })
-        );
+        extraction = await adapter.extract({ content, mimeType: 'image/jpeg', organizationId });
       } catch (error) {
         const reason = error instanceof PackLabelOcrError ? error.reason : 'UNKNOWN';
         // Reason and adapter only: provider text can echo label content.
@@ -210,6 +212,23 @@ export const pharmacyPackLabelRouter = router({
         });
       }
 
+      // The comparison price comes from the pack's record, never the photo: the
+      // branch's own price first, else the organization's. Read only when a
+      // single printed price was read, so there is something to compare.
+      let currentMrpMinor: number | null = null;
+      if (parsePrintedPrice(extraction.price.value).kind === 'read') {
+        const current =
+          (await currentPackPrice(
+            ctx.db,
+            organizationId,
+            line.packLevelId,
+            new Date(),
+            input.branchId
+          )) ?? (await currentPackPrice(ctx.db, organizationId, line.packLevelId));
+        currentMrpMinor = current?.mrpMinor ?? null;
+      }
+      const proposal: PackLabelProposal = proposePackLabelFields(extraction, { currentMrpMinor });
+
       annotateAudit(ctx, {
         category: 'pharmacy.receiving',
         action: 'pack_label.read',
@@ -228,6 +247,9 @@ export const pharmacyPackLabelRouter = router({
           suggestedBatch: proposal.batch.value,
           suggestedExpiry: proposal.expiry.printed,
           expiryKind: proposal.expiry.kind,
+          priceKind: proposal.price.kind,
+          suggestedMrpMinor: proposal.price.kind === 'read' ? proposal.price.amountMinor : null,
+          currentMrpMinor: proposal.currentMrpMinor,
           warnings: proposal.warnings.map((warning) => warning.code),
         },
       });

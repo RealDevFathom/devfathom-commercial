@@ -792,7 +792,11 @@ try {
       sql(`DELETE FROM pharmacy_purchase_order_lines WHERE "purchaseOrderId" IN
       (SELECT id FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed');
       DELETE FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed';
-      DELETE FROM audit_logs WHERE "targetId"='${result.namespace}';`);
+      BEGIN;
+      ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_append_only;
+      DELETE FROM audit_logs WHERE "targetId"='${result.namespace}';
+      ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_append_only;
+      COMMIT;`);
       const beforeCounts = counts();
       await assert.rejects(
         runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
