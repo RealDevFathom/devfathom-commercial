@@ -3,6 +3,7 @@ import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import {
   isManualTender,
+  MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
@@ -44,7 +45,7 @@ const storedSchema = z
         providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
-        approvalCode: z.string().regex(/^[A-Za-z0-9]{2,12}$/).optional(),
+        approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),

@@ -10,6 +10,7 @@ import {
   manualPaymentSettingsSchema,
   isManualTender,
   manualMerchantPolicies,
+  MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
 } from '@/lib/pharmacy/manual-payments';
 import {
@@ -169,10 +170,7 @@ const tenderInput = z
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
-    approvalCode: z
-      .string()
-      .regex(/^[A-Za-z0-9]{2,12}$/)
-      .optional(),
+    approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);

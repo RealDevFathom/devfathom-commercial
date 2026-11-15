@@ -164,8 +164,7 @@ beforeEach(() => {
 
 describe('pharmacySales.tenderOutcome', () => {
   it('DEV-713 reads a card outcome only with the counter access a card write needs', async () => {
-    const { cashReceivedMinor: _cash, ...withoutCashInput } = input;
-    const card = { ...withoutCashInput, type: 'CARD' as const };
+    const card = { ...input, type: 'CARD' as const, cashReceivedMinor: undefined };
     const allowed = fixture(card);
     await expect(allowed.caller().tenderOutcome(card)).resolves.toMatchObject({
       status: 'ACCEPTED',

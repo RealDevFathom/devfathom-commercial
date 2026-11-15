@@ -73,9 +73,11 @@ export const MANUAL_CARD_PROVIDER = 'MANUAL_TERMINAL';
  * must never be stored (PCI DSS).
  */
 export const MANUAL_CARD_REFERENCE = /^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/;
+/** The approval code printed on the terminal slip. */
+export const MANUAL_CARD_APPROVAL_CODE = /^[A-Za-z0-9]{2,12}$/;
 export const manualCardCaptureSchema = z.object({
   providerRef: z.string().trim().regex(MANUAL_CARD_REFERENCE),
-  approvalCode: z.string().trim().regex(/^[A-Za-z0-9]{2,12}$/),
+  approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
 }).strict();
 
 const confirmerSchema = z.object({

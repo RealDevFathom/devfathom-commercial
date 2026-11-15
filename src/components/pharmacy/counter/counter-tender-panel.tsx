@@ -11,6 +11,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
+  MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
@@ -518,7 +519,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               value={approvalCode}
               maxLength={12}
               disabled={!editable}
-              aria-invalid={approvalCode !== '' && !/^[A-Za-z0-9]{2,12}$/.test(approvalCode.trim())}
+              aria-invalid={
+                approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
+              }
               aria-describedby="manual-card-help"
               onChange={(event) => setApprovalCode(event.target.value)}
             />
