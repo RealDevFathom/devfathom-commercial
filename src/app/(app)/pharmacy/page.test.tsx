@@ -15,6 +15,10 @@ vi.mock('./loyalty/loyalty-router', () => ({
   pharmacyLoyaltyRouter: { createCaller: () => ({ earnRate: mocks.earnRate }) },
 }));
 vi.mock('./loyalty/earn-rate-actions', () => ({ saveEarnRate: vi.fn() }));
+// DEV-497: read only when onboarding is refused; page.landing.test.tsx covers it.
+vi.mock('@/server/routers/pharmacy-access', () => ({
+  pharmacyAccessRouter: { createCaller: () => ({ navigation: vi.fn() }) },
+}));
 vi.mock('@/components/pharmacy/onboarding-console', () => ({
   PharmacyOnboardingConsole: () => <div>checklist</div>,
 }));

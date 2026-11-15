@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   approveMarketingCampaign,
+  approveMarketingTemplate,
   captureMarketingCampaign,
   createMarketingDraft,
   marketingConsent,
   marketingDraftInput,
   previewMarketingCampaign,
   requireCaptureWindow,
+  WhatsAppComplianceError,
 } from './marketing-service';
 
 const scope = {
@@ -36,6 +38,8 @@ let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
 let dateOfBirth: Date | null;
+let catalog: string[];
+let templateBody: string;
 let policyRow: Record<string, unknown> | null;
 let churnRows: Array<{ customerId: string; score: number }>;
 let db: ScopedDb;
@@ -56,11 +60,19 @@ function database() {
     pharmacyMarketingTemplate: {
       findFirst: vi.fn(async () => ({
         id: 'template-a',
-        body: 'Visit our store. Reply STOP to opt out.',
+        body: templateBody,
         approvedByUserId: 'owner-a',
         approvedAt: now,
       })),
+      create: vi.fn(async ({ data }) => ({ id: 'template-new', ...data })),
     },
+    medicine: {
+      findMany: vi.fn(async ({ where }) =>
+        where.id ? [] : catalog.map((productName, i) => ({ id: `m${i}`, productName }))
+      ),
+    },
+    medicineAlias: { findMany: vi.fn(async () => []) },
+    ingredient: { findMany: vi.fn(async () => []) },
     pharmacyMarketingSegment: {
       findFirst: vi.fn(async () => ({
         definition: { version: 1, all: [{ field: 'receiptCount', operator: 'gte', value: 1 }] },
@@ -126,6 +138,8 @@ beforeEach(() => {
   optIn = true;
   revokedAt = null;
   dateOfBirth = null;
+  catalog = [];
+  templateBody = 'Visit our store. Reply STOP to opt out.';
   policyRow = null;
   churnRows = [];
   mock = database();
@@ -330,6 +344,53 @@ describe('marketing age eligibility', () => {
     dateOfBirth = new Date('2010-01-01');
     expect(await marketingConsent(db, scope, 'customer-a', now)).toBe('UNDER_18');
     expect(mock.patientConsent.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-29 WhatsApp compliance linter at approval and send time', () => {
+  const template = {
+    branchId: scope.branchId,
+    name: 'Store update',
+    reviewed: true as const,
+  };
+  it('blocks a template naming a catalogue brand, including an Urdu transliteration', async () => {
+    catalog = ['Zyrtecin 10mg Tablet'];
+    for (const body of [
+      'Zyrtecin is back in our store. Reply STOP to opt out.',
+      'Zyrtecen is back in our store. Reply STOP to opt out.',
+      'زائرٹیسن اب دستیاب ہے۔ Reply STOP to opt out.',
+    ]) {
+      const error = await approveMarketingTemplate(db, scope, { ...template, body }).catch(
+        (e: unknown) => e
+      );
+      expect(error).toBeInstanceOf(WhatsAppComplianceError);
+      expect((error as WhatsAppComplianceError).result).toMatchObject({
+        outcome: 'BLOCK',
+        linterVersion: 'wa-compliance-lint-v1',
+      });
+      expect((error as WhatsAppComplianceError).subject).toBe('MARKETING_TEMPLATE');
+    }
+    expect(mock.pharmacyMarketingTemplate.create).not.toHaveBeenCalled();
+  });
+  it('approves generic retail copy and returns the pass result', async () => {
+    catalog = ['Zyrtecin 10mg Tablet'];
+    expect(
+      await approveMarketingTemplate(db, scope, {
+        ...template,
+        body: 'Our store has new opening hours. Reply STOP to opt out.',
+      })
+    ).toMatchObject({ id: 'template-new', compliance: { outcome: 'PASS' } });
+  });
+  it('re-checks an approved template against the current catalogue before capture', async () => {
+    templateBody = 'Ask about Glowmax at our store. Reply STOP to opt out.';
+    catalog = ['Glowmax Cream 30g'];
+    await expect(captureMarketingCampaign(db, scope, 'campaign-a', now)).rejects.toMatchObject({
+      subject: 'MARKETING_CAMPAIGN',
+      subjectId: 'campaign-a',
+      result: { outcome: 'BLOCK' },
+    });
+    expect(captures).toHaveLength(0);
+    expect(mock.pharmacyCampaign.update).not.toHaveBeenCalled();
   });
 });
 
