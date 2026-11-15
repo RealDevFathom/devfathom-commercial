@@ -623,6 +623,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       lines: {
         include: {
           medicine: { select: { productName: true, controlled: true } },
+          // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
+          packLevel: { select: { level: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -674,6 +676,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
+      levelLabel: line.packLevel?.level ?? null,
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,

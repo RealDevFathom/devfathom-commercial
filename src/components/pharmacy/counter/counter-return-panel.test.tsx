@@ -153,6 +153,35 @@ describe('counter returns', () => {
     expect(mocks.returnLine).not.toHaveBeenCalled();
     expect(mocks.refund).not.toHaveBeenCalled();
   });
+  it('labels the line with the pack level sold and hides internal lot ids (DEV-638)', () => {
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0] = {
+      ...history.data.lines[0],
+      saleUnit: 'PACK',
+      levelLabel: 'STRIP',
+      lots: [
+        {
+          lotId: 'cmvzl8u3u01pq4oqrosqy5nsi',
+          batchNumber: 'QA-B2',
+          expiresAt: new Date('2027-05-31T00:00:00Z'),
+          returnableUnits: 8,
+          restockAllowed: true,
+        },
+      ],
+    };
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    const line = screen.getByRole('option', { name: /Medicine/ });
+    expect(line).toHaveTextContent('Medicine · 1 strip of 10 · 8 units returnable');
+    expect(line).not.toHaveTextContent(/box/i);
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expect(screen.getByText(/One sold strip contains 10 base units/)).toBeVisible();
+    expect(screen.queryByText(/box/i)).not.toBeInTheDocument();
+    const lot = screen.getByRole('option', { name: /QA-B2/ });
+    expect(lot).toHaveTextContent('Batch QA-B2 · expires 2027-05-31 · 8 units remaining');
+    expect(lot).not.toHaveTextContent('cmvzl8u3u01pq4oqrosqy5nsi');
+    expect(lot).toHaveValue('cmvzl8u3u01pq4oqrosqy5nsi');
+  });
   it('books the return and the refund to the active branch', async () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
