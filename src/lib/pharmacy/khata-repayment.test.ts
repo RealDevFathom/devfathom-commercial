@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 vi.mock('./patient-prescriptions', () => ({ auditPatientRead: vi.fn() }));
-vi.mock('./bookkeeping', () => ({ postBookkeepingTransaction: vi.fn() }));
+vi.mock('./bookkeeping', async (original) => ({
+  ...(await original<typeof import('./bookkeeping')>()),
+  postBookkeepingTransaction: vi.fn(),
+}));
 
 import { postBookkeepingTransaction } from './bookkeeping';
 import {

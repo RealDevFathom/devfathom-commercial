@@ -1,6 +1,6 @@
 'use client';
 
-import { useDeferredValue, useRef, useState } from 'react';
+import { useDeferredValue, useRef, useState, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,18 +27,45 @@ type Props = {
 const TENDERS = ['CASH', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'] as const;
 type Tender = (typeof TENDERS)[number];
 
+/**
+ * The payment attempt outlives the form: closing the dialog unmounts the form, but a
+ * retry after reopening must reuse the same idempotency key and see a late result.
+ */
+type KhataPaymentSession = {
+  attemptRef: RefObject<{ fingerprint: string; key: string } | null>;
+  slip: KhataPaymentSlipSource | null;
+  setSlip: (slip: KhataPaymentSlipSource | null) => void;
+  pending: boolean;
+  setPending: (pending: boolean) => void;
+};
+
+function useKhataPaymentSession(): KhataPaymentSession {
+  const attemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const [slip, setSlip] = useState<KhataPaymentSlipSource | null>(null);
+  const [pending, setPending] = useState(false);
+  return { attemptRef, slip, setSlip, pending, setPending };
+}
+
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
 /** K4 (DEV-731): receive money against a khata account, outside any bill. */
 export function CounterKhataPaymentPanel(props: Props) {
   const [open, setOpen] = useState(false);
+  const session = useKhataPaymentSession();
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
         Khata payment
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          // A payment in flight keeps the dialog open until the server answers.
+          if (!next && session.pending) return;
+          setOpen(next);
+        }}
+      >
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
           <DialogTitle>Khata payment</DialogTitle>
           <DialogDescription>
@@ -48,6 +75,7 @@ export function CounterKhataPaymentPanel(props: Props) {
             <KhataPaymentForm
               key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
               {...props}
+              session={session}
             />
           )}
         </DialogContent>
@@ -56,7 +84,14 @@ export function CounterKhataPaymentPanel(props: Props) {
   );
 }
 
-export function KhataPaymentForm({ branchId, deviceId, businessDate }: Props) {
+export function KhataPaymentForm({
+  branchId,
+  deviceId,
+  businessDate,
+  session: parentSession,
+}: Props & { session?: KhataPaymentSession }) {
+  const localSession = useKhataPaymentSession();
+  const { attemptRef, slip, setSlip, pending, setPending } = parentSession ?? localSession;
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query.trim());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -65,10 +100,7 @@ export function KhataPaymentForm({ branchId, deviceId, businessDate }: Props) {
   const [payerReference, setPayerReference] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [slip, setSlip] = useState<KhataPaymentSlipSource | null>(null);
   // A retried submit with unchanged details reuses its key, so money is taken once.
-  const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const accounts = trpc.pharmacySales.khataPaymentAccounts.useQuery({
     branchId,
@@ -100,7 +132,7 @@ export function KhataPaymentForm({ branchId, deviceId, businessDate }: Props) {
               : null;
 
   async function submit() {
-    if (!selected || blocker) return;
+    if (!selected || blocker || pending) return;
     const payload = {
       branchId,
       familyAccountId: selected.id,
@@ -109,8 +141,8 @@ export function KhataPaymentForm({ branchId, deviceId, businessDate }: Props) {
       ...(cash ? { drawerSessionId: openDrawerId! } : { payerReference: payerReference.trim() }),
     };
     const fingerprint = JSON.stringify(payload);
-    if (attempt.current?.fingerprint !== fingerprint)
-      attempt.current = { fingerprint, key: `khata-payment:${browserUuid()}` };
+    if (attemptRef.current?.fingerprint !== fingerprint)
+      attemptRef.current = { fingerprint, key: `khata-payment:${browserUuid()}` };
     setPending(true);
     setError(null);
     setNotice(null);
@@ -118,9 +150,9 @@ export function KhataPaymentForm({ branchId, deviceId, businessDate }: Props) {
       const result = await record.mutateAsync({
         ...payload,
         businessDate: businessDate(),
-        idempotencyKey: attempt.current.key,
+        idempotencyKey: attemptRef.current.key,
       });
-      attempt.current = null;
+      attemptRef.current = null;
       setSlip(result);
       setAmount('');
       setPayerReference('');

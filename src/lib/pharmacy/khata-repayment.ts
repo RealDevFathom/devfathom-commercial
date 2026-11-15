@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type Currency } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { postBookkeepingTransaction } from './bookkeeping';
+import { KHATA_REPAYMENT_KEY_PREFIX, postBookkeepingTransaction } from './bookkeeping';
 import {
   FamilyKhataError,
   readKhataBalance,
@@ -60,7 +60,7 @@ function repaymentIdentity(scope: FamilyKhataScope, idempotencyKey: string) {
     .update(`${scope.organizationId}:${scope.branchId}:${idempotencyKey}`)
     .digest('hex');
   return {
-    idempotencyKey: `khata-repayment:${digest}`,
+    idempotencyKey: `${KHATA_REPAYMENT_KEY_PREFIX}${digest}`,
     receiptReference: `KP-${digest.slice(0, 10).toUpperCase()}`,
   };
 }
