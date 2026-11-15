@@ -195,3 +195,45 @@ describe('#519 replay derives recall state', () => {
     });
   });
 });
+
+describe('DEV-825 replay takes stock locks in the global order', () => {
+  it("locks every line's batch, then every candidate balance, before the first line", async () => {
+    mocks.createSale.mockResolvedValue({ id: 'sale_1' });
+    const base = command();
+    const body = router.counterReplaySchema.parse({
+      ...base,
+      lines: [
+        { ...base.lines[0]!, medicineId: 'med_2', inventoryLotId: 'lot_2' },
+        { ...base.lines[0]!, medicineId: 'med_1', inventoryLotId: 'lot_1' },
+      ],
+    });
+    const target = db([
+      { id: 'lot_1', batch: { state: 'ACTIVE' } },
+      { id: 'lot_2', batch: { state: 'ACTIVE' } },
+    ]);
+    const firstLine = vi.fn(async () => {
+      throw new Error('REACHED_LINES');
+    });
+    Object.assign(target.db, { medicine: { findFirst: firstLine } });
+    await expect(replay(target.db, body)).rejects.toThrow('REACHED_LINES');
+
+    const raw = vi.mocked(target.db.$queryRaw);
+    const statements = raw.mock.calls.map(
+      ([sql]) => sql as unknown as { strings: string[]; values: unknown[] }
+    );
+    const batchLock = statements.findIndex((sql) =>
+      sql.strings?.join('').includes('stock_lock:batch')
+    );
+    const balanceLock = statements.findIndex((sql) =>
+      sql.strings?.join('').includes('stock_lock:balance')
+    );
+    expect(batchLock).toBeGreaterThanOrEqual(0);
+    expect(statements[batchLock]!.strings.join('')).toContain('FOR SHARE');
+    expect(statements[batchLock]!.values).toEqual(expect.arrayContaining(['lot_1', 'lot_2']));
+    expect(balanceLock).toBeGreaterThan(batchLock);
+    expect(statements[balanceLock]!.values).toEqual(expect.arrayContaining(['med_1', 'med_2']));
+    expect(raw.mock.invocationCallOrder[balanceLock]).toBeLessThan(
+      firstLine.mock.invocationCallOrder[0]!
+    );
+  });
+});

@@ -62,6 +62,7 @@ import {
   transferStock,
 } from '@/lib/pharmacy/stock-ledger';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -491,8 +492,11 @@ async function assertBranch(db: ScopedDb, scope: LedgerScope) {
  * and a FOR UPDATE here would make that wait the inverse of this path's order.
  */
 async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId: string) {
-  await db.$queryRaw(
-    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId} FOR NO KEY UPDATE`
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT "id" AS "inventoryLotId" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId}`,
+    { lot: 'update' }
   );
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
@@ -741,6 +745,17 @@ async function receiveTransferWithVariance(
   if (open.some((line) => !answered.has(line.id)))
     throw new PharmacyInventoryError('INVALID_UNITS');
 
+  // DEV-825: lock every IN_TRANSIT balance this receipt writes, in the global
+  // key order (stock-lock-order.ts), before reading or writing any line.
+  await lockStockBalances(
+    db,
+    { organizationId: scope.organizationId, branchId: transfer.fromBranchId },
+    open.map((line) => ({
+      inventoryLotId: line.sourceLotId,
+      stockLocationId: line.sourceStockLocationId,
+      disposition: 'IN_TRANSIT',
+    }))
+  );
   const plan = [];
   for (const line of open) {
     const receivedUnits = answered.get(line.id)!;
@@ -748,7 +763,7 @@ async function receiveTransferWithVariance(
     const balances = await db.$queryRaw<
       Array<{ onHandUnits: number; sealedPacks: number; looseUnits: number; unitsPerPack: number }>
     >(
-      Prisma.sql`SELECT b."onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${transfer.fromBranchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='IN_TRANSIT' FOR UPDATE OF b`
+      Prisma.sql`SELECT b."onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${transfer.fromBranchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='IN_TRANSIT'`
     );
     const transit = balances[0];
     if (!transit || Number(transit.onHandUnits) < outstanding)

@@ -48,6 +48,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
+  lockRegister,
   earlierRegisterEntry,
   emergencyNoRxDecision,
   resolveEmergencySupplyPolicy,
@@ -1991,7 +1992,7 @@ export const pharmacySalesRouter = router({
             // DEV-825: the sale row is a document lock, so it precedes the register
             // lock (stock-lock-order.ts); a concurrent void takes them in that order.
             await lockSaleForControlledLine(db, scope, input.saleId);
-            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            await lockRegister(db, scope.organizationId, scope.branchId);
             const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
@@ -2031,7 +2032,7 @@ export const pharmacySalesRouter = router({
           // Lock prescription and branch before stock allocation, fill numbering and register numbering.
           await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
           await lockSaleForControlledLine(db, scope, input.saleId);
-          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+          await lockRegister(db, scope.organizationId, scope.branchId);
           const rx = await db.prescriptionLine.findFirst({
             where: {
               id: authorization.prescriptionLineId,

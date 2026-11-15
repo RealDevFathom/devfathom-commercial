@@ -9,6 +9,7 @@ import {
 } from './finance-postings';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
 export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
@@ -23,6 +24,8 @@ export async function releaseRecallBatches(
   organizationId: string,
   notice: { id: string; batchId: string | null; medicineId: string | null }
 ) {
+  // DEV-825: batch class first, in key order, through the shared helper.
+  await lockRecallBatches(db, organizationId, notice);
   // Decide per batch: a medicine recall can overlap batch recalls for only some
   // of its batches, and a batch recall can overlap a medicine-wide recall.
   await db.$executeRaw(Prisma.sql`
@@ -96,18 +99,17 @@ async function manualQuarantineBalance(
 ) {
   // Lock before reading the reserve, then read it in a separate statement so a
   // waiter sees the preceding transaction's committed balance and recall action.
-  // AVAILABLE comes first to match quarantinePart's movement order and avoid
-  // taking the two projection locks in opposite orders during a release.
-  await db.$queryRaw(Prisma.sql`
-    SELECT "disposition" FROM "pharmacy_stock_balances"
-    WHERE "organizationId" = ${scope.organizationId}
-      AND "branchId" = ${scope.branchId}
-      AND "inventoryLotId" = ${input.inventoryLotId}
-      AND "stockLocationId" = ${input.stockLocationId}
-      AND "disposition" IN ('AVAILABLE', 'QUARANTINE')
-    ORDER BY "disposition"
-    FOR UPDATE
-  `);
+  // AVAILABLE comes first (the global balance key order, stock-lock-order.ts),
+  // so a release never takes the two projection locks in the opposite order.
+  await lockStockBalances(
+    db,
+    scope,
+    (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition,
+    }))
+  );
   const [balance, recallActions] = await Promise.all([
     db.pharmacyStockBalance.findFirst({
       where: {
@@ -463,6 +465,19 @@ export async function approveCount(
   if (hasVariance && !reason) throw new PharmacyInventoryError('VARIANCE_REASON_REQUIRED');
   if (reason && reason.length > CYCLE_COUNT_REASON_MAX)
     throw new PharmacyInventoryError('VARIANCE_REASON_REQUIRED');
+  // DEV-825: lock every balance the variances write, in the global key order,
+  // before the first adjustment; count-line order is not that order.
+  await lockStockBalances(
+    db,
+    scope,
+    count.lines
+      .filter((line) => (line.varianceUnits ?? 0) !== 0)
+      .map((line) => ({
+        inventoryLotId: line.inventoryLotId,
+        stockLocationId: line.stockLocationId,
+        disposition: 'AVAILABLE',
+      }))
+  );
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
@@ -789,11 +804,25 @@ export async function dispatchTransfer(
   });
   if (!transfer || transfer.status !== 'APPROVED')
     throw new PharmacyInventoryError('INVALID_STATE');
+  // DEV-825: lock every balance the dispatch writes (each line's AVAILABLE source
+  // and its IN_TRANSIT bucket), in the global key order, before the first line;
+  // then read each line in a fresh statement.
+  await lockStockBalances(
+    db,
+    scope,
+    transfer.lines.flatMap((line) =>
+      (['AVAILABLE', 'IN_TRANSIT'] as const).map((disposition) => ({
+        inventoryLotId: line.sourceLotId,
+        stockLocationId: line.sourceStockLocationId,
+        disposition,
+      }))
+    )
+  );
   for (const [i, line] of transfer.lines.entries()) {
     const balances = await db.$queryRaw<
       Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date }>
     >(
-      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE' FOR UPDATE OF b`
+      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE'`
     );
     const balance = balances[0];
     if (!balance || Number(balance.onHandUnits) < line.quantityUnits)
@@ -975,22 +1004,26 @@ export async function createRecall(
   });
 }
 
-async function lockRecallBatches(
+export async function lockRecallBatches(
   db: ScopedDb,
   organizationId: string,
   target: { batchId?: string | null; medicineId?: string | null }
 ) {
-  return db.$queryRaw<Array<{ id: string; medicineId: string }>>(Prisma.sql`
-    SELECT id, "medicineId"
+  const batches = Prisma.sql`
     FROM "pharmacy_manufacturing_batches"
     WHERE "organizationId" = ${organizationId}
       AND ${
         target.batchId
           ? Prisma.sql`id = ${target.batchId}`
           : Prisma.sql`"medicineId" = ${target.medicineId}`
-      }
-    ORDER BY id
-    FOR UPDATE
+      }`;
+  // DEV-825: batch class, ascending id, through the shared lock helper.
+  await lockStockRowsFrom(db, organizationId, Prisma.sql`SELECT id AS "batchId" ${batches}`, {
+    batch: 'update',
+  });
+  return db.$queryRaw<Array<{ id: string; medicineId: string }>>(Prisma.sql`
+    SELECT id, "medicineId" ${batches}
+    ORDER BY id COLLATE "C"
   `);
 }
 
@@ -1154,8 +1187,8 @@ export async function reserveSupplierClaim(
   // SHARE on the batch excludes recall updates while remaining compatible with
   // checkout's batch safety check after it has already locked the balances.
   // The caller must keep this lock and the check/create below in one transaction.
-  const locked = await db.$queryRaw<Array<{ onHandUnits: number; state: string }>>(Prisma.sql`
-    SELECT b."onHandUnits", mb.state::text
+  // DEV-825: batch (SHARE) then balances, in the global order, then a fresh read.
+  const lotBalances = Prisma.sql`
     FROM "pharmacy_stock_balances" b
     JOIN "pharmacy_inventory_lots" l
       ON l.id = b."inventoryLotId" AND l."organizationId" = b."organizationId"
@@ -1165,10 +1198,16 @@ export async function reserveSupplierClaim(
       AND b."branchId" = ${scope.branchId}
       AND l."branchId" = ${scope.branchId}
       AND b."inventoryLotId" = ${input.inventoryLotId}
-      AND b."disposition" = 'AVAILABLE'
-    ORDER BY mb.id, b."stockLocationId" ASC
-    FOR SHARE OF mb
-    FOR UPDATE OF b
+      AND b."disposition" = 'AVAILABLE'`;
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT mb.id AS "batchId", b."branchId", b."inventoryLotId", b."stockLocationId",
+      b."disposition"::text AS "disposition" ${lotBalances}`,
+    { batch: 'share', balance: true }
+  );
+  const locked = await db.$queryRaw<Array<{ onHandUnits: number; state: string }>>(Prisma.sql`
+    SELECT b."onHandUnits", mb.state::text ${lotBalances}
   `);
   if (locked.some((row) => row.state !== 'ACTIVE'))
     throw new PharmacyInventoryError('BLOCKED_STOCK');

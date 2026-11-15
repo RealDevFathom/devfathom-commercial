@@ -10,7 +10,7 @@ import { saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
-import { balanceLockOrderBy, lockStockRowsFrom } from './stock-lock-order';
+import { lockStockRowsFrom } from './stock-lock-order';
 
 export type CustomerOrderFulfillment = 'COLLECT' | 'DELIVER';
 export type CustomerOrderStatus =
@@ -201,11 +201,15 @@ export async function reservationCandidates(
   // DEV-825: lock the balances in the global key order (stock-lock-order.ts),
   // the order a counter sale locks the same rows in, then read them in FEFO
   // order in a separate statement so the read sees what committed during a wait.
-  await db.$queryRaw(Prisma.sql`
-    SELECT balance."inventoryLotId"
-    ${candidates}
-    ${balanceLockOrderBy('balance')}
-    FOR UPDATE OF balance`);
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
+    ${candidates}`,
+    { balance: true }
+  );
   return db.$queryRaw<ReservationCandidate[]>(Prisma.sql`
     SELECT balance."inventoryLotId", balance."stockLocationId", balance."organizationId", balance."branchId",
            batch."state"::text AS "batchState", balance."disposition"::text AS disposition,

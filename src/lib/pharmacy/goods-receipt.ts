@@ -31,7 +31,7 @@ import {
   assignedRegisterBranchIds,
   lockRegister,
 } from './controlled-register';
-import { compareBalanceLockKeys } from './stock-lock-order';
+import { compareBalanceLockKeys, lockStockBalances } from './stock-lock-order';
 import {
   clearLockout,
   isLockedOut,
@@ -1056,15 +1056,7 @@ async function assertReceiptStockStillOnHand(
   // Lock in the global balance key order (stock-lock-order.ts), then read in a
   // separate statement so the read sees anything that committed while the lock
   // was waited on.
-  for (const bucket of buckets) {
-    await db.$queryRaw`
-      SELECT "inventoryLotId" FROM "pharmacy_stock_balances"
-      WHERE "organizationId" = ${scope.organizationId}
-        AND "inventoryLotId" = ${bucket.inventoryLotId}
-        AND "stockLocationId" = ${bucket.stockLocationId}
-        AND "disposition"::text = ${bucket.disposition}
-      FOR UPDATE`;
-  }
+  await lockStockBalances(db, scope, buckets);
   const balances = await db.pharmacyStockBalance.findMany({
     where: {
       organizationId: scope.organizationId,

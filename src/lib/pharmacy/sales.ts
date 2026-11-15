@@ -29,6 +29,7 @@ import {
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations, lockRegister } from './controlled-register';
+import { lockStockRowsFrom } from './stock-lock-order';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
@@ -1038,9 +1039,13 @@ export async function returnSaleLine(
     if (!units) continue;
     if (disposition === 'RESTOCK') {
       // Batch lock shares the recall boundary; never restore unsafe stock as available.
-      await db.$queryRaw(Prisma.sql`SELECT b.id FROM pharmacy_manufacturing_batches b
-        JOIN pharmacy_inventory_lots l ON l."manufacturingBatchId"=b.id AND l."organizationId"=b."organizationId"
-        WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId} FOR NO KEY UPDATE OF b`);
+      await lockStockRowsFrom(
+        db,
+        scope.organizationId,
+        Prisma.sql`SELECT l."manufacturingBatchId" AS "batchId" FROM pharmacy_inventory_lots l
+          WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId}`,
+        { batch: 'update' }
+      );
       const lot = await db.pharmacyInventoryLot.findFirst({
         where: {
           id: allocation.inventoryLotId,

@@ -4,8 +4,14 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
-import { lockRecallAuthority, quarantinePart, releaseRecallBatches } from './inventory-operations';
+import {
+  lockRecallAuthority,
+  lockRecallBatches,
+  quarantinePart,
+  releaseRecallBatches,
+} from './inventory-operations';
 import { confirmPriceChanges } from './pricing';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 
 export type DrapPriceNotice = {
   kind: 'PRICE';
@@ -390,8 +396,17 @@ export async function confirmDrapRecall(
     },
   });
   if (claimed.count !== 1) throw new PharmacyInventoryError('INVALID_STATE');
+  // DEV-825: the batches, then every balance the quarantine moves write, each in
+  // the global key order (stock-lock-order.ts), before the first write.
+  const recalledIds = batches.map(({ id }) => id);
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT unnest(${recalledIds}::text[]) AS "batchId"`,
+    { batch: 'update' }
+  );
   await db.pharmacyManufacturingBatch.updateMany({
-    where: { organizationId: scope.organizationId, id: { in: batches.map(({ id }) => id) } },
+    where: { organizationId: scope.organizationId, id: { in: recalledIds } },
     data: { state: 'RECALLED', stateReason: reason, stateChangedAt: new Date() },
   });
   const balances = await db.pharmacyStockBalance.findMany({
@@ -399,9 +414,22 @@ export async function confirmDrapRecall(
       organizationId: scope.organizationId,
       disposition: 'AVAILABLE',
       onHandUnits: { gt: 0 },
-      lot: { manufacturingBatchId: { in: batches.map(({ id }) => id) } },
+      lot: { manufacturingBatchId: { in: recalledIds } },
     },
   });
+  // Balances span branches; every balance of a lot is in the lot's branch, so
+  // the organization-wide key order is still one total order.
+  await lockStockBalances(
+    db,
+    { organizationId: scope.organizationId },
+    balances.flatMap((balance) =>
+      (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+        inventoryLotId: balance.inventoryLotId,
+        stockLocationId: balance.stockLocationId,
+        disposition,
+      }))
+    )
+  );
   for (const balance of balances) {
     const moved = await quarantinePart(
       db,
@@ -591,6 +619,13 @@ export async function reverseRecallQuarantine(
     where: { organizationId: scope.organizationId, recallNoticeId, reversedAt: null },
   });
   if (!actions.length) throw new PharmacyInventoryError('NOT_FOUND');
+  const recall = await db.pharmacyRecallNotice.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: recallNoticeId },
+  });
+  const originalsByAction = new Map<
+    string,
+    Awaited<ReturnType<typeof db.pharmacyStockMovement.findMany>>
+  >();
   for (const action of actions) {
     const originals = await db.pharmacyStockMovement.findMany({
       where: {
@@ -599,6 +634,18 @@ export async function reverseRecallQuarantine(
       },
     });
     if (originals.length !== 2) throw new PharmacyInventoryError('INVALID_STATE');
+    originalsByAction.set(action.id, originals);
+  }
+  // DEV-825: the recalled batches (released below), then every balance the
+  // reversals write, each in the global key order, before the first write.
+  await lockRecallBatches(db, scope.organizationId, recall);
+  await lockStockBalances(
+    db,
+    { organizationId: scope.organizationId },
+    [...originalsByAction.values()].flat()
+  );
+  for (const action of actions) {
+    const originals = originalsByAction.get(action.id)!;
     for (const original of originals) {
       await db.pharmacyStockMovement.create({
         data: {
@@ -623,9 +670,6 @@ export async function reverseRecallQuarantine(
       data: { reversedById: scope.actorId, reversedAt: new Date(), reversalReason: reason },
     });
   }
-  const recall = await db.pharmacyRecallNotice.findFirstOrThrow({
-    where: { organizationId: scope.organizationId, id: recallNoticeId },
-  });
   await releaseRecallBatches(db, scope.organizationId, recall);
   return db.pharmacyRecallNotice.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: recall.id } },

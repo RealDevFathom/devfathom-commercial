@@ -19,7 +19,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { balanceLockOrderBy, lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 
 import {
   arrangementFor,
@@ -175,16 +175,35 @@ async function loadCandidates(
   // snapshot for the claim/reservation subqueries, so a supplier claim that
   // committed while we waited would be invisible and its units sellable.
   // The second statement takes a fresh snapshot after every lock is held.
-  await db.$queryRaw`
-    SELECT balance."inventoryLotId"
+  await lockSaleCandidates(db, scope, [medicineId]);
+  return db.$queryRaw<CandidateRow[]>(query);
+}
+
+/**
+ * Lock every stocked balance a counter sale of `medicineIds` could allocate
+ * from, in the global balance key order (stock-lock-order.ts). A transaction
+ * that adds several lines (offline replay) calls this for all of them first, so
+ * the per-line allocations only re-enter locks it already holds.
+ */
+export async function lockSaleCandidates(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  medicineIds: readonly string[]
+) {
+  if (medicineIds.length === 0) return;
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
-      AND batch."medicineId" = ${medicineId}
-      AND balance."onHandUnits" > 0
-    ${balanceLockOrderBy('balance')}
-    FOR UPDATE OF balance`;
-  return db.$queryRaw<CandidateRow[]>(query);
+      AND batch."medicineId" IN (${Prisma.join([...medicineIds])})
+      AND balance."onHandUnits" > 0`,
+    { balance: true }
+  );
 }
 
 function toCandidate(row: CandidateRow): AllocationCandidate {
@@ -844,7 +863,20 @@ export type TransferInput = {
 export async function transferStock(db: ScopedDb, scope: LedgerScope, input: TransferInput) {
   // DEV-660: read and lock the source balance only within the acting branch, so a
   // sibling branch's lot or location resolves to nothing rather than answering
-  // (and locking) as blocked stock.
+  // (and locking) as blocked stock. DEV-825: both balances this transfer writes
+  // are locked first, in the global key order, then read in a fresh statement.
+  await lockStockBalances(db, scope, [
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.fromStockLocationId,
+      disposition: 'AVAILABLE',
+    },
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.toStockLocationId,
+      disposition: 'IN_TRANSIT',
+    },
+  ]);
   const rows = await db.$queryRaw<CandidateRow[]>(Prisma.sql`
     SELECT ${CANDIDATE_COLUMNS}
     ${CANDIDATE_JOINS}
@@ -852,8 +884,7 @@ export async function transferStock(db: ScopedDb, scope: LedgerScope, input: Tra
       AND balance."branchId" = ${scope.branchId}
       AND balance."inventoryLotId" = ${input.inventoryLotId}
       AND balance."stockLocationId" = ${input.fromStockLocationId}
-      AND balance."disposition" = 'AVAILABLE'
-    FOR UPDATE OF balance`);
+      AND balance."disposition" = 'AVAILABLE'`);
 
   const source = rows[0];
   if (!source) throw new PharmacyInventoryError('NOT_FOUND');
