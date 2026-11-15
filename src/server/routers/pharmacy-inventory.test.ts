@@ -1183,6 +1183,12 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         idempotencyKey: 'write-off-1',
       }),
   },
+  // DEV-682 — the daily cycle-count list names branch stock positions.
+  {
+    name: 'dailyCycleCountList',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().dailyCycleCountList({ branchId: 'branch_a' }),
+  },
   // DEV-660 — the branch stock reads.
   {
     name: 'nearExpiryBoard',
@@ -1840,7 +1846,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(19);
+    expect(ASSIGNMENT_GATED).toHaveLength(20);
   });
 });
 

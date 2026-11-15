@@ -30,6 +30,10 @@ import {
   approveTransfer,
   closeRecall,
   createCount,
+  CYCLE_COUNT_DEFAULT_SIZE,
+  CYCLE_COUNT_MAX_SIZE,
+  CYCLE_COUNT_REASON_MAX,
+  dailyCycleCountList,
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
@@ -1262,6 +1266,33 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-682: today's cycle-count list — fast movers and high-value positions,
+   * ranked in SQL. It is a read; nothing is saved until a person submits the
+   * counted quantities (`createCount`) and confirms the variance (`approveCount`).
+   */
+  dailyCycleCountList: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          size: z.number().int().min(1).max(CYCLE_COUNT_MAX_SIZE).default(CYCLE_COUNT_DEFAULT_SIZE),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await dailyCycleCountList(
+          ctx.db,
+          await admittedScopeFor(ctx, input.branchId),
+          new Date(),
+          input.size
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
   approveCount: inventoryControl
     .input(
       z
@@ -1269,6 +1300,8 @@ export const pharmacyInventoryRouter = router({
           branchId,
           countId: z.string().min(1),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+          // DEV-682: required (server-side) whenever the count has a variance.
+          varianceReason: z.string().trim().max(CYCLE_COUNT_REASON_MAX).optional(),
         })
         .strict()
     )
@@ -1279,7 +1312,8 @@ export const pharmacyInventoryRouter = router({
             txDb(tx),
             await scopeFor(ctx, input.branchId),
             input.countId,
-            input.idempotencyKeyPrefix
+            input.idempotencyKeyPrefix,
+            input.varianceReason
           )
         );
       } catch (error) {

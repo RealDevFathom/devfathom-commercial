@@ -192,6 +192,139 @@ async function removalArrangement(
   return { sealedPacks, looseUnits };
 }
 
+/** DEV-682: the longest variance reason a confirming person may record. */
+export const CYCLE_COUNT_REASON_MAX = 500;
+/** DEV-682: sales inside this window decide which positions move fastest. */
+export const CYCLE_COUNT_SALES_WINDOW_DAYS = 30;
+/** DEV-682: a position counted this recently stays off the daily list. */
+export const CYCLE_COUNT_RECOUNT_AFTER_DAYS = 7;
+export const CYCLE_COUNT_DEFAULT_SIZE = 10;
+export const CYCLE_COUNT_MAX_SIZE = 50;
+
+export type DailyCycleCountItem = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  medicineName: string;
+  batchNumber: string;
+  locationName: string;
+  unitsPerPack: number;
+  /** Canonical units sold from this position in the sales window. */
+  soldUnits: number;
+  /** On-hand value at lot cost, in minor units. */
+  stockValueMinor: number;
+  basis: ReadonlyArray<'FAST_MOVER' | 'HIGH_VALUE'>;
+};
+
+type DailyCycleCountRow = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  medicineName: string;
+  batchNumber: string;
+  locationName: string;
+  unitsPerPack: number;
+  soldUnits: number | bigint;
+  stockValueMinor: number | bigint;
+  fastRank: number | bigint;
+  valueRank: number | bigint;
+};
+
+/**
+ * DEV-682: today's small cycle-count list. SQL ranks every sellable position in
+ * the branch twice — by units sold in the last 30 days and by on-hand value at
+ * lot cost — and takes the top half of each, skipping positions counted in the
+ * last 7 days so the list rotates. The list carries no book quantity: staff
+ * count blind, then `createCount` and `approveCount` post the variance.
+ */
+export async function dailyCycleCountList(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  at: Date,
+  size: number = CYCLE_COUNT_DEFAULT_SIZE
+): Promise<DailyCycleCountItem[]> {
+  if (!Number.isSafeInteger(size) || size < 1 || size > CYCLE_COUNT_MAX_SIZE)
+    throw new PharmacyInventoryError('INVALID_QUANTITY');
+  const day = 24 * 60 * 60 * 1000;
+  const salesSince = new Date(at.getTime() - CYCLE_COUNT_SALES_WINDOW_DAYS * day);
+  const countedSince = new Date(at.getTime() - CYCLE_COUNT_RECOUNT_AFTER_DAYS * day);
+  const perBasis = Math.ceil(size / 2);
+  const rows = await db.$queryRaw<DailyCycleCountRow[]>(Prisma.sql`
+    WITH positions AS (
+      SELECT b."inventoryLotId", b."stockLocationId",
+        m."productName" AS "medicineName", mb."batchNumber", loc.name AS "locationName",
+        l."unitsPerPack",
+        (b."onHandUnits"::bigint * l."unitCostMinor"::bigint) AS "stockValueMinor",
+        COALESCE((
+          SELECT -SUM(mv."quantityUnits") FROM "pharmacy_stock_movements" mv
+          WHERE mv."organizationId" = b."organizationId"
+            AND mv."branchId" = b."branchId"
+            AND mv."inventoryLotId" = b."inventoryLotId"
+            AND mv."stockLocationId" = b."stockLocationId"
+            AND mv.kind = 'SALE'
+            AND mv."reversesMovementId" IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM "pharmacy_stock_movements" r
+              WHERE r."organizationId" = mv."organizationId" AND r."reversesMovementId" = mv.id
+            )
+            AND mv."occurredAt" >= ${salesSince}
+            AND mv."occurredAt" <= ${at}
+        ), 0)::bigint AS "soldUnits"
+      FROM "pharmacy_stock_balances" b
+      JOIN "pharmacy_inventory_lots" l
+        ON l."organizationId" = b."organizationId" AND l.id = b."inventoryLotId"
+      JOIN "pharmacy_manufacturing_batches" mb
+        ON mb."organizationId" = l."organizationId" AND mb.id = l."manufacturingBatchId"
+      JOIN "pharmacy_medicines" m
+        ON m."organizationId" = mb."organizationId" AND m.id = mb."medicineId"
+      JOIN "pharmacy_stock_locations" loc
+        ON loc."organizationId" = b."organizationId" AND loc.id = b."stockLocationId"
+      WHERE b."organizationId" = ${scope.organizationId}
+        AND b."branchId" = ${scope.branchId}
+        AND b.disposition = 'AVAILABLE'
+        AND b."onHandUnits" > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_inventory_count_lines" cl
+          JOIN "pharmacy_inventory_counts" c
+            ON c."organizationId" = cl."organizationId" AND c.id = cl."countId"
+          WHERE cl."organizationId" = b."organizationId"
+            AND cl."branchId" = b."branchId"
+            AND cl."inventoryLotId" = b."inventoryLotId"
+            AND cl."stockLocationId" = b."stockLocationId"
+            AND c."createdAt" >= ${countedSince}
+        )
+    ), ranked AS (
+      SELECT p.*,
+        ROW_NUMBER() OVER (
+          ORDER BY p."soldUnits" DESC, p."stockValueMinor" DESC, p."inventoryLotId", p."stockLocationId"
+        ) AS "fastRank",
+        ROW_NUMBER() OVER (
+          ORDER BY p."stockValueMinor" DESC, p."soldUnits" DESC, p."inventoryLotId", p."stockLocationId"
+        ) AS "valueRank"
+      FROM positions p
+    )
+    SELECT * FROM ranked
+    WHERE ("fastRank" <= ${perBasis} AND "soldUnits" > 0) OR "valueRank" <= ${perBasis}
+    ORDER BY LEAST("fastRank", "valueRank"), "fastRank", "valueRank"
+    LIMIT ${size}
+  `);
+  return rows.map((row) => {
+    const soldUnits = Number(row.soldUnits);
+    const basis: Array<'FAST_MOVER' | 'HIGH_VALUE'> = [];
+    if (soldUnits > 0 && Number(row.fastRank) <= perBasis) basis.push('FAST_MOVER');
+    if (Number(row.valueRank) <= perBasis) basis.push('HIGH_VALUE');
+    return {
+      inventoryLotId: row.inventoryLotId,
+      stockLocationId: row.stockLocationId,
+      medicineName: row.medicineName,
+      batchNumber: row.batchNumber,
+      locationName: row.locationName,
+      unitsPerPack: row.unitsPerPack,
+      soldUnits,
+      stockValueMinor: Number(row.stockValueMinor),
+      basis,
+    };
+  });
+}
+
 export async function createCount(
   db: ScopedDb,
   scope: LedgerScope,
@@ -272,7 +405,8 @@ export async function approveCount(
   db: ScopedDb,
   scope: LedgerScope,
   countId: string,
-  idempotencyKeyPrefix: string
+  idempotencyKeyPrefix: string,
+  varianceReason?: string
 ) {
   // Approval reads the lifecycle state and posts its variance as one critical
   // section. Idempotency keys only deduplicate a replay that uses the same
@@ -297,6 +431,13 @@ export async function approveCount(
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
   if (count.status === 'AWAITING_COAUTH' && count.createdById === scope.actorId)
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  // DEV-682: a variance is posted only with the reason the confirming person
+  // gave for it; a count that matches the book needs none.
+  const reason = varianceReason?.trim() || null;
+  const hasVariance = count.lines.some((line) => (line.varianceUnits ?? 0) !== 0);
+  if (hasVariance && !reason) throw new PharmacyInventoryError('VARIANCE_REASON_REQUIRED');
+  if (reason && reason.length > CYCLE_COUNT_REASON_MAX)
+    throw new PharmacyInventoryError('VARIANCE_REASON_REQUIRED');
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
@@ -319,7 +460,12 @@ export async function approveCount(
   }
   const approved = await db.pharmacyInventoryCount.update({
     where: { id: count.id },
-    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt: new Date() },
+    data: {
+      status: 'APPROVED',
+      approvedById: scope.actorId,
+      approvedAt: new Date(),
+      varianceReason: hasVariance ? reason : null,
+    },
   });
   // FIN-01: each approved variance is journalled in the transaction that moved
   // the stock, so GL inventory and the stock ledger change together.

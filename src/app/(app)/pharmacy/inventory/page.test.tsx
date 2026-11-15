@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   redirect: vi.fn(),
   assigned: vi.fn(),
+  cycleList: vi.fn(),
+  createCount: vi.fn(),
+  approveCount: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
@@ -114,7 +117,13 @@ beforeEach(() => {
     releaseQuarantinedPart: mocks.release,
     createLocation: mocks.createLocation,
     acknowledgeRecall: mocks.acknowledgeRecall,
+    dailyCycleCountList: mocks.cycleList,
+    createCount: mocks.createCount,
+    approveCount: mocks.approveCount,
   });
+  mocks.cycleList.mockResolvedValue([]);
+  mocks.createCount.mockResolvedValue({});
+  mocks.approveCount.mockResolvedValue({});
   mocks.can.mockResolvedValue(true);
   mocks.createLocation.mockResolvedValue({});
   mocks.writeOff.mockResolvedValue({});
@@ -182,6 +191,114 @@ describe('physical count prerequisites', () => {
       `${lot.id}:${location.id}`
     );
     expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DEV-682 daily cycle count', () => {
+  const item = (lotId: string, name: string, basis: string[]) => ({
+    inventoryLotId: lotId,
+    stockLocationId: location.id,
+    medicineName: name,
+    batchNumber: `B-${lotId}`,
+    locationName: 'Rack',
+    unitsPerPack: 10,
+    soldUnits: 40,
+    stockValueMinor: 100_000,
+    basis,
+  });
+  function cycleCard() {
+    return within(
+      screen
+        .getByRole('heading', { name: 'Daily cycle count' })
+        .closest('[data-slot="section-card"]')! as HTMLElement
+    );
+  }
+
+  it('lists the SQL-ranked positions and submits every counted line as one draft count', async () => {
+    mocks.cycleList.mockResolvedValue([
+      item('lot-a', 'Medicine A', ['FAST_MOVER']),
+      item('lot-b', 'Medicine B', ['HIGH_VALUE']),
+    ]);
+    await show();
+    expect(mocks.cycleList).toHaveBeenCalledWith({ branchId: branch.id });
+    const card = cycleCard();
+    expect(card.getByText('Fast mover')).toBeVisible();
+    expect(card.getByText('High value')).toBeVisible();
+    const sealed = card.getAllByRole('spinbutton', { name: /Counted sealed packs/ });
+    const loose = card.getAllByRole('spinbutton', { name: /Counted loose units/ });
+    fireEvent.change(sealed[0]!, { target: { value: '3' } });
+    fireEvent.change(loose[0]!, { target: { value: '4' } });
+    fireEvent.change(sealed[1]!, { target: { value: '0' } });
+    fireEvent.change(loose[1]!, { target: { value: '7' } });
+    fireEvent.submit(card.getByRole('button', { name: 'Submit counted stock' }).closest('form')!);
+    await waitFor(() =>
+      expect(mocks.createCount).toHaveBeenCalledExactlyOnceWith({
+        branchId: branch.id,
+        varianceThreshold: 0,
+        readings: [
+          {
+            inventoryLotId: 'lot-a',
+            stockLocationId: location.id,
+            countedSealedPacks: 3,
+            countedLooseUnits: 4,
+          },
+          {
+            inventoryLotId: 'lot-b',
+            stockLocationId: location.id,
+            countedSealedPacks: 0,
+            countedLooseUnits: 7,
+          },
+        ],
+      })
+    );
+    expect(mocks.approveCount).not.toHaveBeenCalled();
+  });
+
+  it('is not offered to a role that cannot control inventory', async () => {
+    mocks.can.mockResolvedValue(false);
+    await show();
+    expect(screen.queryByRole('heading', { name: 'Daily cycle count' })).not.toBeInTheDocument();
+    expect(mocks.cycleList).not.toHaveBeenCalled();
+  });
+
+  it('asks for a variance reason before approving a count with a variance', async () => {
+    ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+      {
+        id: 'count-1',
+        status: 'OPEN',
+        createdAt: new Date('2026-11-15'),
+        varianceReason: null,
+        lines: [{ varianceUnits: -2 }],
+      },
+    ]);
+    await show();
+    const reason = screen.getByLabelText('Variance reason');
+    expect(reason).toBeRequired();
+    fireEvent.change(reason, { target: { value: 'Two strips broken, not logged' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Approve count' }).closest('form')!);
+    await waitFor(() =>
+      expect(mocks.approveCount).toHaveBeenCalledExactlyOnceWith({
+        branchId: branch.id,
+        countId: 'count-1',
+        idempotencyKeyPrefix: 'ui-count:count-1',
+        varianceReason: 'Two strips broken, not logged',
+      })
+    );
+  });
+
+  it('shows the recorded reason on an approved count', async () => {
+    ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+      {
+        id: 'count-2',
+        status: 'APPROVED',
+        createdAt: new Date('2026-11-15'),
+        varianceReason: 'Expired strip removed',
+        lines: [{ varianceUnits: -1 }],
+      },
+    ]);
+    await show();
+    expect(screen.getByText('Reason: Expired strip removed')).toBeVisible();
+    expect(screen.queryByLabelText('Variance reason')).not.toBeInTheDocument();
   });
 });
 
