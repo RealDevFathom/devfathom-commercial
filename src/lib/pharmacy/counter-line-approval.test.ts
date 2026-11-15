@@ -10,7 +10,9 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
+vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'dummy-hash') }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
+  OPERATOR_CREDENTIAL_BCRYPT_COST: 12,
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),
   clearLockout: () => ({ failedAttempts: 0 }),
@@ -25,7 +27,9 @@ const manager = { id: 'manager', organizationId: 'org', status: 'ACTIVE', role: 
 /** `holders` hold the checked capability; `others` are the other members with a live PIN. */
 function fixture(approver = manager, holders: string[] = ['manager'], others = [manager]) {
   vi.mocked(can).mockImplementation(async (subject) => holders.includes(subject.id));
-  vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+  vi.mocked(verifyOperatorCredential).mockImplementation(
+    async (_type, _pin, credentialHash) => credentialHash === 'hash'
+  );
   const db = {
     $queryRaw: vi.fn(),
     user: {
@@ -50,6 +54,13 @@ function fixture(approver = manager, holders: string[] = ['manager'], others = [
   return db;
 }
 
+/** Refused without touching the real credential: only a dummy compare, no counter write. */
+function expectDummyCompareOnly(db: ReturnType<typeof fixture>) {
+  expect(verifyOperatorCredential).toHaveBeenCalledOnce();
+  expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'dummy-hash');
+  expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(isLockedOut).mockReturnValue(false);
@@ -70,6 +81,7 @@ describe('counter discount approval (#520)', () => {
       approvedByUserId: 'manager',
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
+      credentialId: 'cred',
     });
     expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
@@ -83,7 +95,7 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expectDummyCompareOnly(db);
   });
 
   it.each([
@@ -94,15 +106,16 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expectDummyCompareOnly(db);
   });
 
-  it('refuses an unknown credential', async () => {
+  it('refuses an unknown credential after the same bcrypt work as a wrong PIN', async () => {
     const db = fixture();
     db.restaurantOperatorCredential.findFirst.mockResolvedValue(null);
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
   });
 
   it('commits a failed attempt for a wrong PIN and refuses', async () => {
@@ -111,6 +124,7 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
       where: { id: 'cred' },
       data: { failedAttempts: 1 },
@@ -128,7 +142,7 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expectDummyCompareOnly(db);
   });
 
   it('refuses self-approval while another member can approve', async () => {
@@ -137,7 +151,7 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expectDummyCompareOnly(db);
   });
 
   it('lets the sole approver self-approve with a fresh PIN, recorded as self-approved', async () => {
@@ -147,6 +161,7 @@ describe('counter discount approval (#520)', () => {
       approvedByUserId: 'cashier',
       approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
       selfApproved: true,
+      credentialId: 'cred',
     });
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
   });
@@ -197,6 +212,7 @@ describe('counter FEFO-override approval (#520)', () => {
       approvedByUserId: 'cashier',
       approvalPolicy: 'PHARMACIST_ON_DUTY',
       selfApproved: false,
+      credentialId: null,
     });
     expect(can).toHaveBeenCalledWith(actor, 'pharmacy:dispense', undefined, expect.anything());
     expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
@@ -218,6 +234,7 @@ describe('counter FEFO-override approval (#520)', () => {
       approvedByUserId: 'pharmacist',
       approvalPolicy: 'PHARMACIST_PIN',
       selfApproved: false,
+      credentialId: 'cred',
     });
   });
 
@@ -236,7 +253,41 @@ describe('in-transaction approval re-check (#520)', () => {
     approvedByUserId: 'manager',
     approvalPolicy: 'MANAGER_PIN',
     selfApproved: false,
+    credentialId: 'cred',
   };
+
+  it('refuses a PIN credential revoked since the PIN check', async () => {
+    const db = fixture();
+    db.user.findFirst.mockResolvedValue(manager);
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue(null);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'DISCOUNT', approval)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'cred',
+        organizationId: 'org',
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: { status: 'ACTIVE', userId: 'manager' },
+      },
+      select: { id: true },
+    });
+  });
+
+  it('does not look for a credential for the pharmacist on duty', async () => {
+    const db = fixture(manager, ['cashier']);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'FEFO_OVERRIDE', {
+        approvedByUserId: 'cashier',
+        approvalPolicy: 'PHARMACIST_ON_DUTY',
+        selfApproved: false,
+        credentialId: null,
+      })
+    ).resolves.toBeUndefined();
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
 
   it('accepts an approver who is still active and still holds the capability', async () => {
     const db = fixture();

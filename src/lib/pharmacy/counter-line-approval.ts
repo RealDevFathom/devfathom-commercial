@@ -3,9 +3,11 @@ import type { Action } from '@/lib/abac/policies';
 import type { Subject } from '@/lib/abac/types';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
+import { hash as bcryptHash } from 'bcryptjs';
 import {
   clearLockout,
   isLockedOut,
+  OPERATOR_CREDENTIAL_BCRYPT_COST,
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
@@ -20,6 +22,8 @@ export type CounterApproval = {
   approvedByUserId: string;
   approvalPolicy: string;
   selfApproved: boolean;
+  /** The PIN credential that proved the approval; null for the pharmacist on duty. */
+  credentialId: string | null;
 };
 
 /**
@@ -71,6 +75,7 @@ export async function authorizeCounterApproval(
       approvedByUserId: actor.id,
       approvalPolicy: 'PHARMACIST_ON_DUTY',
       selfApproved: false,
+      credentialId: null,
     };
   }
   if (!input) throw new CounterApprovalDenied(kind);
@@ -87,7 +92,8 @@ export async function authorizeCounterApproval(
 
 /**
  * Inside the sale transaction, before stock is allocated: the approver resolved by
- * `authorizeCounterApproval` must still be an active member holding the capability.
+ * `authorizeCounterApproval` must still be an active member holding the capability, and the
+ * PIN credential that proved it must still be live on an active staff profile of theirs.
  */
 export async function confirmCounterApproval(
   db: ScopedDb,
@@ -105,6 +111,34 @@ export async function confirmCounterApproval(
   if (!approver || !(await can(approver, COUNTER_APPROVAL_CAPABILITY[kind], undefined, { db }))) {
     throw new CounterApprovalDenied(kind);
   }
+  if (approval.credentialId === null) return;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      id: approval.credentialId,
+      organizationId: scope.organizationId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+      staffProfile: { status: 'ACTIVE', userId: approval.approvedByUserId },
+    },
+    select: { id: true },
+  });
+  if (!credential) throw new CounterApprovalDenied(kind);
+}
+
+/**
+ * A constant bcrypt hash at the real cost factor. Ineligible or unknown staff profiles burn a
+ * compare against it so their timing matches a wrong PIN on an eligible profile.
+ */
+let dummyCredentialHash: Promise<string> | null = null;
+function dummyHash(): Promise<string> {
+  dummyCredentialHash ??= bcryptHash('counter-approval-dummy', OPERATOR_CREDENTIAL_BCRYPT_COST);
+  return dummyCredentialHash;
+}
+
+async function refuseAfterDummyCompare(pin: string): Promise<null> {
+  await verifyOperatorCredential('PIN', pin, await dummyHash());
+  return null;
 }
 
 async function verifyApproverPin(
@@ -136,10 +170,11 @@ async function verifyApproverPin(
     isLockedOut(credential, now) ||
     !(await can(approver, capability, undefined, { db, now }))
   ) {
-    return null;
+    return refuseAfterDummyCompare(input.pin);
   }
   const selfApproved = approver.id === scope.actorId;
-  if (selfApproved && !(await isSoleApprover(db, scope, capability, now))) return null;
+  if (selfApproved && !(await isSoleApprover(db, scope, capability, now)))
+    return refuseAfterDummyCompare(input.pin);
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
@@ -156,7 +191,12 @@ async function verifyApproverPin(
     : kind === 'DISCOUNT'
       ? 'MANAGER_PIN'
       : 'PHARMACIST_PIN';
-  return { approvedByUserId: approver.id, approvalPolicy, selfApproved };
+  return {
+    approvedByUserId: approver.id,
+    approvalPolicy,
+    selfApproved,
+    credentialId: credential.id,
+  };
 }
 
 /**
