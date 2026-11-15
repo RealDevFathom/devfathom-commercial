@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const migration = readFileSync(
-  'prisma/migrations/20261115140000_pharmacy_finance_role_operational_reports/migration.sql',
+  'prisma/migrations/20261115220200_pharmacy_finance_role_operational_reports/migration.sql',
   'utf8'
 );
 
