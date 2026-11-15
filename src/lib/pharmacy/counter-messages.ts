@@ -58,6 +58,12 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  PATIENT_AMBIGUOUS:
+    'More than one patient has this name and phone. Select the patient on the counter, then open Khata.',
+  PHONE_REQUIRED: 'Enter the customer’s phone number to open a Khata account.',
+  PATIENT_NOT_FOUND: 'That patient is not available in this workspace. Select the patient again.',
+  PRESCRIPTION_PATIENT_MISMATCH:
+    'This bill carries a prescription for a different patient. Link that patient instead.',
   SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
   OVER_TENDER: 'That payment is more than the amount still due on this bill.',

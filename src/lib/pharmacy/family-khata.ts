@@ -22,6 +22,7 @@ export class FamilyKhataError extends Error {
       | 'PATIENT_NOT_FOUND'
       | 'CONSENT_REQUIRED'
       | 'PHONE_REQUIRED'
+      | 'PATIENT_AMBIGUOUS'
   ) {
     super(reason);
   }
@@ -457,20 +458,27 @@ export async function signUpSaleKhata(
     if (!patient) throw new FamilyKhataError('PATIENT_NOT_FOUND');
   } else {
     if (!phone || phone.replace('+', '').length < 7) throw new FamilyKhataError('PHONE_REQUIRED');
+    // Serialize find-or-create per number so two counters cannot both create the patient.
+    await db.$queryRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`khata-signup:${scope.organizationId}:${phone}`}, 0))`
+    );
     // Same name and phone only: a shared family phone must not merge two people.
     // Stored phones may carry spaces or dashes, so compare normalized numbers.
-    const sameName = await db.pharmacyPatient.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        displayName: { equals: displayName, mode: 'insensitive' },
-        phone: { not: null },
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, displayName: true, phone: true },
-      take: 200,
-    });
+    const matches = (
+      await db.pharmacyPatient.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          displayName: { equals: displayName, mode: 'insensitive' },
+          phone: { not: null },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, displayName: true, phone: true },
+      })
+    ).filter((row) => row.phone !== null && normalizeKhataPhone(row.phone) === phone);
+    // Two records with the same name and number: the operator must pick the patient.
+    if (matches.length > 1) throw new FamilyKhataError('PATIENT_AMBIGUOUS');
     patient =
-      sameName.find((row) => row.phone !== null && normalizeKhataPhone(row.phone) === phone) ??
+      matches[0] ??
       (await db.pharmacyPatient.create({
         data: { organizationId: scope.organizationId, displayName, phone },
         select: { id: true, displayName: true, phone: true },

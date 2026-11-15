@@ -239,6 +239,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       };
     }, [isKhata, loadKhataAccounts, khataReload]);
     const signupPatient = khataSignupPatient ?? null;
+    const signupPatientId = signupPatient?.patientId ?? null;
+    // Consent belongs to one person: a different payer must tick it again.
+    useEffect(() => {
+      setSignupConsent(false);
+      setSignupError('');
+    }, [signupPatientId]);
     const signupReady =
       editable &&
       !signupPending &&
@@ -264,8 +270,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         setSignupPhone('');
         setSignupConsent(false);
         setKhataReload((value) => value + 1);
-      } catch {
-        setSignupError('Khata signup failed. Check the details and retry.');
+      } catch (error) {
+        setSignupError(
+          error instanceof Error && error.message
+            ? error.message
+            : 'Khata signup failed. Check the details and retry.'
+        );
       } finally {
         setSignupPending(false);
       }
@@ -642,7 +652,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         value={signupName}
                         maxLength={200}
                         disabled={!editable || signupPending}
-                        onChange={(event) => setSignupName(event.target.value)}
+                        onChange={(event) => {
+                          setSignupName(event.target.value);
+                          setSignupConsent(false);
+                        }}
                       />
                       <Label htmlFor="khata-signup-phone">Phone</Label>
                       <Input
@@ -654,7 +667,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         value={signupPhone}
                         maxLength={20}
                         disabled={!editable || signupPending}
-                        onChange={(event) => setSignupPhone(event.target.value)}
+                        onChange={(event) => {
+                          setSignupPhone(event.target.value);
+                          setSignupConsent(false);
+                        }}
                       />
                     </>
                   )}

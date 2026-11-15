@@ -1352,7 +1352,12 @@ function ScopedPharmacyCounterConsole({
     async (input: KhataSignupInput) => {
       if (!saleId) throw new Error('Open a bill');
       const startedIn = `${branchId}:${saleId}`;
-      const result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      let result;
+      try {
+        result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      } catch (error) {
+        throw new Error(messageFrom(error));
+      }
       if (counterScopeRef.current !== startedIn) return;
       setCustomerId(result.customerId);
       setNotice({ tone: 'success', message: 'Khata account opened and linked to this bill.' });

@@ -19,6 +19,7 @@ function fakeDb(
   } = {}
 ) {
   return {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyPatient: {
       findFirst: vi.fn().mockResolvedValue(overrides.patient ?? null),
       findMany: vi.fn().mockResolvedValue(overrides.sameName ?? []),
@@ -141,6 +142,42 @@ describe('DEV-716 inline Khata signup', () => {
       scope,
       expect.objectContaining({ patientId: 'patient_old', displayName: 'ayesha' })
     );
+  });
+
+  it('refuses to guess between two patients with the same name and phone', async () => {
+    const db = fakeDb({
+      sameName: [
+        { id: 'patient_a', displayName: 'Ayesha', phone: '03001234567' },
+        { id: 'patient_b', displayName: 'AYESHA', phone: '0300 123-4567' },
+      ],
+    });
+    await expect(
+      signUpSaleKhata(db as never, scope, {
+        saleId: 'sale_1',
+        displayName: 'Ayesha',
+        phone: '03001234567',
+        consentGranted: true,
+      })
+    ).rejects.toMatchObject({ reason: 'PATIENT_AMBIGUOUS' });
+    expect(db.pharmacyPatient.create).not.toHaveBeenCalled();
+    expect(writePatientConsent).not.toHaveBeenCalled();
+    expect(linkCustomerToSale).not.toHaveBeenCalled();
+  });
+
+  it('serializes find-or-create on the normalized number and reads every same-name patient', async () => {
+    const db = fakeDb();
+    await signUpSaleKhata(db as never, scope, {
+      saleId: 'sale_1',
+      displayName: 'Ayesha',
+      phone: '0300-123 4567',
+      consentGranted: true,
+    });
+    const [lock] = db.$queryRaw.mock.calls[0]!;
+    expect((lock as { values: unknown[] }).values).toEqual(['khata-signup:org_a:03001234567']);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyPatient.findMany.mock.invocationCallOrder[0]!
+    );
+    expect(db.pharmacyPatient.findMany.mock.calls[0]![0]).not.toHaveProperty('take');
   });
 
   it('re-records consent when the latest loyalty consent was revoked', async () => {

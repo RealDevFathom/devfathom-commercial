@@ -558,7 +558,9 @@ describe('DEV-716 inline Khata signup', () => {
   });
 
   it('shows a failure and keeps the form when signup is refused', async () => {
-    const signUpKhata = vi.fn().mockRejectedValue(new Error('SALE_NOT_OPEN'));
+    const signUpKhata = vi
+      .fn()
+      .mockRejectedValue(new Error('This bill is no longer open for payment.'));
     setup({
       loadKhataAccounts: vi.fn().mockResolvedValue([]),
       signUpKhata,
@@ -570,7 +572,35 @@ describe('DEV-716 inline Khata signup', () => {
       screen.getByLabelText('Customer consents to a Khata account and loyalty record')
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open Khata account' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Khata signup failed');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This bill is no longer open for payment.'
+    );
     expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeInTheDocument();
+  });
+
+  it('clears the consent tick when the payer changes', async () => {
+    const props = {
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+      signUpKhata: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender, props: all } = setup({
+      ...props,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText('Payer: Bilal');
+    const consent = () =>
+      screen.getByLabelText('Customer consents to a Khata account and loyalty record');
+    fireEvent.click(consent());
+    expect(consent()).toBeChecked();
+    rerender(
+      <CounterTenderPanel
+        {...all}
+        khataSignupPatient={{ patientId: 'patient-b', displayName: 'Sana' }}
+      />
+    );
+    await screen.findByText('Payer: Sana');
+    expect(consent()).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Open Khata account' })).toBeDisabled();
   });
 });
