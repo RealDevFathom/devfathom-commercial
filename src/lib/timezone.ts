@@ -75,21 +75,14 @@ export function formatWorkspaceDateTime(
 }
 
 /**
- * The workspace zone as the owner reads it beside a date: "PKT" for
- * Asia/Karachi, as {@link formatWorkspaceDateTime} names it, otherwise Intl's
- * short name at `at` ("UTC", "GMT+4", "EST").
+ * The workspace zone as the owner reads it beside a date range: "PKT" for
+ * Asia/Karachi, as {@link formatWorkspaceDateTime} names it; any other zone by
+ * its IANA name ("UTC", "Europe/London"), which, unlike a seasonal abbreviation
+ * such as GMT or BST, is right for every date a range can cover.
  */
-export function workspaceZoneLabel(
-  timeZone: string | null | undefined,
-  at: Date = new Date()
-): string {
+export function workspaceZoneLabel(timeZone: string | null | undefined): string {
   const zone = workspaceTimezone(timeZone);
-  if (zone === 'Asia/Karachi') return 'PKT';
-  return (
-    new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' })
-      .formatToParts(at)
-      .find((part) => part.type === 'timeZoneName')?.value ?? zone
-  );
+  return zone === 'Asia/Karachi' ? 'PKT' : zone;
 }
 
 /**

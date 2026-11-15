@@ -90,6 +90,7 @@ describe('workspace time zones', () => {
   it('names the workspace zone the way the owner reads it', () => {
     expect(workspaceZoneLabel('Asia/Karachi')).toBe('PKT');
     expect(workspaceZoneLabel(null)).toBe('UTC');
-    expect(workspaceZoneLabel('Asia/Dubai')).toBe('GMT+4');
+    // A seasonal abbreviation (GMT/BST) would be wrong for half of a historical range.
+    expect(workspaceZoneLabel('Europe/London')).toBe('Europe/London');
   });
 });
