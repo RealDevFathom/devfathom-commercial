@@ -158,6 +158,8 @@ import {
   authenticateRefundPin,
   REFUND_FORBIDDEN,
   REFUND_PIN_POLICY,
+  RETURN_FORBIDDEN,
+  RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
 
 import { assertInOrganization } from '../org-refs';
@@ -2162,15 +2164,39 @@ export const pharmacySalesRouter = router({
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
+          // DEV-621: the signed-in manager's or owner's own PIN, re-entered for every return.
+          managerPin: z.string().regex(/^\d{4,8}$/),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-621: a return restocks stock and posts the refund liability, so a cashier
+        // alone cannot record one. A manager or owner (a solo owner included) re-enters
+        // their own PIN, exactly as for refundTender.
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
+        // The PIN never reaches the return's idempotency payload.
+        const { managerPin, ...line } = input;
+        // An independent transaction, so a refused PIN commits its lockout strike.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.returnLine',
+        });
+        annotateAudit(ctx, {
+          metadata: {
+            policy: REFUND_PIN_POLICY,
+            approverId: scope.actorId,
+            pinVerified: 'verified' in pin,
+          },
+        });
+        if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), scope, input);
+            return await returnSaleLine(txDb(tx), scope, line);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };
