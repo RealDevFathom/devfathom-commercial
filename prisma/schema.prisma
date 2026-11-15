@@ -1325,6 +1325,7 @@ model PharmacyCustomer {
   familyMemberships      PharmacyFamilyMember[]
   user                   User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
   orders                 PharmacyCustomerOrder[]
+  refillSubscriptions    PharmacyRefillSubscription[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
   preferredLanguage      String                       @default("en") @db.VarChar(2)
@@ -2019,6 +2020,82 @@ model PharmacyRestockNotification {
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, status, queuedAt])
   @@map("pharmacy_restock_notifications")
+}
+
+enum PharmacyRefillSubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum PharmacyRefillSubscriptionPayment {
+  PREPAY
+  KHATA
+}
+
+enum PharmacyRefillCycleStatus {
+  AWAITING_PHARMACIST
+  RESERVED
+  CHECKOUT_STARTED
+  RELEASED
+}
+
+/// DEV-73: a chronic-medicine monthly pack subscription. Each cycle holds stock
+/// through DEM-03 reservations; prescription-only cycles stay blocked until a
+/// pharmacist approves that cycle with a fresh PIN.
+model PharmacyRefillSubscription {
+  id               String                            @id @default(cuid())
+  organizationId   String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  customerId       String
+  medicineId       String
+  presentationId   String
+  packLevelId      String
+  packsPerCycle    Int
+  cycleDays        Int
+  reminderLeadDays Int
+  fulfillment      PharmacyCustomerOrderFulfillment
+  paymentMode      PharmacyRefillSubscriptionPayment
+  nextDueAt        DateTime
+  status           PharmacyRefillSubscriptionStatus  @default(ACTIVE)
+  createdByUserId  String
+  cancelledAt      DateTime?
+  createdAt        DateTime                          @default(now())
+  updatedAt        DateTime                          @updatedAt
+  customer         PharmacyCustomer                  @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  cycles           PharmacyRefillSubscriptionCycle[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, status, nextDueAt])
+  @@map("pharmacy_refill_subscriptions")
+}
+
+model PharmacyRefillSubscriptionCycle {
+  id                   String                     @id @default(cuid())
+  organizationId       String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  subscriptionId       String
+  dueAt                DateTime
+  canonicalUnits       Int
+  requiresPharmacist   Boolean
+  status               PharmacyRefillCycleStatus
+  openedByUserId       String
+  approvedByUserId     String?
+  approvalPolicy       String?
+  approvalCredentialId String?
+  selfApproved         Boolean                    @default(false)
+  approvedAt           DateTime?
+  counterSaleId        String?
+  releasedAt           DateTime?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  subscription         PharmacyRefillSubscription @relation(fields: [organizationId, branchId, subscriptionId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, subscriptionId, dueAt])
+  @@index([organizationId, branchId, status, dueAt])
+  @@map("pharmacy_refill_subscription_cycles")
 }
 
 /// MKT-03/MKT-05: one authenticated customer proposal with either collection
