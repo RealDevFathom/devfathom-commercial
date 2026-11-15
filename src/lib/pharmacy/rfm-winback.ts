@@ -143,6 +143,12 @@ const PROHIBITED_OFFER_CONTENT = new RegExp(
   'i'
 );
 
+/** True when copy is non-empty and names no drug, salt or medicine category. */
+export function isNonDrugOfferCopy(body: string): boolean {
+  const text = typeof body === 'string' ? body.trim() : '';
+  return text.length > 0 && !PROHIBITED_OFFER_CONTENT.test(text);
+}
+
 /** True when copy names a drug, salt, dose or medicine category (WhatsApp-unsafe). */
 export function namesDrugContent(text: string): boolean {
   return PROHIBITED_OFFER_CONTENT.test(text);

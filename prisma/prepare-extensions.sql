@@ -163,6 +163,23 @@ BEGIN
         EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
       END LOOP;
 
+      -- Medicine search runs pg_trgm's % operator as devfathom_app, which calls
+      -- similarity_op. The revoke above removed its PUBLIC route, and only this owner
+      -- (not a plain migration role) may grant it back, so grant it here whenever the
+      -- runtime role already exists. prepare-runtime-role.ts covers a brand-new role.
+      IF target_extension = 'pg_trgm'
+         AND EXISTS (
+           SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'devfathom_app'
+         )
+         AND EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_proc AS procedure
+            WHERE procedure.oid = pg_catalog.to_regprocedure('public.similarity_op(text,text)')
+              AND procedure.proowner = owner.owner_oid
+         ) THEN
+        GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app;
+      END IF;
+
       EXECUTE format('SET LOCAL ROLE %I', configured_role);
     END LOOP;
 

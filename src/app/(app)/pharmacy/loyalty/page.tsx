@@ -80,7 +80,7 @@ export default async function LoyaltyPage({
   if (data.state === 'error') {
     const { denied } = data;
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard
           title={denied ? 'Loyalty access required' : 'Ledger unavailable'}
@@ -95,17 +95,17 @@ export default async function LoyaltyPage({
             Reset selection and retry
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   }
   if (data.state === 'empty')
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard title="No active branch" titleLevel={2}>
           <p>An owner must activate a pharmacy branch before its loyalty ledger can be viewed.</p>
         </SectionCard>
-      </main>
+      </div>
     );
   const { branches, branchId, query, customers, hasMore, customerId, history, earnRate } = data;
   const href = (id: string, page = 1) =>
@@ -122,7 +122,7 @@ export default async function LoyaltyPage({
     revalidatePath('/pharmacy/loyalty');
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       <SectionCard title="Earning rate" titleLevel={2}>
         {earnRate.current ? (
@@ -391,6 +391,6 @@ export default async function LoyaltyPage({
       <Link className={linkClass} href="/pharmacy/counter">
         Open counter
       </Link>
-    </main>
+    </div>
   );
 }

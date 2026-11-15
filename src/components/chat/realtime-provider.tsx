@@ -8,7 +8,8 @@
  *    update live, and PATCHES the React Query cache (no refetch) so messages,
  *    reactions, reads, threads appear instantly
  *  - relays typing via the per-channel `typing:{id}` channel
- *  - feeds presence (Ably presence on `presence:global`) into the realtime store
+ *  - feeds presence (Ably presence on the tenant's `presence:org:{orgId}`) into
+ *    the realtime store
  *
  * It renders children unchanged; all work happens in effects. For logged-out
  * users it is a no-op (no client, no queries).
@@ -23,7 +24,7 @@ import {
   channelRoom,
   userRoom,
   typingRoom,
-  PRESENCE_CHANNEL,
+  presenceRoom,
   type ChatMessage,
   type ChatReaction,
   type RTMessageNew,
@@ -46,6 +47,7 @@ export function RealtimeProvider({
 }) {
   const { data: session } = useSession();
   const userId = session?.user?.id;
+  const organizationId = session?.user?.organizationId;
   const myId = userId ?? '';
   const utils = trpc.useUtils();
   const { client } = useAbly(enabled ? userId : undefined);
@@ -60,11 +62,11 @@ export function RealtimeProvider({
   // newly-joined channel appears we re-authorize so the token grants it.
   const authorizedRef = useRef<Set<string>>(new Set());
 
-  // --- Presence: enter the global roster, track enter/leave ----------------
+  // --- Presence: enter this tenant's roster, track enter/leave -------------
   useEffect(() => {
-    if (!client || !userId) return;
+    if (!client || !userId || !organizationId) return;
     const store = useRealtimeStore.getState;
-    const pc = client.channels.get(PRESENCE_CHANNEL);
+    const pc = client.channels.get(presenceRoom(organizationId));
     let cancelled = false;
 
     const onEnter = (m: Ably.PresenceMessage) => {
@@ -96,7 +98,7 @@ export function RealtimeProvider({
       pc.presence.unsubscribe(onLeave);
       void pc.presence.leave().catch(() => {});
     };
-  }, [client, userId]);
+  }, [client, userId, organizationId]);
 
   // --- Channel + typing subscriptions (re-run when the channel set changes) -
   useEffect(() => {
