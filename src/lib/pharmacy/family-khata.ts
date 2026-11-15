@@ -61,19 +61,30 @@ export function calculateKhataHealthSuggestion(
   const charges = entries.filter((entry) => entry.kind === 'CHARGE');
   const payments = entries.filter((entry) => entry.kind === 'PAYMENT');
   const dishonouredCheques = entries.filter((entry) => entry.kind === 'DISHONOURED_CHEQUE').length;
-  const paidChargeIds = new Set(payments.map((payment) => payment.settlesChargeId));
+  // A charge counts as settled only once its payments cover it in full: counter
+  // repayments allocate partially, and one part-payment must not clear an overdue debt.
+  const settledAt = new Map<string, Date>();
+  for (const charge of charges) {
+    let paidMinor = 0;
+    const chargePayments = payments
+      .filter((payment) => payment.settlesChargeId === charge.id)
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+    for (const payment of chargePayments) {
+      paidMinor += payment.amountMinor;
+      if (paidMinor >= charge.amountMinor) {
+        settledAt.set(charge.id, payment.occurredAt);
+        break;
+      }
+    }
+  }
   const overdueChargeCount = charges.filter(
-    (charge) => charge.dueAt && charge.dueAt < windowEnd && !paidChargeIds.has(charge.id)
+    (charge) => charge.dueAt && charge.dueAt < windowEnd && !settledAt.has(charge.id)
   ).length;
-  const paymentDays = payments.flatMap((payment) => {
-    const charge = charges.find((candidate) => candidate.id === payment.settlesChargeId);
-    return charge
-      ? [
-          Math.max(
-            0,
-            Math.round((payment.occurredAt.getTime() - charge.occurredAt.getTime()) / DAY_MS)
-          ),
-        ]
+  // Days-to-pay samples a charge's completed settlement, not each partial payment.
+  const paymentDays = charges.flatMap((charge) => {
+    const at = settledAt.get(charge.id);
+    return at
+      ? [Math.max(0, Math.round((at.getTime() - charge.occurredAt.getTime()) / DAY_MS))]
       : [];
   });
   const averageDaysToPay = paymentDays.length

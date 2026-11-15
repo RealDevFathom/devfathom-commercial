@@ -14,6 +14,7 @@ import {
 import {
   closeAccountingPeriod,
   createSettlementBatch,
+  KHATA_REPAYMENT_KEY_PREFIX,
   PharmacyBookkeepingError,
   postBookkeepingTransaction,
   reconcileBankLine,
@@ -378,7 +379,9 @@ export const pharmacyFinanceRouter = router({
         ]),
         amountMinor: moneyMinor,
         occurredAt: at,
-        idempotencyKey: id,
+        idempotencyKey: id.refine((key) => !key.startsWith(KHATA_REPAYMENT_KEY_PREFIX), {
+          message: 'This idempotency key namespace is reserved for counter khata repayments.',
+        }),
         counterpartyName: z.string().trim().max(160).optional(),
         memo: z.string().trim().max(500).optional(),
         bankReference: z.string().trim().max(160).optional(),

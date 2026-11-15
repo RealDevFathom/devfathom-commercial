@@ -81,6 +81,55 @@ describe('CRM-L02 family privacy and khata settlement', () => {
   });
 });
 
+describe('DEV-731 partial repayments in the health suggestion', () => {
+  it('keeps a partly paid overdue charge overdue and samples days-to-pay at full settlement', () => {
+    const suggestion = calculateKhataHealthSuggestion(
+      [
+        {
+          id: 'charge_partial',
+          kind: 'CHARGE',
+          amountMinor: 10_000,
+          occurredAt: new Date('2026-06-01'),
+          dueAt: new Date('2026-06-10'),
+        },
+        {
+          id: 'pay_partial',
+          kind: 'PAYMENT',
+          amountMinor: 4_000,
+          occurredAt: new Date('2026-06-05'),
+          settlesChargeId: 'charge_partial',
+        },
+        {
+          id: 'charge_full',
+          kind: 'CHARGE',
+          amountMinor: 6_000,
+          occurredAt: new Date('2026-06-01'),
+          dueAt: new Date('2026-06-10'),
+        },
+        {
+          id: 'pay_full_1',
+          kind: 'PAYMENT',
+          amountMinor: 1_000,
+          occurredAt: new Date('2026-06-02'),
+          settlesChargeId: 'charge_full',
+        },
+        {
+          id: 'pay_full_2',
+          kind: 'PAYMENT',
+          amountMinor: 5_000,
+          occurredAt: new Date('2026-06-21'),
+          settlesChargeId: 'charge_full',
+        },
+      ],
+      10_000,
+      new Date('2026-06-01'),
+      new Date('2026-06-30')
+    );
+    expect(suggestion.metrics.overdueChargeCount).toBe(1);
+    expect(suggestion.metrics.averageDaysToPay).toBe(20);
+  });
+});
+
 describe('CRM-L04 explainable health suggestion', () => {
   const now = new Date('2026-09-29T16:00:00.000Z');
   beforeEach(() => {

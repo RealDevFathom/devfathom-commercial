@@ -1,6 +1,6 @@
 'use client';
 
-import { useDeferredValue, useRef, useState, type RefObject } from 'react';
+import { useDeferredValue, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,48 +27,57 @@ type Props = {
 const TENDERS = ['CASH', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'] as const;
 type Tender = (typeof TENDERS)[number];
 
-/**
- * The payment attempt outlives the form: closing the dialog unmounts the form, but a
- * retry after reopening must reuse the same idempotency key and see a late result.
- */
-type KhataPaymentSession = {
-  attemptRef: RefObject<{ fingerprint: string; key: string } | null>;
-  slip: KhataPaymentSlipSource | null;
-  setSlip: (slip: KhataPaymentSlipSource | null) => void;
-  pending: boolean;
-  setPending: (pending: boolean) => void;
+type AttemptPayload = {
+  branchId: string;
+  familyAccountId: string;
+  amountMinor: number;
+  tender: Tender;
+  deviceId?: string;
+  payerReference?: string;
 };
 
-function useKhataPaymentSession(): KhataPaymentSession {
-  const attemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
-  const [slip, setSlip] = useState<KhataPaymentSlipSource | null>(null);
-  const [pending, setPending] = useState(false);
-  return { attemptRef, slip, setSlip, pending, setPending };
+/**
+ * A payment sent without a confirmed answer. It is kept apart from the editable form
+ * and survives dialog close and page reload: if the server committed but the response
+ * was lost, only resending this exact payload with this key can find out, and the
+ * server then replays instead of taking the money twice. New payments wait until it
+ * is resolved.
+ */
+type UnresolvedAttempt = {
+  key: string;
+  payload: AttemptPayload;
+  businessDate: string;
+  accountName: string;
+  startedAt: string;
+};
+
+function isUnresolvedAttempt(value: unknown): value is UnresolvedAttempt {
+  if (typeof value !== 'object' || value === null) return false;
+  const attempt = value as Partial<UnresolvedAttempt>;
+  const payload = attempt.payload as Partial<AttemptPayload> | undefined;
+  return (
+    typeof attempt.key === 'string' &&
+    typeof attempt.businessDate === 'string' &&
+    typeof attempt.accountName === 'string' &&
+    typeof attempt.startedAt === 'string' &&
+    typeof payload?.branchId === 'string' &&
+    typeof payload.familyAccountId === 'string' &&
+    Number.isSafeInteger(payload.amountMinor) &&
+    (TENDERS as readonly unknown[]).includes(payload.tender)
+  );
 }
 
-type StoredAttempt = { fingerprint: string; key: string };
-
-/**
- * An unresolved attempt also survives a page reload: if the server committed but the
- * response was lost, re-entering the same payment must replay it, not take it again.
- */
-function readStoredAttempt(storageKey: string): StoredAttempt | null {
+function readStoredAttempt(storageKey: string): UnresolvedAttempt | null {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as StoredAttempt).fingerprint === 'string' &&
-      typeof (parsed as StoredAttempt).key === 'string'
-    )
-      return parsed as StoredAttempt;
+    return isUnresolvedAttempt(parsed) ? parsed : null;
   } catch {
     // Storage may be unavailable; the in-memory attempt still covers this page.
+    return null;
   }
-  return null;
 }
 
-function writeStoredAttempt(storageKey: string, attempt: StoredAttempt | null) {
+function writeStoredAttempt(storageKey: string, attempt: UnresolvedAttempt | null) {
   try {
     if (attempt) localStorage.setItem(storageKey, JSON.stringify(attempt));
     else localStorage.removeItem(storageKey);
@@ -77,13 +86,54 @@ function writeStoredAttempt(storageKey: string, attempt: StoredAttempt | null) {
   }
 }
 
+/** The server answered with a refusal, so its transaction rolled back and nothing was taken. */
+function serverRefused(cause: unknown) {
+  const status = (cause as { data?: { httpStatus?: unknown } } | null)?.data?.httpStatus;
+  return typeof status === 'number' && status >= 400 && status < 500;
+}
+
+/** The counter device id lives in browser storage; reading it can throw. */
+function safeDeviceId(read: () => string): string | null {
+  try {
+    return read();
+  } catch {
+    return null;
+  }
+}
+
+type KhataPaymentSession = {
+  unresolved: UnresolvedAttempt | null;
+  setUnresolved: (attempt: UnresolvedAttempt | null) => void;
+  slip: (KhataPaymentSlipSource & { replayed?: boolean }) | null;
+  setSlip: (slip: (KhataPaymentSlipSource & { replayed?: boolean }) | null) => void;
+  pending: boolean;
+  setPending: (pending: boolean) => void;
+};
+
+function attemptStorageKey({ organizationId, accountId, branchId }: Props) {
+  return `pharmacy-khata-payment:${organizationId}:${accountId}:${branchId}`;
+}
+
+function useKhataPaymentSession(storageKey: string): KhataPaymentSession {
+  const [unresolved, setUnresolvedState] = useState<UnresolvedAttempt | null>(() =>
+    typeof window === 'undefined' ? null : readStoredAttempt(storageKey)
+  );
+  const [slip, setSlip] = useState<KhataPaymentSession['slip']>(null);
+  const [pending, setPending] = useState(false);
+  const setUnresolved = (attempt: UnresolvedAttempt | null) => {
+    writeStoredAttempt(storageKey, attempt);
+    setUnresolvedState(attempt);
+  };
+  return { unresolved, setUnresolved, slip, setSlip, pending, setPending };
+}
+
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
 /** K4 (DEV-731): receive money against a khata account, outside any bill. */
 export function CounterKhataPaymentPanel(props: Props) {
   const [open, setOpen] = useState(false);
-  const session = useKhataPaymentSession();
+  const session = useKhataPaymentSession(attemptStorageKey(props));
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
@@ -116,15 +166,14 @@ export function CounterKhataPaymentPanel(props: Props) {
 }
 
 export function KhataPaymentForm({
-  branchId,
-  organizationId,
-  accountId,
-  deviceId,
-  businessDate,
   session: parentSession,
+  ...props
 }: Props & { session?: KhataPaymentSession }) {
-  const localSession = useKhataPaymentSession();
-  const { attemptRef, slip, setSlip, pending, setPending } = parentSession ?? localSession;
+  const { branchId, deviceId, businessDate } = props;
+  const localSession = useKhataPaymentSession(attemptStorageKey(props));
+  const { unresolved, setUnresolved, slip, setSlip, pending, setPending } =
+    parentSession ?? localSession;
+  const device = safeDeviceId(deviceId);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query.trim());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -133,14 +182,15 @@ export function KhataPaymentForm({
   const [payerReference, setPayerReference] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // A retried submit with unchanged details reuses its key, so money is taken once.
-  const storageKey = `pharmacy-khata-payment:${organizationId}:${accountId}:${branchId}`;
 
   const accounts = trpc.pharmacySales.khataPaymentAccounts.useQuery({
     branchId,
     query: deferredQuery,
   });
-  const drawer = trpc.pharmacySales.drawerStatus.useQuery({ branchId, deviceId: deviceId() });
+  const drawer = trpc.pharmacySales.drawerStatus.useQuery(
+    { branchId, deviceId: device ?? '' },
+    { enabled: device !== null }
+  );
   const record = trpc.pharmacySales.recordKhataPayment.useMutation();
 
   const selected = accounts.data?.find((row) => row.id === selectedId) ?? null;
@@ -149,59 +199,72 @@ export function KhataPaymentForm({
   const cash = tender === 'CASH';
   const referenceValid = cash || payerReference.trim().length >= 4;
   const overBalance = selected !== null && amountMinor > selected.balanceMinor;
-  const blocker = !selected
-    ? 'Choose the khata account.'
-    : selected.balanceMinor <= 0
-      ? 'This account owes nothing.'
-      : amountMinor <= 0
-        ? 'Enter the amount received.'
-        : overBalance
-          ? `The account owes PKR ${formatMinor(selected.balanceMinor)}. Enter that amount or less.`
-          : cash && !openDrawerId
-            ? drawer.isLoading
-              ? 'Checking the cash drawer…'
-              : 'Open the cash drawer for this counter before taking cash.'
-            : !referenceValid
-              ? 'Enter the transfer or wallet reference (at least 4 characters).'
-              : null;
+  const blocker = unresolved
+    ? 'Retry the previous payment above before taking a new one.'
+    : !selected
+      ? 'Choose the khata account.'
+      : selected.balanceMinor <= 0
+        ? 'This account owes nothing.'
+        : amountMinor <= 0
+          ? 'Enter the amount received.'
+          : overBalance
+            ? `The account owes PKR ${formatMinor(selected.balanceMinor)}. Enter that amount or less.`
+            : cash && !device
+              ? 'This browser cannot keep a counter id, so it cannot take cash. Use a non-cash tender or another counter.'
+              : cash && !openDrawerId
+                ? drawer.isLoading
+                  ? 'Checking the cash drawer…'
+                  : 'Open the cash drawer for this counter before taking cash.'
+                : !referenceValid
+                  ? 'Enter the transfer or wallet reference (at least 4 characters).'
+                  : null;
 
-  async function submit() {
-    if (!selected || blocker || pending) return;
-    const payload = {
-      branchId,
-      familyAccountId: selected.id,
-      amountMinor,
-      tender,
-      ...(cash ? { deviceId: deviceId() } : { payerReference: payerReference.trim() }),
-    };
-    const fingerprint = JSON.stringify(payload);
-    const unresolved = attemptRef.current ?? readStoredAttempt(storageKey);
-    if (unresolved?.fingerprint === fingerprint) {
-      attemptRef.current = unresolved;
-    } else {
-      attemptRef.current = { fingerprint, key: `khata-payment:${browserUuid()}` };
-      writeStoredAttempt(storageKey, attemptRef.current);
-    }
+  async function send(attempt: UnresolvedAttempt) {
     setPending(true);
     setError(null);
     setNotice(null);
     try {
       const result = await record.mutateAsync({
-        ...payload,
-        businessDate: businessDate(),
-        idempotencyKey: attemptRef.current.key,
+        ...attempt.payload,
+        businessDate: new Date(attempt.businessDate),
+        idempotencyKey: attempt.key,
       });
-      attemptRef.current = null;
-      writeStoredAttempt(storageKey, null);
+      setUnresolved(null);
       setSlip(result);
+      if (result.replayed)
+        setNotice(
+          'This payment was already recorded. No new money was taken: give back any cash received twice.'
+        );
       setAmount('');
       setPayerReference('');
       void accounts.refetch();
     } catch (cause) {
+      // Only a server refusal proves nothing was recorded; any other failure stays
+      // unresolved so the next step is a retry of this exact payment.
+      if (serverRefused(cause)) setUnresolved(null);
       setError(counterErrorMessage(cause));
     } finally {
       setPending(false);
     }
+  }
+
+  async function submit() {
+    if (!selected || blocker || pending || unresolved) return;
+    const attempt: UnresolvedAttempt = {
+      key: `khata-payment:${browserUuid()}`,
+      payload: {
+        branchId,
+        familyAccountId: selected.id,
+        amountMinor,
+        tender,
+        ...(cash ? { deviceId: device! } : { payerReference: payerReference.trim() }),
+      },
+      businessDate: businessDate().toISOString(),
+      accountName: selected.displayName,
+      startedAt: new Date().toISOString(),
+    };
+    setUnresolved(attempt);
+    await send(attempt);
   }
 
   function printSlip() {
@@ -234,7 +297,11 @@ export function KhataPaymentForm({
         <pre className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-3 font-mono text-xs whitespace-pre-wrap text-text-body">
           {khataPaymentSlipLines(slip).join('\n')}
         </pre>
-        {notice ? <p className="text-sm text-text-muted">{notice}</p> : null}
+        {notice ? (
+          <p className={`text-sm ${slip.replayed ? 'text-warning' : 'text-text-muted'}`}>
+            {notice}
+          </p>
+        ) : null}
         {error ? (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -267,6 +334,27 @@ export function KhataPaymentForm({
         void submit();
       }}
     >
+      {unresolved ? (
+        <section
+          aria-label="Unconfirmed khata payment"
+          className="grid gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning/10 p-3 text-sm text-text-body"
+        >
+          <p>
+            A payment of PKR {formatMinor(unresolved.payload.amountMinor)} from{' '}
+            {unresolved.accountName} ({KHATA_TENDER_LABELS[unresolved.payload.tender]}) has no
+            confirmed result. Retry it to find out whether it was recorded. A retry never takes the
+            money twice.
+          </p>
+          <Button
+            type="button"
+            className="h-11"
+            disabled={pending}
+            onClick={() => void send(unresolved)}
+          >
+            {pending ? 'Checking…' : 'Retry previous payment'}
+          </Button>
+        </section>
+      ) : null}
       <div className="grid gap-1">
         <Label htmlFor="khata-payment-search">Find account</Label>
         <Input

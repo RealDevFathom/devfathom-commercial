@@ -530,3 +530,23 @@ describe('cash-flow forecast boundary', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
+
+describe('counter khata repayment key namespace (DEV-731)', () => {
+  const posting = {
+    branchId: 'branch_1',
+    reference: 'CR-1',
+    kind: 'CUSTOMER_RECEIPT' as const,
+    amountMinor: 100,
+    occurredAt: '2026-11-15T06:00:00.000Z',
+  };
+
+  it('refuses a manual posting in the reserved key namespace before writing', async () => {
+    await expect(
+      caller().post({ ...posting, idempotencyKey: 'khata-repayment:forged' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('reserved for counter khata repayments'),
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+});
