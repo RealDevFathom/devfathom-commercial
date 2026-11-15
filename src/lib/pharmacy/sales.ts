@@ -572,7 +572,9 @@ export async function changeSaleStatus(
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
   reason?: string,
-  controlledWitness?: ControlledRestorationPin
+  controlledWitness?: ControlledRestorationPin,
+  /** DEV-508: structured detail kept on the status event, e.g. a void's reason code. */
+  eventPayload?: Prisma.InputJsonValue
 ) {
   const sale = await saleInScope(db, scope, saleId);
   // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
@@ -662,7 +664,7 @@ export async function changeSaleStatus(
     });
   }
 
-  await event(db, scope, saleId, kind, reason);
+  await event(db, scope, saleId, kind, reason, eventPayload);
   return saleInScope(db, scope, saleId);
 }
 
