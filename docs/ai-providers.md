@@ -373,8 +373,10 @@ The web service runs on **ECS Fargate**, which has no EC2 instance profile.
   uses for AWS: the "instance role" of this deployment, and the one that holds the policy
   below.
 - **The execution role.** `WebTaskExecutionRole` is used only by the ECS agent (image pull,
-  logs, `Secrets:` injection). It gets no AI permission, and neither does the migration
-  task's role.
+  logs, `Secrets:` injection). It reads only the secrets the web container receives, never
+  the database admin URL or a sign-in password, and gets no AI permission; neither does the
+  migration task's role. The two key secret ids refuse this stack's own `devfathom/<env>/`
+  secrets, so the task role cannot be pointed at one of them.
 - **Running on EC2.** When the app runs directly on an EC2 host, attach the same grants to
   that host's instance-profile role. Nothing in the app changes.
   - The develop host `devfathom-pharmacy` runs as `inky-ec2-ssm`. Its Bedrock calls still go

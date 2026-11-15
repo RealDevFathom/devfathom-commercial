@@ -1,6 +1,6 @@
 import { can } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
-import type { Subject } from '@/lib/abac/types';
+import type { Environment, Subject } from '@/lib/abac/types';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { hash as bcryptHash } from 'bcryptjs';
@@ -45,6 +45,26 @@ export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = 
   KHATA_OVER_LIMIT: 'pharmacy:manage',
 };
 
+/**
+ * DEV-806: the one approver check every approval route shares: the till PIN route, the
+ * signed-in password re-authentication route, the in-transaction re-check, the approver list
+ * and both sole-approver (second-person) rules. Whether `subject` may approve `kind`: only a
+ * live grant of the kind's capability counts, so an explicit DENY always wins and the tenant
+ * ADMIN role on its own (`admin:access`) is not an approver.
+ */
+export async function mayApproveCounterLine(
+  db: ScopedDb,
+  subject: Subject,
+  kind: CounterApprovalKind,
+  options: { now?: Date; source?: Environment['source'] } = {}
+): Promise<boolean> {
+  return can(subject, COUNTER_APPROVAL_CAPABILITY[kind], undefined, {
+    db,
+    now: options.now,
+    source: options.source,
+  });
+}
+
 const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
   DISCOUNT: 'A discount needs a manager to approve it with their PIN.',
   FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
@@ -82,12 +102,11 @@ export async function authorizeCounterApproval(
   kind: CounterApprovalKind,
   input?: CounterApprovalPin
 ): Promise<CounterApproval> {
-  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
   const actor = (await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   })) as ActiveUser | null;
   if (!actor) throw new CounterApprovalDenied(kind);
-  if (kind === 'FEFO_OVERRIDE' && (await can(actor, capability, undefined, { db }))) {
+  if (kind === 'FEFO_OVERRIDE' && (await mayApproveCounterLine(db, actor, kind))) {
     return {
       approvedByUserId: actor.id,
       approvalPolicy: 'PHARMACIST_ON_DUTY',
@@ -125,7 +144,7 @@ export async function confirmCounterApproval(
       status: 'ACTIVE',
     },
   })) as ActiveUser | null;
-  if (!approver || !(await can(approver, COUNTER_APPROVAL_CAPABILITY[kind], undefined, { db }))) {
+  if (!approver || !(await mayApproveCounterLine(db, approver, kind))) {
     throw new CounterApprovalDenied(kind);
   }
   if (approval.credentialId === null) return;
@@ -164,7 +183,6 @@ async function verifyApproverPin(
   kind: CounterApprovalKind,
   input: CounterApprovalPin
 ): Promise<CounterApproval | null> {
-  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
@@ -185,12 +203,12 @@ async function verifyApproverPin(
     approver.organizationId !== scope.organizationId ||
     approver.status !== 'ACTIVE' ||
     isLockedOut(credential, now) ||
-    !(await can(approver, capability, undefined, { db, now }))
+    !(await mayApproveCounterLine(db, approver, kind, { now }))
   ) {
     return refuseAfterDummyCompare(input.pin);
   }
   const selfApproved = approver.id === scope.actorId;
-  if (selfApproved && !(await isSoleApprover(db, scope, capability, now)))
+  if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
@@ -227,7 +245,6 @@ export async function listCounterApprovers(
   scope: LedgerScope,
   kind: CounterApprovalKind
 ): Promise<Array<{ id: string; name: string; self: boolean }>> {
-  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
   const now = new Date();
   const profiles = await db.restaurantStaffProfile.findMany({
     where: {
@@ -245,7 +262,7 @@ export async function listCounterApprovers(
     const user = profile.user as ActiveUser | null;
     if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
     if (!capable.has(user.id))
-      capable.set(user.id, await can(user, capability, undefined, { db, now }));
+      capable.set(user.id, await mayApproveCounterLine(db, user, kind, { now }));
     if (capable.get(user.id))
       eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
   }
@@ -265,13 +282,12 @@ export async function isSoleActiveApprover(
   kind: CounterApprovalKind,
   now = new Date()
 ): Promise<boolean> {
-  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
   const others = (await db.user.findMany({
     where: { organizationId: scope.organizationId, status: 'ACTIVE', id: { not: scope.actorId } },
   })) as ActiveUser[];
   for (const other of others) {
     if (other.id === scope.actorId || other.organizationId !== scope.organizationId) continue;
-    if (await can(other, capability, undefined, { db, now })) return false;
+    if (await mayApproveCounterLine(db, other, kind, { now })) return false;
   }
   return true;
 }
@@ -280,7 +296,12 @@ export async function isSoleActiveApprover(
  * True when nobody else could approve: approval needs an active member with an active staff
  * profile and a live counter PIN, so only those members are checked for the capability.
  */
-async function isSoleApprover(db: ScopedDb, scope: LedgerScope, capability: Action, now: Date) {
+async function isSoleApprover(
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  now: Date
+) {
   const credentials = await db.restaurantOperatorCredential.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -303,7 +324,7 @@ async function isSoleApprover(db: ScopedDb, scope: LedgerScope, capability: Acti
     const other = credential.staffProfile.user;
     if (!other || other.id === scope.actorId || checked.has(other.id)) continue;
     checked.add(other.id);
-    if (await can(other, capability, undefined, { db, now })) return false;
+    if (await mayApproveCounterLine(db, other, kind, { now })) return false;
   }
   return true;
 }
