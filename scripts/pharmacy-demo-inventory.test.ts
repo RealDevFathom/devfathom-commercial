@@ -410,6 +410,8 @@ describe('shared inventory contract and prepared receiving composition', () => {
         supplierId: 'supplier',
         reference: `${input.namespace}approved-po`,
         status: 'SENT',
+        freightMinor: 0,
+        otherChargesMinor: 0,
         approvedAt: at,
         approvedByUserId: 'test-approver',
         createdByUserId: 'test-creator',
@@ -453,12 +455,30 @@ describe('shared inventory contract and prepared receiving composition', () => {
     const receiptRead = vi.fn().mockResolvedValue(receipt);
     const actorRead = vi.fn().mockResolvedValue({ id: 'purchaser', status: 'ACTIVE' });
     const batchRead = vi.fn().mockResolvedValue(null);
+    // The order line's costing terms, as the receipt was drafted against them.
+    const orderLine = {
+      id: 'approved-order-line',
+      medicineId: 'medicine',
+      packLevelId: 'pack',
+      orderedPacks: 4,
+      bonusPacks: 0,
+      canonicalUnitsPerPack: 10,
+      listPricePerPackMinor: 15000,
+      discountBps: 0,
+      rebateBps: 0,
+      taxBps: 0,
+      taxCreditable: false,
+    };
+    const orderLinesRead = vi.fn().mockImplementation(async () => [orderLine]);
     const tx = {
       user: { findFirst: actorRead },
       pharmacyGoodsReceipt: { findFirst: receiptRead, update: updateReceipt },
       pharmacyGoodsReceiptLine: { update: updateLine, findMany: vi.fn().mockResolvedValue([]) },
       pharmacyManufacturingBatch: { findFirst: batchRead, create: batchCreate },
-      pharmacyPurchaseOrderLine: { findFirst: vi.fn().mockResolvedValue(line.purchaseOrderLine) },
+      pharmacyPurchaseOrderLine: {
+        findFirst: vi.fn().mockResolvedValue(line.purchaseOrderLine),
+        findMany: orderLinesRead,
+      },
       pharmacyPurchaseOrder: {
         findFirst: vi.fn().mockResolvedValue(receipt.purchaseOrder),
         update: vi.fn().mockResolvedValue({}),
@@ -476,6 +496,7 @@ describe('shared inventory contract and prepared receiving composition', () => {
     return {
       input,
       receipt,
+      orderLine,
       expectation,
       tx,
       execute,
@@ -572,6 +593,35 @@ describe('shared inventory contract and prepared receiving composition', () => {
     expect(result.status === 'applied' && result.records[0]!.observedFacts.exceptionIds).toContain(
       'generated-SHORT'
     );
+  });
+
+  it('re-derives the stamped landed cost from the order rebate and freight share', async () => {
+    const p = prepared();
+    p.receipt.purchaseOrder!.freightMinor = 1200;
+    p.orderLine.rebateBps = 1000;
+    // 30_000 invoiced − 10% rebate = 27_000, plus half the 1_200 freight for 20
+    // of the 40 ordered paid units = 27_600 over 30 units.
+    p.receipt.lines[0]!.unitCostMinor = 920;
+    // The batch guard runs right after the cost check, so reaching it proves
+    // the landed cost was accepted without posting anything.
+    p.batchRead.mockResolvedValue({ id: 'existing-batch' });
+    expect(await p.execute({ ...p.expectation(), unitCostMinor: 920 })).toMatchObject({
+      status: 'refused',
+      unmetPrerequisites: ['UNRECONCILED_BATCH_COLLISION'],
+    });
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it('refuses a prepared cost that leaves out the order rebate and freight', async () => {
+    const p = prepared();
+    p.receipt.purchaseOrder!.freightMinor = 1200;
+    p.orderLine.rebateBps = 1000;
+    // The invoice-only 1_000 is no longer the landed cost of this line.
+    expect(await p.execute()).toMatchObject({
+      status: 'refused',
+      unmetPrerequisites: ['RECEIPT_QUANTITY_OR_COST_MISMATCH'],
+    });
+    expect(receiveLot).not.toHaveBeenCalled();
   });
 
   it.each(['status', 'approval', 'expiry', 'quantity', 'cost', 'scope', 'batch'])(

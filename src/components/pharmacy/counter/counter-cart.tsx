@@ -200,7 +200,7 @@ export function CounterCartPanel({
                           {allocation.overridden ? (
                             <StatusPill status="override" tone="warning" label="Batch override" />
                           ) : allocation.overridden === false ? (
-                            <StatusPill status="fefo" tone="neutral" label="FEFO" />
+                            <StatusPill status="fefo" tone="neutral" label="Earliest expiry" />
                           ) : null}
                           <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
                         </div>
@@ -355,7 +355,7 @@ export function CounterLotOverride({
     return (
       <div className="space-y-2" role="status" data-testid="counter-lot-override-applied">
         <p className="text-sm font-semibold text-text-strong">
-          Batch {chosenLot.batchNumber} will be sold on this line (not the FEFO batch).
+          Batch {chosenLot.batchNumber} will be sold on this line (not the earliest-expiry batch).
         </p>
         <p className="text-xs text-text-muted">Reason: {value.reason.trim()}</p>
         <div className="flex flex-wrap gap-2">
@@ -376,7 +376,7 @@ export function CounterLotOverride({
               onChange(null);
             }}
           >
-            Keep FEFO batch
+            Use earliest-expiry batch
           </button>
         </div>
       </div>
@@ -425,7 +425,7 @@ export function CounterLotOverride({
                 <span>Batch {lot.batchNumber}</span>
                 <span>Exp {formatReceiptDate(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
-                {fefo ? <StatusPill status="fefo" tone="neutral" label="FEFO" /> : null}
+                {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}
                 {blocked ? (
                   <StatusPill
                     status="blocked"
@@ -485,7 +485,7 @@ export function CounterLotOverride({
           disabled={disabled}
           onClick={() => onChange(null)}
         >
-          Keep FEFO batch
+          Use earliest-expiry batch
         </button>
       </div>
     </div>
