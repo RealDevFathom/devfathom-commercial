@@ -195,10 +195,18 @@ async function decideAll(
   reviewer = userA
 ) {
   for (const line of await linesOf(importId, db)) {
+    // DEV-175: accepting a line with extracted sizes confirms each size as shown.
+    const sizes = line.extractedVariants as Array<{
+      name: string;
+      price: { amount: string | null };
+    }>;
     await deps.menuImport.reviewMenuImportLine(db, {
       lineId: line.id,
       decision,
       reviewedById: reviewer,
+      ...(decision === 'ACCEPTED' && sizes.length > 0
+        ? { variants: sizes.map((size) => ({ name: size.name, priceAmount: size.price.amount })) }
+        : {}),
     });
   }
 }
@@ -669,6 +677,39 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     });
     expect(version.status).toBe('DRAFT');
     expect(version.activatedAt).toBeNull();
+  });
+
+  it('refuses to accept a line with sizes until every size is confirmed (DEV-175)', async () => {
+    const importId = await seedAwaitingReview('variants', { label: 'unconfirmed-sizes' });
+    const [line] = await linesOf(importId);
+    await expect(
+      deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: line!.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+      })
+    ).rejects.toMatchObject({ reason: 'VARIANTS_REVIEW_REQUIRED' });
+
+    await deps.menuImport.reviewMenuImportLine(dbA, {
+      lineId: line!.id,
+      decision: 'ACCEPTED',
+      reviewedById: userA,
+      variants: [{ name: 'Small 9"', priceAmount: '1250' }],
+    });
+    const result = await deps.menuImport.commitMenuImport(
+      dbA,
+      { importId, committedById: userA },
+      { runtime: store.runtime }
+    );
+    const product = await dbA.restaurantProduct.findUniqueOrThrow({
+      where: { id: result.createdProductIds[0]! },
+      include: { variants: true },
+    });
+    expect(product.variants.map((variant) => variant.name)).toEqual(['Small 9"']);
+    const entries = await dbA.restaurantPriceListEntry.findMany({
+      where: { priceListVersionId: result.priceListVersionId, variantId: { not: null } },
+    });
+    expect(entries.map((entry) => entry.price.toString())).toEqual(['1250']);
   });
 
   it('merges into an existing product instead of duplicating it', async () => {

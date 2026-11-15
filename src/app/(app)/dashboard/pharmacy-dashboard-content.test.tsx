@@ -146,6 +146,27 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getAllByRole('status', { name: /^Loading /i }).length).toBeGreaterThan(0);
   });
 
+  it('shows a refused branch read as restricted, with no Retry (DEV-95)', () => {
+    state.branches = query(undefined, { error: { data: { code: 'FORBIDDEN' } } });
+    // The command query stays disabled until branches load.
+    state.command = query(undefined);
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(screen.queryByText('Branches could not be loaded.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByText('Branch reports are outside your access.')).toBeInTheDocument();
+    expect(screen.getByText('Restricted')).toBeInTheDocument();
+  });
+
+  it('still offers Retry when the branch read fails for another reason', () => {
+    state.branches = query(undefined, { error: { data: { code: 'INTERNAL_SERVER_ERROR' } } });
+    // The command query stays disabled until branches load.
+    state.command = query(undefined);
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByText('Branches could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('reads the command centre when Pharmacy Reports is licensed', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(mounted.hooks).toEqual(expect.arrayContaining(REPORT_HOOKS));

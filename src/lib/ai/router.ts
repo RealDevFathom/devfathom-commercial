@@ -1008,16 +1008,22 @@ export async function readRoutedAvailability(
       sawOpenCircuit = true;
       continue;
     }
+    let underCap = false;
     try {
-      if (
-        (await dependencies.spend(provider, bounds.from, bounds.to)) < settings.capsUsd[provider]
-      ) {
-        return { available: true };
-      }
+      underCap =
+        (await dependencies.spend(provider, bounds.from, bounds.to)) < settings.capsUsd[provider];
     } catch {
       // Unknown spend is treated as capped, as in prepareAttempt.
     }
-    sawCap = true;
+    if (!underCap) {
+      sawCap = true;
+      continue;
+    }
+    // A secret id alone is not a reachable provider: prepareAttempt skips a keyed provider
+    // whose key cannot be loaded, so the launcher must not offer it either (DEV-583).
+    // The loader caches keys and failures, so this adds no per-request secret read.
+    if (provider !== 'bedrock' && !(await dependencies.apiKey(provider, env))) continue;
+    return { available: true };
   }
   return {
     available: false,

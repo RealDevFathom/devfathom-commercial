@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { exportWorkforceAttendanceCsv, presentWorkforceShift } from './workforce';
+import {
+  appendTimeAdjustment,
+  exportWorkforceAttendanceCsv,
+  presentWorkforceShift,
+} from './workforce';
 
 const baseShift = {
   id: 'shift_1',
@@ -133,5 +137,73 @@ describe('restaurant workforce presentation and export', () => {
     const [, openRow, repairedRow] = result.csv.split('\n');
     expect(openRow).toContain(',0,,,COMPLETE_LATE,7');
     expect(repairedRow).toContain(',30,450,7.50,COMPLETE_LATE,7');
+  });
+});
+
+describe('restaurant workforce corrections on cancelled shifts', () => {
+  function correctionDb(shift: object) {
+    const create = vi.fn(async ({ data }: { data: object }) => ({ id: 'adj_1', ...data }));
+    const tx = {
+      $queryRaw: vi.fn(async () => [{ id: 'shift_1' }]),
+      restaurantShift: { findUnique: vi.fn(async () => shift) },
+      restaurantTimeAdjustment: { create },
+    };
+    const db = {
+      $transaction: async (run: (client: typeof tx) => unknown) => run(tx),
+    } as unknown as ScopedDb;
+    return { db, create };
+  }
+
+  const correction = {
+    shiftId: 'shift_1',
+    reason: 'Employee forgot to punch in',
+    actorUserId: 'user_manager',
+    actorStaffProfileId: 'staff_manager',
+  };
+
+  it('refuses a clock-in correction that would leave a cancelled shift on the clock', async () => {
+    const { db, create } = correctionDb({
+      ...baseShift,
+      status: 'CANCELLED',
+      cancelledAt: new Date('2026-08-20T08:00:00Z'),
+      clockedInAt: null,
+    });
+    await expect(
+      appendTimeAdjustment(db, {
+        ...correction,
+        kind: 'CLOCK_IN',
+        correctedAt: new Date('2026-08-20T09:00:00Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'CONFLICT' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('still corrects closed attendance on a cancelled shift', async () => {
+    const { db, create } = correctionDb({
+      ...baseShift,
+      status: 'CANCELLED',
+      cancelledAt: new Date('2026-08-20T18:00:00Z'),
+      clockedOutAt: new Date('2026-08-20T17:00:00Z'),
+    });
+    await expect(
+      appendTimeAdjustment(db, {
+        ...correction,
+        kind: 'CLOCK_IN',
+        correctedAt: new Date('2026-08-20T09:00:00Z'),
+      })
+    ).resolves.toMatchObject({ kind: 'CLOCK_IN' });
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('still records a clock-in correction on a live shift', async () => {
+    const { db, create } = correctionDb({ ...baseShift, clockedInAt: null });
+    await expect(
+      appendTimeAdjustment(db, {
+        ...correction,
+        kind: 'CLOCK_IN',
+        correctedAt: new Date('2026-08-20T09:00:00Z'),
+      })
+    ).resolves.toMatchObject({ kind: 'CLOCK_IN' });
+    expect(create).toHaveBeenCalledOnce();
   });
 });

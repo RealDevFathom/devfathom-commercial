@@ -71,6 +71,7 @@ function line(overrides: Partial<ImportLine> = {}): ImportLine {
     reviewedDescription: null,
     reviewedPriceAmount: null,
     reviewedCurrency: null,
+    reviewedVariants: null,
     reviewNote: null,
     mergeProductId: null,
     mergeVariantId: null,
@@ -161,6 +162,7 @@ function summary(overrides: Partial<ImportSummary> = {}): ImportSummary {
     MERGED: 0,
     total: 3,
     flagged: 2,
+    sizesUnconfirmed: 0,
     readyToCommit: false,
     lowConfidenceThreshold: 0.6,
     ...overrides,
@@ -287,6 +289,189 @@ describe('Restaurant menu-import console', () => {
       renderConsole({ snapshot: { imports: [], mergeCandidates: [] } });
 
       expect(screen.getByText('No menu imports yet')).toBeInTheDocument();
+    });
+  });
+
+  describe('extracted sizes (DEV-175)', () => {
+    const sizes = [
+      { name: 'Small 9"', price: { amount: '1200.00', currency: null, raw: 'Rs. 1,200' } },
+      { name: 'Large 15"', price: { amount: '2600.00', currency: null, raw: 'Rs. 2,600' } },
+    ];
+
+    beforeEach(() => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [line({ extractedProductName: 'Fajita Pizza', extractedVariants: sizes })],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+    });
+
+    it('shows every extracted size price on the review row', () => {
+      renderConsole();
+
+      const list = screen.getByRole('list', { name: 'Extracted sizes' });
+      expect(list).toHaveTextContent('Small 9": 1200.00 PKR');
+      expect(list).toHaveTextContent('Large 15": 2600.00 PKR');
+    });
+
+    it('confirms the displayed sizes with an accept', () => {
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept Fajita Pizza' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          decision: 'ACCEPTED',
+          variants: [
+            { name: 'Small 9"', priceAmount: '1200.00' },
+            { name: 'Large 15"', priceAmount: '2600.00' },
+          ],
+        })
+      );
+    });
+
+    it('does not report an unchanged size confirmation as a correction', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: sizes,
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [
+                    { name: 'Small 9"', price: { amount: '1200.00', currency: null, raw: null } },
+                    { name: 'Large 15"', price: { amount: '2600.00', currency: null, raw: null } },
+                  ],
+                }),
+                line({
+                  id: 'line_9',
+                  extractedProductName: 'Naan',
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getAllByText('No correction')).toHaveLength(2);
+      expect(screen.queryByRole('list', { name: 'Confirmed sizes' })).not.toBeInTheDocument();
+    });
+
+    it('shows when the reviewer removed every extracted size', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: sizes,
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getByText('All sizes removed')).toBeInTheDocument();
+    });
+
+    it('keeps the printed text on a size whose name the reviewer corrected', () => {
+      const base = detail();
+      mocks.get.mockReturnValue({
+        data: {
+          ...base,
+          pages: [
+            {
+              ...base.pages[0]!,
+              lines: [
+                line({
+                  extractedProductName: 'Fajita Pizza',
+                  extractedVariants: [
+                    {
+                      name: 'Lagre',
+                      price: { amount: '2600.00', currency: null, raw: 'Rs. 2,600' },
+                    },
+                  ],
+                  reviewStatus: 'ACCEPTED',
+                  reviewedVariants: [
+                    { name: 'Large', price: { amount: '2600.00', currency: null, raw: null } },
+                  ],
+                }),
+              ],
+            },
+          ],
+        } as ImportDetail,
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Fajita Pizza' }));
+      expect(screen.getByText('Printed: Lagre Rs. 2,600')).toBeInTheDocument();
+    });
+
+    it('explains why an import with unconfirmed sizes is not ready', () => {
+      mocks.summary.mockReturnValue({
+        data: summary({ PENDING: 0, ACCEPTED: 1, sizesUnconfirmed: 1, readyToCommit: false }),
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(
+        screen.getByText(/1 accepted line\(s\) have sizes nobody confirmed/)
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Import reviewed menu' })).toBeDisabled();
+    });
+
+    it('lets the reviewer correct or remove a size before accepting', () => {
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Fajita Pizza' }));
+      expect(screen.getByText('Printed: Small 9" Rs. 1,200')).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText('Size 1 price'), { target: { value: '1250' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Remove size 2' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          decision: 'ACCEPTED',
+          variants: [{ name: 'Small 9"', priceAmount: '1250' }],
+        })
+      );
     });
   });
 

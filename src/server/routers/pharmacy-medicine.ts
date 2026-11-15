@@ -787,6 +787,10 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
+  // A batch's rounding increment lowers the price posted at the counter
+  // (MED-08), so recording one is a pricing write held to the same gate as
+  // `setPackPrice`; otherwise any employee could cut a charge without the
+  // discount approval path.
   recordPrintedMrp: adminProcedure
     .input(
       z
