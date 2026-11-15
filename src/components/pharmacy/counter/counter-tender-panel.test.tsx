@@ -287,6 +287,18 @@ describe('DEV-713 manual card tender', () => {
     expect(screen.getByLabelText('Approval code')).toHaveAttribute('aria-invalid', 'true');
     expect(button).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+    // A full card number is refused before any payment is sent.
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: '4242424242424242' },
+    });
+    expect(screen.getByLabelText('Card last 4 digits or terminal reference')).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    );
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
+      target: { value: '4242' },
+    });
     fireEvent.click(button);
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledExactlyOnceWith(

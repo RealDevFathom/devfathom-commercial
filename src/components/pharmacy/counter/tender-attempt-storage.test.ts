@@ -70,6 +70,7 @@ describe('original tender attempt storage', () => {
       { payerName: 'Ayesha' },
       { type: 'RAAST' as const, providerRef: '001234', payerName: 'Ayesha' },
       { type: 'BANK_TRANSFER' as const },
+      { providerRef: '4242424242424242' },
     ]) {
       const mixed = { ...attempt, input: { ...attempt.input, ...change } };
       expect(() => persistTenderAttempt(mixed)).toThrow();

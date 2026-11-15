@@ -67,8 +67,14 @@ export function validateManualTenderPolicy(policies: unknown, capture: unknown) 
  * printed on the terminal slip. No provider API approves it.
  */
 export const MANUAL_CARD_PROVIDER = 'MANUAL_TERMINAL';
+/**
+ * Last 4 digits or a terminal reference (an RRN is 12 digits). An all-digit
+ * value of 13 or more digits is refused: it could be a full card number, which
+ * must never be stored (PCI DSS).
+ */
+export const MANUAL_CARD_REFERENCE = /^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/;
 export const manualCardCaptureSchema = z.object({
-  providerRef: z.string().trim().regex(/^[A-Za-z0-9]{4,24}$/),
+  providerRef: z.string().trim().regex(MANUAL_CARD_REFERENCE),
   approvalCode: z.string().trim().regex(/^[A-Za-z0-9]{2,12}$/),
 }).strict();
 

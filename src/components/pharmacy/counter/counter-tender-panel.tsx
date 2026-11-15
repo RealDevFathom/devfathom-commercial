@@ -11,6 +11,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
+  MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
@@ -505,7 +506,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               value={providerRef}
               maxLength={24}
               disabled={!editable}
-              aria-invalid={providerRef !== '' && !/^[A-Za-z0-9]{4,24}$/.test(providerRef.trim())}
+              aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
               aria-describedby="manual-card-help"
               onChange={(event) => setProviderRef(event.target.value)}
             />
@@ -522,7 +523,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               onChange={(event) => setApprovalCode(event.target.value)}
             />
             <p id="manual-card-help" className="text-sm text-text-muted">
-              Letters and digits only: 4–24 for the reference, 2–12 for the approval code.
+              Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
+              enter the full card number.
             </p>
           </div>
         ) : null}

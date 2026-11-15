@@ -88,6 +88,7 @@ describe('DEV-713 manual card and wallet confirmation', () => {
     { providerRef: '42', approvalCode: 'A1B2' },
     { providerRef: '4242', approvalCode: 'A1B2', payerName: 'Ayesha' },
     { providerRef: '4242', approvalCode: 'A1B2', cashReceivedMinor: 1000 },
+    { providerRef: '4242424242424242', approvalCode: 'A1B2' },
   ])('refuses an incomplete manual card capture %j before any tender', async (capture) => {
     const input = { ...cardBase, ...capture };
     const { db, scoped } = fixture(input);

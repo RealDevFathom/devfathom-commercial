@@ -23,6 +23,8 @@ BEGIN
         -- Null-safe: a NULL provider must fail this branch, not make the CHECK NULL.
         type::text = 'CARD' AND provider IS NOT DISTINCT FROM 'MANUAL_TERMINAL'
         AND "providerRef" IS NOT NULL AND "providerRef" ~ '^[A-Za-z0-9]{4,24}$'
+        -- Never a full card number (PCI DSS): no all-digit value of 13+ digits.
+        AND "providerRef" !~ '^[0-9]{13,}$'
         AND "approvalCode" IS NOT NULL AND "approvalCode" ~ '^[A-Za-z0-9]{2,12}$'
         AND "confirmedById" IS NOT NULL AND "confirmedById" = "actorId"
       )

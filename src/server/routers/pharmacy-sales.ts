@@ -10,6 +10,7 @@ import {
   manualPaymentSettingsSchema,
   isManualTender,
   manualMerchantPolicies,
+  MANUAL_CARD_REFERENCE,
 } from '@/lib/pharmacy/manual-payments';
 import {
   readManualPaymentSettings,
@@ -163,11 +164,8 @@ const tenderInput = z
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
-    // reference. Each tender's exact shape is enforced in settlement.
-    providerRef: z
-      .string()
-      .regex(/^[A-Za-z0-9]{4,24}$/)
-      .optional(),
+    // reference, never a full card number. Each tender's shape is enforced in settlement.
+    providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */

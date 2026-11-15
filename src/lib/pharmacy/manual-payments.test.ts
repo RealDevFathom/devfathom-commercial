@@ -67,7 +67,13 @@ describe('DEV-713 manual card and optional merchant details', () => {
       { providerRef: '1234' }, { approvalCode: 'A1B2' }, { providerRef: '123', approvalCode: 'A1B2' },
       { providerRef: '1234', approvalCode: 'A' }, { providerRef: '12-34', approvalCode: 'A1B2' },
       { providerRef: '1234', approvalCode: 'A1B2', payerName: 'x' },
+      // A full card number must never be stored (PCI DSS).
+      { providerRef: '4242424242424242', approvalCode: 'A1B2' },
+      { providerRef: '4000000000002', approvalCode: 'A1B2' },
+      { providerRef: '6011000990139424123', approvalCode: 'A1B2' },
     ]) expect(manualCardCaptureSchema.safeParse(capture).success).toBe(false);
+    // A 12-digit terminal retrieval reference is still accepted.
+    expect(manualCardCaptureSchema.safeParse({ providerRef: '123456789012', approvalCode: 'A1B2' }).success).toBe(true);
   });
   it('reports manual confirmers by tender type at the end of the day', () => {
     const names = new Map([['u1', 'Ayesha'], ['u2', 'Bilal']]);

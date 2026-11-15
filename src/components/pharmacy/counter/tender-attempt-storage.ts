@@ -3,6 +3,7 @@ import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import {
   isManualTender,
+  MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
 } from '@/lib/pharmacy/manual-payments';
@@ -40,7 +41,7 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
-        providerRef: z.string().regex(/^[A-Za-z0-9]{4,24}$/).optional(),
+        providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
         approvalCode: z.string().regex(/^[A-Za-z0-9]{2,12}$/).optional(),
