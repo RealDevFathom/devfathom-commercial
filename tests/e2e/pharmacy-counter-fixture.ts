@@ -15,6 +15,11 @@ export const PHARMACY_E2E = {
   cashierCounterPermissionId: 'perm_pharmacy_counter_e2e_cashier_counter',
   cashierOrdersPermissionId: 'perm_pharmacy_counter_e2e_cashier_orders',
   cashierAssignmentId: 'pba_pharmacy_counter_e2e_cashier',
+  /** DEV-497: the Pharmacist whose landing the spec proves (dispense + catalogue review). */
+  pharmacistRoleId: 'role_pharmacy_counter_e2e_pharmacist',
+  pharmacistId: 'user_pharmacy_counter_e2e_pharmacist',
+  pharmacistEmail: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
+  pharmacistAssignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
   branchId: 'branch_pharmacy_counter_e2e',
   branchName: 'Gulberg Counter E2E',
   branchCode: 'PCE-1',

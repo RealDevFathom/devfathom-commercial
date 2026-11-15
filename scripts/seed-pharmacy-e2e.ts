@@ -340,12 +340,15 @@ async function seedStagingDemoSensitiveGrants() {
   );
 }
 
-/** Staging demo only: a Pharmacist (dispense + catalogue review, explicit grants; never `*`). */
+/**
+ * A Pharmacist (dispense + catalogue review, explicit grants; never `*`). Seeded for the
+ * staging demo and, since DEV-497, for the browser lane that proves each role's landing.
+ */
 const STAGING_DEMO_PHARMACIST = {
-  roleId: 'role_pharmacy_counter_e2e_pharmacist',
-  userId: 'user_pharmacy_counter_e2e_pharmacist',
-  email: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
-  assignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
+  roleId: PHARMACY_E2E.pharmacistRoleId,
+  userId: PHARMACY_E2E.pharmacistId,
+  email: PHARMACY_E2E.pharmacistEmail,
+  assignmentId: PHARMACY_E2E.pharmacistAssignmentId,
   capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
 };
 
@@ -986,13 +989,12 @@ async function main() {
     await seedWorkspace(email, passwordHash);
     await seedBranch();
     await seedCashier(passwordHash);
+    // DEV-497: the browser lane signs in as cashier, pharmacist and owner.
+    await seedStagingDemoPharmacist(passwordHash);
     await seedMedicines();
     await seedStock();
     await seedPrescription();
-    if (stagingDemo) {
-      await seedStagingDemoSensitiveGrants();
-      await seedStagingDemoPharmacist(passwordHash);
-    }
+    if (stagingDemo) await seedStagingDemoSensitiveGrants();
 
     console.log('Pharmacy counter E2E seed complete.');
   } finally {

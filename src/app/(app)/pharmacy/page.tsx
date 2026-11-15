@@ -1,6 +1,8 @@
 import { Download } from 'lucide-react';
+import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
 import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
@@ -8,9 +10,11 @@ import { LicenceRenewalBanner } from '@/components/pharmacy/licence-renewal-bann
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
+import { pharmacyLandingPath } from '@/lib/pharmacy/landing';
 import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
+import { pharmacyAccessRouter } from '@/server/routers/pharmacy-access';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
-import { createTRPCContext } from '@/server/trpc';
+import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Pharmacy onboarding' };
 
@@ -19,16 +23,28 @@ export const metadata: Metadata = { title: 'Pharmacy onboarding' };
  *
  * Rendered on the server so the twelve steps are on screen in the first paint,
  * with no spinner between the operator and the thing they came to read. The
- * permission-denied state is a card in the same geometry as the loaded content
- * rather than a redirect, so an operator without the module learns why.
+ * DEV-497: onboarding is administration. A member the server refuses it to
+ * (a cashier, a pharmacist) is sent to their own working page instead of a
+ * dead end. Any other failure keeps the card, in the same geometry as the
+ * loaded content, so an administrator learns why.
  */
+async function memberLanding(ctx: TRPCContext) {
+  const access = await pharmacyAccessRouter
+    .createCaller(ctx)
+    .navigation()
+    .catch(() => null);
+  return pharmacyLandingPath(access?.capabilities ?? [], ctx.entitlements?.enabledModules);
+}
+
 export default async function PharmacyOnboardingPage() {
   const ctx = await createTRPCContext();
   const caller = pharmacyOnboardingRouter.createCaller(ctx);
   let overview: Awaited<ReturnType<typeof caller.overview>>;
   try {
     overview = await caller.overview();
-  } catch {
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN')
+      redirect(await memberLanding(ctx));
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader

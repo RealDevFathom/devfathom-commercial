@@ -1,4 +1,7 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
@@ -13,6 +16,9 @@ const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
 const pharmacyRailQuery = vi.hoisted(() => ({
   isError: false,
+  // The Pharmacy Safety and procedure reads, denied unless a case grants them.
+  safety: false,
+  sop: false,
   input: vi.fn(),
   data: undefined as
     undefined | { userId: string; organizationId: string | null; capabilities: string[] },
@@ -73,7 +79,7 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     pharmacySafety: {
-      access: { useQuery: () => ({ data: { allowed: false } }) },
+      access: { useQuery: () => ({ data: { allowed: pharmacyRailQuery.safety } }) },
     },
     pharmacyAccess: {
       navigation: {
@@ -85,7 +91,9 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySop: {
       access: {
-        useQuery: () => ({ data: { canComplete: false, canVerify: false, canManage: false } }),
+        useQuery: () => ({
+          data: { canComplete: pharmacyRailQuery.sop, canVerify: false, canManage: false },
+        }),
       },
     },
   },
@@ -516,6 +524,239 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page')
     ).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Onboarding$/ })).not.toHaveAttribute('aria-current');
+  });
+
+  // DEV-497: every page of the workspace, nested routes included, marks
+  // exactly one destination current, and it is the one that page belongs to.
+  const everyModule = [
+    ...pharmacyModules,
+    'pharmacy-dispensing',
+    'pharmacy-safety',
+    'pharmacy-crm',
+  ];
+  const everyCapability = [
+    'pharmacy:procurement',
+    'pharmacy:prescriptions',
+    'pharmacy:dispense',
+    'reports:operational',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:inventory',
+    'pharmacy:manage',
+  ];
+  const currentLinks = () =>
+    screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page');
+
+  it.each([
+    ['/pharmacy', 'Onboarding'],
+    ['/pharmacy/settings/data-export', 'Onboarding'],
+    ['/pharmacy/accounts/balance-sheet', 'Finance'],
+    ['/pharmacy/orders', 'Counter'],
+    ['/pharmacy/counter/close', 'Day close'],
+    ['/pharmacy/settings/cameras/privacy', 'Cameras'],
+    ['/pharmacy/inventory/expiry', 'Inventory'],
+    ['/pharmacy/medicines/prices', 'Medicine catalog'],
+    ['/pharmacy/regulatory/fbr-tier-1', 'Regulatory profile'],
+  ])('marks exactly the right destination current at %s (DEV-497)', (pathname, label) => {
+    renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
+    expect(currentLinks()).toHaveLength(1);
+    expect(currentLinks()[0]).toHaveAccessibleName(expect.stringMatching(new RegExp(`${label}$`)));
+  });
+
+  it('marks exactly one destination current on every pharmacy page (DEV-497)', () => {
+    const root = join(process.cwd(), 'src/app/(app)');
+    const routes = readdirSync(join(root, 'pharmacy'), { recursive: true, encoding: 'utf8' })
+      .filter((file) => file.endsWith('page.tsx'))
+      .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
+    expect(routes).toContain('/pharmacy');
+    expect(routes).toContain('/pharmacy/accounts/profit-loss');
+    pharmacyRailQuery.safety = true;
+    pharmacyRailQuery.sop = true;
+    try {
+      for (const pathname of routes) {
+        cleanup();
+        renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
+        expect({ pathname, current: currentLinks().length }).toEqual({ pathname, current: 1 });
+      }
+    } finally {
+      pharmacyRailQuery.safety = false;
+      pharmacyRailQuery.sop = false;
+    }
+  });
+
+  it('marks the statements current under Reports for a reports reader without Finance', () => {
+    renderNavigation({
+      role: 'MEMBER',
+      pathname: '/pharmacy/accounts/balance-sheet',
+      capabilities: ['reports:operational'],
+    });
+    expect(currentLinks()).toHaveLength(1);
+    expect(currentLinks()[0]).toHaveAttribute('href', '/pharmacy/reports');
+  });
+
+  it('labels destinations with icons and names, never numeric prefixes (DEV-497)', () => {
+    renderNavigation({ granted: everyModule, capabilities: everyCapability });
+    const nav = screen.getByRole('navigation', {
+      name: surface === 'mobile' ? 'Main navigation' : 'Primary navigation',
+    });
+    expect(nav.textContent).not.toMatch(/\d/);
+    for (const link of within(nav).getAllByRole('link'))
+      expect(link.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('Pharmacy grouped top navigation (DEV-497)', () => {
+  const everyModule = [
+    'pharmacy-core',
+    'pharmacy-counter',
+    'pharmacy-inventory',
+    'pharmacy-procurement',
+    'pharmacy-finance',
+    'pharmacy-reports',
+    'pharmacy-dispensing',
+    'pharmacy-safety',
+    'pharmacy-crm',
+    'hr',
+    'chat',
+    'notes',
+    'meetings',
+  ];
+  const everyCapability = [
+    'pharmacy:procurement',
+    'pharmacy:prescriptions',
+    'pharmacy:dispense',
+    'reports:operational',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:inventory',
+    'pharmacy:manage',
+  ];
+
+  function renderBar({
+    role = 'ADMIN',
+    pathname = '/dashboard',
+    capabilities = everyCapability,
+    granted = everyModule,
+  }: { role?: string; pathname?: string; capabilities?: string[]; granted?: string[] } = {}) {
+    useSessionMock.mockReturnValue({
+      data: {
+        user: {
+          id: 'pharmacy-user-1',
+          role,
+          name: 'Test operator',
+          organizationId: 'pharmacy-1',
+          status: 'ACTIVE',
+        },
+      },
+    } as unknown as ReturnType<typeof useSessionMock>);
+    pharmacyRailQuery.data = {
+      userId: 'pharmacy-user-1',
+      organizationId: 'pharmacy-1',
+      capabilities,
+    };
+    pharmacyRailQuery.isError = false;
+    usePathnameMock.mockReturnValue(pathname);
+    render(
+      <EntitlementsProvider
+        value={{
+          organizationId: 'pharmacy-1',
+          vertical: 'PHARMACY',
+          seatLimit: 10,
+          activeSeats: 1,
+          enabledModules: granted,
+          modules: [],
+          limits: {},
+        }}
+      >
+        <TopNavigation />
+        <button type="button">Outside</button>
+      </EntitlementsProvider>
+    );
+    return screen.getByRole('navigation', { name: 'Primary navigation' });
+  }
+
+  const menu = (label: string) => screen.getByRole('button', { name: label });
+  const panel = (label: string) =>
+    document.getElementById(menu(label).getAttribute('aria-controls')!)!;
+
+  it('groups an owner’s destinations into a handful of task menus that wrap, not scroll', () => {
+    const nav = renderBar();
+    expect(
+      within(nav)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['Sell', 'Dispense', 'Stock', 'Reports', 'Settings', 'More']);
+    // A menu with one destination is that destination.
+    expect(
+      Array.from(nav.children)
+        .filter((child) => child.tagName === 'A')
+        .map((link) => link.getAttribute('href'))
+    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/pharmacy/finance']);
+    expect(nav.children).toHaveLength(9);
+    expect(nav).toHaveClass('flex-wrap');
+    expect(nav).not.toHaveClass('overflow-x-auto');
+    expect(
+      within(panel('Sell'))
+        .getAllByRole('link')
+        .map((link) => link.textContent)
+    ).toEqual(['Counter', 'Day close', 'Khata', 'Loyalty points', 'Marketing & growth']);
+    expect(within(panel('Settings')).getByRole('link', { name: 'Onboarding' })).toHaveAttribute(
+      'href',
+      '/pharmacy'
+    );
+  });
+
+  it('offers a cashier only pages a cashier can open, with no menus to dig through', () => {
+    const nav = renderBar({
+      role: 'MEMBER',
+      capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+      granted: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-procurement', 'pharmacy-finance'],
+    });
+    expect(within(nav).queryAllByRole('button')).toEqual([]);
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href'))
+    ).toEqual(['/dashboard', '/pharmacy/counter', '/settings']);
+  });
+
+  it('opens one menu at a time and closes it on Escape, outside press and navigation', () => {
+    renderBar();
+    for (const label of ['Sell', 'Stock']) {
+      expect(menu(label)).toHaveAttribute('aria-expanded', 'false');
+      expect(panel(label)).toHaveClass('hidden');
+    }
+    fireEvent.click(menu('Sell'));
+    expect(menu('Sell')).toHaveAttribute('aria-expanded', 'true');
+    expect(panel('Sell')).not.toHaveClass('hidden');
+
+    fireEvent.click(menu('Stock'));
+    expect(menu('Sell')).toHaveAttribute('aria-expanded', 'false');
+    expect(panel('Stock')).not.toHaveClass('hidden');
+
+    within(panel('Stock')).getByRole('link', { name: 'Inventory' }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(menu('Stock')).toHaveAttribute('aria-expanded', 'false');
+    expect(menu('Stock')).toHaveFocus();
+
+    fireEvent.click(menu('Reports'));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }));
+    expect(menu('Reports')).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(menu('Reports'));
+    fireEvent.click(within(panel('Reports')).getByRole('link', { name: 'Reports & Insights' }));
+    expect(menu('Reports')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('wears the active pill on the menu holding the current page', () => {
+    renderBar({ pathname: '/pharmacy/inventory/expiry' });
+    expect(menu('Stock')).toHaveAttribute('data-active', 'true');
+    for (const label of ['Sell', 'Dispense', 'Reports', 'Settings', 'More'])
+      expect(menu(label)).not.toHaveAttribute('data-active');
+    expect(within(panel('Stock')).getByRole('link', { name: 'Inventory' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
   });
 });
 
