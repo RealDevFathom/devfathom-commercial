@@ -15,7 +15,7 @@ import {
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
 
-export type CounterApprovalKind = 'DISCOUNT' | 'FEFO_OVERRIDE';
+export type CounterApprovalKind = 'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT';
 
 /** Server-derived approval evidence persisted on the sale line / allocation override. */
 export type CounterApproval = {
@@ -35,10 +35,21 @@ export type CounterApproval = {
  *   may approve their own discount by re-entering their own PIN (recorded as self-approved).
  * - FEFO_OVERRIDE is a pharmacist's decision: an actor holding `pharmacy:dispense` approves it
  *   as the pharmacist on duty; anyone else needs an active pharmacist's PIN.
+ * - KHATA_OVER_LIMIT (DEV-290): charging a family Khata past its credit limit is approved at
+ *   the cashier's till by a manager or owner (`pharmacy:manage`) with their own PIN, under the
+ *   same different-person and solo rules as a discount.
  */
 export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = {
   DISCOUNT: 'pharmacy:manage',
   FEFO_OVERRIDE: 'pharmacy:dispense',
+  KHATA_OVER_LIMIT: 'pharmacy:manage',
+};
+
+const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
+  DISCOUNT: 'A discount needs a manager to approve it with their PIN.',
+  FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
+  KHATA_OVER_LIMIT:
+    'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',
 };
 
 /**
@@ -53,11 +64,7 @@ export function fefoOverrideApprovalPolicy(approval: CounterApproval, actorId: s
 
 export class CounterApprovalDenied extends Error {
   constructor(readonly kind: CounterApprovalKind) {
-    super(
-      kind === 'DISCOUNT'
-        ? 'A discount needs a manager to approve it with their PIN.'
-        : 'A non-FEFO batch needs a pharmacist to approve it with their PIN.'
-    );
+    super(DENIED_MESSAGE[kind]);
   }
 }
 
@@ -198,15 +205,52 @@ async function verifyApproverPin(
   });
   const approvalPolicy = selfApproved
     ? 'SOLE_APPROVER_PIN_REAUTH'
-    : kind === 'DISCOUNT'
-      ? 'MANAGER_PIN'
-      : 'PHARMACIST_PIN';
+    : kind === 'FEFO_OVERRIDE'
+      ? 'PHARMACIST_PIN'
+      : 'MANAGER_PIN';
   return {
     approvedByUserId: approver.id,
     approvalPolicy,
     selfApproved,
     credentialId: credential.id,
   };
+}
+
+/**
+ * DEV-290: the staff profiles the counter may offer as approvers for `kind`: other active
+ * members with an active staff profile and a live counter PIN who hold the capability. When
+ * nobody else qualifies (solo rule), the actor's own eligible profiles are offered so they can
+ * self-approve by re-entering their PIN. `verifyApproverPin` re-checks every rule on use.
+ */
+export async function listCounterApprovers(
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind
+): Promise<Array<{ id: string; name: string; self: boolean }>> {
+  const capability = COUNTER_APPROVAL_CAPABILITY[kind];
+  const now = new Date();
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+    },
+    select: { id: true, displayName: true, user: true },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+  });
+  const eligible: Array<{ id: string; name: string; self: boolean }> = [];
+  const capable = new Map<string, boolean>();
+  for (const profile of profiles) {
+    const user = profile.user as ActiveUser | null;
+    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
+    if (!capable.has(user.id))
+      capable.set(user.id, await can(user, capability, undefined, { db, now }));
+    if (capable.get(user.id))
+      eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
+  }
+  const others = eligible.filter((profile) => !profile.self);
+  return others.length ? others : eligible;
 }
 
 /**

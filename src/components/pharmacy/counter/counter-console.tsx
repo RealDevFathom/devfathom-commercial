@@ -1396,6 +1396,10 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  const loadKhataApprovers = useCallback(
+    () => utils.client.pharmacySales.khataOverLimitApprovers.query({ branchId }),
+    [branchId, utils]
+  );
   // A signup started on one bill must not link its customer to another branch or bill.
   const counterScopeRef = useRef('');
   useEffect(() => {
@@ -1501,6 +1505,7 @@ function ScopedPharmacyCounterConsole({
         familyAccountId?: string;
         ownerOverride?: boolean;
         overrideReason?: string;
+        overLimitApproval?: { staffProfileId: string; pin: string };
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
@@ -1580,7 +1585,13 @@ function ScopedPharmacyCounterConsole({
         };
         receiptIntent.current = intent;
         dispatched = true;
-        const result = await tender.mutateAsync(payload);
+        // DEV-290: the approver's PIN goes with this one request only; it is never persisted
+        // with the recovery attempt, so a recovery check never carries or replays it.
+        const result = await tender.mutateAsync(
+          input.overLimitApproval
+            ? { ...payload, overLimitApproval: input.overLimitApproval }
+            : payload
+        );
         outcome = tenderAcknowledgement(result)
           ? { status: 'accepted', message: 'Payment recorded.' }
           : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
@@ -2920,6 +2931,7 @@ function ScopedPharmacyCounterConsole({
           onReloadManualSettings={() => void manualSettings.refetch()}
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
+          loadKhataApprovers={loadKhataApprovers}
           printKhataStatement={printKhataStatement}
           signUpKhata={signUpKhata}
           khataSignupPatient={khataSignupPatient}

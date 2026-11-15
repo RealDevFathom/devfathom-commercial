@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   searchProps: vi.fn<(props: ComponentProps<typeof CounterSearchResults>) => void>(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
+  khataApprovers: vi.fn(),
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
@@ -114,6 +115,7 @@ vi.mock('@/lib/trpc', async () => {
         tenderOutcome: { query: mocks.outcomeQuery },
         khataAccounts: { query: mocks.khataAccounts },
         khataStatement: { query: mocks.khataStatement },
+        khataOverLimitApprovers: { query: mocks.khataApprovers },
       },
     },
     pharmacySales: {
@@ -516,6 +518,7 @@ beforeEach(() => {
   mocks.khataAccounts.mockResolvedValue([
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
   ]);
+  mocks.khataApprovers.mockResolvedValue([]);
   mocks.signIn.mockResolvedValue({ ok: true });
   window.localStorage.clear();
 });
@@ -1686,6 +1689,7 @@ it.each([404, 200])(
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
@@ -1711,6 +1715,46 @@ it.each([404, 200])(
     );
   }
 );
+
+it('DEV-290: sends a manager PIN approval with the tender but never stores it', async () => {
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+  ]);
+  mocks.khataApprovers.mockResolvedValue([
+    { id: 'staff-manager', name: 'Manager Sana', self: false },
+  ]);
+  const setItem = vi.spyOn(Storage.prototype, 'setItem');
+  renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  chooseTender('KHATA');
+  await screen.findByText(/Ledger balance/);
+  fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+  await screen.findByRole('option', { name: 'Manager Sana' });
+  expect(mocks.khataApprovers).toHaveBeenCalledWith({ branchId: 'branch-a' });
+  fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+    target: { value: 'Paying on Friday' },
+  });
+  fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
+    target: { value: 'staff-manager' },
+  });
+  fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '975310' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+  await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+  expect(mocks.mutations.tender).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ownerOverride: true,
+      overrideReason: 'Paying on Friday',
+      overLimitApproval: { staffProfileId: 'staff-manager', pin: '975310' },
+    })
+  );
+  // The recovery attempt was persisted before the write, without the PIN.
+  const stored = setItem.mock.calls.filter(([key]) => key.includes('counter.attempt'));
+  expect(stored.length).toBeGreaterThan(0);
+  for (const [, value] of stored) {
+    expect(value).not.toContain('975310');
+    expect(value).not.toContain('overLimitApproval');
+  }
+  setItem.mockRestore();
+});
 
 describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   beforeEach(() => {

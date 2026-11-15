@@ -630,6 +630,7 @@ describe('family Khata tender', () => {
     const take = screen.getByRole('button', { name: 'Take payment' });
     expect(take).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Your password (current account)'), {
       target: { value: 'test-only-password' },
     });
@@ -665,6 +666,7 @@ describe('family Khata tender', () => {
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('I am the owner or manager: re-enter my password'));
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
@@ -677,6 +679,76 @@ describe('family Khata tender', () => {
     expect(screen.getByLabelText('Your password (current account)')).toHaveValue('');
     // The reason is kept so a retry does not lose it.
     expect(screen.getByLabelText('Reason for exceeding the limit')).toHaveValue('Paying on Friday');
+  });
+  it('DEV-290: a manager approves at the till with their own PIN, which is never kept', async () => {
+    const reauthenticateOwner = vi.fn();
+    const loadKhataApprovers = vi
+      .fn()
+      .mockResolvedValue([{ id: 'staff-manager', name: 'Manager Sana', self: false }]);
+    const { props } = setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([account]),
+      reauthenticateOwner,
+      loadKhataApprovers,
+    });
+    chooseTender('KHATA');
+    await screen.findByText(/Ledger balance/);
+    const take = screen.getByRole('button', { name: 'Take payment' });
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    // The till's PIN approval is the default method.
+    expect(screen.getByLabelText('Manager or owner PIN at this till')).toBeChecked();
+    expect(screen.queryByLabelText('Your password (current account)')).not.toBeInTheDocument();
+    await screen.findByRole('option', { name: 'Manager Sana' });
+    expect(loadKhataApprovers).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+      target: { value: 'Paying on Friday' },
+    });
+    expect(screen.getByLabelText('Approver PIN')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
+      target: { value: 'staff-manager' },
+    });
+    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '12a' } });
+    expect(screen.getByLabelText('Approver PIN')).toHaveValue('12');
+    expect(take).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '2468' } });
+    expect(take).toBeEnabled();
+    fireEvent.click(take);
+    await screen.findByText('Payment recorded.');
+    expect(reauthenticateOwner).not.toHaveBeenCalled();
+    expect(props.onTender).toHaveBeenCalledWith(
+      {
+        type: 'KHATA',
+        amountMinor: 25000,
+        familyAccountId: 'family-a',
+        ownerOverride: true,
+        overrideReason: 'Paying on Friday',
+        overLimitApproval: { staffProfileId: 'staff-manager', pin: '2468' },
+      },
+      { amount: '', cashReceived: '' }
+    );
+    expect(screen.getByLabelText('Approver PIN')).toHaveValue('');
+  });
+  it('DEV-290: offers a solo owner their own profile and explains a missing approver', async () => {
+    const loadKhataApprovers = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 'staff-owner', name: 'Owner Ali', self: true }])
+      .mockResolvedValueOnce([]);
+    setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([account]),
+      loadKhataApprovers,
+    });
+    chooseTender('KHATA');
+    await screen.findByText(/Ledger balance/);
+    const override = screen.getByLabelText('Owner or manager: authorize limit increase');
+    fireEvent.click(override);
+    await screen.findByRole('option', { name: 'Owner Ali (you)' });
+    // Without a password transport the till offers only the PIN method.
+    expect(
+      screen.queryByLabelText('I am the owner or manager: re-enter my password')
+    ).not.toBeInTheDocument();
+    fireEvent.click(override);
+    fireEvent.click(override);
+    await screen.findByText(/No manager or owner has an active staff PIN/);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   });
   it('allows an exact-limit charge and requests only the selected statement', async () => {
     const printKhataStatement = vi.fn().mockResolvedValue(undefined);

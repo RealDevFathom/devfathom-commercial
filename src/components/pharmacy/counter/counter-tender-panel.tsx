@@ -77,6 +77,8 @@ export type CounterTenderPanelProps = {
   onReloadManualSettings?: () => void;
   loadKhataAccounts?: () => Promise<KhataAccount[]>;
   reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
+  /** DEV-290: managers or owners who may approve an over-limit Khata charge with their PIN. */
+  loadKhataApprovers?: () => Promise<KhataApprover[]>;
   printKhataStatement?: (familyAccountId: string) => Promise<void>;
   /** DEV-716: find or create the patient, record consent, link and open a 0-limit account. */
   signUpKhata?: (input: KhataSignupInput) => Promise<void>;
@@ -108,6 +110,7 @@ export type CounterTenderPanelProps = {
       familyAccountId?: string;
       ownerOverride?: boolean;
       overrideReason?: string;
+      overLimitApproval?: { staffProfileId: string; pin: string };
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
@@ -116,6 +119,10 @@ export type CounterTenderPanelProps = {
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
 };
+
+/** DEV-290: a manager or owner the till may ask for an over-limit Khata PIN approval. */
+export type KhataApprover = { id: string; name: string; self: boolean };
+const APPROVER_PIN = /^\d{4,8}$/;
 
 /** A typed money amount (up to two decimals) in minor units, or null when it is not one. */
 export function parseAmountMinor(value: string): number | null {
@@ -157,6 +164,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       onCheckOutcome,
       loadKhataAccounts,
       reauthenticateOwner,
+      loadKhataApprovers,
       printKhataStatement,
       signUpKhata,
       khataSignupPatient,
@@ -175,6 +183,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [ownerOverride, setOwnerOverride] = useState(false);
     const [overrideReason, setOverrideReason] = useState('');
     const [password, setPassword] = useState('');
+    // DEV-290: approve at this till with a manager's or owner's PIN, or re-enter my password.
+    const [approvalMethod, setApprovalMethod] = useState<'PIN' | 'PASSWORD'>('PIN');
+    const [approvers, setApprovers] = useState<KhataApprover[] | null>(null);
+    const [approversError, setApproversError] = useState(false);
+    const [approverId, setApproverId] = useState('');
+    const [approverPin, setApproverPin] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
     const [khataReload, setKhataReload] = useState(0);
@@ -281,6 +295,25 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         live = false;
       };
     }, [isKhata, loadKhataAccounts, khataReload]);
+    const wantsApprovers = isKhata && ownerOverride && Boolean(loadKhataApprovers);
+    useEffect(() => {
+      if (!wantsApprovers) return;
+      let current = true;
+      setApprovers(null);
+      setApproversError(false);
+      void loadKhataApprovers!()
+        .then((rows) => {
+          if (!current) return;
+          setApprovers(rows);
+          setApproverId((selected) => (rows.some((row) => row.id === selected) ? selected : ''));
+        })
+        .catch(() => {
+          if (current) setApproversError(true);
+        });
+      return () => {
+        current = false;
+      };
+    }, [wantsApprovers, loadKhataApprovers]);
     const signupPatient = khataSignupPatient ?? null;
     const signupPatientId = signupPatient?.patientId ?? null;
     // Consent belongs to one person: a different payer must tick it again.
@@ -343,8 +376,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           (!overLimit ||
             (ownerOverride &&
               Boolean(overrideReason.trim()) &&
-              Boolean(password) &&
-              Boolean(reauthenticateOwner)))));
+              (approvalMethod === 'PIN'
+                ? Boolean(approverId) && APPROVER_PIN.test(approverPin)
+                : Boolean(password) && Boolean(reauthenticateOwner))))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -352,7 +386,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       setSubmitting(true);
       setOutcome(null);
       try {
-        if (isKhata && overLimit) {
+        const pinApproval =
+          isKhata && overLimit && approvalMethod === 'PIN'
+            ? { staffProfileId: approverId, pin: approverPin }
+            : undefined;
+        // The PIN is single-use evidence for this attempt: clear it whatever the outcome.
+        setApproverPin('');
+        if (isKhata && overLimit && !pinApproval) {
           try {
             await reauthenticateOwner!(password, totp);
           } catch {
@@ -376,6 +416,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   familyAccountId: accountId,
                   ownerOverride: overLimit && ownerOverride,
                   ...(overLimit && ownerOverride ? { overrideReason: overrideReason.trim() } : {}),
+                  ...(pinApproval ? { overLimitApproval: pinApproval } : {}),
                 }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
@@ -872,8 +913,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner or manager must give a
-                  reason and re-enter their password to raise the limit to{' '}
+                  This charge exceeds the family credit limit. A manager or owner must give a reason
+                  and approve raising the limit to{' '}
                   {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
@@ -897,25 +938,104 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       onChange={(event) => setOverrideReason(event.target.value)}
                       className="min-h-11 rounded-sm"
                     />
-                    <Label htmlFor="khata-password">Your password (current account)</Label>
-                    <Input
-                      id="khata-password"
-                      type="password"
-                      autoComplete="current-password"
-                      value={password}
-                      disabled={!editable}
-                      onChange={(event) => setPassword(event.target.value)}
-                      className="h-11 rounded-sm"
-                    />
-                    <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
-                    <Input
-                      id="khata-totp"
-                      autoComplete="one-time-code"
-                      value={totp}
-                      disabled={!editable}
-                      onChange={(event) => setTotp(event.target.value)}
-                      className="h-11 rounded-sm"
-                    />
+                    <fieldset className="space-y-2">
+                      <legend className="text-sm font-medium text-text-strong">Approval</legend>
+                      <Label className="flex min-h-11 items-center gap-2">
+                        <input
+                          type="radio"
+                          name="khata-approval-method"
+                          checked={approvalMethod === 'PIN'}
+                          disabled={!editable}
+                          onChange={() => setApprovalMethod('PIN')}
+                        />
+                        Manager or owner PIN at this till
+                      </Label>
+                      {reauthenticateOwner ? (
+                        <Label className="flex min-h-11 items-center gap-2">
+                          <input
+                            type="radio"
+                            name="khata-approval-method"
+                            checked={approvalMethod === 'PASSWORD'}
+                            disabled={!editable}
+                            onChange={() => setApprovalMethod('PASSWORD')}
+                          />
+                          I am the owner or manager: re-enter my password
+                        </Label>
+                      ) : null}
+                    </fieldset>
+                    {approvalMethod === 'PIN' ? (
+                      <>
+                        <Label htmlFor="khata-approver">Approving manager or owner</Label>
+                        <select
+                          id="khata-approver"
+                          className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                          disabled={!editable || approvers === null || approversError}
+                          value={approverId}
+                          onChange={(event) => {
+                            setApproverId(event.target.value);
+                            setApproverPin('');
+                          }}
+                        >
+                          <option value="">Select manager or owner</option>
+                          {(approvers ?? []).map((approver) => (
+                            <option key={approver.id} value={approver.id}>
+                              {approver.self ? `${approver.name} (you)` : approver.name}
+                            </option>
+                          ))}
+                        </select>
+                        {approversError ? (
+                          <p role="alert" className="text-sm text-destructive">
+                            Approvers could not be loaded. Untick and tick the approval box to
+                            retry.
+                          </p>
+                        ) : approvers === null ? (
+                          <p role="status">Loading approvers…</p>
+                        ) : approvers.length === 0 ? (
+                          <p role="status">
+                            No manager or owner has an active staff PIN. Ask your administrator to
+                            set one up.
+                          </p>
+                        ) : null}
+                        <Label htmlFor="khata-approver-pin">Approver PIN</Label>
+                        <Input
+                          id="khata-approver-pin"
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={8}
+                          value={approverPin}
+                          disabled={!editable || !approverId}
+                          onChange={(event) =>
+                            setApproverPin(event.target.value.replace(/\D/g, ''))
+                          }
+                          className="h-11 rounded-sm"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Label htmlFor="khata-password">Your password (current account)</Label>
+                        <Input
+                          id="khata-password"
+                          type="password"
+                          autoComplete="current-password"
+                          value={password}
+                          disabled={!editable}
+                          onChange={(event) => setPassword(event.target.value)}
+                          className="h-11 rounded-sm"
+                        />
+                        <Label htmlFor="khata-totp">
+                          Authentication or recovery code (if enabled)
+                        </Label>
+                        <Input
+                          id="khata-totp"
+                          autoComplete="one-time-code"
+                          value={totp}
+                          disabled={!editable}
+                          onChange={(event) => setTotp(event.target.value)}
+                          className="h-11 rounded-sm"
+                        />
+                      </>
+                    )}
                   </>
                 ) : null}
               </>
