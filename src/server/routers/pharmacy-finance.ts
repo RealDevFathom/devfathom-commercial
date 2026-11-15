@@ -275,6 +275,25 @@ export const pharmacyFinanceRouter = router({
   leakageReport: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
     const period = { from: new Date(input.from), to: new Date(input.to) };
     const rows = await leakageReport(ctx.db, ctx.reportScope, period);
+    const { organizationId } = ctx.reportScope;
+    const branchIds = [...new Set(rows.map((row) => row.branchId).filter((v) => v !== null))];
+    const productIds = [...new Set(rows.map((row) => row.medicineId).filter((v) => v !== null))];
+    const [branches, products] = await Promise.all([
+      branchIds.length
+        ? ctx.db.pharmacyBranch.findMany({
+            where: { organizationId, id: { in: branchIds as string[] } },
+            select: { id: true, name: true },
+          })
+        : [],
+      productIds.length
+        ? ctx.db.medicine.findMany({
+            where: { organizationId, id: { in: productIds as string[] } },
+            select: { id: true, productName: true },
+          })
+        : [],
+    ]);
+    const branchNames = new Map(branches.map((b) => [b.id, b.name]));
+    const productNames = new Map(products.map((p) => [p.id, p.productName]));
     return {
       ...ledgerMetadata(
         ctx.reportScope,
@@ -282,6 +301,10 @@ export const pharmacyFinanceRouter = router({
       ),
       period: { ...period, bounds: '[from,to)' as const },
       rows,
+      names: {
+        branches: Object.fromEntries(branchNames),
+        products: Object.fromEntries(productNames),
+      },
     };
   }),
 

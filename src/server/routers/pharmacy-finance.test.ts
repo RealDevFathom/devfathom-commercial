@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   valuation: vi.fn(),
   margin: vi.fn(),
   leakage: vi.fn(),
+  medicineFindMany: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/finance-reports')>(
@@ -48,6 +49,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
     db: {
       $transaction: mocks.transaction,
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
+      medicine: { findMany: mocks.medicineFindMany },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
@@ -80,6 +82,8 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   vi.mocked(hasModule).mockReturnValue(true);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+  mocks.branchFindMany.mockResolvedValue([]);
+  mocks.medicineFindMany.mockResolvedValue([]);
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
   mocks.comparison.mockResolvedValue({ differenceMinor: 42 });
   mocks.valuation.mockResolvedValue([
@@ -302,6 +306,26 @@ describe('ledger date and dimension delegation', () => {
     expect(mocks.leakage.mock.calls[0][2]).toEqual({
       from: new Date(input.from),
       to: new Date('2026-12-02T00:00:00Z'),
+    });
+  });
+
+  it('names branches and products for leakage rows', async () => {
+    mocks.leakage.mockResolvedValue([
+      {
+        branchId: 'branch_1',
+        medicineId: 'med_1',
+        discountMinor: 1,
+        writeOffMinor: 2,
+        shrinkageMinor: 3,
+        totalMinor: 6,
+      },
+    ]);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main Branch' }]);
+    mocks.medicineFindMany.mockResolvedValue([{ id: 'med_1', productName: 'Panadol' }]);
+    const result = await caller().leakageReport(input);
+    expect(result.names).toEqual({
+      branches: { branch_1: 'Main Branch' },
+      products: { med_1: 'Panadol' },
     });
   });
 

@@ -232,14 +232,41 @@ export function MarginLedger({ report }: { report: Margin }) {
   );
 }
 
+const pktFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Karachi',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+const pkt = (date: Date) => `${pktFormat.format(date)} PKT`;
+
+function LeakageMetadata({ report }: { report: Leakage }) {
+  const branch = Object.values(report.names.branches)[0];
+  return (
+    <div className="space-y-2 break-words text-sm text-text-muted">
+      <p>
+        {pkt(report.period.from)} to {pkt(report.period.to)}
+        {branch ? ` · ${branch}` : ''}. Amounts are in PKR.
+      </p>
+      <p>
+        Based on posted ledger entries only. Missing costs are unknown, not zero, and refunds count
+        only when posted as reversals. Retrieved {pkt(report.freshness.retrievedAt)}.
+      </p>
+    </div>
+  );
+}
+
 export function LeakageLedger({ report }: { report: Leakage }) {
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} />
+      <LeakageMetadata report={report} />
       <p className="text-sm text-text-body">
-        Recorded categories only: discounts, write-offs and signed shrinkage. Stock found offsets
-        stock lost. Discounts are commercial decisions; these totals are not all realized loss.
-        Expiry exposure and reasons for changes are not inferred.
+        Counts discounts given, stock written off, and stock lost or found. Stock found offsets
+        stock lost. Discounts are business choices, so these totals are not all lost money. Expired
+        stock and the reasons for changes are not worked out here.
       </p>
       <LedgerTable
         caption="Recorded leakage by branch and product"
@@ -252,12 +279,12 @@ export function LeakageLedger({ report }: { report: Leakage }) {
           { label: 'Recorded total', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.branchId ?? unknown,
-          row.medicineId ?? unknown,
-          money(row.discountMinor, report.currency),
-          money(row.writeOffMinor, report.currency),
-          money(row.shrinkageMinor, report.currency),
-          money(row.totalMinor, report.currency),
+          (row.branchId && report.names.branches[row.branchId]) || unknown,
+          (row.medicineId && report.names.products[row.medicineId]) || unknown,
+          money(row.discountMinor, 'PKR'),
+          money(row.writeOffMinor, 'PKR'),
+          money(row.shrinkageMinor, 'PKR'),
+          money(row.totalMinor, 'PKR'),
         ])}
       />
     </div>
