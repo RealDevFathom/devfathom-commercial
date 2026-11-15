@@ -1709,7 +1709,14 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      annotateAudit(ctx, { skipInput: true });
+      // The input stays out of the audit row (it can carry a controlled PIN), but
+      // the bill it targeted is named so a refused add can be traced (DEV-712).
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId },
+      });
       // PH-A4 (F10): a batch taken out of FEFO order is a safety decision, so its
       // audit row is labelled as one — refused attempts included, since the
       // label is set before the domain runs. The override row itself is written
