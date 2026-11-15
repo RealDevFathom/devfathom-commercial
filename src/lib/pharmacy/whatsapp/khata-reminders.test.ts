@@ -163,6 +163,17 @@ describe('planKhataReminder', () => {
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
   });
+
+  it('rolls the weekly key over on the Asia/Karachi boundary, not the UTC one', () => {
+    const key = (iso: string) =>
+      planKhataReminder(
+        { familyAccountId: 'f', balanceMinor: 50_000, oldestOverdueAt: NOW },
+        new Date(iso)
+      ).dedupeKey;
+    // The week turns at Thursday 00:00 Karachi = Wednesday 19:00 UTC (not Thursday 00:00 UTC).
+    expect(key('2026-10-21T18:00:00Z')).not.toBe(key('2026-10-21T19:00:00Z'));
+    expect(key('2026-10-21T19:00:00Z')).toBe(key('2026-10-22T04:59:00Z'));
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
@@ -449,7 +460,7 @@ describe('processDueWhatsAppKhataReminders', () => {
       config,
       provider,
     });
-    expect(result).toMatchObject({ skippedNoConsent: 1, prepared: 0 });
+    expect(result).toMatchObject({ skippedQuietHours: 1, skippedNoConsent: 0, prepared: 0 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
   });

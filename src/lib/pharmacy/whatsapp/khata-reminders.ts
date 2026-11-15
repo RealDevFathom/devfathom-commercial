@@ -20,6 +20,8 @@ import {
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
+/** Asia/Karachi is a fixed UTC+5 (no DST), so the weekly bucket can be computed from the instant. */
+const KARACHI_OFFSET_MS = 5 * 60 * 60 * 1000;
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -48,7 +50,9 @@ export function planKhataReminder(
     candidate.oldestOverdueAt.getTime() <= now.getTime() &&
     Number.isSafeInteger(candidate.balanceMinor) &&
     candidate.balanceMinor >= floor;
-  const week = Math.floor(now.getTime() / WEEK_MS);
+  // Week boundary follows Asia/Karachi local time, not the UTC epoch week. The `w<n>`
+  // namespace is kept so a reminder claimed earlier this week under the old key still collides.
+  const week = Math.floor((now.getTime() + KARACHI_OFFSET_MS) / WEEK_MS);
   return {
     due,
     dueDate: candidate.oldestOverdueAt
@@ -77,6 +81,7 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedQuietHours: number;
   skippedConfiguration: number;
   notDue: number;
   configurationErrors: string[];
@@ -84,6 +89,7 @@ export type KhataReminderRunResult = {
 
 type KhataRecipientResult =
   | { kind: 'configuration'; configurationError: string }
+  | { kind: 'quiet' }
   | {
       kind: 'recipient';
       customerId: string;
@@ -151,6 +157,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     skippedConfiguration: 0,
     notDue: 0,
     configurationErrors: baseConfigurationErrors(config),
@@ -215,7 +222,7 @@ export async function processDueWhatsAppKhataReminders(
             hourCycle: 'h23',
           }).format(now)
         );
-        if (hour >= 22 || hour < 8) return null;
+        if (hour >= 22 || hour < 8) return { kind: 'quiet' };
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -295,6 +302,10 @@ export async function processDueWhatsAppKhataReminders(
     );
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.kind === 'quiet') {
+      result.skippedQuietHours += 1;
       continue;
     }
     if (recipient.kind === 'configuration') {
