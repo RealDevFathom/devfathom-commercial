@@ -39,6 +39,7 @@ export const ALL_ACTIONS = [
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
+  'orders:void', // restaurant: back-office order cancel / item void gate (org-role driven)
   'catering:read',
   'catering:manage',
   'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
@@ -172,6 +173,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   'floor:manage': [],
   'orders:read': [],
   'orders:manage': [],
+  // Back-office order cancellation and item voids gate on the same `orders:void`
+  // capability the restaurant role templates (General Manager, Branch Manager)
+  // already grant — not on the Owner-only `orders:manage`. Org-role-driven, no
+  // static agency-role policy, so it is default-deny without an explicit grant.
+  'orders:void': [],
   'catering:read': [],
   'catering:manage': [],
 

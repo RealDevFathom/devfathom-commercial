@@ -13,7 +13,8 @@ import { Prisma } from '@/generated/prisma/client';
 const D = (v: string) => new Prisma.Decimal(v);
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
+  can: vi.fn<typeof import('@/lib/abac').can>(() => Promise.resolve(true)),
+  userFindUnique: vi.fn(),
   annotateAudit: vi.fn(),
   orderFindMany: vi.fn(),
   orderFindUnique: vi.fn(),
@@ -75,8 +76,10 @@ import { OrderCommandError } from '@/lib/restaurant/orders';
 import { buildCoAuthorizationRecord } from '@/lib/restaurant/co-authorization';
 import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { RESTAURANT_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const db = {
+  user: { findUnique: mocks.userFindUnique },
   restaurantOrder: { findMany: mocks.orderFindMany, findUnique: mocks.orderFindUnique },
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
   restaurantStaffProfile: { findMany: mocks.staffFindMany },
@@ -341,12 +344,99 @@ describe('capability gating + strict inputs', () => {
     expect(mocks.can.mock.calls.some((c) => c[1] === 'orders:manage')).toBe(true);
   });
 
+  it('gates cancel and item void on orders:void, not orders:manage (#638)', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+    mocks.voidItem.mockResolvedValue({ itemId: 'i1', replayed: false });
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Walkout', actor: ACTOR })
+    ).resolves.toMatchObject({ orderId: 'o1' });
+    await expect(
+      caller().voidItem({ orderId: 'o1', itemId: 'i1', reason: 'Wrong item', actor: ACTOR })
+    ).resolves.toMatchObject({ itemId: 'i1' });
+    expect(mocks.can.mock.calls.some((c) => c[1] === 'orders:manage')).toBe(false);
+  });
+
+  it('does not let orders:manage alone cancel or void (#638)', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:manage');
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Walkout', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().voidItem({ orderId: 'o1', itemId: 'i1', reason: 'Wrong item', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    expect(mocks.voidItem).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown input fields (strict)', async () => {
     await expect(
       // @ts-expect-error — surplus field must be rejected, never stripped
       caller().getOrder({ orderId: 'o1', surplus: true })
     ).rejects.toBeDefined();
   });
+});
+
+// ── #638: back-office cancel through the real ABAC engine + seeded templates ──
+
+describe('back-office cancel with the seeded restaurant role templates (#638)', () => {
+  const permissionsFor = (key: string) =>
+    RESTAURANT_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => ({
+      capability,
+      effect: 'ALLOW' as const,
+    }));
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+    mocks.can.mockImplementation(actual.can);
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+  });
+
+  it.each(['owner', 'general-manager', 'branch-manager'])(
+    'lets the %s template cancel an order from the Orders console',
+    async (role) => {
+      mocks.userFindUnique.mockResolvedValue({
+        organizationRole: { permissions: permissionsFor(role) },
+        permissionOverrides: [],
+      });
+
+      await expect(
+        caller().cancel({ orderId: 'o1', reason: 'Walkout', actor: ACTOR })
+      ).resolves.toMatchObject({ orderId: 'o1' });
+      expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('honours an explicit orders:void DENY override over a manager template', async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      organizationRole: { permissions: permissionsFor('general-manager') },
+      permissionOverrides: [{ capability: 'orders:void', effect: 'DENY' }],
+    });
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Walkout', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(['cashier', 'server', 'kitchen'])(
+    'still refuses the %s template, which holds no orders:void',
+    async (role) => {
+      const template = RESTAURANT_ROLE_TEMPLATES.find((r) => r.key === role);
+      expect(template).toBeDefined();
+      mocks.userFindUnique.mockResolvedValue({
+        organizationRole: { permissions: permissionsFor(role) },
+        permissionOverrides: [],
+      });
+
+      await expect(
+        caller().cancel({ orderId: 'o1', reason: 'Walkout', actor: ACTOR })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('mutation wiring', () => {

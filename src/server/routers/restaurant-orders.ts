@@ -44,7 +44,9 @@ import {
  * model (C10, consumed by L5a) and the manager-level order mutations.
  *
  * Reads are gated by `capabilityProcedure('orders:read')`; mutations by
- * `capabilityProcedure('orders:manage')` — both org-role-driven through the ABAC
+ * `capabilityProcedure('orders:manage')`, except the maker-checker void/cancel
+ * commands, which gate on the narrower `capabilityProcedure('orders:void')` the
+ * manager role templates grant — all org-role-driven through the ABAC
  * engine (no static policy, see `abac/policies.ts`), the licensed `restaurant-pos`
  * module (`module-catalog.ts`) and the audit middleware. Tenant scoping is the
  * RLS-forced `organizationId` default on every row (C1).
@@ -254,6 +256,7 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
 
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('orders:manage');
+const voidProcedure = capabilityProcedure('orders:void');
 
 export const restaurantOrdersRouter = router({
   // ── Read model (C10) ─────────────────────────────────────────────────────────
@@ -531,7 +534,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  voidItem: manageProcedure
+  voidItem: voidProcedure
     .input(
       z
         .object({
@@ -569,7 +572,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  cancel: manageProcedure
+  cancel: voidProcedure
     .input(
       z
         .object({
