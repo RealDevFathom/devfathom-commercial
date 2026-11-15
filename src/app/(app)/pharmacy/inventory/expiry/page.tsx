@@ -85,7 +85,7 @@ export default async function PharmacyExpiryBoardPage({
   );
   if (!ctx?.session?.user || !moduleEnabled) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard title={moduleEnabled ? 'Permission required' : 'Inventory module unavailable'}>
           <p className="text-sm text-text-muted">
@@ -94,7 +94,7 @@ export default async function PharmacyExpiryBoardPage({
               : 'Enable Pharmacy Inventory in workspace modules to use this board.'}
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -113,22 +113,22 @@ export default async function PharmacyExpiryBoardPage({
     workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
   if (!branch && branches.length > 0) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
-      </main>
+      </div>
     );
   }
   if (!branch) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard title="Create an active branch first">
           <p className="text-sm text-text-muted">
             The expiry board is branch-scoped. Finish pharmacy onboarding to create a branch.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -210,7 +210,7 @@ export default async function PharmacyExpiryBoardPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       {query.branch && query.branch !== branch.id ? (
         <p
@@ -277,6 +277,6 @@ export default async function PharmacyExpiryBoardPage({
         view={view}
         withinDays={withinDays}
       />
-    </main>
+    </div>
   );
 }

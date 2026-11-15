@@ -127,7 +127,7 @@ export default async function AccountActivityBridgePage({
   }
 
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Account activity bridge"
@@ -236,13 +236,13 @@ export default async function AccountActivityBridgePage({
           </>
         )}
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
 function State({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Account activity bridge"
@@ -253,6 +253,6 @@ function State({ title, children }: { title: string; children: React.ReactNode }
           {children}
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

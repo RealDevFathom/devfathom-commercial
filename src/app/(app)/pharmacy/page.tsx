@@ -25,7 +25,7 @@ export default async function PharmacyOnboardingPage() {
     overview = await caller.overview();
   } catch {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy"
           heading="Onboarding"
@@ -37,7 +37,7 @@ export default async function PharmacyOnboardingPage() {
             workspace has no pharmacy licence, your DevFathom account manager assigns it.
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -46,7 +46,7 @@ export default async function PharmacyOnboardingPage() {
   const fbrTier1 = await caller.fbrTier1Status().catch(() => null);
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy"
         heading="Onboarding"
@@ -54,6 +54,6 @@ export default async function PharmacyOnboardingPage() {
       />
       <PharmacyOnboardingConsole initial={overview} />
       {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
-    </main>
+    </div>
   );
 }

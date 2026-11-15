@@ -113,14 +113,14 @@ export default async function PharmacyReportsPage({
       }
     }
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Reports"
           description="Bounded, permission-scoped command centre and report catalog."
         />
         <ReportNotice title="Reports unavailable" detail={detail} />
-      </main>
+      </div>
     );
   }
   // Reuse the authenticated tenant context; report rows do not prove historical currency.
@@ -345,7 +345,7 @@ export default async function PharmacyReportsPage({
       ]
     : [];
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
@@ -1169,6 +1169,6 @@ export default async function PharmacyReportsPage({
           detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
         />
       ) : null}
-    </main>
+    </div>
   );
 }

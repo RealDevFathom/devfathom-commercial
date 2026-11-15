@@ -111,8 +111,9 @@ describe('repeat purchasing page', () => {
     expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
   });
   it('provides meaningful loading state without animated dependency', () => {
-    render(<Loading />);
-    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    const { container } = render(<Loading />);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Checking complete follow-up');
   });
 });

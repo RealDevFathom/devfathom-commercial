@@ -58,7 +58,7 @@ export default async function ProfitAndLossPage({
           : 'Profit and loss could not be read. Retry the report.';
   }
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Profit and loss"
@@ -123,6 +123,6 @@ export default async function ProfitAndLossPage({
           <ProfitAndLossReport statements={result.profitAndLoss} />
         </SectionCard>
       )}
-    </main>
+    </div>
   );
 }

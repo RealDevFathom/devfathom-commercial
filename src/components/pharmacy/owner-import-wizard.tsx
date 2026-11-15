@@ -59,7 +59,7 @@ export function OwnerImportWizard() {
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader eyebrow="Pharmacy inventory · Owner setup" heading="Import opening stock"
         description="Upload your handover, map its columns, and review the physical opening position before posting."
         actions={<Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>Back to Inventory</Link>} />
@@ -164,6 +164,6 @@ export function OwnerImportWizard() {
             <p className="mt-3 text-sm text-text-muted">This posts the entire reviewed file once. A retry recovers the same receipt. Every count difference must carry a variance explanation; independent sign-off is not performed by this import.</p>
           </SectionCard>}
         </>}
-    </main>
+    </div>
   );
 }

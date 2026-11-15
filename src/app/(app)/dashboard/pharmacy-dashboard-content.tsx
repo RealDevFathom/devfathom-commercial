@@ -499,6 +499,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       catalog.data?.metrics.find((metric) => metric.key === item.metrics[0])
                         ?.drillThrough ? (
                         <Link
+                          aria-label={`Open report: ${item.label}`}
                           className="text-sm font-medium text-text-strong underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           href={
                             catalog.data.metrics.find((metric) => metric.key === item.metrics[0])!

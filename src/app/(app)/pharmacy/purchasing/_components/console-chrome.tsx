@@ -112,7 +112,7 @@ export function AccessState({
   requirement?: string;
 }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PurchasingHeader heading={heading} description={description} />
       <SectionCard
         title={
@@ -134,7 +134,7 @@ export function AccessState({
             : 'This is a licensing limit, not a usage limit: no allowance has been consumed.'}
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
