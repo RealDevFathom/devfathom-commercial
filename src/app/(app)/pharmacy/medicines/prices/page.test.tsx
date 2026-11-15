@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -47,7 +47,7 @@ const packRow = {
   effectiveDate: new Date('2026-01-01'),
 };
 const data = { asOf: new Date('2026-09-29'), rows: [row], packRows: [packRow] };
-const base = { onRetry: vi.fn(), onConfirm: vi.fn(async () => undefined) };
+const base = { onRetry: vi.fn() };
 describe('price intelligence page states', () => {
   it('renders the route with one heading and accessible initial loading', () => {
     render(<MedicinePricesPage />);
@@ -65,7 +65,7 @@ describe('price intelligence page states', () => {
     rerender(<PriceNoticesView {...base} data={{ ...data, rows: [] }} />);
     expect(screen.getByRole('status')).toHaveTextContent('No DRAP');
   });
-  it('keeps mapping rows unselectable; confirms eligible selection explicitly', async () => {
+  it('DEV-693: shows earlier DRAP notices as information only, with nothing to confirm', () => {
     render(
       <PriceNoticesView
         {...base}
@@ -73,6 +73,7 @@ describe('price intelligence page states', () => {
           ...data,
           rows: [
             row,
+            { ...row, id: 'applied', reference: 'applied', status: 'CONFIRMED', eligible: false },
             {
               ...row,
               id: 'unmapped',
@@ -85,15 +86,16 @@ describe('price intelligence page states', () => {
         }}
       />
     );
-    expect(screen.queryByLabelText('Select unmapped')).not.toBeInTheDocument();
-    expect(screen.getAllByText('گولی')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Review 0 selected' })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Select =SRO-1'));
-    fireEvent.click(screen.getByRole('button', { name: 'Review 1 selected' }));
-    expect(base.onConfirm).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm pack prices' }));
-    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledWith(['proposal']));
-    expect(await screen.findByRole('status')).toHaveTextContent('confirmed');
+    expect(screen.getAllByText('گولی')).toHaveLength(3);
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /review|confirm/i })).toBeNull();
+    const notices = screen.getByRole('region', { name: 'Mapped DRAP pack price notices, PKR' });
+    expect(
+      within(notices).getAllByText(/^Official price changed as of 2027-01-01: Rs\s?300\.00$/)
+    ).toHaveLength(2);
+    expect(within(notices).getByText('Information only')).toBeVisible();
+    expect(within(notices).getByText('Applied earlier')).toBeVisible();
+    expect(screen.getByText(/never change a price/)).toBeVisible();
   });
   it('exports UTF-8 aliases, formula-safe identifiers and blank unknown prices', () => {
     const csv = pricesCsv(data);
@@ -106,7 +108,7 @@ describe('price intelligence page states', () => {
   it('identifies every price table header as a column header', () => {
     render(<PriceNoticesView {...base} data={data} />);
     const headers = screen.getAllByRole('columnheader');
-    expect(headers).toHaveLength(12);
+    expect(headers).toHaveLength(11);
     for (const header of headers) expect(header).toHaveAttribute('scope', 'col');
   });
 });

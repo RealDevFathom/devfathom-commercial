@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import {
   confirmPriceChanges,
+  DRAP_PRICE_INFORMATION_ONLY,
   currentPackPrice,
   priceOverrides,
   setManualPackPrice,
@@ -143,60 +144,53 @@ describe.skipIf(!enabled)('WHA-1606 disposable database transaction/RLS evidence
     );
     expect(roles).toEqual([{ rolsuper: false, rolbypassrls: false }]);
   });
-  it('concurrent confirmations serialize, audit once and preserve future date', async () => {
-    await Promise.all(
-      [1, 2].map(() => withTenantDb(org, (tx) => confirmPriceChanges(tx, scope(), [proposalId])))
-    );
+  it('DEV-693: confirming DRAP proposals is refused, even concurrently, and writes nothing', async () => {
+    const outcomes = await Promise.allSettled([
+      withTenantDb(org, (tx) => confirmPriceChanges(tx, scope(), [proposalId])),
+      withTenantDb(org, (tx) => confirmPriceChanges(tx, scope(), [proposalId, pendingId])),
+    ]);
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe('rejected');
+      expect((outcome as PromiseRejectedResult).reason).toMatchObject({
+        message: DRAP_PRICE_INFORMATION_ONLY,
+      });
+    }
     await withTenantDb(org, async (tx) => {
-      expect(await tx.pharmacyPackPrice.count({ where: { proposalId } })).toBe(1);
-      const price = await tx.pharmacyPackPrice.findFirstOrThrow({ where: { proposalId } });
-      expect(
-        await tx.auditLog.count({
-          where: { targetId: price.id, action: 'pharmacyMedicine.confirmPrices' },
-        })
-      ).toBe(1);
-      expect((await currentPackPrice(tx, org, packId, new Date('2026-09-29')))?.mrpMinor).toBe(
+      for (const id of [proposalId, pendingId]) {
+        expect(await tx.pharmacyPackPrice.count({ where: { proposalId: id } })).toBe(0);
+        expect(
+          (await tx.pharmacyPriceChangeProposal.findFirstOrThrow({ where: { id } })).status
+        ).toBe('PROPOSED');
+      }
+      expect(await tx.auditLog.count({ where: { action: 'pharmacyMedicine.confirmPrices' } })).toBe(
+        0
+      );
+      // The notified 30000 never becomes a price; the manual 20000 stays.
+      expect((await currentPackPrice(tx, org, packId, new Date('2027-06-01')))?.mrpMinor).toBe(
         20000
       );
-      expect((await currentPackPrice(tx, org, packId, new Date('2027-01-01')))?.mrpMinor).toBe(
-        30000
-      );
       const overrides = await priceOverrides(tx, scope(), branchId);
-      expect(overrides[0]).toMatchObject({
-        mrpMinor: 19000,
-        sellingPriceMinor: 18000,
-        isOverride: true,
-        needsReview: true,
-      });
+      expect(overrides[0]).toMatchObject({ mrpMinor: 19000, sellingPriceMinor: 18000 });
     });
   });
-  it('bulk rollback includes price, proposal status and audit when one ID fails', async () => {
-    await expect(
-      withTenantDb(org, (tx) => confirmPriceChanges(tx, scope(), [pendingId, 'zz-missing']))
-    ).rejects.toThrow();
+  it('a manual owner price change still works', async () => {
+    await withTenantDb(org, (tx) =>
+      setManualPackPrice(tx, scope(), {
+        packLevelId: packId,
+        mrpMinor: 21000,
+        sellingPriceMinor: 20500,
+        effectiveFrom: new Date('2028-01-01'),
+      })
+    );
     await withTenantDb(org, async (tx) => {
-      expect(await tx.pharmacyPackPrice.count({ where: { proposalId: pendingId } })).toBe(0);
-      expect(
-        (await tx.pharmacyPriceChangeProposal.findFirstOrThrow({ where: { id: pendingId } })).status
-      ).toBe('PROPOSED');
-    });
-  });
-  it('audit failure rolls back the policy and confirmation', async () => {
-    await expect(
-      withTenantDb(org, (tx) =>
-        confirmPriceChanges(tx, { organizationId: org, actorId: 'missing-actor' }, [pendingId])
-      )
-    ).rejects.toThrow();
-    await withTenantDb(org, async (tx) => {
-      expect(await tx.pharmacyPackPrice.count({ where: { proposalId: pendingId } })).toBe(0);
-      expect(
-        (await tx.pharmacyPriceChangeProposal.findFirstOrThrow({ where: { id: pendingId } })).status
-      ).toBe('PROPOSED');
+      expect((await currentPackPrice(tx, org, packId, new Date('2028-01-02')))?.mrpMinor).toBe(
+        21000
+      );
     });
   });
   it('RLS rejects cross-tenant writes and identity guard rejects a mismatched presentation', async () => {
     const price = await withTenantDb(org, (tx) =>
-      tx.pharmacyPackPrice.findFirstOrThrow({ where: { proposalId } })
+      tx.pharmacyPackPrice.findFirstOrThrow({ where: { packLevelId: packId, branchId: null } })
     );
     for (const patch of [
       { organizationId: 'org_other' },

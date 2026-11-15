@@ -305,8 +305,9 @@ export async function ingestDrapNotice(
   return ingest;
 }
 
+/** DEV-693: refused like every DRAP confirmation; kept so old callers get the reason. */
 export async function confirmPriceChange(db: ScopedDb, scope: ActorScope, proposalId: string) {
-  return (await confirmPriceChanges(db, scope, [proposalId]))[0]!;
+  return confirmPriceChanges(db, scope, [proposalId]);
 }
 
 export async function recallActionList(db: ScopedDb, scope: ActorScope, recallNoticeId: string) {

@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -70,23 +69,14 @@ export function PriceNoticesView({
   loading,
   error,
   forbidden,
-  pending,
-  mutationError,
   onRetry,
-  onConfirm,
 }: {
   data?: PriceData;
   loading?: boolean;
   error?: boolean;
   forbidden?: boolean;
-  pending?: boolean;
-  mutationError?: string;
   onRetry: () => void;
-  onConfirm: (ids: string[]) => Promise<unknown>;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [review, setReview] = useState(false);
-  const [success, setSuccess] = useState(false);
   if (forbidden)
     return (
       <SectionCard title="Price review permission required" titleLevel={2}>
@@ -102,14 +92,12 @@ export function PriceNoticesView({
   if (error || !data)
     return (
       <SectionCard title="Price notices unavailable" titleLevel={2}>
-        <p role="alert">Could not load price policies. Retry before confirming notices.</p>
+        <p role="alert">Could not load price policies. Retry to see current pack prices.</p>
         <Button variant="outline" onClick={onRetry}>
           Retry
         </Button>
       </SectionCard>
     );
-  const eligible = data.rows.filter((r) => r.eligible && r.proposalId);
-  const ids = selected.filter((id) => eligible.some((r) => r.proposalId === id));
   const mapping = data.rows.filter((r) => r.status === 'NEEDS_MAPPING');
   const mapped = data.rows.filter((r) => r.status !== 'NEEDS_MAPPING');
   const exportCsv = () => {
@@ -197,95 +185,22 @@ export function PriceNoticesView({
           </div>
         )}
       </SectionCard>
-      <SectionCard title="DRAP price notices" titleLevel={2}>
+      <SectionCard title="Earlier DRAP price notices" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
-          Current prices as of {data.asOf.toISOString()}. Variance = selling − confirmed MRP for the
-          same pack. Missing selling policies remain unknown. Unit amounts are derived previews.
+          Current prices as of {data.asOf.toISOString()}. DRAP notices are for information only and
+          never change a price: set pack prices yourself from the MRP printed on the pack. Earlier
+          notices stay here unchanged as history. Variance = selling − confirmed MRP for the same
+          pack.
         </p>
         <div className="mb-4 flex flex-wrap items-center gap-3">
-          <Button
-            disabled={!ids.length || pending || review}
-            onClick={() => {
-              setReview(true);
-              setSuccess(false);
-            }}
-          >
-            Review {ids.length} selected
-          </Button>
-          <Button variant="outline" disabled={!data.packRows.length || pending} onClick={exportCsv}>
+          <Button variant="outline" disabled={!data.packRows.length} onClick={exportCsv}>
             Export CSV
           </Button>
-          <label className="flex min-h-11 items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              disabled={!eligible.length || pending || review}
-              checked={eligible.length > 0 && ids.length === eligible.length}
-              onChange={(e) =>
-                setSelected(
-                  e.target.checked ? eligible.slice(0, 100).map((r) => r.proposalId!) : []
-                )
-              }
-            />
-            Select eligible notices (up to 100)
-          </label>
         </div>
-        {review && (
-          <div
-            className="mb-4 space-y-3 rounded-md border border-border-default bg-surface-sunken p-4"
-            aria-label="Confirm selected notices"
-          >
-            <h3 className="font-semibold">Confirm {ids.length} pack price updates?</h3>
-            <p className="text-sm">
-              All selected updates are atomic and audited. Future effective dates stay scheduled.
-              Branch overrides retain their prices and require review against the new organization
-              version.
-            </p>
-            <ul className="text-sm">
-              {eligible
-                .filter((r) => ids.includes(r.proposalId!))
-                .map((r) => (
-                  <li key={r.id}>
-                    {r.reference}: {r.presentation} / {r.packLevel} — {money(r.notifiedMrpMinor)},
-                    effective {r.effectiveDate?.toISOString().slice(0, 10)}
-                  </li>
-                ))}
-            </ul>
-            <div className="flex flex-wrap gap-3">
-              <Button
-                disabled={pending || !ids.length}
-                onClick={async () => {
-                  try {
-                    await onConfirm(ids);
-                    setSelected([]);
-                    setReview(false);
-                    setSuccess(true);
-                  } catch {
-                    /* Mutation error remains visible; selection preserved. */
-                  }
-                }}
-              >
-                {pending ? 'Confirming…' : 'Confirm pack prices'}
-              </Button>
-              <Button variant="outline" disabled={pending} onClick={() => setReview(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-        {mutationError && (
-          <p role="alert" className="mb-4 text-destructive">
-            {mutationError}
-          </p>
-        )}
-        {success && (
-          <p role="status" className="mb-4">
-            Selected notices confirmed. Effective dates preserved.
-          </p>
-        )}
         {!data.rows.length && (
           <p role="status">
-            No DRAP price notices waiting for confirmation. New DRAP notices appear under Official
-            price changes for information and never change a price.
+            No DRAP price notices. New DRAP notices appear under Official price changes, for
+            information only.
           </p>
         )}
         {!!mapped.length && (
@@ -300,11 +215,10 @@ export function PriceNoticesView({
               <thead className="border-b border-border-default text-left font-mono text-xs uppercase">
                 <tr>
                   {[
-                    'Select',
                     'Medicine / presentation',
                     'Notice / effective',
                     'Pack',
-                    'Notified MRP',
+                    'Official price',
                     'Status',
                   ].map((h) => (
                     <th key={h} scope="col" className="p-3">
@@ -316,26 +230,6 @@ export function PriceNoticesView({
               <tbody>
                 {mapped.map((r) => (
                   <tr key={r.id} className="border-b border-border-subtle hover:bg-surface-sunken">
-                    <td className="p-3">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${r.reference}`}
-                        disabled={
-                          !r.eligible ||
-                          pending ||
-                          review ||
-                          (!ids.includes(r.proposalId!) && ids.length >= 100)
-                        }
-                        checked={ids.includes(r.proposalId!)}
-                        onChange={(e) =>
-                          setSelected(
-                            e.target.checked
-                              ? [...ids, r.proposalId!]
-                              : ids.filter((id) => id !== r.proposalId)
-                          )
-                        }
-                      />
-                    </td>
                     <td className="p-3">
                       <span className="font-medium">{r.medicine}</span>
                       <div dir="auto">{r.aliases.join(' / ')}</div>
@@ -351,16 +245,19 @@ export function PriceNoticesView({
                       {r.packLevel}
                       <div className="text-text-muted">{r.units} UNIT</div>
                     </td>
-                    <td className="p-3 text-right tabular-nums">{money(r.notifiedMrpMinor)}</td>
+                    <td className="p-3 tabular-nums">
+                      {r.effectiveDate && r.notifiedMrpMinor !== null
+                        ? officialPriceText({
+                            effectiveDate: r.effectiveDate,
+                            notifiedPriceMinor: r.notifiedMrpMinor,
+                          })
+                        : money(r.notifiedMrpMinor)}
+                    </td>
                     <td className="p-3">
+                      {/* Confirmed before DEV-693: kept as history, never re-applied. */}
                       <StatusPill
-                        status={
-                          r.status === 'CONFIRMED'
-                            ? r.effectiveDate && r.effectiveDate > data.asOf
-                              ? 'scheduled'
-                              : 'confirmed'
-                            : 'pending'
-                        }
+                        status={r.status === 'CONFIRMED' ? 'confirmed' : 'info'}
+                        label={r.status === 'CONFIRMED' ? 'Applied earlier' : 'Information only'}
                       />
                     </td>
                   </tr>
@@ -372,9 +269,9 @@ export function PriceNoticesView({
       </SectionCard>
       <SectionCard title={`Needs mapping (${mapping.length})`} titleLevel={2}>
         <p className="mb-3 text-sm text-text-muted">
-          Missing, unmatched, or ambiguous presentation/pack identities cannot be confirmed. Review
-          catalog mapping with an administrator. Keep the original source reference and payload
-          unchanged; unresolved notices remain blocked pending a supported mapping correction.
+          These notices name a presentation or pack the catalog cannot match exactly. Like every
+          DRAP notice they are information only. Review catalog mapping with an administrator. Keep
+          the original source reference and payload unchanged.
         </p>
         {!mapping.length ? (
           <p>No notices need mapping.</p>
@@ -568,7 +465,6 @@ export function DrapPriceAlertsView({
 
 export function PriceNotices() {
   const query = trpc.pharmacyMedicine.priceNotices.useQuery();
-  const mutation = trpc.pharmacyMedicine.confirmPrices.useMutation();
   const overrides = trpc.pharmacyMedicine.priceOverrides.useQuery(
     {},
     { retry: false, enabled: !!query.data }
@@ -603,13 +499,7 @@ export function PriceNotices() {
         forbidden={
           query.error?.data?.code === 'FORBIDDEN' || query.error?.data?.code === 'UNAUTHORIZED'
         }
-        pending={mutation.isPending}
-        mutationError={mutation.error?.message}
         onRetry={() => void query.refetch()}
-        onConfirm={async (ids) => {
-          await mutation.mutateAsync({ proposalIds: ids });
-          await Promise.all([query.refetch(), overrides.refetch()]);
-        }}
       />
       {query.data && (
         <PriceOverridesView
