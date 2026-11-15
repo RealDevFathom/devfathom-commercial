@@ -322,7 +322,7 @@ export const pharmacyMedicineRouter = router({
     })
   ),
   confirmPrices: capabilityProcedure('pharmacy:safety')
-    .input(z.object({ proposalIds: z.array(z.string().min(1)).min(1).max(100) }).strict())
+    .input(z.object({ proposalIds: z.array(z.string().min(1).max(200)).min(1).max(100) }).strict())
     .mutation(({ ctx, input }) =>
       confirmPriceChanges(
         ctx.db,
@@ -367,7 +367,7 @@ export const pharmacyMedicineRouter = router({
   drapPriceAlerts: capabilityProcedure('pharmacy:safety')
     .input(
       z
-        .object({ medicineIds: z.array(z.string().min(1)).min(1).max(500).optional() })
+        .object({ medicineIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional() })
         .strict()
         .optional()
     )
@@ -379,7 +379,7 @@ export const pharmacyMedicineRouter = router({
       )
     ),
   dismissDrapPriceAlert: capabilityProcedure('pharmacy:safety')
-    .input(z.object({ alertId: z.string().min(1) }).strict())
+    .input(z.object({ alertId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
         return await dismissDrapPriceAlert(
@@ -400,8 +400,8 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          packLevelId: z.string().min(1),
-          branchId: z.string().min(1).optional(),
+          packLevelId: z.string().min(1).max(200),
+          branchId: z.string().min(1).max(200).optional(),
           mrpMinor: z.number().int().min(0).max(2147483647),
           sellingPriceMinor: z.number().int().min(0).max(2147483647).nullable(),
           effectiveFrom: z.date(),
@@ -416,7 +416,7 @@ export const pharmacyMedicineRouter = router({
       )
     ),
   priceOverrides: adminProcedure
-    .input(z.object({ branchId: z.string().min(1).optional() }).strict())
+    .input(z.object({ branchId: z.string().min(1).max(200).optional() }).strict())
     .query(({ ctx, input }) =>
       priceOverrides(
         ctx.db,
@@ -474,17 +474,24 @@ export const pharmacyMedicineRouter = router({
                   batchId: z.string().trim().min(1).max(200),
                   rowSourceKey: z.string().trim().min(1).max(300),
                   targetMedicineId: z.string().trim().min(1).max(200).optional(),
-                  values: z.record(z.string(), z.string().trim().min(1).max(1_000)),
+                  values: z
+                    .record(z.string().min(1).max(100), z.string().trim().min(1).max(1_000))
+                    .refine(
+                      (value) => Object.keys(value).length <= 50,
+                      'Must contain at most 50 fields'
+                    ),
                   assertions: z.array(referenceAssertion).min(1).max(20),
-                  blockingIssues: z.array(
-                    z.enum([
-                      'MISSING_PRODUCT_NAME',
-                      'MISSING_STRENGTH',
-                      'MISSING_DOSAGE_FORM',
-                      'MISSING_PACK',
-                      'INVALID_SCHEDULE_CLASSIFICATION',
-                    ])
-                  ),
+                  blockingIssues: z
+                    .array(
+                      z.enum([
+                        'MISSING_PRODUCT_NAME',
+                        'MISSING_STRENGTH',
+                        'MISSING_DOSAGE_FORM',
+                        'MISSING_PACK',
+                        'INVALID_SCHEDULE_CLASSIFICATION',
+                      ])
+                    )
+                    .max(5),
                 })
                 .strict()
             )
@@ -837,7 +844,7 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          medicineId: z.string().min(1),
+          medicineId: z.string().min(1).max(200),
           retailPriceMinor: z.number().int().positive().safe().nullable(),
           retailCategory: z.string().max(200).nullable(),
         })
@@ -869,7 +876,7 @@ export const pharmacyMedicineRouter = router({
     }),
 
   get: auditedProtectedProcedure
-    .input(z.object({ id: z.string().min(1) }).strict())
+    .input(z.object({ id: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const medicine = await ctx.db.medicine.findFirst({
         where: { id: input.id, saleable: true },
@@ -887,9 +894,9 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          presentationId: z.string().min(1),
-          parentPackLevelId: z.string().min(1).optional(),
-          versionGroupId: z.string().min(1),
+          presentationId: z.string().min(1).max(200),
+          parentPackLevelId: z.string().min(1).max(200).optional(),
+          versionGroupId: z.string().min(1).max(200),
           level: z.enum(['CARTON', 'BOX', 'STRIP', 'UNIT']),
           unitsPerParent: z.number().int().positive(),
           effectiveFrom: z.date(),
@@ -919,7 +926,7 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          id: z.string().min(1),
+          id: z.string().min(1).max(200),
           unitsPerParent: z.number().int().positive(),
           effectiveFrom: z.date(),
         })
@@ -956,7 +963,7 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          packLevelId: z.string().min(1),
+          packLevelId: z.string().min(1).max(200),
           batchReference: z.string().min(1).max(200),
           printedMrpMinor: z.number().int().nonnegative(),
           roundingIncrementMinor: z.number().int().positive().default(1),
@@ -975,7 +982,10 @@ export const pharmacyMedicineRouter = router({
   deriveLooseUnitPrice: auditedProtectedProcedure
     .input(
       z
-        .object({ mrpId: z.string().min(1), canonicalUnitsInPack: z.number().int().positive() })
+        .object({
+          mrpId: z.string().min(1).max(200),
+          canonicalUnitsInPack: z.number().int().positive(),
+        })
         .strict()
     )
     .query(async ({ ctx, input }) => {
@@ -992,8 +1002,8 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          presentationId: z.string().min(1),
-          packLevelId: z.string().min(1).optional(),
+          presentationId: z.string().min(1).max(200),
+          packLevelId: z.string().min(1).max(200).optional(),
           type: z.enum(['GTIN', 'MANUFACTURER', 'INTERNAL']),
           code: z.string().trim().min(1).max(200),
         })
@@ -1068,7 +1078,7 @@ export const pharmacyMedicineRouter = router({
     .input(
       z
         .object({
-          medicineId: z.string().min(1),
+          medicineId: z.string().min(1).max(200),
           type: z.enum(['BRAND', 'GENERIC', 'URDU', 'TRANSLITERATION', 'LEGACY_CODE']),
           value: z.string().trim().min(1).max(300),
         })
@@ -1467,7 +1477,7 @@ export const pharmacyMedicineRouter = router({
   ),
 
   supersedePublication: adminProcedure
-    .input(z.object({ batchId: z.string().min(1) }).strict())
+    .input(z.object({ batchId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const published = await tx.medicinePublicationBatch.findFirst({

@@ -44,11 +44,11 @@ Parameters:
     Default: migrate
     AllowedValues: [migrate, seed, bootstrap]
     Description: >-
-      What the migration task runs after the migrations, as in
-      infra/environment.bicep. migrate: nothing. seed (staging only):
-      prisma/seed.ts, the demo data, on every release. bootstrap (production
-      only, once): prisma/bootstrap.ts, the first administrators. The
-      sign-in password secrets reach the task only in seed or bootstrap mode.
+      What the migration task runs after the migrations. migrate: nothing.
+      seed (staging only): prisma/seed.ts, the demo data, on every release.
+      bootstrap (production only, once): prisma/bootstrap.ts, the first
+      administrators. The sign-in password secrets reach the task only in seed
+      or bootstrap mode.
   DesiredCount:
     Type: Number
     Default: 1
@@ -128,14 +128,24 @@ Parameters:
   AnthropicApiKeySecretId:
     Type: String
     Default: ''
-    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    # Never one of this stack's own secrets: the web task role may read this
+    # name, so the database admin URL or a password must not be reachable here.
+    AllowedPattern: '^(?!devfathom/[^/]+/(?!(?:anthropic|openai)-api-key$))[A-Za-z0-9/_+=.@-]*$'
+    ConstraintDescription: >-
+      A secret name of letters, digits and /_+=.@-, outside devfathom/<environment>/
+      except that environment's own anthropic-api-key or openai-api-key.
     Description: >-
       Name (not ARN) of the existing secret holding the Anthropic API key.
       Empty means devfathom/<EnvironmentName>/anthropic-api-key.
   OpenAiApiKeySecretId:
     Type: String
     Default: ''
-    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    # Never one of this stack's own secrets: the web task role may read this
+    # name, so the database admin URL or a password must not be reachable here.
+    AllowedPattern: '^(?!devfathom/[^/]+/(?!(?:anthropic|openai)-api-key$))[A-Za-z0-9/_+=.@-]*$'
+    ConstraintDescription: >-
+      A secret name of letters, digits and /_+=.@-, outside devfathom/<environment>/
+      except that environment's own anthropic-api-key or openai-api-key.
     Description: >-
       Name (not ARN) of the existing secret holding the OpenAI API key.
       Empty means devfathom/<EnvironmentName>/openai-api-key.
@@ -726,6 +736,8 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      # Exactly the secrets the web container receives. The database admin URL
+      # and the sign-in passwords belong to the migration task alone.
       Policies:
         - PolicyName: read-web-task-secrets
           PolicyDocument:
@@ -739,9 +751,6 @@ Resources:
                   - !Ref PlatformEncryptionKeySecret
                   - !Ref CameraCredentialKeySecret
                   - !Ref CronSecret
-                  - !If [IsStaging, !Ref SeedPasswordSecret, !Ref AWS::NoValue]
-                  - !Ref AdminPasswordSecret
-                  - !Ref PlatformAdminPasswordSecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
 
   WebTaskRole:
@@ -951,8 +960,8 @@ Resources:
               awslogs-stream-prefix: web
 
   # Run on demand (aws ecs run-task), before the web service gets a new image.
-  # The command is infra/environment.bicep's migration path, plus the seed or the
-  # bootstrap that MigrationMode selects.
+  # The command applies the migrations and prepares the runtime role, plus the
+  # seed or the bootstrap that MigrationMode selects.
   MigrateTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -1010,7 +1019,7 @@ Resources:
               Value: !Ref EnvironmentName
             - Name: STAGING_DB_ENDPOINT
               Value: !GetAtt Database.Endpoint.Address
-          # The sign-in passwords only when seeding or bootstrapping, as in the bicep.
+          # The sign-in passwords only when seeding or bootstrapping.
           Secrets: !If
             - MigrationSeeds
             - - Name: DATABASE_URL
