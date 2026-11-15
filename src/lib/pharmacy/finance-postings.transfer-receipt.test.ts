@@ -39,9 +39,15 @@ function transferDb(
     movement?: Movement;
     unitCostMinor?: number;
     dispatchJournalled?: boolean;
+    receivedUnits?: number;
   } = {}
 ) {
-  const entries: Array<{ idempotencyKey: string; lines: Array<Record<string, unknown>> }> = [];
+  const entries: Array<{
+    idempotencyKey: string;
+    actorId: string;
+    occurredAt: Date;
+    lines: Array<Record<string, unknown>>;
+  }> = [];
   const db = {
     pharmacyInterbranchTransferLine: {
       findFirst: vi.fn().mockResolvedValue({
@@ -52,10 +58,12 @@ function transferDb(
         sourceStockLocationId: 'loc_src',
         destinationStockLocationId: 'loc_dest',
         quantityUnits: 20,
+        receivedUnits: overrides.receivedUnits ?? 0,
         transfer: {
           id: 'transfer_1',
           toBranchId: overrides.toBranchId ?? 'branch_dest',
           dispatchedAt: DISPATCHED_AT,
+          dispatchedById: 'user_dispatcher',
         },
       }),
     },
@@ -90,7 +98,12 @@ function transferDb(
             : null
         ),
       create: vi.fn().mockImplementation(async ({ data }) => {
-        entries.push({ idempotencyKey: data.idempotencyKey, lines: [] });
+        entries.push({
+          idempotencyKey: data.idempotencyKey,
+          actorId: data.actorId,
+          occurredAt: data.occurredAt,
+          lines: [],
+        });
         return { id: `entry_${entries.length}`, ...data };
       }),
       findFirstOrThrow: vi.fn().mockImplementation(async () => entries.at(-1)),
@@ -161,7 +174,12 @@ describe('postInterbranchTransferReceiptEntry', () => {
       DISPATCH_KEY,
       `${DISPATCH_KEY}:receipt:received_in`,
     ]);
-    // The whole dispatched line goes into transit, from the source branch.
+    // In the dispatcher's name, at the dispatch time; the receipt stays the
+    // receiver's.
+    expect(entries[0]).toMatchObject({ actorId: 'user_dispatcher', occurredAt: DISPATCHED_AT });
+    expect(entries[1]).toMatchObject({ actorId: destination.actorId, occurredAt: AT });
+    // Nothing was received yet, so the whole line goes into transit, from the
+    // source branch.
     expect(entries[0]!.lines).toEqual([
       expect.objectContaining({
         accountCode: 'INVENTORY_IN_TRANSIT',
@@ -178,6 +196,29 @@ describe('postInterbranchTransferReceiptEntry', () => {
         branchId: 'branch_src',
         lotId: 'lot_src',
         locationId: 'loc_src',
+      }),
+    ]);
+  });
+
+  it('backfills only what was still in transit when receipts began to be journalled', async () => {
+    // 5 of 20 units were shelved before receipts were journalled; they never
+    // reached the GL, so only the 15 still outstanding go into transit.
+    const { scoped, entries } = transferDb({ receivedUnits: 5 });
+
+    await receive(scoped);
+
+    expect(entries[0]!.idempotencyKey).toBe(DISPATCH_KEY);
+    expect(entries[0]!.lines).toEqual([
+      expect.objectContaining({ accountCode: 'INVENTORY_IN_TRANSIT', amountMinor: 9_000 }),
+      expect.objectContaining({ accountCode: 'INVENTORY', amountMinor: 9_000 }),
+    ]);
+    // ...and the 15 received now take them all back out.
+    expect(entries[1]!.lines).toEqual([
+      expect.objectContaining({ accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: 9_000 }),
+      expect.objectContaining({
+        accountCode: 'INVENTORY_IN_TRANSIT',
+        side: 'CREDIT',
+        amountMinor: 9_000,
       }),
     ]);
   });
@@ -258,12 +299,24 @@ describe('postInterbranchTransferLossEntry', () => {
   });
 
   it('backfills an unjournalled dispatch before clearing transit', async () => {
-    const { scoped, entries } = transferDb({ movement: lossMovement });
+    // 15 of 20 arrived before journalling; the 5 closed short are all that is
+    // still in transit, so the backfill and the loss net transit to zero.
+    const { scoped, entries } = transferDb({ movement: lossMovement, receivedUnits: 15 });
     await close(scoped);
     expect(entries.map((entry) => entry.idempotencyKey)).toEqual([
       DISPATCH_KEY,
       `${DISPATCH_KEY}:loss:loss_out`,
     ]);
+    expect(entries[0]).toMatchObject({ actorId: 'user_dispatcher' });
+    const transit = entries
+      .flatMap((entry) => entry.lines)
+      .filter((leg) => leg.accountCode === 'INVENTORY_IN_TRANSIT')
+      .reduce(
+        (sum, leg) =>
+          sum + (leg.side === 'DEBIT' ? Number(leg.amountMinor) : -Number(leg.amountMinor)),
+        0
+      );
+    expect(transit).toBe(0);
   });
 
   it.each([

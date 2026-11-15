@@ -562,11 +562,32 @@ export async function postInterbranchTransferEntry(
     throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   }
 
+  return postTransferDispatch(db, scope, line, line.quantityUnits, input.at);
+}
+
+type DispatchedLine = {
+  id: string;
+  transferId: string;
+  sourceBranchId: string;
+  sourceLotId: string;
+  sourceStockLocationId: string;
+  destinationStockLocationId: string;
+  transfer: { toBranchId: string };
+};
+
+/** The dispatch entry itself: `units` of the source lot's value into transit. */
+async function postTransferDispatch(
+  db: ScopedDb,
+  scope: PostingScope,
+  line: DispatchedLine,
+  units: number,
+  at: Date
+) {
   const lots = await loadLots(db, scope, [line.sourceLotId]);
   const lot = lots.get(line.sourceLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const amountMinor = lot.unitCostMinor * line.quantityUnits;
+  const amountMinor = lot.unitCostMinor * units;
   // A zero-cost lot moves units but no value; there is nothing to journal.
   if (amountMinor === 0) return null;
 
@@ -577,7 +598,7 @@ export async function postInterbranchTransferEntry(
       sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
       sourceId: line.id,
       description: `Inter-branch transfer ${line.transferId}`,
-      occurredAt: input.at,
+      occurredAt: at,
       idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
       branchId: line.sourceBranchId,
       lines: nonZero([
@@ -762,19 +783,45 @@ export async function postInterbranchTransferLossEntry(
 /**
  * Nothing may leave transit that was never put there. A transfer dispatched
  * before dispatches were journalled has no dispatch entry, so the first posting
- * that clears its transit backfills it — once, by the dispatch's own
- * idempotency key, at the time it was dispatched, on the source branch.
+ * that clears its transit backfills it — once, under the dispatch's own
+ * idempotency key, on the source branch, at the recorded dispatch time and in
+ * the recorded dispatcher's name.
+ *
+ * The backfill values only what is still in transit at that moment: units the
+ * line had already received before receipts were journalled never reached the
+ * GL, so putting them into transit now would leave them there for good. The
+ * caller must clear transit before it increments the line's `receivedUnits`.
  */
 async function ensureTransferDispatchPosted(
   db: ScopedDb,
   scope: PostingScope,
-  line: { id: string; sourceBranchId: string; transfer: { dispatchedAt: Date | null } },
+  line: DispatchedLine & {
+    quantityUnits: number;
+    receivedUnits: number;
+    transfer: { dispatchedAt: Date | null; dispatchedById: string | null };
+  },
   fallbackAt: Date
 ) {
-  await postInterbranchTransferEntry(
+  const posted = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
+    },
+    select: { id: true },
+  });
+  if (posted) return;
+  const outstanding = line.quantityUnits - line.receivedUnits;
+  if (outstanding <= 0) return;
+  await postTransferDispatch(
     db,
-    { ...scope, branchId: line.sourceBranchId },
-    { transferLineId: line.id, at: line.transfer.dispatchedAt ?? fallbackAt }
+    {
+      organizationId: scope.organizationId,
+      branchId: line.sourceBranchId,
+      actorId: line.transfer.dispatchedById ?? scope.actorId,
+    },
+    line,
+    outstanding,
+    line.transfer.dispatchedAt ?? fallbackAt
   );
 }
 
