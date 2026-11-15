@@ -2,7 +2,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 export default function Loading() {
   return (
-    <main className="min-w-0 space-y-6" aria-busy="true">
+    <div className="min-w-0 space-y-6" aria-busy="true">
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Repeat purchasing"
@@ -14,6 +14,6 @@ export default function Loading() {
           bounded scope is read.
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

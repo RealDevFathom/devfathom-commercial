@@ -86,6 +86,9 @@ function createFakeDb() {
       applyData(row, data);
       return { ...row };
     },
+    deleteMany: async ({ where }: { where: { id: string } }) => ({
+      count: inbox.delete(where.id) ? 1 : 0,
+    }),
   };
 
   const db = {
@@ -214,6 +217,152 @@ describe('recordInboundWebhook', () => {
     expect(result.inbox.id).toBe('inbox_raced');
     expect(result.enqueuedJobId).toBeNull();
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a signed event id', () => {
+  const terminalPayload = {
+    status: 'approved',
+    terminalId: 'counter-1',
+    reference: 'bill-1',
+    amount: '12.50',
+    staffProfileId: 'staff-1',
+    providerReference: 'provider-ref-1',
+  };
+  // What the route passes after `verifyTerminalSignature` returned VERIFIED.
+  const signedTerminal = {
+    source: 'card-provider',
+    externalEventId: 'evt_target',
+    eventType: 'terminal.approved',
+    payload: terminalPayload,
+    signature: 'hmac-hex',
+    verificationStatus: 'VERIFIED' as const,
+  };
+
+  beforeEach(() => {
+    let jobs = 0;
+    mocks.enqueue.mockImplementation(async () => ({
+      job: { id: `job_${(jobs += 1)}`, status: 'QUEUED' },
+      deduplicated: false,
+    }));
+  });
+
+  it.each([
+    ['unsigned, no event type', { signature: null }],
+    ['unsigned, non-terminal type', { eventType: 'order.created', signature: null }],
+    // The stub records VERIFIED for any non-empty header: still unauthenticated.
+    ['stub-signed, non-terminal type', { eventType: 'order.created', signature: 'forged' }],
+  ])(
+    'processes the signed terminal event exactly once after a %s envelope',
+    async (_label, spoof) => {
+      const { db, inbox } = createFakeDb();
+      const squatter = await recordInboundWebhook(
+        db,
+        { source: 'card-provider', externalEventId: 'evt_target', payload: { x: 1 }, ...spoof },
+        T0
+      );
+      expect(squatter.deduplicated).toBe(false);
+
+      const signed = await recordInboundWebhook(db, signedTerminal, T0);
+
+      expect(signed.deduplicated).toBe(false);
+      expect(signed.enqueuedJobId).toBe('job_2');
+      expect(signed.inbox.id).not.toBe(squatter.inbox.id);
+      expect(signed.inbox).toMatchObject({ verificationStatus: 'VERIFIED', status: 'PENDING' });
+      expect(inbox.size).toBe(1);
+      expect(inbox.get(signed.inbox.id)).toMatchObject({
+        eventType: 'terminal.approved',
+        payload: terminalPayload,
+      });
+
+      // Drain both queued jobs: the squatter's job finds its row gone and no-ops.
+      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: squatter.inbox.id }) });
+      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: signed.inbox.id }) });
+      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: signed.inbox.id }) });
+
+      expect(mocks.processTerminalEvent).toHaveBeenCalledExactlyOnceWith(db, {
+        source: 'card-provider',
+        externalEventId: 'evt_target',
+        event: terminalPayload,
+        requiredMode: 'WEBHOOK',
+      });
+      expect(inbox.get(signed.inbox.id)).toMatchObject({ status: 'PROCESSED' });
+    }
+  );
+
+  it('keeps a signed event when an unsigned envelope reuses its id later', async () => {
+    const { db, inbox } = createFakeDb();
+    const signed = await recordInboundWebhook(db, signedTerminal, T0);
+    mocks.enqueue.mockClear();
+
+    const spoof = await recordInboundWebhook(
+      db,
+      {
+        source: 'card-provider',
+        externalEventId: 'evt_target',
+        eventType: 'order.created',
+        payload: { x: 1 },
+        signature: 'forged',
+      },
+      T0
+    );
+
+    expect(spoof).toMatchObject({ deduplicated: true, enqueuedJobId: null });
+    expect(spoof.inbox.id).toBe(signed.inbox.id);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(inbox.size).toBe(1);
+    expect(inbox.get(signed.inbox.id)).toMatchObject({
+      eventType: 'terminal.approved',
+      payload: terminalPayload,
+      verificationStatus: 'VERIFIED',
+    });
+  });
+
+  it('still deduplicates a repeat of the same signed event', async () => {
+    const { db, inbox } = createFakeDb();
+    const first = await recordInboundWebhook(db, signedTerminal, T0);
+    mocks.enqueue.mockClear();
+
+    const second = await recordInboundWebhook(db, signedTerminal, T0);
+
+    expect(second).toMatchObject({ deduplicated: true, enqueuedJobId: null });
+    expect(second.inbox.id).toBe(first.inbox.id);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(inbox.size).toBe(1);
+  });
+
+  it('retries when an unsigned envelope wins the create race against a signed event', async () => {
+    const { db, inbox } = createFakeDb();
+    const realCreate = db.restaurantWebhookInbox.create.bind(db.restaurantWebhookInbox);
+    let raced = false;
+    (db.restaurantWebhookInbox as unknown as { create: unknown }).create = async (
+      args: Parameters<typeof realCreate>[0]
+    ) => {
+      if (!raced) {
+        raced = true;
+        // A concurrent unsigned insert commits between our lookup and our create.
+        await realCreate({
+          data: {
+            source: 'card-provider',
+            externalEventId: 'evt_target',
+            payload: {},
+            verificationStatus: 'PENDING',
+            status: 'PENDING',
+          },
+        } as Parameters<typeof realCreate>[0]);
+      }
+      return realCreate(args);
+    };
+
+    const signed = await recordInboundWebhook(db, signedTerminal, T0);
+
+    expect(signed.deduplicated).toBe(false);
+    expect(signed.enqueuedJobId).not.toBeNull();
+    expect(inbox.size).toBe(1);
+    expect(inbox.get(signed.inbox.id)).toMatchObject({
+      eventType: 'terminal.approved',
+      verificationStatus: 'VERIFIED',
+    });
   });
 });
 

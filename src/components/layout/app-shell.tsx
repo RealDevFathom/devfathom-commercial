@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
@@ -158,6 +158,9 @@ function WorkspaceIdentityMismatch() {
   );
 }
 
+const MOBILE_MENU_FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function isPathModuleEnabled(
   pathname: string,
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
@@ -191,15 +194,66 @@ export function AppShell({
   const { resolvedTheme } = useTheme();
   const brandStyle = tenantBrandTokens(brand, resolvedTheme) as CSSProperties;
 
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuOpenerRef = useRef<HTMLElement | null>(null);
+
+  // The trigger comes from the click itself: a tap in Safari does not focus a
+  // button, so `document.activeElement` may be the body or an unrelated field.
+  const openMobileMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    mobileMenuOpenerRef.current = event.currentTarget;
+    setMobileMenuOpen(true);
+  };
+
+  // DEV-507: the mobile drawer is a modal dialog. Focus moves into it on open,
+  // Tab and Shift+Tab stay inside it (the rest of the shell is also `inert`),
+  // and focus returns to the control that opened it once it closes.
   useEffect(() => {
     if (!mobileMenuOpen) return;
+    const drawer = mobileMenuRef.current;
+    const opener = mobileMenuOpenerRef.current;
+    const focusable = () =>
+      Array.from(drawer?.querySelectorAll<HTMLElement>(MOBILE_MENU_FOCUSABLE) ?? []).filter(
+        (element) => element.tabIndex >= 0
+      );
 
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileMenuOpen(false);
+    (drawer?.querySelector<HTMLElement>('nav a[href]') ?? focusable()[0] ?? drawer)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab' || !drawer) return;
+      const items = focusable();
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!first || !last) {
+        event.preventDefault();
+        drawer.focus();
+      } else if (event.shiftKey && (active === first || !drawer.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !drawer.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
 
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    // The drawer only exists below `lg`; widening the viewport dismisses it so
+    // focus is never trapped inside a hidden dialog.
+    const desktop = window.matchMedia?.('(min-width: 1024px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    desktop?.addEventListener?.('change', closeOnDesktop);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      desktop?.removeEventListener?.('change', closeOnDesktop);
+      if (opener?.isConnected) opener.focus();
+    };
   }, [mobileMenuOpen]);
 
   // WHA-276: enforce the invariant that displayed workspace identity can never
@@ -213,6 +267,7 @@ export function AppShell({
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
       <a
         href="#main-content"
+        inert={mobileMenuOpen}
         className="sr-only top-3 left-3 z-[60] rounded-[var(--radius-xs)] bg-primary text-sm font-semibold text-primary-foreground focus:not-sr-only focus:fixed focus:px-4 focus:py-2"
       >
         Skip to content
@@ -226,21 +281,27 @@ export function AppShell({
             onClick={() => setMobileMenuOpen(false)}
           />
           <div
+            ref={mobileMenuRef}
             role="dialog"
             aria-modal="true"
             aria-label="Mobile navigation"
-            className="fixed inset-y-0 start-0 z-50 lg:hidden"
+            tabIndex={-1}
+            className="fixed inset-y-0 start-0 z-50 outline-none lg:hidden"
           >
             <Sidebar
               brand={brand}
               onNavigate={() => setMobileMenuOpen(false)}
+              onClose={() => setMobileMenuOpen(false)}
               collapsible={false}
             />
           </div>
         </>
       )}
 
-      <div className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+      <div
+        inert={mobileMenuOpen}
+        className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden"
+      >
         {pharmacyPlaceholder ? (
           <div
             role="alert"
@@ -259,7 +320,7 @@ export function AppShell({
             <EndSupportAccessButton />
           </div>
         ) : null}
-        <Topbar brand={brand} onMenuClick={() => setMobileMenuOpen(true)} />
+        <Topbar brand={brand} onMenuClick={openMobileMenu} />
         {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
             organization activated before staff profiles were provisioned. Self-
             hiding, so it costs a healthy workspace nothing. */}
@@ -312,10 +373,12 @@ export function AppShell({
       </div>
 
       {sessionStatus === 'authenticated' && session?.user.organizationId && (
-        <AskFathomChat
-          key={session.user.organizationId}
-          organizationId={session.user.organizationId}
-        />
+        <div inert={mobileMenuOpen} className="contents">
+          <AskFathomChat
+            key={session.user.organizationId}
+            organizationId={session.user.organizationId}
+          />
+        </div>
       )}
     </div>
   );

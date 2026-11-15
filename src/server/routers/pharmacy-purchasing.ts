@@ -1527,6 +1527,23 @@ const purchasingRouter = router({
           let costedOrder: { id: string; freightMinor: number; otherChargesMinor: number } | null =
             null;
           if (input.purchaseOrderId) {
+            // An organization-wide order raised from a branch requisition is
+            // still that branch's demand: receiving against it needs reach
+            // there too, as every other order-scoped procedure does (#979).
+            // Checked before the row lock (#991), so a buyer cannot lock
+            // another branch's order or learn its status from the refusal.
+            // An order's branch and requisition never change after creation.
+            const target = await db.pharmacyPurchaseOrder.findFirst({
+              where: { id: input.purchaseOrderId, organizationId: scope.organizationId },
+              select: { branchId: true, requisitionId: true },
+            });
+            if (target) {
+              await assertOrderBranches(
+                ctx,
+                { branchId: target.branchId, requisitionId: target.requisitionId },
+                db
+              );
+            }
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
             const order = await lockReceivablePurchaseOrder(db, scope, {
@@ -1538,14 +1555,6 @@ const purchasingRouter = router({
               freightMinor: order.freightMinor,
               otherChargesMinor: order.otherChargesMinor,
             };
-            // An organization-wide order raised from a branch requisition is
-            // still that branch's demand: receiving against it needs reach
-            // there too, as every other order-scoped procedure does (#979).
-            await assertOrderBranches(
-              ctx,
-              { branchId: order.branchId, requisitionId: order.requisitionId },
-              db
-            );
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
           // received from, checked here and again when the receipt posts. With

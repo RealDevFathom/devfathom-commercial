@@ -13,7 +13,9 @@ export type WhatsAppTemplateKey =
   /** DEV-16 utility template: branch, receipt no, total, method and a hosted link only. */
   | 'receiptLink'
   /** DEV-79 utility template: branch, request date and an opaque reference only. */
-  | 'backInStock';
+  | 'backInStock'
+  /** DEV-15 authentication template: the customer app sign-in code only. */
+  | 'portalSignInCode';
 export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 /**
@@ -150,6 +152,8 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
       // DEV-79: utility template whose body names no drug, salt or category.
       backInStock: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_BACK_IN_STOCK'),
+      // DEV-15: an approved Meta AUTHENTICATION template (one code parameter, copy-code button).
+      portalSignInCode: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE'),
       receiptLink: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_RECEIPT_LINK'),
     },
     khataTemplates: {
@@ -295,6 +299,17 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
             type: 'body',
             parameters: input.parameters.map((text) => ({ type: 'text', text })),
           },
+          // Authentication templates carry the code again on their copy-code button.
+          ...(input.template === 'portalSignInCode'
+            ? [
+                {
+                  type: 'button',
+                  sub_type: 'url',
+                  index: '0',
+                  parameters: [{ type: 'text', text: input.parameters[0] ?? '' }],
+                },
+              ]
+            : []),
         ],
       },
     });

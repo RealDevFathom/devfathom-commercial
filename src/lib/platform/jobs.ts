@@ -17,6 +17,7 @@ import {
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
 import {
+  OwnerDataExportTooLargeError,
   purgeExpiredOwnerDataExports,
   runPharmacyOwnerDataExportJob,
 } from '@/lib/pharmacy/owner-data-export';
@@ -858,6 +859,11 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
           ? 120_000
           : 30_000,
+      // The owner export reads each table in pages, and some tables twice (sales
+      // then sale lines). One snapshot keeps every file consistent with the rest.
+      ...(job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
+        ? { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+        : {}),
     }
   );
 }
@@ -883,7 +889,11 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  const retry = !(error instanceof PermanentJobError) && job.attempts < job.maxAttempts;
+  // An export over its size cap stays over it: retrying only repeats the work.
+  const retry =
+    !(error instanceof PermanentJobError) &&
+    !(error instanceof OwnerDataExportTooLargeError) &&
+    job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({
       where: { id: job.id },
