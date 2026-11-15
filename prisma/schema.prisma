@@ -3034,8 +3034,9 @@ enum PlatformJobType {
   PURGE_DATA
   SUSPEND
   RESUME
-  PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
-  CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  PHARMACY_CAMERA_SNAPSHOT_V1   @map("pharmacy.camera.snapshot.v1")
+  CAMERA_EVIDENCE_RETENTION_V1  @map("camera.evidence.retention.v1")
+  PHARMACY_OWNER_DATA_EXPORT_V1 @map("pharmacy.owner.data_export.v1")
 }
 
 enum PlatformJobStatus {

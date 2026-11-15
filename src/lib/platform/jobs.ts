@@ -16,6 +16,7 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
+import { runPharmacyOwnerDataExportJob } from '@/lib/pharmacy/owner-data-export';
 import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
@@ -837,6 +838,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
       return handlers[job.type](db, job, payload);
     },
@@ -844,7 +846,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       timeout:
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
+        job.type === 'PHARMACY_OWNER_DATA_EXPORT_V1'
           ? 120_000
           : 30_000,
     }
