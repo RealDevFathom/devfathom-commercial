@@ -36,4 +36,11 @@ CREATE POLICY tenant_isolation ON "pharmacy_marketing_send_policies"
   USING (current_setting('app.is_platform_admin', true) = 'true' OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
   WITH CHECK (current_setting('app.is_platform_admin', true) = 'true' OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
 
+-- Dispatch suppression reasons are a closed list. Extend it as a superset with the
+-- auto-pause reason and the existing under-18 consent outcome, which dispatch can
+-- also write. Drop-and-add keeps this idempotent.
+ALTER TABLE "pharmacy_campaign_delivery_events" DROP CONSTRAINT IF EXISTS "pharmacy_campaign_delivery_events_reason_check";
+ALTER TABLE "pharmacy_campaign_delivery_events" ADD CONSTRAINT "pharmacy_campaign_delivery_events_reason_check"
+  CHECK (reason IN ('DEFINITE_REJECTION','TRANSPORT_UNKNOWN','ADAPTER_FAULT','OPTED_OUT','NO_CONSENT','INACTIVE','FREQUENCY_CAP','WINDOW_CLOSED','PROVIDER_FAILURE','UNDER_18','MARKETING_PAUSED'));
+
 COMMIT;

@@ -190,12 +190,25 @@ export async function evaluateMarketingBlockRate(
         purpose: 'MARKETING',
         channel: 'WHATSAPP',
         granted: false,
+        // Only WhatsApp STOP replies; counter and QR refusals are not blocks.
+        source: 'REPLY',
         recordedAt: { gte: since, lte: now },
       },
     }),
-    db.pharmacyCampaignDeliveryEvent.count({
-      where: { organizationId, state: 'DELIVERED', occurredAt: { gte: since, lte: now } },
-    }),
+    // One real provider delivery per accepted message: sandbox rows and repeat
+    // delivered/read callbacks for the same message must not dilute the rate.
+    db.pharmacyCampaignDeliveryEvent
+      .groupBy({
+        by: ['acceptanceId'],
+        where: {
+          organizationId,
+          provider: 'meta',
+          state: 'DELIVERED',
+          acceptanceId: { not: null },
+          occurredAt: { gte: since, lte: now },
+        },
+      })
+      .then((rows) => rows.length),
   ]);
   if (delivered < policy.blockRateMinSample) return 'INSUFFICIENT_SAMPLE' as const;
   const rateBps = Math.floor((blocks * 10_000) / delivered);

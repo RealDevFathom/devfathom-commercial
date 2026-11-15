@@ -148,11 +148,17 @@ it('does not pause on benign account updates or before signature verification', 
   ).toBe(401);
   expect(mocks.pause).not.toHaveBeenCalled();
 });
-it('re-checks the block rate after a STOP opt-out only', async () => {
+it('re-checks the block rate after a STOP and after a replayed STOP', async () => {
   await POST(request());
   expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
   mocks.blockRate.mockClear();
-  mocks.inbound.mockResolvedValue('ORDER_PLACED');
+  // A Meta retry of a STOP whose first check failed is handled as DUPLICATE.
+  mocks.inbound.mockResolvedValue('DUPLICATE');
+  await POST(request());
+  expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
+});
+it('skips the block-rate check when no sender message was handled', async () => {
+  mocks.parse.mockReturnValue([]);
   await POST(request());
   expect(mocks.blockRate).not.toHaveBeenCalled();
 });

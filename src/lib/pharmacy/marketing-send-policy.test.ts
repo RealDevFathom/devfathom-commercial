@@ -23,7 +23,11 @@ function database(row: Record<string, unknown> | null, counts = { blocks: 0, del
       updateMany: vi.fn(async () => ({ count: row?.pausedAt ? 1 : 0 })),
     },
     patientConsent: { count: vi.fn(async () => counts.blocks) },
-    pharmacyCampaignDeliveryEvent: { count: vi.fn(async () => counts.delivered) },
+    pharmacyCampaignDeliveryEvent: {
+      groupBy: vi.fn(async () =>
+        Array.from({ length: counts.delivered }, (_, i) => ({ acceptanceId: `acceptance-${i}` }))
+      ),
+    },
     pharmacyCampaignCapture: { count: vi.fn(async () => 0) },
   };
 }
@@ -172,7 +176,18 @@ describe('block-rate auto-pause', () => {
         purpose: 'MARKETING',
         channel: 'WHATSAPP',
         granted: false,
+        source: 'REPLY',
         recordedAt: { gte: new Date('2026-09-29T07:00:00Z'), lte: now },
+      },
+    });
+    expect(mock.pharmacyCampaignDeliveryEvent.groupBy).toHaveBeenCalledWith({
+      by: ['acceptanceId'],
+      where: {
+        organizationId: 'org-a',
+        provider: 'meta',
+        state: 'DELIVERED',
+        acceptanceId: { not: null },
+        occurredAt: { gte: new Date('2026-09-29T07:00:00Z'), lte: now },
       },
     });
   });
