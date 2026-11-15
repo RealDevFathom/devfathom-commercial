@@ -17,6 +17,12 @@ import {
 } from '@/lib/pharmacy/finance-reports';
 import { loadLedgerLabels } from '@/lib/pharmacy/finance-label-lookup';
 import {
+  DeliveryRadiusAssumptionError,
+  deliveryRadiusProfitability,
+  loadDeliveryRadiusOrders,
+  MAX_DELIVERY_DISTANCE_METERS,
+} from '@/lib/pharmacy/delivery-radius-profitability';
+import {
   closeAccountingPeriod,
   createSettlementBatch,
   PharmacyBookkeepingError,
@@ -360,6 +366,42 @@ export const pharmacyFinanceRouter = router({
       labels,
     };
   }),
+
+  /**
+   * DEV-63: delivered-order profitability by radius band. The delivery cost
+   * is an estimate from the owner's own assumptions, supplied with the query.
+   */
+  deliveryRadiusProfitability: ledgerReportProcedure
+    .input(
+      reportPeriod.safeExtend({
+        bandEdgesMeters: z
+          .array(z.number().int().positive().max(MAX_DELIVERY_DISTANCE_METERS))
+          .min(1)
+          .max(12),
+        costPerKmMinor: z.number().int().min(0).max(999_999_999),
+        fixedCostPerOrderMinor: z.number().int().min(0).max(999_999_999),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const period = { from: new Date(input.from), to: new Date(input.to) };
+      const orders = await loadDeliveryRadiusOrders(ctx.db, ctx.reportScope, period);
+      try {
+        return {
+          scope: ctx.reportScope,
+          period: { ...period, bounds: '[from,to)' as const },
+          moneyUnit: 'integer_minor' as const,
+          ...deliveryRadiusProfitability(orders, {
+            bandEdgesMeters: input.bandEdgesMeters,
+            costPerKmMinor: input.costPerKmMinor,
+            fixedCostPerOrderMinor: input.fixedCostPerOrderMinor,
+          }),
+        };
+      } catch (error) {
+        if (error instanceof DeliveryRadiusAssumptionError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
+    }),
 
   marginComparison: adminProcedure
     .input(
