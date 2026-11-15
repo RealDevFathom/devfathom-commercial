@@ -40,11 +40,13 @@ vi.mock('@/lib/ai/tools', () => ({
   assistantToolChoice: vi.fn(() => 'auto'),
 }));
 
+import { readAskFathomAvailability } from '@/lib/ai/ask-fathom-settings';
 import { assistantRateKeys } from '@/lib/ai/assistant-request';
 import { __setRouterDependenciesForTests } from '@/lib/ai/router';
 import { __setSecretsReaderForTests } from '@/lib/ai/secrets';
 import type { StoredAISettings } from '@/lib/ai/spend';
 import { clearRateLimit } from '@/lib/rate-limit';
+import { createTenantDb } from '@/lib/tenancy/scoped-db';
 
 import { POST } from './route';
 
@@ -431,6 +433,23 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
     routing(null, { anthropic: 190, openai: 190, bedrock: 300 });
     const capped = await ask();
     expect(capped.status).toBe(503);
+    expect(calls).toEqual([]);
+  });
+
+  it('turns the launcher off when no provider key can be read from Secrets Manager (DEV-583)', async () => {
+    // Secret ids are set, but the instance role cannot read them and Bedrock is not set up.
+    vi.stubEnv('BEDROCK_REGION', '');
+    __setSecretsReaderForTests(async () => {
+      throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+    });
+    const check = await readAskFathomAvailability(createTenantDb('org_a'), 'org_a');
+    expect(check?.availability).toMatchObject({
+      askFathomEnabled: true,
+      available: false,
+      unavailableReason: 'AI_UNAVAILABLE',
+    });
+    const response = await ask();
+    expect(response.status).toBe(503);
     expect(calls).toEqual([]);
   });
 });

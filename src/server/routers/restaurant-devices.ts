@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { can, subjectFromSession } from '@/lib/abac';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { z } from 'zod';
@@ -63,6 +63,55 @@ async function assertApproverCanCoAuthorize(
       code: 'FORBIDDEN',
       message: 'The approving staff member lacks co-authorization approval permission.',
     });
+  }
+}
+
+/**
+ * Revocation is its own capability, never implied by `devices:manage`. Like
+ * `menu:publish`, it is an organization-role capability outside the ABAC action
+ * union, so `can()` resolves it through the role grant and default-denies.
+ */
+const DEVICES_REVOKE = 'devices:revoke' as Action;
+
+type RevokeAuthorizationContext = {
+  db: ScopedDb;
+  session: { user: Parameters<typeof resolveCapabilityBranchAuthorization>[1] } | null;
+  entitlements: { organizationId?: string | null };
+  requestMeta: { ip: string | null };
+};
+
+/**
+ * Resolve the branches where the actor may revoke devices. A branch actor needs
+ * `devices:revoke` on that branch's job role; an organization-wide actor
+ * (`restaurant:configure`) must also hold `devices:revoke` on their organization
+ * role, because configuring the restaurant does not grant revocation.
+ */
+async function resolveRevokeAuthorization(ctx: RevokeAuthorizationContext) {
+  const user = ctx.session!.user;
+  const authorization = await resolveCapabilityBranchAuthorization(ctx.db, user, 'devices:revoke', {
+    organizationId: ctx.entitlements.organizationId,
+    requireExactlyOneActiveActor: true,
+  });
+  if (
+    authorization.organizationWide &&
+    !(await can(subjectFromSession(user), DEVICES_REVOKE, undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
+    denyStaffBranchAccess();
+  }
+  return authorization;
+}
+
+/** Branches whose devices the actor may revoke; only drives the console's Revoke affordance. */
+async function revocableBranchIds(ctx: RevokeAuthorizationContext): Promise<Set<string>> {
+  try {
+    return new Set((await resolveRevokeAuthorization(ctx)).branchIds);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') return new Set();
+    throw error;
   }
 }
 
@@ -258,6 +307,8 @@ export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
   list: auditedProtectedProcedure.query(async ({ ctx }) => {
     let authorization = await resolveDemoDirectoryScope(ctx, 'devices', demoDirectoryPolicy);
+    // Branches where `revoke` would accept this actor; the server re-checks on revoke.
+    let revokeBranchIds = new Set<string>();
     if (!authorization) {
       if (
         !(await can(subjectFromSession(ctx.session!.user), 'devices:manage', undefined, {
@@ -273,6 +324,7 @@ export const restaurantDevicesRouter = router({
         'devices:manage',
         { organizationId: ctx.entitlements.organizationId }
       );
+      revokeBranchIds = await revocableBranchIds(ctx);
     }
     const now = new Date();
     const devices = await ctx.db.restaurantRegisteredDevice.findMany({
@@ -291,6 +343,7 @@ export const restaurantDevicesRouter = router({
       revokedAt: device.revokedAt,
       createdAt: device.createdAt,
       health: deviceHealth(device, now),
+      canRevoke: device.status !== 'REVOKED' && revokeBranchIds.has(device.branchId),
     }));
   }),
 
@@ -451,12 +504,10 @@ export const restaurantDevicesRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
 
-      const authorization = await resolveCapabilityBranchAuthorization(
-        ctx.db,
-        ctx.session!.user,
-        'devices:manage',
-        { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
-      );
+      // Revocation is its own capability: `devices:manage` (the procedure gate)
+      // is not enough. The acting identity must hold `devices:revoke` for the
+      // device's branch before any approval evidence is built or persisted.
+      const authorization = await resolveRevokeAuthorization(ctx);
       const actingStaffProfileId = authorization.actorStaffProfileId;
       if (!actingStaffProfileId) denyStaffBranchAccess();
 

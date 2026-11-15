@@ -714,6 +714,284 @@ describe('review before a stale submission (criterion 5)', () => {
     );
   });
 
+  describe('selected modifiers are part of the reviewed quote', () => {
+    const withModifiers = (priceDelta: string, options = [{ id: 'opt-cheese', priceDelta }]) =>
+      catalog({
+        sections: [
+          {
+            ...catalog().sections[0],
+            items: [
+              {
+                ...catalog().sections[0].items[0],
+                modifierGroups: [
+                  {
+                    id: 'grp-1',
+                    name: 'Extras',
+                    minSelect: 0,
+                    maxSelect: null,
+                    options: options.map((option) => ({ ...option, name: option.id })),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    const modifierDraft = (quotedModifiers?: Array<{ optionId: string; priceDelta: string }>) =>
+      seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              ...(quotedModifiers ? { quotedModifiers } : {}),
+            },
+          ],
+        }),
+      ]).drafts[0];
+
+    const modifierDraftSnapshot = (
+      quotedModifiers: Array<{ optionId: string; priceDelta: string }>
+    ) =>
+      seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              quotedModifiers,
+            },
+          ],
+        }),
+      ]);
+
+    it('passes when every selected modifier still has the quoted delta', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      expect(reviewAgainstCatalog(draft, withModifiers('50.00'))).toBeNull();
+    });
+
+    it('flags a repriced modifier even when the base price is unchanged', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const review = reviewAgainstCatalog(draft, withModifiers('80.00'));
+      expect(review?.reason).toBe('PRICE_CHANGED');
+      expect(review?.atCommandId).toBe(draft.commands[1].commandId);
+
+      const flagged = markDraftsForCatalogReview(
+        seeded([
+          draftInput({
+            lines: [
+              {
+                menuItemId: 'mi-1',
+                quantity: 1,
+                quotedUnitPrice: '450.00',
+                modifierOptionIds: ['opt-cheese'],
+                quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+              },
+            ],
+          }),
+        ]),
+        withModifiers('80.00')
+      );
+      expect(flagged.flagged).toBe(1);
+      expect(flagged.snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(nextReplayCommand(flagged.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
+    });
+
+    it('flags a selected modifier that was withdrawn from the item', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const withdrawn = withModifiers('50.00', [{ id: 'opt-onion', priceDelta: '0.00' }]);
+      expect(reviewAgainstCatalog(draft, withdrawn)?.reason).toBe('ITEM_UNAVAILABLE');
+      expect(reviewAgainstCatalog(draft, catalog())?.reason).toBe('ITEM_UNAVAILABLE');
+    });
+
+    it('reviews a legacy draft whose modifier quote was never captured', () => {
+      const draft = modifierDraft();
+      expect(reviewAgainstCatalog(draft, withModifiers('50.00'))?.reason).toBe('PRICE_CHANGED');
+    });
+
+    it('keeps the modifier quote local to the device', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const built = buildReplayRequest({ ...draft, serverOrderId: 'order-1' }, draft.commands[1]);
+      expect(built.ok).toBe(true);
+      if (!built.ok) return;
+      expect(built.request.body).not.toHaveProperty('quotedModifiers');
+      expect(addItemBody.safeParse(built.request.body).success).toBe(true);
+    });
+
+    it('records the reviewed catalog as the accepted quote when the operator sends a draft', () => {
+      const legacy = seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+            },
+          ],
+        }),
+      ]);
+      const current = withModifiers('50.00');
+      const flagged = markDraftsForCatalogReview(legacy, current).snapshot;
+      expect(flagged.drafts[0].status).toBe('NEEDS_REVIEW');
+
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        current.version,
+        current
+      );
+      // Unchanged since the review: the accepted draft is not flagged again.
+      const refreshed = markDraftsForCatalogReview(accepted, current);
+      expect(refreshed.flagged).toBe(0);
+      expect(refreshed.snapshot.drafts[0].status).toBe('QUEUED');
+      // A change made after the review still needs a fresh one.
+      expect(markDraftsForCatalogReview(accepted, withModifiers('80.00')).flagged).toBe(1);
+    });
+
+    it('does not take another channel menu as the accepted quote', () => {
+      const legacy = seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+            },
+          ],
+        }),
+      ]);
+      const takeaway = { ...withModifiers('50.00'), channel: 'TAKEAWAY' as const };
+      const flagged = markDraftsForCatalogReview(legacy, takeaway).snapshot;
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        takeaway.version,
+        takeaway
+      );
+      expect(accepted.drafts[0].commands[1]).toEqual(legacy.drafts[0].commands[1]);
+      expect(markDraftsForCatalogReview(accepted, withModifiers('50.00')).flagged).toBe(1);
+    });
+
+    it('shows every changed line before replay instead of accepting unseen changes', () => {
+      const snapshot = seeded([
+        draftInput({
+          lines: [
+            { menuItemId: 'mi-1', quantity: 1, quotedUnitPrice: '400.00' },
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+            },
+          ],
+        }),
+      ]);
+      const current = withModifiers('80.00');
+      const flagged = markDraftsForCatalogReview(snapshot, current).snapshot;
+      const draftId = flagged.drafts[0].draftId;
+      expect(flagged.drafts[0].review).toMatchObject({
+        reason: 'PRICE_CHANGED',
+        atCommandId: 'c2',
+      });
+
+      // Accepting the base-price change shown for the first line surfaces the
+      // modifier change on the second line; nothing replays yet.
+      const first = resolveReviewedDraft(flagged, draftId, 'REPLAY', current.version, current);
+      expect(first.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(first.drafts[0].review).toMatchObject({ reason: 'PRICE_CHANGED', atCommandId: 'c3' });
+      expect(nextReplayCommand(first, DEVICE, OPERATOR).status).toBe('IDLE');
+
+      const second = resolveReviewedDraft(first, draftId, 'REPLAY', current.version, current);
+      expect(second.drafts[0].status).toBe('QUEUED');
+      expect(markDraftsForCatalogReview(second, current).flagged).toBe(0);
+    });
+
+    it('shows a line change hidden behind an accepted closed-channel review', () => {
+      const snapshot = modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const closed = { ...withModifiers('80.00'), channelOpen: false };
+      const flagged = markDraftsForCatalogReview(snapshot, closed).snapshot;
+      expect(flagged.drafts[0].review?.reason).toBe('CHANNEL_CLOSED');
+
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        closed.version,
+        closed
+      );
+      expect(accepted.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(accepted.drafts[0].review).toMatchObject({
+        reason: 'PRICE_CHANGED',
+        atCommandId: 'c2',
+      });
+    });
+
+    describe('a review raised while a command is in flight', () => {
+      const twoLines = () => {
+        let snapshot = seeded([
+          draftInput({
+            lines: [
+              { menuItemId: 'mi-1', quantity: 1, quotedUnitPrice: '450.00' },
+              {
+                menuItemId: 'mi-1',
+                quantity: 1,
+                quotedUnitPrice: '450.00',
+                modifierOptionIds: ['opt-cheese'],
+                quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+              },
+            ],
+          }),
+        ]);
+        const draft = snapshot.drafts[0];
+        snapshot = applyReplayOutcome(beginReplay(snapshot, draft.draftId, 'c1'), {
+          draftId: draft.draftId,
+          commandId: 'c1',
+          outcome: { action: 'ACK' },
+          serverRef: 'order-1',
+        }).snapshot;
+        // The first line is on the wire when the refresh reprices the second line.
+        snapshot = beginReplay(snapshot, draft.draftId, 'c2');
+        snapshot = markDraftsForCatalogReview(snapshot, withModifiers('80.00')).snapshot;
+        expect(snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(snapshot.drafts[0].review?.atCommandId).toBe('c3');
+        return snapshot;
+      };
+
+      it('survives the acknowledgement of the in-flight command', () => {
+        const snapshot = twoLines();
+        const acked = applyReplayOutcome(snapshot, {
+          draftId: snapshot.drafts[0].draftId,
+          commandId: 'c2',
+          outcome: { action: 'ACK' },
+          serverRef: 'item-1',
+        }).snapshot;
+        expect(acked.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(acked.drafts[0].review?.reason).toBe('PRICE_CHANGED');
+        expect(nextReplayCommand(acked, DEVICE, OPERATOR).status).toBe('IDLE');
+      });
+
+      it('survives a retry of the in-flight command', () => {
+        const snapshot = twoLines();
+        const retried = applyReplayOutcome(snapshot, {
+          draftId: snapshot.drafts[0].draftId,
+          commandId: 'c2',
+          outcome: classifyReplayOutcome({ status: 0 }),
+        }).snapshot;
+        expect(retried.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(nextReplayCommand(retried, DEVICE, OPERATOR).status).toBe('IDLE');
+      });
+    });
+  });
+
   it('does not re-price lines the server already accepted', () => {
     let snapshot = seeded([draftInput()]);
     const draft = snapshot.drafts[0];
