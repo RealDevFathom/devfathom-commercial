@@ -714,6 +714,98 @@ describe('review before a stale submission (criterion 5)', () => {
     );
   });
 
+  describe('selected modifiers are part of the reviewed quote', () => {
+    const withModifiers = (priceDelta: string, options = [{ id: 'opt-cheese', priceDelta }]) =>
+      catalog({
+        sections: [
+          {
+            ...catalog().sections[0],
+            items: [
+              {
+                ...catalog().sections[0].items[0],
+                modifierGroups: [
+                  {
+                    id: 'grp-1',
+                    name: 'Extras',
+                    minSelect: 0,
+                    maxSelect: null,
+                    options: options.map((option) => ({ ...option, name: option.id })),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    const modifierDraft = (quotedModifiers?: Array<{ optionId: string; priceDelta: string }>) =>
+      seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+              ...(quotedModifiers ? { quotedModifiers } : {}),
+            },
+          ],
+        }),
+      ]).drafts[0];
+
+    it('passes when every selected modifier still has the quoted delta', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      expect(reviewAgainstCatalog(draft, withModifiers('50.00'))).toBeNull();
+    });
+
+    it('flags a repriced modifier even when the base price is unchanged', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const review = reviewAgainstCatalog(draft, withModifiers('80.00'));
+      expect(review?.reason).toBe('PRICE_CHANGED');
+      expect(review?.atCommandId).toBe(draft.commands[1].commandId);
+
+      const flagged = markDraftsForCatalogReview(
+        seeded([
+          draftInput({
+            lines: [
+              {
+                menuItemId: 'mi-1',
+                quantity: 1,
+                quotedUnitPrice: '450.00',
+                modifierOptionIds: ['opt-cheese'],
+                quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+              },
+            ],
+          }),
+        ]),
+        withModifiers('80.00')
+      );
+      expect(flagged.flagged).toBe(1);
+      expect(flagged.snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(nextReplayCommand(flagged.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
+    });
+
+    it('flags a selected modifier that was withdrawn from the item', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const withdrawn = withModifiers('50.00', [{ id: 'opt-onion', priceDelta: '0.00' }]);
+      expect(reviewAgainstCatalog(draft, withdrawn)?.reason).toBe('ITEM_UNAVAILABLE');
+      expect(reviewAgainstCatalog(draft, catalog())?.reason).toBe('ITEM_UNAVAILABLE');
+    });
+
+    it('reviews a legacy draft whose modifier quote was never captured', () => {
+      const draft = modifierDraft();
+      expect(reviewAgainstCatalog(draft, withModifiers('50.00'))?.reason).toBe('PRICE_CHANGED');
+    });
+
+    it('keeps the modifier quote local to the device', () => {
+      const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
+      const built = buildReplayRequest({ ...draft, serverOrderId: 'order-1' }, draft.commands[1]);
+      expect(built.ok).toBe(true);
+      if (!built.ok) return;
+      expect(built.request.body).not.toHaveProperty('quotedModifiers');
+      expect(addItemBody.safeParse(built.request.body).success).toBe(true);
+    });
+  });
+
   it('does not re-price lines the server already accepted', () => {
     let snapshot = seeded([draftInput()]);
     const draft = snapshot.drafts[0];

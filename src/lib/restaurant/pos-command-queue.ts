@@ -42,7 +42,7 @@ import type { TerminalReplayOutcome } from '@/lib/retail-terminal/replay-outcome
 export { classifyReplayOutcome, parseRetryAfterMs } from '@/lib/retail-terminal/replay-outcome';
 export type { TerminalReplayOutcome as PosReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
 
-import type { PosCatalogSnapshot, PosOrderChannel } from './pos-client-store';
+import type { PosCatalogItem, PosCatalogSnapshot, PosOrderChannel } from './pos-client-store';
 import { findCatalogItem } from './pos-client-store';
 
 /** The visible ceiling on submitted drafts held for one device (M9 §3.5). */
@@ -74,7 +74,16 @@ export type PosAddItemBody = {
    * it, because the server prices every line and its M4 body is `.strict()`.
    */
   quotedUnitPrice: string | null;
+  /**
+   * The modifier price deltas the operator saw for each selected option. LOCAL ONLY,
+   * like `quotedUnitPrice`: the catalog review compares the full configuration so a
+   * repriced or withdrawn modifier needs review. Absent on drafts saved before this
+   * field existed; such a draft with modifiers cannot prove its quote and is reviewed.
+   */
+  quotedModifiers?: PosQuotedModifier[];
 };
+
+export type PosQuotedModifier = { optionId: string; priceDelta: string };
 
 export type PosFireBody = { course?: number };
 
@@ -680,10 +689,50 @@ export function reviewAgainstCatalog(
         atCommandId: command.commandId,
       };
     }
+    const modifierReview = reviewModifiers(command.commandId, command.body, item);
+    if (modifierReview) return modifierReview;
   }
 
   // A newer catalog version alone is not a conflict: the draft is re-validated line
   // by line above, so an unrelated publication change must not nag the operator.
+  return null;
+}
+
+/**
+ * The selected modifiers are part of the quote: the server prices each option's
+ * current delta, so a withdrawn option or a changed delta needs the same review as a
+ * changed base price.
+ */
+function reviewModifiers(
+  commandId: string,
+  line: PosAddItemBody,
+  item: PosCatalogItem
+): PosDraftReview | null {
+  const options = new Map(
+    (item.modifierGroups ?? []).flatMap((group) =>
+      group.options.map((option) => [option.id, option] as const)
+    )
+  );
+  const quoted = new Map(
+    (line.quotedModifiers ?? []).map((modifier) => [modifier.optionId, modifier.priceDelta])
+  );
+  for (const optionId of line.modifierOptionIds ?? []) {
+    const option = options.get(optionId);
+    if (!option) {
+      return {
+        reason: 'ITEM_UNAVAILABLE',
+        message: 'A modifier on this order is no longer available. Review it before sending.',
+        atCommandId: commandId,
+      };
+    }
+    if (quoted.get(optionId) !== option.priceDelta) {
+      return {
+        reason: 'PRICE_CHANGED',
+        message: 'A modifier price on this order changed. Review it before sending.',
+        atCommandId: commandId,
+      };
+    }
+  }
   return null;
 }
 
