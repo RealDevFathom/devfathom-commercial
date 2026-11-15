@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { isNoExpiryDate } from '@/lib/pharmacy/product-class';
 import { formatSoldQuantity, soldUnitNoun } from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 
@@ -608,7 +609,9 @@ export function ReturnForm({
                   <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
                     Batch {lot.batchNumber}
                     {lot.expiresAt
-                      ? ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
+                      ? isNoExpiryDate(lot.expiresAt)
+                        ? ' · no expiry'
+                        : ` · expires ${lot.expiresAt.toISOString().slice(0, 10)}`
                       : ''}{' '}
                     · {lot.returnableUnits} units remaining
                     {lot.restockAllowed ? '' : ' · quarantine only'}

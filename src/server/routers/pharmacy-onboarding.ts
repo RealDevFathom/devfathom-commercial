@@ -34,6 +34,8 @@ import {
   pharmacyOnboardingChecklist,
 } from '@/lib/pharmacy/onboarding-checklist';
 import {
+  BRANCH_PROVINCE_SET_ACTION,
+  branchProvinceInput,
   fieldError,
   provinceName,
   regulatoryProfileInput,
@@ -533,6 +535,73 @@ export const pharmacyOnboardingRouter = router({
         }),
       };
     }),
+
+  /**
+   * QA-3 — set the province a branch operates in. Owner/admin only
+   * (adminProcedure) and audited twice: the procedure audit middleware records
+   * the call, and this records the before and after province in the same
+   * transaction as the change. The branch's province decides which published
+   * jurisdiction rules its regulatory profile is recorded on (#977). It never
+   * changes a retention period: pharmacy_retention_days() reads the rule set of
+   * the profile in force, and its 10-year floor holds whatever the province.
+   */
+  setBranchProvince: adminProcedure.input(branchProvinceInput).mutation(async ({ ctx, input }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const user = ctx.session.user;
+    const branch = await ctx.db.pharmacyBranch.findFirst({
+      where: { organizationId, id: input.branchId, active: true },
+      select: { id: true, name: true, provinceCode: true },
+    });
+    if (!branch) {
+      throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+    }
+    if (sameProvince(branch.provinceCode, input.provinceCode)) {
+      return { branchId: branch.id, provinceCode: branch.provinceCode, changed: false };
+    }
+    await ctx.db.$transaction(async (tx) => {
+      const updated = await tx.pharmacyBranch.updateMany({
+        where: { organizationId, id: branch.id, provinceCode: branch.provinceCode },
+        data: { provinceCode: input.provinceCode },
+      });
+      if (updated.count !== 1) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This branch changed while you were editing it. Reload and try again.',
+        });
+      }
+      await recordAudit(
+        {
+          organizationId,
+          actorType: 'USER',
+          actorId: user.id,
+          actorName: user.name ?? null,
+          actorEmail: user.email ?? null,
+          actorRole: user.role ?? null,
+          source: 'TRPC',
+          category: 'PHARMACY',
+          operation: 'UPDATE',
+          action: BRANCH_PROVINCE_SET_ACTION,
+          description: `Branch province changed from ${provinceName(branch.provinceCode)} to ${provinceName(input.provinceCode)}`,
+          targetType: 'PharmacyBranch',
+          targetId: branch.id,
+          targetLabel: branch.name,
+          changes: {
+            provinceCode: { before: branch.provinceCode, after: input.provinceCode },
+          },
+          metadata: user.isSupportSession
+            ? {
+                supportSessionId: user.supportSessionId ?? null,
+                platformUserId: user.platformUserId ?? null,
+                actingAsTenantUserId: user.id,
+              }
+            : undefined,
+          path: 'pharmacyOnboarding.setBranchProvince',
+        },
+        tx as unknown as ScopedDb
+      );
+    });
+    return { branchId: branch.id, provinceCode: input.provinceCode, changed: true };
+  }),
 
   /**
    * Append the next effective-dated version of a branch's regulatory profile.

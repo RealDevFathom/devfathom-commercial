@@ -29,6 +29,7 @@ import {
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
 } from '@/lib/pharmacy/action-error-message';
+import { isNoExpiryDate, NO_EXPIRY_LABEL } from '@/lib/pharmacy/product-class';
 import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
@@ -643,7 +644,11 @@ export default async function PharmacyInventoryPage({
                       Batch {lot.batch.batchNumber} · {lot.supplierName}
                     </span>
                   </TableCell>
-                  <TableCell>{when(lot.batch.expiresAt)}</TableCell>
+                  <TableCell>
+                    {isNoExpiryDate(lot.batch.expiresAt)
+                      ? NO_EXPIRY_LABEL
+                      : when(lot.batch.expiresAt)}
+                  </TableCell>
                   <TableCell>{balance.location.name}</TableCell>
                   <TableCell>
                     <StatusPill

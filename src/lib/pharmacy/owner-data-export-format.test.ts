@@ -10,6 +10,7 @@ import {
   exportCsv,
   exportReadme,
   exportRowCounts,
+  formatExpiryDateOnly,
   formatMinor,
   type OwnerDataExportRows,
 } from './owner-data-export-format';
@@ -179,5 +180,14 @@ describe('owner data export format', () => {
       expect(text).toContain(name);
     }
     expect(exportRowCounts(countExportRows(SEEDED))['customers.csv']).toBe(3);
+  });
+});
+
+describe('formatExpiryDateOnly (QA-3)', () => {
+  it('leaves a no-expiry lot blank instead of exporting 9998-12-31', () => {
+    expect(formatExpiryDateOnly(new Date('9998-12-31T00:00:00.000Z'))).toBe('');
+    expect(formatExpiryDateOnly(new Date('9998-12-31T19:00:00.000Z'))).toBe('');
+    expect(formatExpiryDateOnly(new Date('2027-04-30T19:00:00.000Z'))).toBe('2027-04-30');
+    expect(formatExpiryDateOnly(null)).toBe('');
   });
 });

@@ -18,6 +18,7 @@ import { formatKarachiDateTime } from './karachi-time';
 import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printing/contract';
 
 import type { DispensingLabelSource } from './dispensing-label';
+import { isNoExpiryDate } from './product-class';
 
 import type { SaleUnitKind } from './counter-pricing';
 
@@ -106,6 +107,8 @@ type Strings = {
   strength: string;
   batch: string;
   expiry: string;
+  /** QA-3: printed in place of an expiry date for a non-drug item with none. */
+  noExpiry: string;
   quantity: string;
   unitPrice: string;
   lineTotal: string;
@@ -141,6 +144,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     strength: 'Strength',
     batch: 'Batch',
     expiry: 'Expiry',
+    noExpiry: 'No expiry',
     quantity: 'Qty',
     unitPrice: 'Unit price',
     lineTotal: 'Amount',
@@ -180,6 +184,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     strength: 'طاقت',
     batch: 'بیچ',
     expiry: 'میعاد',
+    noExpiry: 'کوئی میعاد نہیں',
     quantity: 'مقدار',
     unitPrice: 'فی یونٹ قیمت',
     lineTotal: 'رقم',
@@ -262,6 +267,27 @@ export function formatReceiptDate(value: string | null): string {
   return Number.isNaN(date.getTime()) ? '—' : date.toISOString().slice(0, 10);
 }
 
+/**
+ * QA-3 — a dispensed batch's expiry as a receipt prints it. A non-drug item
+ * stocked without an expiry is stored on a far-future marker date; it prints
+ * as having no expiry, never as 9998-12-31.
+ */
+export function formatReceiptExpiry(
+  value: string | null,
+  locale: CounterReceiptLocale = 'en'
+): string {
+  return isNoExpiryDate(value)
+    ? COUNTER_RECEIPT_STRINGS[locale].noExpiry
+    : formatReceiptDate(value);
+}
+
+/** The compact "Exp 2027-01-31" a counter screen shows, or "No expiry" (QA-3). */
+export function formatShortExpiry(value: string | null): string {
+  return isNoExpiryDate(value)
+    ? COUNTER_RECEIPT_STRINGS.en.noExpiry
+    : `Exp ${formatReceiptDate(value)}`;
+}
+
 export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   if (receipt.receiptNumber === null) return strings.unissued;
@@ -282,7 +308,9 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
-    `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
+    isNoExpiryDate(line.expiresAt)
+      ? strings.noExpiry
+      : `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
     `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
     formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');

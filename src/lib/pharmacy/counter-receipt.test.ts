@@ -5,6 +5,8 @@ import {
   COUNTER_RECEIPT_STRINGS,
   counterReceiptTotals,
   formatMinor,
+  formatReceiptExpiry,
+  formatShortExpiry,
   localizeReceiptNumber,
   PharmacyCounterReceiptError,
   receiptLineLabel,
@@ -210,6 +212,29 @@ describe('counterReceiptTotals', () => {
 
     expect(totals.tenderedMinor).toBe(8_000);
     expect(totals.changeMinor).toBe(200);
+  });
+});
+
+describe('no-expiry items (QA-3)', () => {
+  // A non-drug lot stocked without an expiry: printed 9998-12-31, expiry instant
+  // 9998-12-31T19:00Z (the end of that Karachi day).
+  const noExpiry = '9998-12-31T19:00:00.000Z';
+
+  it('prints "No expiry" on the receipt line, never 9998-12-31', () => {
+    const label = receiptLineLabel(receiptLine({ expiresAt: noExpiry }), 'en');
+    expect(label).toContain('No expiry');
+    expect(label).not.toContain('9998');
+    const urdu = receiptLineLabel(receiptLine({ expiresAt: noExpiry }), 'ur');
+    expect(urdu).toContain(COUNTER_RECEIPT_STRINGS.ur.noExpiry);
+    expect(urdu).not.toContain('9998');
+  });
+
+  it('formats a no-expiry lot as no expiry and a real expiry as its date', () => {
+    expect(formatReceiptExpiry(noExpiry)).toBe('No expiry');
+    expect(formatReceiptExpiry(noExpiry, 'ur')).toBe(COUNTER_RECEIPT_STRINGS.ur.noExpiry);
+    expect(formatReceiptExpiry('2027-04-30T19:00:00.000Z')).toBe('2027-04-30');
+    expect(formatShortExpiry(noExpiry)).toBe('No expiry');
+    expect(formatShortExpiry('2027-04-30T19:00:00.000Z')).toBe('Exp 2027-04-30');
   });
 });
 
