@@ -408,7 +408,12 @@ describe('DEV-15 sign-in code delivery', () => {
   const meta = (overrides: Record<string, unknown> = {}) => ({
     provider: 'meta' as const,
     organizationId: ORG,
-    templates: { refillReminder: null, khataReminder: null, portalSignInCode: 'portal_code' },
+    templates: {
+      refillReminder: null,
+      khataReminder: null,
+      receiptLink: null,
+      portalSignInCode: 'portal_code',
+    },
     ...overrides,
   });
 
@@ -430,7 +435,14 @@ describe('DEV-15 sign-in code delivery', () => {
     });
     await expect(
       portalCodeSender(
-        meta({ templates: { refillReminder: null, khataReminder: null, portalSignInCode: null } }),
+        meta({
+          templates: {
+            refillReminder: null,
+            khataReminder: null,
+            receiptLink: null,
+            portalSignInCode: null,
+          },
+        }),
         sender,
         ORG
       )(message)
