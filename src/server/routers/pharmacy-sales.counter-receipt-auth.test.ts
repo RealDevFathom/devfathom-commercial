@@ -42,6 +42,7 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   createSale: vi.fn(async () => ({ id: 'sale-new' })),
   changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  quoteSaleLineReturn: vi.fn(async () => ({ valueMinor: 250 })),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/regulatory', async (original) => ({
@@ -100,6 +101,7 @@ import {
   changeSaleStatus,
   createSale,
   readReturnHistory,
+  quoteSaleLineReturn,
   returnSaleLine,
 } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
@@ -697,6 +699,10 @@ describe('counter receipt authorization', () => {
     await expect(
       f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // DEV-501: the refund quote shares the receipt read boundary.
+    await expect(
+      f.caller().returnQuote({ branchId: 'branch-a', saleLineId: 'line-1', canonicalUnits: 1 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(
       f.caller().tender({
         branchId: 'branch-a',
@@ -710,8 +716,27 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(readCounterCart).not.toHaveBeenCalled();
     expect(readReturnHistory).not.toHaveBeenCalled();
+    expect(quoteSaleLineReturn).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('quotes a proposed return for an assigned counter user in the active branch (DEV-501)', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().returnQuote({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        lotId: 'lot-1',
+        canonicalUnits: 2,
+      })
+    ).resolves.toEqual({ valueMinor: 250 });
+    expect(quoteSaleLineReturn).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      { saleLineId: 'line-1', lotId: 'lot-1', canonicalUnits: 2 }
+    );
   });
 
   it.each([

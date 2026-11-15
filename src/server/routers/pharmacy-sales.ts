@@ -145,6 +145,7 @@ import {
   restockRecoveryReport,
   returnSaleLine,
   readReturnHistory,
+  quoteSaleLineReturn,
   saleReturnValueMinor,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
@@ -2264,6 +2265,28 @@ export const pharmacySalesRouter = router({
       });
       return withLabels([...active, ...others]);
     }),
+  /** DEV-501: the exact refund a proposed return is worth, so the counter can prefill it. */
+  returnQuote: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleLineId: z.string().min(1),
+          lotId: z.string().min(1).optional(),
+          canonicalUnits: z.number().int().positive(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const { branchId: _branch, ...quote } = input;
+        void _branch;
+        return await quoteSaleLineReturn(ctx.db, scope, quote);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -2398,6 +2421,30 @@ export const pharmacySalesRouter = router({
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          // The refund settles this return's own receipt, never another sale's liability.
+          const soldLine = await db.pharmacySaleLine.findFirst({
+            where: {
+              id: line.saleLineId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { saleId: true },
+          });
+          if (!soldLine) throw new PharmacySaleError('NOT_FOUND');
+          const sameSaleTender = await db.pharmacyTender.findFirst({
+            where: {
+              id: refund.originalTenderId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: soldLine.saleId,
+            },
+            select: { id: true },
+          });
+          if (!sameSaleTender)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Refund the return to a tender from the same receipt.',
+            });
           let returned: Awaited<ReturnType<typeof returnSaleLine>>;
           try {
             returned = await returnSaleLine(db, scope, line);

@@ -106,6 +106,7 @@ function fixture(
       findMany: vi.fn().mockResolvedValue([{ grossMinor: 600, discountMinor: 100 }]),
     },
     pharmacyUnidentifiedReturnHold: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue({ saleId: 'sale-a' }) },
     restaurantOperatorCredential: {
       findFirst: vi.fn().mockResolvedValue(
         credential && {
@@ -466,6 +467,28 @@ describe('DEV-501 one confirm records the return and refunds it', () => {
       });
     }
   );
+
+  it('refuses a tender from another receipt before recording the return', async () => {
+    const f = fixture(ROLES.owner!);
+    // The tender is not on the returned line's sale.
+    f.db.pharmacyTender.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      f.caller.returnAndRefund({ ...returnAndRefund, managerPin: PIN })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Refund the return to a tender from the same receipt.',
+    });
+    expect(f.db.pharmacySaleLine.findFirst).toHaveBeenCalledWith({
+      where: { id: 'line-a', organizationId: 'org-a', branchId: 'branch-a' },
+      select: { saleId: true },
+    });
+    expect(f.db.pharmacyTender.findFirst).toHaveBeenCalledWith({
+      where: { id: 'tender-a', organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+      select: { id: true },
+    });
+    expect(returnSaleLine).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
 
   it('refunds a lowered amount and refuses more than the return is worth', async () => {
     const f = fixture(ROLES.manager!);

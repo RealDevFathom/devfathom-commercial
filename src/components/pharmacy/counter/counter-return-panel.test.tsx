@@ -1,11 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  CounterReturnPanel,
-  estimateReturnRefundMinor,
-  parseReceiptNumber,
-  ReturnForm,
-} from './counter-return-panel';
+import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   returnAndRefund: vi.fn(),
@@ -15,12 +10,18 @@ const mocks = vi.hoisted(() => ({
   lookup: {} as Record<string, unknown>,
   pharmacists: {} as Record<string, unknown>,
   refundAccess: {} as Record<string, unknown>,
+  /** DEV-501: the server's price per returned base unit, by lot ('' = unidentified). */
+  pricePerUnit: {} as Record<string, number>,
+  quote: vi.fn(),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
       lookupReceiptByNumber: { useQuery: () => mocks.lookup },
       returnHistory: { useQuery: () => mocks.history },
+      returnQuote: {
+        useQuery: (input: unknown, options: { enabled?: boolean }) => mocks.quote(input, options),
+      },
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       returnAndRefund: { useMutation: () => ({ mutateAsync: mocks.returnAndRefund }) },
@@ -63,6 +64,21 @@ beforeEach(() => {
   mocks.refund.mockResolvedValue({});
   mocks.pharmacists = { data: [{ id: 'staff-w', name: 'Witness Pharmacist' }] };
   mocks.refundAccess = { data: { authorized: true } };
+  mocks.pricePerUnit = { '': 100 };
+  mocks.quote.mockImplementation(
+    (input: { lotId?: string; canonicalUnits: number }, options: { enabled?: boolean }) =>
+      options.enabled
+        ? {
+            isSuccess: true,
+            isFetching: false,
+            data: {
+              valueMinor:
+                input.canonicalUnits *
+                (mocks.pricePerUnit[input.lotId ?? ''] ?? mocks.pricePerUnit['']!),
+            },
+          }
+        : { isSuccess: false, isFetching: false }
+  );
   mocks.lookup = {
     isSuccess: true,
     data: [
@@ -685,20 +701,64 @@ describe('DEV-501 returns in six steps or fewer', () => {
         refundableMinor: 0,
       },
     };
+    mocks.pricePerUnit = { '': 120 };
   }
 
-  it('prices a returned quantity as the server snapshots it', () => {
-    const line = { canonicalUnits: 3, returnedUnits: 0, netMinor: 1000, returnedMinor: 0 };
-    expect(estimateReturnRefundMinor(line, 1)).toBe(333);
-    expect(estimateReturnRefundMinor({ ...line, returnedUnits: 1, returnedMinor: 333 }, 1)).toBe(
-      333
+  it('prefills the refund from the selected lot as the server prices it', () => {
+    singleLineReceipt();
+    const history = mocks.history as { data: { lines: Array<{ lots: unknown[] }> } };
+    history.data.lines[0].lots.push({
+      lotId: 'lot-b',
+      batchNumber: 'B',
+      returnableUnits: 20,
+      restockAllowed: true,
+    });
+    // The two batches were sold at different prices.
+    mocks.pricePerUnit = { '': 120, 'lot-a': 90, 'lot-b': 150 };
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    const amount = screen.getByLabelText('Refund for this return (PKR)');
+    expect(amount).toHaveValue('12.00');
+    fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-b' } });
+    expect(mocks.quote).toHaveBeenLastCalledWith(
+      { branchId: 'b', saleLineId: 'line', lotId: 'lot-b', canonicalUnits: 10 },
+      expect.objectContaining({ enabled: true })
     );
-    // The final slice takes the rounding remainder.
-    expect(estimateReturnRefundMinor({ ...line, returnedUnits: 2, returnedMinor: 666 }, 1)).toBe(
-      334
-    );
-    expect(estimateReturnRefundMinor(line, 0)).toBe(0);
-    expect(estimateReturnRefundMinor(line, Number.NaN)).toBe(0);
+    expect(amount).toHaveValue('15.00');
+    fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
+    expect(amount).toHaveValue('9.00');
+  });
+
+  it('waits for the server price before the refund can be confirmed', () => {
+    singleLineReceipt();
+    mocks.quote.mockImplementation(() => ({ isSuccess: false, isFetching: true }));
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('');
+    expect(screen.getByText('Pricing the returned quantity…')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    // Recording the return only needs no price.
+    recordOnly();
+    expect(screen.getByRole('button', { name: 'Record return' })).toBeEnabled();
+  });
+
+  it('explains a pricing failure and offers to reprice', () => {
+    singleLineReceipt();
+    const refetch = vi.fn();
+    mocks.quote.mockImplementation(() => ({
+      isError: true,
+      error: new Error('Connection failed'),
+      refetch,
+    }));
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    enterManagerPin();
+    expect(screen.getByText(/Connection failed The refund cannot be priced yet/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reprice refund' }));
+    expect(refetch).toHaveBeenCalledOnce();
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
   });
 
   it('completes a one-line return and refund in six steps with one confirm', async () => {

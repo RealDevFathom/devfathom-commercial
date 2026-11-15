@@ -96,25 +96,6 @@ export function isBlockedResult(result: unknown): result is { blocked: string } 
     typeof (result as { blocked: unknown }).blocked === 'string'
   );
 }
-/**
- * DEV-501: the refund a returned quantity is worth, priced as the server snapshots a return
- * (cumulative rounding; the final slice takes what is left). The server values the recorded
- * return itself; this only prefills and bounds the counter's refund amount.
- */
-export function estimateReturnRefundMinor(
-  line: { canonicalUnits: number; returnedUnits: number; netMinor: number; returnedMinor: number },
-  units: number
-): number {
-  const { canonicalUnits, returnedUnits, netMinor, returnedMinor } = line;
-  if (!Number.isSafeInteger(units) || units <= 0 || canonicalUnits <= 0) return 0;
-  const remaining = Math.max(0, netMinor - returnedMinor);
-  if (returnedUnits + units >= canonicalUnits) return remaining;
-  const delta =
-    Math.floor((netMinor * (returnedUnits + units)) / canonicalUnits) -
-    Math.floor((netMinor * returnedUnits) / canonicalUnits);
-  return Math.max(0, Math.min(remaining, delta));
-}
-
 /** Parses a whole, non-negative count typed at the counter; blank reads as zero. */
 function wholeCount(value: string): number {
   const trimmed = value.trim();
@@ -294,7 +275,20 @@ export function ReturnForm({
     chosenReturnTender || (refundableTenders.length === 1 ? refundableTenders[0].id : '');
   const returnTender = data?.tenders.find((row) => row.id === returnTenderId);
   const refundNow = !!returnTender;
-  const returnValueMinor = line && unitsValid ? estimateReturnRefundMinor(line, units) : 0;
+  // The server prices the proposed return exactly as it will snapshot it, from the selected
+  // lot's own allocation prices, so the confirmed refund is the refund recorded.
+  const quote = trpc.pharmacySales.returnQuote.useQuery(
+    { branchId, saleLineId: lineId, lotId: lotId || undefined, canonicalUnits: units },
+    {
+      enabled: ready && online && refundAuthorized && refundNow && !!line && unitsValid,
+      retry: false,
+    }
+  );
+  const quoted =
+    refundNow && line && unitsValid && quote.isSuccess && !quote.isFetching
+      ? quote.data.valueMinor
+      : undefined;
+  const returnValueMinor = quoted ?? 0;
   const returnTenderRemaining = returnTender
     ? returnTender.amountMinor - returnTender.refundedMinor
     : 0;
@@ -339,6 +333,7 @@ export function ReturnForm({
     managerPinReady &&
     (returnTenderId === 'none' ||
       (refundNow &&
+        quoted !== undefined &&
         Number.isSafeInteger(returnAmountMinor) &&
         returnAmountMinor > 0 &&
         returnAmountMinor <= returnRefundMax &&
@@ -532,7 +527,7 @@ export function ReturnForm({
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
-          <Button variant="outline" onClick={() => void pharmacists.refetch()}>
+          <Button type="button" variant="outline" onClick={() => void pharmacists.refetch()}>
             Reload pharmacists
           </Button>
         </p>
@@ -970,13 +965,26 @@ export function ReturnForm({
                         returnAmount !== null &&
                         !(returnAmountMinor > 0 && returnAmountMinor <= returnRefundMax)
                       }
-                      value={returnAmount ?? formatMinor(returnRefundMax)}
+                      disabled={quoted === undefined}
+                      value={
+                        returnAmount ?? (quoted === undefined ? '' : formatMinor(returnRefundMax))
+                      }
                       onChange={(event) => setReturnAmount(event.target.value)}
                     />
                     <p id="return-refund-amount-hint" className="text-sm text-text-muted">
-                      Prefilled from the returned quantity. You can lower it, up to PKR{' '}
-                      {formatMinor(returnRefundMax)}. Loyalty refunds restore redeemed points.
+                      {quoted !== undefined
+                        ? `Prefilled from the returned quantity. You can lower it, up to PKR ${formatMinor(returnRefundMax)}. Loyalty refunds restore redeemed points.`
+                        : quote.isError
+                          ? `${counterErrorMessage(quote.error)} The refund cannot be priced yet.`
+                          : line && unitsValid
+                            ? 'Pricing the returned quantity…'
+                            : 'Enter the quantity to price the refund.'}
                     </p>
+                    {quote.isError && (
+                      <Button type="button" variant="outline" onClick={() => void quote.refetch()}>
+                        Reprice refund
+                      </Button>
+                    )}
                     {returnManualRequired && (
                       <label className="flex min-h-11 items-start gap-2">
                         <input
