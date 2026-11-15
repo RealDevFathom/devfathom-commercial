@@ -634,9 +634,10 @@ export default async function PharmacyReportsPage({
               splits days at midnight UTC, so its totals can differ for the same dates. It may
               differ from sales grouped by business date. Missing journal evidence is unavailable;
               posted totals do not establish complete source or cost coverage. Supplier, ingredient
-              and batch filters do not apply to these KPI totals, the daily work pack or observed
-              demand. Those panels use branch/date scope only; current snapshots use branch scope
-              only.
+              and batch filters narrow sales, gross margin, stock signals, recommended orders and
+              expiry exposure to the matching stock lots and products. Cash, cash variance and
+              refunds cannot be traced to a supplier, ingredient or batch, so they show — while one
+              is selected. The daily work pack and observed demand use branch/date scope only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
