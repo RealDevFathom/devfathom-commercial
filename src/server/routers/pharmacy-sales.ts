@@ -54,6 +54,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -337,9 +338,11 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
 > & {
   discountApproval?: CounterApprovalPin;
+  /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
+  voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
 };
 
@@ -373,6 +376,18 @@ async function approvedLineInput(
     idempotencyKey: input.idempotencyKey,
   };
   const { override } = input;
+  // DEV-819: a voucher is redeemed only after the signed-in cashier re-enters their own PIN,
+  // verified in its own transaction so a wrong PIN's lockout strike is kept.
+  if (input.voucherId) {
+    const verified = await authenticateVoucherCashierPin({
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      pin: input.voucherPin,
+    });
+    annotateAudit(ctx, { metadata: { voucherId: input.voucherId, voucherPinVerified: verified } });
+    if (!verified) throw new PharmacySaleError('VOUCHER_PIN_REQUIRED');
+    lineInput.voucherCashierPinVerified = true;
+  }
   if ((input.discountMinor ?? 0) > 0) {
     const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
     approvals.push({ kind: 'DISCOUNT', approval });
@@ -1745,6 +1760,11 @@ export const pharmacySalesRouter = router({
           // DEV-27: a voucher is redeemed by its stored id; the server sets the amount and
           // enforces the voucher's eligible categories. A client cannot label a voucher.
           voucherId: z.string().trim().min(1).max(128).optional(),
+          // DEV-819: the redeeming cashier's own staff PIN, required with a voucher.
+          voucherPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           discountApproval: counterApprovalPin.optional(),
           override: z
