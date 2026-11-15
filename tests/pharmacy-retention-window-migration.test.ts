@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync(
   path.join(
     process.cwd(),
-    'prisma/migrations/20261115160000_pharmacy_retention_window_enforcement/migration.sql'
+    'prisma/migrations/20261115220700_pharmacy_retention_window_enforcement/migration.sql'
   ),
   'utf8'
 );
