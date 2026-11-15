@@ -41,6 +41,16 @@ export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = 
   FEFO_OVERRIDE: 'pharmacy:dispense',
 };
 
+/**
+ * The `approvalPolicy` stored on an allocation-override row for a server-verified FEFO
+ * approval. The row's `actorId` names the operator; a different approver is named here.
+ */
+export function fefoOverrideApprovalPolicy(approval: CounterApproval, actorId: string): string {
+  return approval.approvedByUserId === actorId
+    ? approval.approvalPolicy
+    : `${approval.approvalPolicy}:${approval.approvedByUserId}`;
+}
+
 export class CounterApprovalDenied extends Error {
   constructor(readonly kind: CounterApprovalKind) {
     super(

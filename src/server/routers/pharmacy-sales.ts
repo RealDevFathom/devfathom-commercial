@@ -3,6 +3,7 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  fefoOverrideApprovalPolicy,
   type CounterApproval,
   type CounterApprovalKind,
   type CounterApprovalPin,
@@ -256,10 +257,7 @@ async function approvedLineInput(
     lineInput.override = {
       inventoryLotId: override.inventoryLotId,
       reason: override.reason,
-      approvalPolicy:
-        approval.approvedByUserId === scope.actorId
-          ? approval.approvalPolicy
-          : `${approval.approvalPolicy}:${approval.approvedByUserId}`,
+      approvalPolicy: fefoOverrideApprovalPolicy(approval, scope.actorId),
     };
     annotateAudit(ctx, {
       metadata: {
