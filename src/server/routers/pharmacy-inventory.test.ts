@@ -3138,7 +3138,8 @@ describe('DEV-82 — live cold-chain sensor management', () => {
  * (owner through `pharmacy:*`). Every other template, Manager included, holds no
  * inventory grant, so a location move is refused before any stock is read.
  */
-const TRANSFER_ROLES = ['owner', 'owner-operator', 'inventory'];
+// DEV-505: the Manager template now holds stock control on its assigned branches.
+const TRANSFER_ROLES = ['owner', 'owner-operator', 'inventory', 'manager'];
 
 const transferRequest = () =>
   caller().transfer({
