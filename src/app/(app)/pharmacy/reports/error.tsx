@@ -6,7 +6,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function PharmacyReportsError({ reset }: { reset: () => void }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
@@ -20,6 +20,6 @@ export default function PharmacyReportsError({ reset }: { reset: () => void }) {
           Try again
         </Button>
       </SectionCard>
-    </main>
+    </div>
   );
 }

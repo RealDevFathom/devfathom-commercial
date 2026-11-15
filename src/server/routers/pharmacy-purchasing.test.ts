@@ -116,9 +116,20 @@ function orderableSupplier() {
   });
 }
 
+/** pack_a is a box of 10 canonical units, the conversion every fixture line uses. */
+const PACK_A_LEVEL = {
+  id: 'pack_a',
+  level: 'BOX',
+  unitsPerParent: 10,
+  parentPackLevelId: null,
+  effectiveFrom: PAST,
+  effectiveTo: null,
+};
+
 function resolvableCatalog() {
   db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a' });
-  db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+  db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+  db.packLevel.findMany.mockResolvedValue([PACK_A_LEVEL]);
 }
 
 const ORDER_LINE = {
@@ -1253,6 +1264,43 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it.each([
+    ['its own branch', { branchId: 'branch_b', requisitionId: null }],
+    ['its requisition branch', { branchId: null, requisitionId: 'req_b' }],
+  ] as const)(
+    'refuses an order outside reach by %s before locking it or reading its status (#991)',
+    async (_label, placement) => {
+      const tx = {
+        ...db,
+        pharmacyRequisition: {
+          ...model(),
+          findFirst: vi.fn().mockResolvedValue({ branchId: 'branch_b' }),
+        },
+      };
+      db.$transaction.mockImplementation(async (fn: (inner: typeof db) => unknown) =>
+        fn(tx as typeof db)
+      );
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        status: 'CANCELLED',
+        ...placement,
+      });
+      await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      const locked = db.$queryRaw.mock.calls.some(([sql]) =>
+        String((sql as TemplateStringsArray).join?.('?') ?? '').includes(
+          'pharmacy_purchase_orders'
+        )
+      );
+      expect(locked).toBe(false);
+      expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
     ['branch_a', 'allow'],
     ['branch_b', 'refuse'],
     [null, 'allow'],
@@ -1568,6 +1616,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   it('prorates the order charge by paid units when the delivered pack size differs', async () => {
     chargedOrder(1_000);
+    // The order line recorded 10 per pack; the pack level is now configured as 20
+    // (DEV-201: a receipt line's units per pack must match the configured pack).
+    db.packLevel.findMany.mockResolvedValue([{ ...PACK_A_LEVEL, unitsPerParent: 20 }]);
     // Five 20-unit packs are the whole 100 ordered units: all of the freight.
     await caller().createGoodsReceipt({
       ...RECEIPT,
@@ -1718,13 +1769,25 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     const policySql = (db.$queryRaw.mock.calls[1]![0] as { sql: string }).sql;
     expect(policySql).toContain('pharmacy_owner_policies');
     expect(policySql).toContain('FOR SHARE');
-    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
-    );
+    // #991: the only read before the lock is the order's immutable branch
+    // placement, for the branch check; status and supplier are read under it.
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.calls[0]![0]).toEqual({
+      where: { id: 'po_a', organizationId: 'org_a' },
+      select: { branchId: true, requisitionId: true },
+    });
     expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      db.$queryRaw.mock.invocationCallOrder[0]!
+    );
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]!
+    );
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.calls[1]![0]).toEqual({
+      where: { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a' },
+    });
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacySupplier.findFirst.mock.invocationCallOrder[0]!
     );
-    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacyGoodsReceipt.create.mock.invocationCallOrder[0]!
     );
   });
@@ -2019,9 +2082,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       branchId: 'branch_b',
       status: 'SENT',
     });
+    // #991: a buyer without reach at the order's branch is refused by the branch
+    // boundary, before the order is locked or compared with the receipt.
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'CROSS_BRANCH_REFERENCE',
+      message: 'Branch is outside your scope.',
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
@@ -2068,6 +2133,101 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       message: 'PURCHASE_ORDER_LINE_ITEM_MISMATCH',
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a pack level that is not one of the line medicine own packs (DEV-201)', async () => {
+    db.packLevel.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: undefined,
+        purchaseOrderId: 'po_a',
+        lines: [{ ...RECEIPT_LINE, packLevelId: 'pack_of_medicine_b' }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'MISSING_PACK_CONVERSION' });
+    expect(db.packLevel.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'pack_of_medicine_b',
+          presentation: expect.objectContaining({ medicineId: 'medicine_a' }),
+        }),
+      })
+    );
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses units per pack that differ from the configured pack conversion (DEV-201)', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, canonicalUnitsPerPack: 1_000 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PACK_CONVERSION_MISMATCH' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a direct purchase whose units per pack differ from the pack conversion (DEV-201)', async () => {
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'credential',
+      credentialHash: APPROVER_HASH,
+      failedAttempts: 0,
+      lockedUntil: null,
+    });
+    const direct = withoutOrder();
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...direct,
+        directPurchase: {
+          reason: 'Emergency insulin.',
+          approvedByUserId: 'user_manager',
+          pin: '1234',
+        },
+        lines: [{ ...direct.lines[0]!, canonicalUnitsPerPack: 11 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PACK_CONVERSION_MISMATCH' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('derives the expected units per pack down the effective pack hierarchy (DEV-201)', async () => {
+    // A carton of 5 boxes of 10: one carton is 50 canonical units, not 5 or 10.
+    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+    db.packLevel.findMany.mockResolvedValue([
+      { ...PACK_A_LEVEL, level: 'CARTON', unitsPerParent: 5 },
+      { ...PACK_A_LEVEL, id: 'pack_box', level: 'BOX', parentPackLevelId: 'pack_a' },
+    ]);
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, lines: [RECEIPT_LINE] })
+    ).rejects.toMatchObject({ message: 'PACK_CONVERSION_MISMATCH' });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, canonicalUnitsPerPack: 50 }],
+      })
+    ).resolves.toBeDefined();
+    expect(db.packLevel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', presentationId: 'presentation_a' },
+      })
+    );
+  });
+
+  it('checks a since-superseded pack version against the conversion it carried (DEV-201)', async () => {
+    db.packLevel.findMany.mockResolvedValue([
+      { ...PACK_A_LEVEL, effectiveTo: new Date('2026-01-01T00:00:00.000Z') },
+      {
+        ...PACK_A_LEVEL,
+        id: 'pack_a_v2',
+        unitsPerParent: 12,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).resolves.toBeDefined();
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, canonicalUnitsPerPack: 12 }],
+      })
+    ).rejects.toMatchObject({ message: 'PACK_CONVERSION_MISMATCH' });
   });
 
   it('refuses rejected units with no quarantine destination or reason (PUR-04)', async () => {
@@ -2787,6 +2947,7 @@ const sensitiveReads = {
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  receiptDebitNotes: () => caller().receiptDebitNotes({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
     caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
@@ -2887,6 +3048,13 @@ const branchActions = {
   goodsReceipts: sensitiveReads.goodsReceipts,
   receivingExceptions: sensitiveReads.receivingExceptions,
   receivingExceptionQueue: sensitiveReads.receivingExceptionQueue,
+  receiptDebitNotes: sensitiveReads.receiptDebitNotes,
+  decideReceiptDebitNote: () =>
+    caller().decideReceiptDebitNote({
+      branchId: 'branch_a',
+      debitNoteId: 'debit',
+      decision: 'CONFIRMED',
+    }),
   lotsFromReceipt: sensitiveReads.lotsFromReceipt,
   returnableLots: sensitiveReads.returnableLots,
   debitNotePositions: sensitiveReads.debitNotePositions,
@@ -3104,6 +3272,7 @@ const readActions = {
   officialPriceAlerts: () => caller().officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  receiptDebitNotes: () => caller().receiptDebitNotes({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
     caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),

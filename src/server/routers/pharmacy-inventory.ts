@@ -109,6 +109,7 @@ import {
 } from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { maskPhone } from '@/lib/pharmacy/patient-prescriptions';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
@@ -902,9 +903,22 @@ export const pharmacyInventoryRouter = router({
         .catch(domainError)
     ),
 
-  drapRecallActions: auditedProtectedProcedure
+  // DEV-832: recall contact tracing is regulatory work. Phones are masked unless
+  // the caller also holds the patient-record grant (`pharmacy:prescriptions`).
+  drapRecallActions: regulatory
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
-    .query(async ({ ctx, input }) => recallActionList(ctx.db, actorFor(ctx), input.recallNoticeId)),
+    .query(async ({ ctx, input }) => {
+      const rows = await recallActionList(ctx.db, actorFor(ctx), input.recallNoticeId);
+      const patientRecords = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:prescriptions',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
+      return patientRecords
+        ? rows
+        : rows.map((row) => ({ ...row, patientPhone: maskPhone(row.patientPhone) }));
+    }),
 
   reverseDrapRecall: regulatory
     .input(

@@ -5,6 +5,7 @@ vi.mock('server-only', () => ({}));
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  INSPECTION_PACK_AUDIT_QUERY,
   INSPECTION_PACK_SECTIONS,
   INSPECTION_PACK_SOP_SECTION,
   SOP_OCCURRENCE_INSPECTION_QUERY,
@@ -149,5 +150,95 @@ describe('DEV-751 SOP occurrences in the inspection pack', () => {
     expect(query).toContain('rn."pharmacyBranchId" = site."pharmacyBranchId"');
     expect(query).toContain('rn."organizationId" = o."organizationId"');
     expect(query).not.toMatch(/'authorStaffProfileId'|'authorUserId'/);
+  });
+});
+
+describe('DEV-829 inspection pack audit section is branch-scoped', () => {
+  const input = {
+    branchId: 'pb_mine',
+    from: new Date('2026-11-01T00:00:00.000Z'),
+    to: new Date('2026-11-30T23:59:59.999Z'),
+  };
+  const branchEvent = {
+    id: 'audit_1',
+    category: 'PHARMACY_SAFETY',
+    action: 'pharmacy.inspectionPack.export',
+    actorName: 'Ayesha',
+  };
+
+  function database() {
+    const queryRawUnsafe = vi.fn(async (query: string, ..._params: unknown[]) =>
+      query === INSPECTION_PACK_AUDIT_QUERY ? [{ record: branchEvent }] : []
+    );
+    return { db: { $queryRawUnsafe: queryRawUnsafe } as unknown as ScopedDb, queryRawUnsafe };
+  }
+
+  it('reads audit_logs only through the branch-bound projection', async () => {
+    const { db, queryRawUnsafe } = database();
+    const manifest = await createInspectionPack(db, input);
+
+    const auditCalls = queryRawUnsafe.mock.calls.filter(([query]) =>
+      String(query).includes('"audit_logs"')
+    );
+    expect(auditCalls).toEqual([
+      [INSPECTION_PACK_AUDIT_QUERY, input.from, input.to, input.branchId],
+    ]);
+    // No section is read without the authorized branch as a bound parameter.
+    for (const [, , , branch] of queryRawUnsafe.mock.calls) expect(branch).toBe(input.branchId);
+
+    const audit = manifest.files.find((file) => file.path === 'audit.json')!;
+    expect(JSON.parse(audit.content)).toEqual([branchEvent]);
+  });
+
+  it('keeps only pharmacy events tied to the requested branch', () => {
+    const query = INSPECTION_PACK_AUDIT_QUERY;
+    expect(query).toContain('FROM "audit_logs" a');
+    expect(query).toContain('a."createdAt" >= $1 AND a."createdAt" <= $2');
+    // Administrative functions (team, finance, auth, ...) never qualify.
+    expect(query).toContain(`a."category" LIKE 'PHARMACY%'`);
+    // Only events aimed at this branch or recorded against it; no unscoped rows.
+    expect(query).toMatch(
+      /AND \(\s*\(a\."targetType" = 'PharmacyBranch' AND a\."targetId" = \$3\)\s*OR a\."metadata"->>'branchId' = \$3\s*\)/
+    );
+    expect(query).not.toMatch(/IS NULL/);
+    expect(query).not.toMatch(/to_jsonb\(/);
+  });
+
+  it('projects a minimal regulatory record, never payloads or contact details', () => {
+    const exported = [...INSPECTION_PACK_AUDIT_QUERY.matchAll(/'(\w+)', a\."\w+"/g)].map(
+      ([, key]) => key
+    );
+    expect(exported.sort()).toEqual(
+      [
+        'action',
+        'actorName',
+        'actorRole',
+        'actorType',
+        'category',
+        'createdAt',
+        'id',
+        'operation',
+        'outcome',
+        'targetId',
+        'targetType',
+      ].sort()
+    );
+    for (const hidden of [
+      'input',
+      'changes',
+      'result',
+      'actorEmail',
+      'actorId',
+      'ip',
+      'userAgent',
+      'tokenId',
+      'tokenName',
+      'path',
+      'errorMessage',
+      'targetLabel',
+      'organizationId',
+    ]) {
+      expect(INSPECTION_PACK_AUDIT_QUERY).not.toContain(`'${hidden}'`);
+    }
   });
 });

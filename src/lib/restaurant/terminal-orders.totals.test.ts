@@ -15,6 +15,8 @@ function dbFor(
   options: {
     serviceChargeRate?: string;
     billedServiceCharges?: string[];
+    bills?: { serviceChargeTotal: string; splitKind?: string; orderItemIds: string[] }[];
+    includeExtraLine?: boolean;
     includeChainedRemakes?: boolean;
   } = {}
 ) {
@@ -115,6 +117,28 @@ function dbFor(
               },
             ],
           },
+          ...(options.includeExtraLine
+            ? [
+                {
+                  id: 'cake',
+                  course: 1,
+                  seatNumber: null,
+                  productId: 'product-2',
+                  variantId: null,
+                  name: 'Cake',
+                  unitPrice: D('60.00'),
+                  quantity: 1,
+                  taxAmount: D('0'),
+                  serviceChargeAmount: D('0'),
+                  status: 'SENT',
+                  remakeOfItemId: null,
+                  voidedPostPrep: false,
+                  wastageDisposition: null,
+                  voidReason: null,
+                  modifiers: [],
+                },
+              ]
+            : []),
           ...(options.includeChainedRemakes
             ? [
                 {
@@ -158,9 +182,21 @@ function dbFor(
         ],
         orderTables: [],
         kitchenTickets: [],
-        bills: (options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
-          serviceChargeTotal: D(serviceChargeTotal),
-        })),
+        bills: [
+          ...(options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
+            serviceChargeTotal: D(serviceChargeTotal),
+            splitKind: 'NONE',
+            lines: [
+              { orderItemId: 'coffee' },
+              ...(options.includeExtraLine ? [{ orderItemId: 'cake' }] : []),
+            ],
+          })),
+          ...(options.bills ?? []).map((bill) => ({
+            serviceChargeTotal: D(bill.serviceChargeTotal),
+            splitKind: bill.splitKind ?? 'BY_ITEM',
+            lines: bill.orderItemIds.map((orderItemId) => ({ orderItemId })),
+          })),
+        ],
         deliveryFulfillment: null,
       })),
     },
@@ -252,4 +288,36 @@ describe('order totals ignore stored tax and service', () => {
       });
     }
   );
+
+  it('adds live service for unbilled items to the billed service of a partly cut order', async () => {
+    // Coffee (4.50) is on a bill whose pinned service is 0.30; the cake (60.00)
+    // is not billed yet, so it still carries the live 10% service of 6.00.
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', {
+        includeExtraLine: true,
+        bills: [{ serviceChargeTotal: '0.30', orderItemIds: ['coffee'] }],
+      }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.subtotal).toBe('64.5');
+    expect(detail?.totals.serviceCharge).toBe('6.3');
+  });
+
+  it('does not add unbilled service when fractional bills cover the whole order', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', {
+        includeExtraLine: true,
+        bills: [
+          { serviceChargeTotal: '3.23', splitKind: 'FRACTIONAL', orderItemIds: ['coffee'] },
+          { serviceChargeTotal: '3.22', splitKind: 'FRACTIONAL', orderItemIds: ['cake'] },
+        ],
+      }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('6.45');
+  });
 });

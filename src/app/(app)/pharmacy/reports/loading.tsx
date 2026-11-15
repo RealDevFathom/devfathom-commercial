@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export default function PharmacyReportsLoading() {
   return (
-    <main aria-label="Loading Pharmacy reports" className="min-w-0 space-y-6" role="status">
+    <div aria-label="Loading Pharmacy reports" className="min-w-0 space-y-6" role="status">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
@@ -19,6 +19,6 @@ export default function PharmacyReportsLoading() {
       <SectionCard title="Loading daily owner digest">
         <Skeleton className="h-40 w-full" />
       </SectionCard>
-    </main>
+    </div>
   );
 }

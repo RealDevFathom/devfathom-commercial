@@ -14,6 +14,7 @@ export function reminderOutcome(result: KhataReminderRunResult): string {
     return 'reminder-failed';
   if (!result.scanned && !result.configured) return 'reminder-not-configured';
   if (result.skippedConfiguration) return 'reminder-not-configured';
+  if (result.skippedQuietHours) return 'reminder-quiet-hours';
   if (result.skippedNoConsent) return 'reminder-no-consent';
   return 'reminder-not-due';
 }
