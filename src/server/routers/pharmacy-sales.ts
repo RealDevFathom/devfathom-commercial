@@ -219,15 +219,39 @@ async function marginScopeFor(
   branch: string,
   actions: readonly ('pharmacy:dispense' | 'pharmacy:procurement' | 'pharmacy:manage')[]
 ): Promise<LedgerScope> {
-  const scope = await scopeFor(ctx, branch);
-  const subject = subjectFromSession(ctx.session!.user);
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  let permitted = false;
   for (const action of actions) {
-    if (await can(subject, action, undefined, { db: ctx.db, source: 'TRPC' })) return scope;
+    if (await can(subject, action, undefined, { db: ctx.db, source: 'TRPC' })) {
+      permitted = true;
+      break;
+    }
   }
-  throw new TRPCError({
-    code: 'FORBIDDEN',
-    message: 'Pharmacist or manager permission is required to view brand margins.',
+  if (!permitted) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacist or manager permission is required to view brand margins.',
+    });
+  }
+  // Branch stock, cost and margin stay inside the caller's active branch assignment.
+  // Only a session ADMIN of this organization may read any of its active branches.
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
   });
+  if (!assignment.some((row) => row.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {

@@ -30,7 +30,10 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({ pharmacySales: pharmacySalesRouter });
 
-function caller(rules: { capability: string; effect: 'ALLOW' | 'DENY' }[]) {
+function caller(
+  rules: { capability: string; effect: 'ALLOW' | 'DENY' }[],
+  { assignedBranches = ['branch-1'], role = 'EMPLOYEE' } = {}
+) {
   const db = {
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
@@ -38,7 +41,13 @@ function caller(rules: { capability: string; effect: 'ALLOW' | 'DENY' }[]) {
       ),
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     },
-    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async ({ where }: { where: { branchId?: string } }) =>
+        assignedBranches
+          .filter((branchId) => !where.branchId || where.branchId === branchId)
+          .map((branchId) => ({ branchId }))
+      ),
+    },
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
@@ -54,7 +63,7 @@ function caller(rules: { capability: string; effect: 'ALLOW' | 'DENY' }[]) {
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
     session: {
       expires: 'later',
-      user: { id: 'actor-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
+      user: { id: 'actor-1', role, status: 'ACTIVE', organizationId: 'org-1' },
     },
     organization: { id: 'org-1', vertical: 'PHARMACY' },
     support: null,
@@ -119,5 +128,30 @@ describe('#745 brand margin optimiser access', () => {
     await expect(buyer.sameSaltMarginRanking(rankInput)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  });
+
+  it('refuses a pharmacist or buyer on a branch they are not assigned to', async () => {
+    const pharmacist = caller([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }], {
+      assignedBranches: ['branch-2'],
+    });
+    await expect(pharmacist.sameSaltMarginRanking(rankInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    const buyer = caller([{ capability: 'pharmacy:procurement', effect: 'ALLOW' }], {
+      assignedBranches: [],
+    });
+    await expect(buyer.higherMarginBrandMix({ branchId: 'branch-1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(rankSameSaltBrandsByMargin).not.toHaveBeenCalled();
+    expect(suggestHigherMarginBrandMix).not.toHaveBeenCalled();
+  });
+
+  it('lets an organization admin read any active branch without an assignment', async () => {
+    await caller([{ capability: 'pharmacy:manage', effect: 'ALLOW' }], {
+      assignedBranches: [],
+      role: 'ADMIN',
+    }).sameSaltMarginRanking(rankInput);
+    expect(rankSameSaltBrandsByMargin).toHaveBeenCalledTimes(1);
   });
 });
