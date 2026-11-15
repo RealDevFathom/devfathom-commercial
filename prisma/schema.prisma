@@ -2058,6 +2058,7 @@ model PharmacyStockLocation {
   discrepancies           PharmacyStockDiscrepancy[]
   deviceQuotas            PharmacyDeviceLotQuota[]
   temperatureLogs         PharmacyTemperatureLog[]
+  coldChainSensors        PharmacyColdChainSensor[]
   unidentifiedReturnHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
@@ -2070,11 +2071,40 @@ model PharmacyStockLocation {
 enum PharmacyTemperatureReadingSource {
   MANUAL
   IMPORT
+  /// DEV-82 — pushed live by an enrolled PharmacyColdChainSensor.
+  SENSOR
 }
 
-/// INV-05: immutable storage-zone temperature evidence. Staff entry and
-/// data-logger files append through the same source seam; live devices remain
-/// outside this boundary.
+/// DEV-82 — a live cold-chain sensor bound to exactly one storage zone. Only the
+/// SHA-256 hash of its push secret is stored; it is globally unique so the
+/// webhook resolves the sensor before it knows the tenant. Revocation is a
+/// state, never a deletion.
+model PharmacyColdChainSensor {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  stockLocationId   String
+  name              String
+  deviceIdentifier  String
+  secretHash        String               @unique(map: "pharmacy_cold_chain_sensors_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  lastReadingAt     DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_cold_chain_sensors_location_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_cold_chain_sensors_org_id_key")
+  @@unique([organizationId, deviceIdentifier], map: "pharmacy_cold_chain_sensors_org_device_key")
+  @@index([organizationId, branchId, stockLocationId], map: "pharmacy_cold_chain_sensors_org_branch_location_idx")
+  @@map("pharmacy_cold_chain_sensors")
+}
+
+/// INV-05: immutable storage-zone temperature evidence. Staff entry, data-logger
+/// files and (DEV-82) enrolled live sensors append through the same source seam.
 model PharmacyTemperatureLog {
   id               String                           @id @default(cuid())
   organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
