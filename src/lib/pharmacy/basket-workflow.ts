@@ -220,7 +220,7 @@ export async function reviewBasketInsight(
         rx: false,
         restricted: false,
         controlled: false,
-        OR: [{ otc: true }, { productFamily: 'FRONT_SHOP' }],
+        productFamily: 'FRONT_SHOP',
       },
       select: { id: true },
     });
@@ -243,6 +243,7 @@ export async function reviewBasketInsight(
         name: 'Reviewed bundle retail notice',
         body: bundleProposalWhatsAppText(),
         reviewed: true,
+        featuredMedicineIds: proposal.productIds,
       },
       now
     );

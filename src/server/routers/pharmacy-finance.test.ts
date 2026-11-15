@@ -280,7 +280,7 @@ describe.each(ledgerCases)(
 );
 
 describe('ledger date and dimension delegation', () => {
-  it.each(['line', 'batch', 'product', 'branch'] as const)(
+  it.each(['line', 'batch', 'product', 'branch', 'productClass'] as const)(
     'accepts margin dimension %s and exact 92-day boundary',
     async (by) => {
       const result = await caller().grossMargin({ ...input, to: '2026-12-02T00:00:00Z', by });

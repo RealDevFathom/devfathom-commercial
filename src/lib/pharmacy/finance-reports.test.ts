@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  grossMarginQuery,
   marginComparisonPeriods,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
@@ -114,5 +115,25 @@ describe('gross-margin accounting comparison', () => {
         { from: new Date('2026-09-01Z'), to: new Date('2026-09-02Z') }
       )
     ).rejects.toThrow('branch group');
+  });
+});
+
+describe('gross margin by product class (#718)', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const period = { from: new Date('2026-10-01'), to: new Date('2026-11-01') };
+
+  it('splits medicine and non-drug retail margin from the FRONT_SHOP family', () => {
+    const sql = grossMarginQuery(scope, { ...period, by: 'productClass' });
+    expect(sql.sql).toContain(`LEFT JOIN "pharmacy_medicines" product`);
+    expect(sql.sql).toContain(`product."organizationId" = line."organizationId"`);
+    expect(sql.sql).toContain(
+      `WHEN product."productFamily" = 'FRONT_SHOP' THEN 'NON_DRUG_RETAIL' ELSE 'MEDICINE'`
+    );
+    expect(sql.values).toContain('org_1');
+  });
+
+  it('leaves other dimensions without the catalogue join', () => {
+    const sql = grossMarginQuery(scope, { ...period, by: 'product' });
+    expect(sql.sql).not.toContain('pharmacy_medicines');
   });
 });

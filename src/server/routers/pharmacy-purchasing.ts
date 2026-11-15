@@ -75,6 +75,10 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import {
+  resolveReceiptBatchIdentity,
+  resolveReceiptRetailPrice,
+} from '@/lib/pharmacy/product-class';
 import { assertProcurement } from '../pharmacy-procurement-access';
 import {
   assertDirectPurchaseAuthorized,
@@ -1408,10 +1412,12 @@ const purchasingRouter = router({
                   purchaseOrderLineId: z.string().min(1).optional(),
                   medicineId: z.string().min(1),
                   packLevelId: z.string().min(1),
-                  batchNumber: z.string().trim().min(1).max(120),
-                  printedExpiry: z.date(),
+                  // #718: optional only for NON_DRUG_RETAIL (FRONT_SHOP) items; the server
+                  // still refuses a medicine line without its printed batch, expiry and MRP.
+                  batchNumber: z.string().trim().min(1).max(120).optional(),
+                  printedExpiry: z.date().optional(),
                   expiryPrecision: z.enum(['DAY', 'MONTH']),
-                  printedMrpMinor: z.number().int().positive(),
+                  printedMrpMinor: z.number().int().positive().optional(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   receivedPacks: z.number().int().nonnegative(),
                   bonusPacks: z.number().int().nonnegative().default(0),
@@ -1554,8 +1560,27 @@ const purchasingRouter = router({
           const lines = [];
           const seenSerials = new Set<string>();
           for (const [index, line] of input.lines.entries()) {
-            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
-              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            const item = await db.medicine.findFirst({
+              where: { id: line.medicineId, saleable: true },
+              select: { id: true, productFamily: true, retailPriceMinor: true },
+            });
+            if (!item) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // #718: a medicine keeps PUR-02 exactly (printed batch, expiry and DRAP MRP). A
+            // non-drug item may arrive without a batch or expiry and is priced at the shop-set
+            // retail price, so the counter never has to ask for a batch.
+            const receiptBatch = resolveReceiptBatchIdentity({
+              productFamily: item.productFamily,
+              batchNumber: line.batchNumber,
+              printedExpiry: line.printedExpiry,
+              expiryPrecision: line.expiryPrecision,
+            });
+            if (!receiptBatch.ok) throw new PharmacyReceivingError(receiptBatch.reason);
+            const printedMrpMinor = resolveReceiptRetailPrice({
+              productFamily: item.productFamily,
+              printedMrpMinor: line.printedMrpMinor,
+              retailPriceMinor: item.retailPriceMinor,
+            });
+            if (printedMrpMinor === null) throw new PharmacyReceivingError('MISSING_MRP');
             if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
               throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
             // An ordered line borrowed from another order — or from another
@@ -1583,9 +1608,9 @@ const purchasingRouter = router({
             });
             const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
               medicineId: line.medicineId,
-              batchNumber: line.batchNumber,
-              printedExpiry: line.printedExpiry,
-              expiryPrecision: line.expiryPrecision,
+              batchNumber: receiptBatch.batchNumber,
+              printedExpiry: receiptBatch.printedExpiry,
+              expiryPrecision: receiptBatch.expiryPrecision,
               gtin: line.gtin,
               serialNumber: line.serialNumber,
               gs1Warnings: line.gs1Warnings,
@@ -1636,7 +1661,7 @@ const purchasingRouter = router({
               batchNumber: identity.batchNumber,
               printedExpiry: identity.printedExpiry,
               expiryPrecision: identity.expiryPrecision,
-              printedMrpMinor: line.printedMrpMinor,
+              printedMrpMinor,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,

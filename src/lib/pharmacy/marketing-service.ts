@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { assertPromotableProducts, PharmacyProductClassError } from './product-class';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -39,6 +40,8 @@ export const marketingTemplateInput = marketingScopeInput
     name: z.string().trim().min(1).max(100),
     body: z.string().trim().min(1).max(1000),
     reviewed: z.literal(true),
+    // #718: catalogue items this template promotes. Only NON_DRUG_RETAIL items qualify.
+    featuredMedicineIds: z.array(id).max(20).default([]),
   })
   .strict();
 export type MarketingScope = {
@@ -64,20 +67,52 @@ const whereScope = (scope: MarketingScope) => ({
   branchId: scope.branchId,
 });
 
+/**
+ * #718 server-side product guard, layered on `validateMarketingBody`: every featured item must be a
+ * same-tenant NON_DRUG_RETAIL item without Rx, restricted or controlled flags. Re-run whenever a
+ * template is used, so an item reclassified as a medicine after approval refuses the campaign too.
+ */
+export async function assertPromotableTemplateItems(
+  db: ScopedDb,
+  scope: MarketingScope,
+  featuredMedicineIds: readonly string[]
+) {
+  const ids = [...new Set(featuredMedicineIds)];
+  if (ids.length === 0) return;
+  const products = await db.medicine.findMany({
+    where: { organizationId: scope.organizationId, id: { in: ids } },
+    select: { id: true, productFamily: true, rx: true, restricted: true, controlled: true },
+  });
+  try {
+    assertPromotableProducts(ids, products);
+  } catch (error) {
+    if (error instanceof PharmacyProductClassError)
+      throw new MarketingWorkflowError(
+        error.reason === 'PROMOTED_ITEM_NOT_FOUND'
+          ? 'A featured item is not in this catalogue.'
+          : 'Medicines cannot be promoted. Feature only non-drug retail items.'
+      );
+    throw error;
+  }
+}
+
 /** Human-reviewed templates are immutable; AI assistance never calls this writer. */
 export async function approveMarketingTemplate(
   db: ScopedDb,
   scope: MarketingScope,
-  input: z.infer<typeof marketingTemplateInput>,
+  input: z.input<typeof marketingTemplateInput>,
   now = new Date()
 ) {
-  marketingTemplateInput.parse(input);
-  validateMarketingBody(input.body);
+  const parsed = marketingTemplateInput.parse(input);
+  validateMarketingBody(parsed.body);
+  const featuredMedicineIds = [...new Set(parsed.featuredMedicineIds)];
+  await assertPromotableTemplateItems(db, scope, featuredMedicineIds);
   return db.pharmacyMarketingTemplate.create({
     data: {
       ...whereScope(scope),
-      name: input.name,
-      body: input.body,
+      name: parsed.name,
+      body: parsed.body,
+      featuredMedicineIds,
       channel: 'WHATSAPP',
       approvedByUserId: scope.actorId,
       approvedAt: now,
@@ -92,6 +127,7 @@ async function templateFor(db: ScopedDb, scope: MarketingScope, templateId: stri
   if (!template || !template.approvedByUserId || !template.approvedAt)
     throw new MarketingWorkflowError('Select a reviewed template in this branch.');
   validateMarketingBody(template.body);
+  await assertPromotableTemplateItems(db, scope, template.featuredMedicineIds);
   return template;
 }
 

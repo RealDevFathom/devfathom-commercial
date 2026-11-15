@@ -25,7 +25,18 @@ type Leakage = Awaited<ReturnType<Caller['leakageReport']>>;
 type Report = Valuation | Margin | Leakage;
 type Group = Margin['by'];
 const day = 86_400_000;
-const groups: Group[] = ['line', 'batch', 'product', 'branch'];
+const groups: Group[] = ['line', 'batch', 'product', 'branch', 'productClass'];
+const groupLabels: Record<Group, string> = {
+  line: 'Sale line',
+  batch: 'Batch',
+  product: 'Product',
+  branch: 'Branch',
+  productClass: 'Medicine vs non-drug',
+};
+const classLabels: Record<string, string> = {
+  MEDICINE: 'Medicine',
+  NON_DRUG_RETAIL: 'Non-drug retail',
+};
 const unknown = 'Not recorded';
 
 // Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
@@ -200,9 +211,9 @@ export function MarginLedger({ report }: { report: Margin }) {
         margin. Current purchase costs are not substituted for historical COGS.
       </p>
       <LedgerTable
-        caption={`Gross margin grouped by ${report.by}`}
+        caption={`Gross margin grouped by ${groupLabels[report.by]}`}
         columns={[
-          { label: report.by },
+          { label: groupLabels[report.by] },
           { label: 'Gross revenue', numeric: true },
           { label: 'Discounts', numeric: true },
           { label: 'Net revenue', numeric: true },
@@ -210,7 +221,11 @@ export function MarginLedger({ report }: { report: Margin }) {
           { label: 'Gross margin', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.key ?? unknown,
+          row.key === null
+            ? unknown
+            : report.by === 'productClass'
+              ? (classLabels[row.key] ?? row.key)
+              : row.key,
           money(row.revenueMinor, report.currency),
           money(row.discountMinor, report.currency),
           money(net(row), report.currency),
@@ -398,7 +413,7 @@ export async function LedgerReportsSection({
               {!groupValid && <option value={group}>Invalid grouping</option>}
               {groups.map((value) => (
                 <option key={value} value={value}>
-                  {value === 'line' ? 'Sale line' : value[0].toUpperCase() + value.slice(1)}
+                  {groupLabels[value]}
                 </option>
               ))}
             </select>

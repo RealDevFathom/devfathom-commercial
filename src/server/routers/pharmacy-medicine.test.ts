@@ -365,3 +365,74 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(moduleForProcedure('pharmacyMedicine.createIngredient')).toBe('pharmacy-core');
   });
 });
+
+describe('non-drug retail catalogue fields (#718)', () => {
+  it('creates a front-shop item with a shop retail price, category and EAN-13', async () => {
+    await caller().createMedicine({
+      productName: 'Baby lotion 200 ml',
+      productFamily: 'FRONT_SHOP',
+      presentation: { presentation: 'Bottle 200 ml' },
+      retailPriceMinor: 45_000,
+      retailCategory: ' Baby care ',
+      ean13: '4006381333931',
+      saleable: true,
+    });
+    const data = db.medicine.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 45_000,
+      retailCategory: 'Baby care',
+      presentations: {
+        create: {
+          presentation: 'Bottle 200 ml',
+          barcodes: { create: { type: 'GTIN', code: '4006381333931' } },
+        },
+      },
+    });
+    expect(data).not.toHaveProperty('ean13');
+  });
+
+  it('refuses a shop retail price on a medicine and an invalid EAN-13', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Syrup',
+        productFamily: 'PHARMACEUTICAL',
+        retailPriceMinor: 9_000,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createMedicine({
+        productName: 'Shampoo',
+        productFamily: 'FRONT_SHOP',
+        presentation: { presentation: 'Bottle' },
+        ean13: '4006381333932',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('sets retail details on a front-shop item but refuses a medicine', async () => {
+    db.medicine.findFirst.mockResolvedValueOnce({ id: 'soap', productFamily: 'FRONT_SHOP' });
+    await caller().setRetailDetails({
+      medicineId: 'soap',
+      retailPriceMinor: 12_000,
+      retailCategory: 'FMCG',
+    });
+    expect(db.medicine.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'soap' },
+        data: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
+      })
+    );
+
+    db.medicine.findFirst.mockResolvedValueOnce({ id: 'syrup', productFamily: 'PHARMACEUTICAL' });
+    await expect(
+      caller().setRetailDetails({
+        medicineId: 'syrup',
+        retailPriceMinor: 9_000,
+        retailCategory: null,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicine.update).toHaveBeenCalledTimes(1);
+  });
+});
