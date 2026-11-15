@@ -151,6 +151,7 @@ function callerFor(suppliers: readonly object[], orders: readonly object[] = [])
     requisitions: vi.fn().mockResolvedValue([]),
     purchaseOrders: vi.fn().mockResolvedValue(orders),
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
+    receiptDebitNotes: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
     compareQuotes: vi.fn().mockResolvedValue({ ranking: [] }),
     landedCost: vi.fn().mockResolvedValue({

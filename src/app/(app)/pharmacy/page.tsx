@@ -12,7 +12,10 @@ import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
 import { pharmacyLandingPath } from '@/lib/pharmacy/landing';
 import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
+import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
 import { pharmacyAccessRouter } from '@/server/routers/pharmacy-access';
+import { pharmacyLoyaltyRouter } from './loyalty/loyalty-router';
+import { OnboardingLoyaltyStep } from './loyalty/onboarding-loyalty-step';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 
@@ -22,7 +25,8 @@ export const metadata: Metadata = { title: 'Pharmacy onboarding' };
  * PLAT-03 — the pharmacy workspace home.
  *
  * Rendered on the server so the twelve steps are on screen in the first paint,
- * with no spinner between the operator and the thing they came to read. The
+ * with no spinner between the operator and the thing they came to read.
+ *
  * DEV-497: onboarding is administration. A member the server refuses it to
  * (a cashier, a pharmacist) is sent to their own working page instead of a
  * dead end. Any other failure keeps the card, in the same geometry as the
@@ -65,10 +69,20 @@ export default async function PharmacyOnboardingPage() {
   // #709 — the Tier-1 self-check prompt is additive: if it cannot be read,
   // the rest of the page still renders.
   // #720 — renewal reminders are additive in the same way.
-  const [fbrTier1, renewals] = await Promise.all([
+  // DEV-814 — the optional loyalty question, also additive. It reads the rate through the
+  // loyalty router, so only a user who may set the rate is asked; a pharmacy already active
+  // or with a rate set keeps the loyalty page's own notice instead.
+  const [fbrTier1, renewals, earnRate] = await Promise.all([
     caller.fbrTier1Status().catch(() => null),
     caller.licenceRenewals().catch(() => []),
+    overview.organization.status === 'ACTIVE'
+      ? null
+      : pharmacyLoyaltyRouter
+          .createCaller(ctx)
+          .earnRate()
+          .catch(() => null),
   ]);
+  const askLoyalty = !!earnRate && !earnRate.current;
   // DEV-93 — the owner's "no lock-in" export, offered only to the live owner.
   const userId = ctx.session?.user?.id;
   const organizationId = ctx.organization?.id;
@@ -97,6 +111,11 @@ export default async function PharmacyOnboardingPage() {
       />
       <LicenceRenewalBanner reminders={renewals} />
       <PharmacyOnboardingConsole initial={overview} />
+      {askLoyalty ? (
+        <OnboardingLoyaltyStep
+          presets={LOYALTY_EARN_PRESETS.map((preset) => ({ id: preset.id, label: preset.label }))}
+        />
+      ) : null}
       {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
     </main>
   );

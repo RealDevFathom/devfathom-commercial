@@ -1,115 +1,75 @@
-import { TRPCError } from '@trpc/server';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import PharmacyOnboardingPage from './page';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   overview: vi.fn(),
-  navigation: vi.fn(),
-  redirect: vi.fn((path: string) => {
-    throw new Error(`NEXT_REDIRECT ${path}`);
-  }),
-  enabledModules: [] as string[],
+  fbrTier1Status: vi.fn(),
+  licenceRenewals: vi.fn(),
+  earnRate: vi.fn(),
 }));
-
-vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
-vi.mock('@/server/trpc', () => ({
-  createTRPCContext: vi.fn(async () => ({
-    session: { user: { id: 'member_1', role: 'EMPLOYEE' } },
-    organization: { id: 'org_1' },
-    entitlements: { organizationId: 'org_1', enabledModules: mocks.enabledModules },
-    db: {},
-  })),
-}));
+vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/server/routers/pharmacy-onboarding', () => ({
-  pharmacyOnboardingRouter: {
-    createCaller: () => ({
-      overview: mocks.overview,
-      fbrTier1Status: vi.fn().mockResolvedValue(null),
-      licenceRenewals: vi.fn().mockResolvedValue([]),
-    }),
-  },
+  pharmacyOnboardingRouter: { createCaller: () => mocks },
 }));
+vi.mock('./loyalty/loyalty-router', () => ({
+  pharmacyLoyaltyRouter: { createCaller: () => ({ earnRate: mocks.earnRate }) },
+}));
+vi.mock('./loyalty/earn-rate-actions', () => ({ saveEarnRate: vi.fn() }));
+// DEV-497: read only when onboarding is refused; page.landing.test.tsx covers it.
 vi.mock('@/server/routers/pharmacy-access', () => ({
-  pharmacyAccessRouter: { createCaller: () => ({ navigation: mocks.navigation }) },
-}));
-vi.mock('@/lib/pharmacy/owner-data-export', () => ({
-  isLiveOrganizationOwner: vi.fn().mockResolvedValue(false),
+  pharmacyAccessRouter: { createCaller: () => ({ navigation: vi.fn() }) },
 }));
 vi.mock('@/components/pharmacy/onboarding-console', () => ({
-  PharmacyOnboardingConsole: () => <p>Onboarding steps</p>,
+  PharmacyOnboardingConsole: () => <div>checklist</div>,
 }));
-vi.mock('@/components/pharmacy/fbr-tier1-summary', () => ({ FbrTier1Summary: () => null }));
 vi.mock('@/components/pharmacy/licence-renewal-banner', () => ({
   LicenceRenewalBanner: () => null,
 }));
+vi.mock('@/components/pharmacy/fbr-tier1-summary', () => ({ FbrTier1Summary: () => null }));
+vi.mock('@/lib/pharmacy/owner-data-export', () => ({
+  isLiveOrganizationOwner: vi.fn().mockResolvedValue(false),
+}));
+import PharmacyOnboardingPage from './page';
 
-const forbidden = () =>
-  new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
-
-async function landing() {
-  try {
-    await PharmacyOnboardingPage();
-  } catch (error) {
-    const match = /^NEXT_REDIRECT (.+)$/.exec((error as Error).message);
-    if (match) return match[1];
-    throw error;
-  }
-  return null;
-}
+const overview = (status: string) => ({ organization: { status, displayName: 'Shifa' } });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.enabledModules = ['pharmacy-core', 'pharmacy-counter', 'pharmacy-dispensing'];
-  mocks.overview.mockRejectedValue(forbidden());
+  mocks.overview.mockResolvedValue(overview('ONBOARDING'));
+  mocks.fbrTier1Status.mockResolvedValue(null);
+  mocks.licenceRenewals.mockResolvedValue([]);
+  mocks.earnRate.mockResolvedValue({ current: null, versions: [] });
 });
+afterEach(cleanup);
 
-describe('/pharmacy landing by capability (DEV-497)', () => {
-  it('sends a cashier to the counter instead of the onboarding dead end', async () => {
-    mocks.navigation.mockResolvedValue({ capabilities: ['pharmacy:counter'] });
-    expect(await landing()).toBe('/pharmacy/counter');
+const show = async () => render(await PharmacyOnboardingPage());
+const step = () => screen.queryByRole('heading', { name: 'Loyalty programme' });
+
+describe('DEV-814 loyalty question during onboarding', () => {
+  it('asks an onboarding owner with no earning rate whether to enable loyalty', async () => {
+    await show();
+    expect(step()).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Enable the loyalty programme?' })).toBeTruthy();
+    expect(screen.getByText('checklist')).toBeTruthy();
   });
 
-  it('sends a pharmacist to the pharmacist queue', async () => {
-    mocks.navigation.mockResolvedValue({
-      capabilities: ['pharmacy:dispense', 'pharmacy:prescriptions', 'pharmacy:counter'],
-    });
-    expect(await landing()).toBe('/pharmacy/pharmacist-queue');
+  it('does not ask once an earning rate is set', async () => {
+    mocks.earnRate.mockResolvedValue({ current: { version: 1 }, versions: [{ version: 1 }] });
+    await show();
+    expect(step()).toBeNull();
   });
 
-  it('sends a member holding operational reports to the command centre', async () => {
-    mocks.navigation.mockResolvedValue({
-      capabilities: ['reports:operational', 'pharmacy:counter', 'pharmacy:dispense'],
-    });
-    expect(await landing()).toBe('/dashboard');
+  it('does not ask a pharmacy that already finished onboarding', async () => {
+    mocks.overview.mockResolvedValue(overview('ACTIVE'));
+    await show();
+    expect(step()).toBeNull();
+    expect(mocks.earnRate).not.toHaveBeenCalled();
   });
 
-  it('never lands on a surface the workspace does not license', async () => {
-    mocks.enabledModules = ['pharmacy-core'];
-    mocks.navigation.mockResolvedValue({
-      capabilities: ['pharmacy:dispense', 'pharmacy:counter'],
-    });
-    expect(await landing()).toBe('/dashboard');
-  });
-
-  it('falls back to the staff home when the capability read fails', async () => {
-    mocks.navigation.mockRejectedValue(new Error('unavailable'));
-    expect(await landing()).toBe('/dashboard');
-  });
-
-  it('keeps onboarding for the administrator', async () => {
-    mocks.overview.mockResolvedValue({ steps: [] });
-    const page = await PharmacyOnboardingPage();
-    expect(renderToStaticMarkup(page)).toContain('Onboarding steps');
-    expect(mocks.redirect).not.toHaveBeenCalled();
-    expect(mocks.navigation).not.toHaveBeenCalled();
-  });
-
-  it('explains a failure that is not a permission refusal instead of redirecting', async () => {
-    mocks.overview.mockRejectedValue(new Error('database unavailable'));
-    const page = await PharmacyOnboardingPage();
-    expect(renderToStaticMarkup(page)).toContain('Onboarding is not available to you');
-    expect(mocks.redirect).not.toHaveBeenCalled();
+  it('does not ask a user who may not set the rate, and the page still renders', async () => {
+    mocks.earnRate.mockRejectedValue(new Error('FORBIDDEN'));
+    await show();
+    expect(step()).toBeNull();
+    expect(screen.getByText('checklist')).toBeTruthy();
   });
 });

@@ -460,6 +460,9 @@ function makeDb() {
             breaks: state.breaks
               .filter((row) => row.shiftId === shift.id)
               .map(({ id }) => ({ id })),
+            adjustments: state.adjustments
+              .filter((row) => row.shiftId === shift.id)
+              .map(({ id }) => ({ id })),
           },
           replacement: state.profiles.find((p) => p.id === request.replacementStaffProfileId)!,
         };
@@ -1127,6 +1130,39 @@ describe('restaurantShifts.reviewSwap', () => {
     expect(state.shifts.find((shift) => shift.id === 'shift_emp')!.staffProfileId).toBe(
       'staff_emp'
     );
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
+  it('refuses to reassign a shift whose attendance exists only as a time repair', async () => {
+    const request = await pendingSwap();
+    state.adjustments.push({
+      id: 'adj_repair',
+      shiftId: 'shift_emp',
+      breakId: null,
+      kind: 'CLOCK_IN',
+      originalAt: null,
+      correctedAt: at('2026-09-20T09:02:00Z'),
+      reason: 'Reader offline',
+      createdAt: at('2026-09-20T18:00:00Z'),
+    });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-repair-only',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedInAt: null,
+    });
     expect(state.decisions).toHaveLength(0);
     expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
