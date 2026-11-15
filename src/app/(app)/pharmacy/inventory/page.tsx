@@ -860,7 +860,19 @@ export default async function PharmacyInventoryPage({
               </Button>
             </form>
           ) : (
-            <Empty>Receive stock and create a location before starting a count.</Empty>
+            <div className="space-y-3">
+              <Empty>
+                {locations.length === 0
+                  ? 'No active stock location exists for this branch. Create a location in Locations, then receive stock before starting a count.'
+                  : 'No available received stock to count at this branch. Receive stock before starting a count.'}
+              </Empty>
+              <Link
+                href={`/pharmacy/purchasing/receiving?branch=${encodeURIComponent(branch.id)}`}
+                className={buttonVariants({ variant: 'outline', size: 'touch' })}
+              >
+                Receive stock
+              </Link>
+            </div>
           )}
           <div className="mt-5 space-y-2">
             {counts.map((count) => (

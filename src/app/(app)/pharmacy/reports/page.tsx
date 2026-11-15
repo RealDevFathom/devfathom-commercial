@@ -196,11 +196,15 @@ export default async function PharmacyReportsPage({
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
-    else
+    else {
       expiryAdviceError = !(
         expiryResult.reason instanceof TRPCError &&
         ['FORBIDDEN', 'UNAUTHORIZED'].includes(expiryResult.reason.code)
       );
+      if (expiryAdviceError) {
+        console.error('[pharmacy-reports] Expiry advice failed', expiryResult.reason);
+      }
+    }
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
