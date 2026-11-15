@@ -710,7 +710,7 @@ function PosShell({
     <div className="pos-calm studio-viewport h-dvh overflow-hidden text-text-strong">
       <a
         href="#pos-main"
-        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+        className="sr-only fixed top-3 left-3 z-50 rounded-sm bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
       >
         Skip to order pad
       </a>

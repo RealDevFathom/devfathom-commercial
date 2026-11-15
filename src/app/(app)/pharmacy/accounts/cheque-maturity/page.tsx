@@ -144,7 +144,7 @@ export default async function ChequeMaturityPage({
             </select>
           </label>
           <button
-            className="mt-4 min-h-11 rounded-[3px] bg-primary px-3 text-sm font-semibold text-primary-foreground"
+            className="mt-4 min-h-11 rounded-sm bg-primary px-3 text-sm font-semibold text-primary-foreground"
             type="submit"
           >
             Load evidence
