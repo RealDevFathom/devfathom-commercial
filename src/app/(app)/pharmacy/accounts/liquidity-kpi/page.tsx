@@ -18,6 +18,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { ExportCsv } from './export-csv';
 
 export const metadata: Metadata = { title: 'Posted cash coverage · Pharmacy accounts' };
@@ -164,9 +165,8 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
       actions={kpi.empty ? undefined : <ExportCsv csv={csv} />}
     >
       <p className="text-sm text-text-muted">
-        Branch {state.branchId}. Closing balances posted before {state.cutoff.toISOString()}.
-        Source: finance_journal_lines. Retrieved {state.retrievedAt.toISOString()}.{' '}
-        {LIQUIDITY_KPI_COVERAGE}
+        Closing balances posted before {formatUtcInstant(state.cutoff)}. Source: posted accounts.
+        Retrieved {formatUtcInstant(state.retrievedAt)}. {LIQUIDITY_KPI_COVERAGE}
       </p>
       <p className="mt-2 text-sm text-text-muted">
         Coverage = (CASH + BANK) ÷ (accounts payable + goods-received accrual), each currency
