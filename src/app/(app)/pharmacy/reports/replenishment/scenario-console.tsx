@@ -551,7 +551,7 @@ function ScenarioWorkspace({
         <SectionCard title="Observation window" titleLevel={2}>
           <div className="grid gap-4 md:grid-cols-2">
             {field('historyStartDate', 'History start (UTC)', 'date')}
-            {field('originDate', 'Forecast from (history ends the day before)', 'date')}
+            {field('originDate', 'Forecast from (UTC date; history ends the day before)', 'date')}
             {field('horizonDays', 'Planning / forecast horizon (days)', 'number', false, 1, 366)}
             <label className="text-sm text-text-body">
               Forecast method
@@ -595,10 +595,10 @@ function ScenarioWorkspace({
                 Include a user-supplied scenario
               </label>
               <p className="mt-2 text-sm text-text-muted">
-                Your settings: enter a constant daily demand and hypothetical order
-                terms. Current policy means the order quantity you enter, not on-hand stock. These
-                inputs are not observed demand or a forecast guarantee. Sales and margin goals and
-                prices are configurable assumptions, never recorded facts.
+                Your settings: enter a constant daily demand and hypothetical order terms. Current
+                policy means the order quantity you enter, not on-hand stock. These inputs are not
+                observed demand or a forecast guarantee. Sales and margin goals and prices are
+                configurable assumptions, never recorded facts.
               </p>
               {manual && (
                 <div className="mt-4 space-y-4">
@@ -608,7 +608,7 @@ function ScenarioWorkspace({
                     supplied currency. Arrival and expiry require an explicit timezone.
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
-                    {field('planningOrigin', 'Scenario starts on (future day)', 'date')}
+                    {field('planningOrigin', 'Scenario starts on (future UTC day)', 'date')}
                     {field('currency', 'Scenario currency (three-letter code)')}
                     {numericFields.map(([key, label, optional, min]) =>
                       field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
@@ -703,8 +703,9 @@ function ReportEvidence({
           {demand.period.endDateExclusive} (exclusive).
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
-          Demand provenance: {SOURCE_LABELS[demand.provenance.kind] ?? demand.provenance.kind} · {demand.provenance.reference}. Read at:{' '}
-          {demand.provenance.readAt}. Sources: {demand.provenance.sources.join(', ')}.
+          Demand provenance: {SOURCE_LABELS[demand.provenance.kind] ?? demand.provenance.kind} ·{' '}
+          {demand.provenance.reference}. Read at: {demand.provenance.readAt}. Sources:{' '}
+          {demand.provenance.sources.join(', ')}.
         </p>
         <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
@@ -798,8 +799,13 @@ function ReportEvidence({
         {report.forecast.result && (
           <>
             <p className="mt-3 text-sm text-text-muted">
-              {report.forecast.result.label === 'CONDITIONAL_SCENARIO' ? 'What-if scenario' : report.forecast.result.label} · {SOURCE_LABELS[report.forecast.result.source.kind] ?? report.forecast.result.source.kind}. Period:{' '}
-              {report.forecast.result.period.startDate} to{' '}
+              {report.forecast.result.label === 'CONDITIONAL_SCENARIO'
+                ? 'What-if scenario'
+                : report.forecast.result.label}{' '}
+              ·{' '}
+              {SOURCE_LABELS[report.forecast.result.source.kind] ??
+                report.forecast.result.source.kind}
+              . Period: {report.forecast.result.period.startDate} to{' '}
               {report.forecast.result.period.endDateExclusive} (exclusive).
             </p>
             <Table>
