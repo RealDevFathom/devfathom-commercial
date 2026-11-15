@@ -411,6 +411,7 @@ const CALLS = {
   authenticatePack: (c: Caller) => c.authenticatePack({ branchId: 'branch_a', payload: '0100' }),
   supplierCredits: (c: Caller) => c.supplierCredits({ branchId: 'branch_a' }),
   centralDemand: (c: Caller) => c.centralDemand({}),
+  reorderDrafts: (c: Caller) => c.reorderDrafts({ branchId: 'branch_a' }),
   createCentralPurchaseOrder: (c: Caller) =>
     c.createCentralPurchaseOrder({
       reference: 'CPO-1',
@@ -493,6 +494,7 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   authenticatePack: PROCUREMENT,
   supplierCredits: FINANCIAL,
   centralDemand: PROCUREMENT,
+  reorderDrafts: PROCUREMENT,
   createCentralPurchaseOrder: PROCUREMENT,
   allocateCentralReceipt: PROCUREMENT,
 };
@@ -522,6 +524,7 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'returnableLots',
   'authenticatePack',
   'supplierCredits',
+  'reorderDrafts',
 ];
 const ORDER_SCOPED: ProcedureName[] = [
   'submitPurchaseOrder',
@@ -1374,5 +1377,68 @@ describe('a supplier licence is verified by a second person (PUR-01)', () => {
       code: 'BAD_REQUEST',
     });
     expect(m('pharmacySupplierLicence').create).not.toHaveBeenCalled();
+  });
+});
+
+// ── DEV-678 reorder drafts ───────────────────────────────────────────────
+
+describe('reorder drafts are a read, scoped to the caller’s branch (DEV-678)', () => {
+  it('plans one draft per distributor from branch-scoped SQL and writes nothing', async () => {
+    assignments({ buyer: ['branch_a'] });
+    db.$queryRaw.mockImplementation(async (query: unknown) =>
+      (query as { sql?: string }).sql?.includes('pharmacy_sale_lines')
+        ? [
+            {
+              medicineId: 'medicine_a',
+              medicineName: 'Alpha',
+              soldUnits: BigInt(280),
+              onHandUnits: BigInt(50),
+              inboundUnits: BigInt(0),
+              supplierId: 'supplier_a',
+              supplierName: 'Karachi Distributors',
+              supplierActive: true,
+              packLevelId: 'pack_a',
+              canonicalUnitsPerPack: 20,
+              listPricePerPackMinor: 15_000,
+              discountBps: 0,
+              taxBps: 0,
+              taxCreditable: false,
+              lineLeadTimeDays: 7,
+              observedLeadTimeDays: null,
+            },
+          ]
+        : []
+    );
+    const plan = await caller('buyer').reorderDrafts({ branchId: 'branch_a' });
+    expect(plan).toMatchObject({
+      branchId: 'branch_a',
+      policy: { windowDays: 28, coverDays: 14 },
+      drafts: [
+        {
+          supplierId: 'supplier_a',
+          lines: [{ medicineId: 'medicine_a', suggestedPacks: 8 }],
+        },
+      ],
+      unassigned: [],
+    });
+    const factsQuery = db.$queryRaw.mock.calls
+      .map(([query]) => query as { sql?: string; values?: unknown[] })
+      .find((query) => query.sql?.includes('pharmacy_sale_lines'));
+    expect(factsQuery?.values).toEqual(expect.arrayContaining(['org_a', 'branch_a']));
+    for (const [, delegate] of models) {
+      expect(delegate.create).not.toHaveBeenCalled();
+      expect(delegate.update).not.toHaveBeenCalled();
+    }
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a history or cover outside 1..90 / 0..90 days', async () => {
+    assignments({ buyer: ['branch_a'] });
+    await expect(
+      caller('buyer').reorderDrafts({ branchId: 'branch_a', windowDays: 0 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller('buyer').reorderDrafts({ branchId: 'branch_a', coverDays: 91 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });

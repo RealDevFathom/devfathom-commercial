@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
@@ -24,7 +25,10 @@ export function ControlledRegisterConsole() {
   const [pin, setPin] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const branches = trpc.pharmacySafety.branches.useQuery();
-  const selected = branchId || branches.data?.[0]?.id || '';
+  // Only branches the server listed are offered; a sole branch is picked automatically.
+  const selected =
+    branches.data?.find((branch) => branch.id === branchId)?.id ?? branches.data?.[0]?.id ?? '';
+  const noBranch = branches.data?.length === 0;
   const register = trpc.pharmacySafety.controlledRegister.useQuery(
     { branchId: selected },
     { enabled: Boolean(selected) }
@@ -108,22 +112,50 @@ export function ControlledRegisterConsole() {
           Allow the print window, then try Print register again.
         </p>
       ) : null}
-      <label className="block text-xs text-text-muted" htmlFor="register-branch">
-        Branch
-        <select
-          id="register-branch"
-          className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
-          value={selected}
-          onChange={(event) => setBranchId(event.target.value)}
-        >
-          {branches.data?.length ? null : <option value="">No branch</option>}
-          {branches.data?.map((branch) => (
-            <option key={branch.id} value={branch.id}>
-              {branch.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {branches.isLoading ? (
+        <WorkspaceState title="Loading branches">Finding the branches you work at.</WorkspaceState>
+      ) : null}
+      {noBranch ? (
+        <WorkspaceState title="No branch is assigned to you">
+          <p>
+            The controlled register opens only for branches you are assigned to, because it holds
+            patient identity details. Nothing has been recorded or changed.
+          </p>
+          <p className="mt-2">
+            Ask a workspace administrator to assign you in{' '}
+            <Link
+              href="/pharmacy/settings/branches"
+              className="font-semibold text-text-strong underline underline-offset-4 focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              Branch assignments
+            </Link>
+            , then open this page again.
+          </p>
+        </WorkspaceState>
+      ) : null}
+      {branches.data?.length === 1 ? (
+        <p className="text-xs text-text-muted">
+          Branch{' '}
+          <span className="ml-1 text-sm font-medium text-text-strong">{branches.data[0].name}</span>
+        </p>
+      ) : null}
+      {branches.data && branches.data.length > 1 ? (
+        <label className="block text-xs text-text-muted" htmlFor="register-branch">
+          Branch
+          <select
+            id="register-branch"
+            className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
+            value={selected}
+            onChange={(event) => setBranchId(event.target.value)}
+          >
+            {branches.data.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {branches.error ? (
         <p className="text-xs text-destructive" role="alert">
           {branches.error.message}

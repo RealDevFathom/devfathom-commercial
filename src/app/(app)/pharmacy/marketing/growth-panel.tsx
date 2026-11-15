@@ -9,7 +9,7 @@ import {
   recentCompletedDays,
   timeZoneLabel,
 } from '@/lib/pharmacy/marketing-dates';
-import { workspaceTimezone } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { MarketingActionForm } from './action-form';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
@@ -28,6 +28,95 @@ const REVIEW_WORKSPACES: Partial<
     href: (branchId) => `/pharmacy/inventory?branch=${encodeURIComponent(branchId)}`,
   },
 };
+/** Owner-facing names for saved evidence; definitions stay server-owned in GROWTH_METRICS. */
+const METRIC_LABELS: Record<keyof typeof GROWTH_METRICS, string> = {
+  settled_sales_minor: 'Sales after refunds',
+  posted_margin_minor: 'Profit margin',
+  receipt_count: 'Receipts for known customers',
+  consent_eligible_retail_count: 'Customers who agreed to messages',
+  repeat_visit_count: 'Repeat visits',
+  meta_delivered_count: 'Messages delivered',
+  meta_attributed_sales_minor: 'Sales linked to messages',
+  refunds_minor: 'Refunds',
+  comps_minor: 'Free items given',
+  discounts_minor: 'Discounts',
+  daypart_sales_minor: 'Sales by time of day',
+  family_sales_minor: 'Sales by menu group',
+  recipe_cost_coverage_count: 'Receipts with known recipe cost',
+  wastage_minor: 'Stock written off',
+  inventory_value_minor: 'Stock value',
+  loyalty_eligible_count: 'Loyalty members who can be contacted',
+  catering_quote_count: 'Catering quotes',
+  catering_confirmed_count: 'Confirmed catering bookings',
+  catering_fulfilled_count: 'Completed catering bookings',
+  catering_headcount: 'Catering guests',
+  catering_capacity_count: 'Catering capacity',
+  catering_estimated_margin_minor: 'Estimated catering margin',
+};
+const PERIOD_LABELS = { CURRENT: 'chosen days', COMPARISON: 'days before' } as const;
+const COVERAGE_LABELS = {
+  COMPLETE: 'complete data',
+  PARTIAL: 'incomplete data',
+  ESTIMATED: 'estimated',
+} as const;
+/** Failures that a later run can clear once AI is set up or the service recovers. */
+const RETRYABLE_FAILURES = new Set(['CONFIGURATION', 'PROVIDER', 'TIMEOUT']);
+type SavedInsight = NonNullable<History>['insights'][number];
+type SavedFact = SavedInsight['snapshot']['facts'][number];
+
+/** Stored values stay exact; money is shown in the currency's main unit (all are 2-decimal). */
+function factValue(fact: Pick<SavedFact, 'metric' | 'value'>, currency: string) {
+  const value = Number(fact.value);
+  if (!Number.isFinite(value)) return fact.value;
+  if (!fact.metric.endsWith('_minor')) return new Intl.NumberFormat('en-GB').format(value);
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(value / 100);
+}
+
+/** An exclusive [from, cutoff) period as the inclusive local days the owner chose. */
+function localDays(period: { from: string; cutoff: string }, zone: string) {
+  const first = new Date(period.from);
+  const last = new Date(new Date(period.cutoff).getTime() - 1);
+  if (Number.isNaN(first.getTime()) || Number.isNaN(last.getTime())) return null;
+  const label = new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).formatRange(first, last);
+  return { firstDay: workspaceToday(zone, first), lastDay: workspaceToday(zone, last), label };
+}
+
+function FactLine({
+  fact,
+  currency,
+  zone,
+  definition,
+  showGroup,
+}: {
+  fact: SavedFact;
+  currency: string;
+  zone: string;
+  definition?: string;
+  showGroup?: boolean;
+}) {
+  return (
+    <li className="break-words">
+      <strong>
+        {METRIC_LABELS[fact.metric] ?? fact.metric}: {factValue(fact, currency)}
+      </strong>{' '}
+      · {PERIOD_LABELS[fact.period]} · {COVERAGE_LABELS[fact.coverage]}
+      {showGroup ? ` · group size: ${fact.cohortSize}` : ''} · updated{' '}
+      {formatWorkspaceDateTime(fact.freshAt, zone)}
+      {definition && <span className="block text-text-muted">{definition}</span>}
+    </li>
+  );
+}
+
 const control =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring';
 export function GrowthPanel({
@@ -129,15 +218,15 @@ export function GrowthPanel({
               }
             />
             <p className="break-words text-sm text-text-muted">
-              {insight.snapshot.current.from} to {insight.snapshot.current.cutoff} (exclusive).
-              Saved {insight.createdAt.toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })} PKT.
+              {localDays(insight.snapshot.current, zone)?.label ?? 'Unknown days'}, {zoneLabel}.
+              Saved {formatWorkspaceDateTime(insight.createdAt, zone)}.
             </p>
             <section className="space-y-3" aria-label="Saved aggregate evidence">
               <h3 className="font-medium">Saved evidence</h3>
               <p className="break-words text-sm text-text-muted">
-                Comparison: {insight.snapshot.comparison.from} to{' '}
-                {insight.snapshot.comparison.cutoff} (exclusive). Currency:{' '}
-                {insight.snapshot.currency}. Missing or suppressed facts are unknown, not zero.
+                Comparison: {localDays(insight.snapshot.comparison, zone)?.label ?? 'unknown days'}.
+                Amounts in {insight.snapshot.currency}. Figures that are missing or hidden for
+                privacy are unknown, not zero.
               </p>
               {!insight.snapshot.facts.length ? (
                 <p className="text-sm">
@@ -147,17 +236,14 @@ export function GrowthPanel({
               ) : (
                 <ul className="space-y-3 text-sm">
                   {insight.snapshot.facts.map((fact) => (
-                    <li key={fact.ref} className="break-words">
-                      <strong>
-                        {fact.ref}: {fact.value}
-                      </strong>{' '}
-                      {fact.metric.endsWith('_minor')
-                        ? `${insight.snapshot.currency} minor units`
-                        : 'count'}{' '}
-                      · {fact.period.toLowerCase()} · {GROWTH_METRICS[fact.metric]} Coverage:{' '}
-                      {fact.coverage.toLowerCase()}; cohort: {fact.cohortSize}; fresh at{' '}
-                      {fact.freshAt}.
-                    </li>
+                    <FactLine
+                      key={fact.ref}
+                      fact={fact}
+                      currency={insight.snapshot.currency}
+                      zone={zone}
+                      definition={GROWTH_METRICS[fact.metric]}
+                      showGroup
+                    />
                   ))}
                 </ul>
               )}
@@ -177,6 +263,27 @@ export function GrowthPanel({
                       : 'No suggestion could be generated from this evidence. Manual drafts remain available.'}
               </p>
             )}
+            {insight.status === 'UNAVAILABLE' &&
+              RETRYABLE_FAILURES.has(insight.failureCode ?? '') &&
+              (() => {
+                const days = localDays(insight.snapshot.current, zone);
+                if (!days) return null;
+                return (
+                  <MarketingActionForm
+                    branchId={branchId}
+                    operation="growth-generate"
+                    label="Generate again for these days"
+                    timeZone={zone}
+                  >
+                    <input type="hidden" name="from" value={days.firstDay} />
+                    <input type="hidden" name="lastDay" value={days.lastDay} />
+                    <p className="text-sm text-text-body">
+                      This is a saved result. If AI has been set up or is working again, generate
+                      fresh suggestions for {days.label}. Evidence is rebuilt from current records.
+                    </p>
+                  </MarketingActionForm>
+                );
+              })()}
             {insight.status === 'READY' &&
               insight.output?.recommendations.map((rec, index) => {
                 const card = presentGrowthRecommendation(insight.snapshot, rec);
@@ -194,16 +301,13 @@ export function GrowthPanel({
                     <p className="text-sm">{card.action}</p>
                     <ul className="space-y-2 text-sm">
                       {card.facts.map((f) => (
-                        <li key={f.ref} className="break-words">
-                          <strong>
-                            {f.ref}: {f.value}
-                          </strong>{' '}
-                          {f.metric.endsWith('_minor')
-                            ? `${insight.snapshot.currency} minor units`
-                            : 'count'}{' '}
-                          · {f.period.toLowerCase()} · {f.definition} Coverage:{' '}
-                          {f.coverage.toLowerCase()}; fresh at {f.freshAt}.
-                        </li>
+                        <FactLine
+                          key={f.ref}
+                          fact={f}
+                          currency={insight.snapshot.currency}
+                          zone={zone}
+                          definition={f.definition}
+                        />
                       ))}
                     </ul>
                     <ul className="space-y-1 text-sm text-text-muted">
