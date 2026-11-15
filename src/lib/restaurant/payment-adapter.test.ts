@@ -178,6 +178,25 @@ describe('MOCK — deterministic references and scriptable declines', () => {
     }
   });
 
+  it('lets the MOCK approve in production only when the caller allows it (demo organizations)', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const allowed = MOCK_PROVIDER.execute({
+        capability: 'SALE',
+        amount: '10.00',
+        operationRef: 'd',
+        allowMock: true,
+      });
+      expect(allowed.approved).toBe(true);
+      expect(allowed.status).toBe('CAPTURED');
+      expect(
+        MOCK_PROVIDER.execute({ capability: 'SALE', amount: '10.00', operationRef: 'd' }).approved
+      ).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('counts only an explicit approved outcome as approval', () => {
     const base = { approved: true, declineCode: null, status: 'CAPTURED' };
     expect(isExplicitApproval(base)).toBe(true);

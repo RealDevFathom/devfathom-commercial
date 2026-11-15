@@ -647,6 +647,74 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
     expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
   });
 
+  it('under NODE_ENV=production a real organization completes a manually confirmed card sale (MANUAL, with the actor)', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    vi.stubEnv('NODE_ENV', 'production');
+    let result: Awaited<ReturnType<typeof deps.tenders.applyTender>>;
+    try {
+      result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: {
+          type: 'CARD',
+          amount: grandTotal,
+          manualConfirmation: { approvalCode: 'AB12CD', reference: '4242' },
+        },
+        actor: actor(),
+        now: AT,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(result.settled).toBe(true);
+    const payment = await read((tx) =>
+      tx.restaurantPayment.findUnique({
+        where: { id: result.paymentId! },
+        select: {
+          provider: true,
+          status: true,
+          staffProfileId: true,
+          deviceId: true,
+          providerRef: true,
+          events: { select: { eventType: true, payload: true } },
+        },
+      })
+    );
+    expect(payment).toMatchObject({
+      provider: 'MANUAL',
+      status: 'CAPTURED',
+      staffProfileId: ids.operator,
+      deviceId,
+      providerRef: '4242',
+    });
+    expect(payment?.events).toHaveLength(1);
+    expect(payment?.events[0]).toMatchObject({
+      eventType: 'MANUAL_CONFIRMED',
+      payload: { provider: 'MANUAL', manuallyConfirmed: true, approvalCode: 'AB12CD' },
+    });
+  });
+
+  it('refuses a manually confirmed card tender without a valid approval code and saves nothing', async () => {
+    const { billId, grandTotal } = await openBill(1);
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: {
+          type: 'CARD',
+          amount: grandTotal,
+          manualConfirmation: { approvalCode: '', reference: '4242' },
+        },
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    const counts = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+      payments: await tx.restaurantPayment.count({ where: { billId } }),
+      events: await tx.restaurantPaymentEvent.count({ where: { payment: { billId } } }),
+    }));
+    expect(counts).toEqual({ tenders: 0, payments: 0, events: 0 });
+  });
+
   it('rejects an over-tender beyond the bill balance', async () => {
     const { billId } = await openBill(1); // 12.50
     await expect(

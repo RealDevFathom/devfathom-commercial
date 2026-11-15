@@ -83,6 +83,9 @@ export type PaymentOperation = {
   tipAmount?: Prisma.Decimal | string | number;
   operationRef: string;
   priorRef?: string | null;
+  /** The caller has established the MOCK may approve here (a demo organization). In a
+   * production build the MOCK refuses SALE/AUTH unless this is true. */
+  allowMock?: boolean;
 };
 
 /** The append-only event a provider operation produces. The caller writes it via
@@ -162,12 +165,17 @@ export const MOCK_IN_PRODUCTION_CODE = 'MOCK_PROVIDER_IN_PRODUCTION';
 /**
  * Fail closed. The MOCK provider is a test/demo stand-in: in a production build it
  * must never approve a card sale (no money moved), and the scripted cent-code
- * declines are not applied to real amounts. A SALE/AUTH in production is refused;
- * the cashier uses the manual terminal confirmation flow instead.
+ * declines are not applied to real amounts. A SALE/AUTH in production is refused
+ * unless the caller passes `allowMock` (a demo organization); every real
+ * organization uses the cashier-confirmed MANUAL card tender instead.
  */
-function declineCodeFor(capability: PaymentCapability, amount: Prisma.Decimal): string | null {
+function declineCodeFor(
+  capability: PaymentCapability,
+  amount: Prisma.Decimal,
+  allowMock: boolean
+): string | null {
   if (!AUTHORIZING.has(capability)) return null;
-  if (process.env.NODE_ENV === 'production') return MOCK_IN_PRODUCTION_CODE;
+  if (process.env.NODE_ENV === 'production' && !allowMock) return MOCK_IN_PRODUCTION_CODE;
   return DECLINE_CODES[centsComponent(amount)] ?? null;
 }
 
@@ -220,7 +228,7 @@ function mockExecute(operation: PaymentOperation): PaymentOutcome {
 
   const amount = money(operation.amount);
   const tipAmount = operation.tipAmount === undefined ? ZERO : money(operation.tipAmount);
-  const declineCode = declineCodeFor(operation.capability, amount);
+  const declineCode = declineCodeFor(operation.capability, amount, operation.allowMock === true);
   const approved = declineCode === null;
   const providerRef = mockReference(operation.capability, operation.operationRef);
   const status = approved ? APPROVED_STATUS[operation.capability] : 'DECLINED';
