@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   credentialUpdate: vi.fn(),
   verifyPin: vi.fn(),
   queryRaw: vi.fn(),
+  executeRaw: vi.fn(),
   auditCreate: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
@@ -97,6 +98,7 @@ import { pharmacyReportsRouter } from './pharmacy-reports';
 function context(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
   const db = {
     $queryRaw: mocks.queryRaw,
+    $executeRaw: mocks.executeRaw,
     auditLog: { create: mocks.auditCreate },
     user: {
       findFirst: mocks.userFindFirst,
@@ -690,6 +692,73 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     expect(mocks.reportCreate).not.toHaveBeenCalled();
     expect(mocks.reportUpdate).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'createPharmacovigilanceReport',
+      mocks.reportCreate,
+      () => pvCaller().createPharmacovigilanceReport(filing),
+    ],
+    [
+      'transitionPharmacovigilanceReport',
+      mocks.reportFindFirst,
+      () =>
+        pvCaller().transitionPharmacovigilanceReport({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'UNDER_REVIEW',
+        }),
+    ],
+    [
+      'recordPharmacovigilanceSubmission',
+      mocks.reportFindFirst,
+      () =>
+        pvCaller().recordPharmacovigilanceSubmission({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'PENDING',
+        }),
+    ],
+    [
+      'exportPharmacovigilanceDrap',
+      mocks.reportFindMany,
+      () =>
+        pvCaller().exportPharmacovigilanceDrap({
+          branchId: 'branch_1',
+          from: new Date('2026-09-01'),
+          to: new Date('2026-09-30'),
+        }),
+    ],
+  ])(
+    'binds the authorized branch for row-level security before %s touches reports (#1244)',
+    async (_procedure, reportCall, invoke) => {
+      mocks.reportCreate.mockResolvedValue({ id: 'pv_1' });
+      mocks.reportFindMany.mockResolvedValue([]);
+      mocks.reportFindFirst.mockResolvedValue({
+        id: 'pv_1',
+        state: 'READY',
+        externalSubmissionState: 'NOT_SUBMITTED',
+        createdByUserId: 'maker',
+        externalReference: null,
+        externalFailureReason: null,
+      });
+      mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1' }]);
+
+      await invoke();
+
+      expect(mocks.transaction).toHaveBeenCalledOnce();
+      expect(mocks.executeRaw).toHaveBeenCalledOnce();
+      const [sql, branchId] = mocks.executeRaw.mock.calls[0];
+      expect((sql as TemplateStringsArray).join('?')).toBe(
+        "SELECT set_config('app.current_branch_id', ?, true)"
+      );
+      expect(branchId).toBe('branch_1');
+      expect(reportCall).toHaveBeenCalled();
+      expect(mocks.executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        reportCall.mock.invocationCallOrder[0]
+      );
+    }
+  );
 
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({
