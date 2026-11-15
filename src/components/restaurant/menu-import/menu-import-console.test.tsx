@@ -320,8 +320,8 @@ describe('Restaurant menu-import console', () => {
       renderConsole();
 
       const list = screen.getByRole('list', { name: 'Extracted sizes' });
-      expect(list).toHaveTextContent('Small 9": 1200.00 PKR');
-      expect(list).toHaveTextContent('Large 15": 2600.00 PKR');
+      expect(list).toHaveTextContent('Small 9": 1200.00 PKR (printed Rs. 1,200)');
+      expect(list).toHaveTextContent('Large 15": 2600.00 PKR (printed Rs. 2,600)');
     });
 
     it('confirms the displayed sizes with an accept', () => {

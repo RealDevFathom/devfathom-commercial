@@ -138,7 +138,10 @@ function sizeLabel(size: SizeRow, fallbackCurrency: string | null): string {
   const price = size.amount
     ? `${size.amount} ${size.currency ?? fallbackCurrency ?? ''}`.trim()
     : (size.raw ?? 'no price');
-  return `${size.name}: ${price}`;
+  // The parsed figure can differ from the print ("1.250" read as 1250.00), so
+  // the reviewer always sees what the menu said next to what will be imported.
+  const printed = size.amount && size.raw ? ` (printed ${size.raw})` : '';
+  return `${size.name}: ${price}${printed}`;
 }
 
 const labelClass =
