@@ -5625,6 +5625,8 @@ model Organization {
   dataResidency                 String?
   primaryContactName            String?
   primaryContactEmail           String?
+  invoiceAddress                String?
+  taxId                         String?
   notes                         String?
   createdAt                     DateTime                       @default(now())
   updatedAt                     DateTime                       @updatedAt
@@ -5951,6 +5953,7 @@ model RestaurantTaxRateBucketSnapshot {
   evidenceVersion         Int                    @default(0)
   allocationKind          String?
   billLineId              String?
+  sourceOrderItemId       String?
   unitOrdinal             Int?
   createdAt               DateTime               @default(now())
 
@@ -14802,18 +14805,31 @@ model PharmacyChurnScoringRun {
 /// DEV-27: a voucher carries its eligible-category allowlist. Only non-drug
 /// categories are allowed (database check); the POS refuses it on drug lines.
 model PharmacyVoucher {
-  id                 String    @id @default(cuid())
-  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId           String
-  code               String
-  name               String
-  body               String
-  discountMinor      Int
-  eligibleCategories String[]  @default(["NON_DRUG"])
-  active             Boolean   @default(true)
-  validUntil         DateTime?
-  issuedByUserId     String
-  createdAt          DateTime  @default(now())
+  id                   String    @id @default(cuid())
+  organizationId       String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  code                 String
+  name                 String
+  body                 String
+  discountMinor        Int
+  eligibleCategories   String[]  @default(["NON_DRUG"])
+  active               Boolean   @default(true)
+  /// DEV-819: an expiry is required.
+  validUntil           DateTime
+  issuedByUserId       String
+  /// DEV-819: redemptions allowed and taken; `usedCount <= maxUses` (database check).
+  maxUses              Int       @default(1)
+  usedCount            Int       @default(0)
+  /// DEV-819: the approval. Above the value cap this is a second manager, or the
+  /// solo owner's fresh PIN; never the issuer's issue alone.
+  approvedByUserId     String?
+  approvalPolicy       String?
+  approvalCredentialId String?
+  /// DEV-819: a revoked voucher is inactive and never redeems again.
+  revokedAt            DateTime?
+  revokedByUserId      String?
+  revokeReason         String?
+  createdAt            DateTime  @default(now())
 
   @@unique([organizationId, id], map: "pharmacy_vouchers_org_id_key")
   @@unique([organizationId, branchId, code], map: "pharmacy_vouchers_org_branch_code_key")

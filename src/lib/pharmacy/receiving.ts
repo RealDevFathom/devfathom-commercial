@@ -58,6 +58,8 @@ export class PharmacyReceivingError extends Error {
       | 'GS1_INVALID'
       | 'GTIN_MEDICINE_MISMATCH'
       | 'PURCHASE_ORDER_LINE_ITEM_MISMATCH'
+      /** Units per pack differ from the pack level's configured conversion. */
+      | 'PACK_CONVERSION_MISMATCH'
       | 'EXPIRED_PACK'
       | 'SERIALIZED_PACK_QUANTITY'
       | 'CARTON_PACK_COUNT'
