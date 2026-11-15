@@ -2,7 +2,7 @@
 
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -18,6 +18,13 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import {
+  clearDayCloseDraft,
+  dayCloseDraftKey,
+  readDayCloseDraft,
+  saveDayCloseDraft,
+  type DayCloseDraft,
+} from './day-close-draft';
 
 /**
  * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
@@ -44,6 +51,9 @@ export function cashMinor(value: string): number | null {
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const subscribeToNothing = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
 
 // Optional deep link (e.g. Ask Fathom's cash-close drill-through): the branch and
 // business day to open on. An unknown branch or malformed day falls back to defaults.
@@ -81,10 +91,27 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} initial={initial} />;
+  return (
+    <DayCloseBranches
+      key={JSON.stringify([user.organizationId, user.id])}
+      organizationId={user.organizationId}
+      accountId={user.id}
+      initial={initial}
+    />
+  );
 }
 
-function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
+function DayCloseBranches({
+  initial,
+  organizationId,
+  accountId,
+}: {
+  initial?: DayCloseInitial;
+  organizationId: string;
+  accountId: string;
+}) {
+  // Read the tab's draft only after hydration, including when queries were prefetched.
+  const hydrated = useSyncExternalStore(subscribeToNothing, clientReady, serverReady);
   const branches = trpc.pharmacySales.counterBranches.useQuery();
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(
@@ -145,9 +172,10 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
           <p>No active pharmacy branches are available.</p>
         )}
       </SectionCard>
-      {branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
+      {hydrated && branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
         <DayCloseForm
           key={`${branchId}:${date}`}
+          draftKey={dayCloseDraftKey(organizationId, accountId, branchId, date)}
           branchId={branchId}
           date={date}
           currency={currency}
@@ -158,10 +186,12 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
 }
 
 function DayCloseForm({
+  draftKey,
   branchId,
   date,
   currency,
 }: {
+  draftKey: string;
   branchId: string;
   date: string;
   currency: string;
@@ -169,11 +199,22 @@ function DayCloseForm({
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
-  const [counts, setCounts] = useState<Record<string, string>>({});
-  const [note, setNote] = useState('');
+  const [recovery] = useState(() => readDayCloseDraft(draftKey));
+  const [draft, setDraft] = useState(recovery.draft);
+  const [draftWarning, setDraftWarning] = useState(recovery.warning);
+  const { counts, note } = draft;
+  function updateDraft(next: DayCloseDraft) {
+    setDraft(next);
+    // Save on each edit, not on unmount: navigation/reload may interrupt cleanup.
+    setDraftWarning(saveDayCloseDraft(draftKey, next));
+  }
   const [confirmed, setConfirmed] = useState(false);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
+  const report = close.data ?? preview.data?.close;
+  useEffect(() => {
+    if (report) clearDayCloseDraft(draftKey);
+  }, [draftKey, report]);
   if (preview.isLoading)
     return (
       <SectionCard>
@@ -190,7 +231,6 @@ function DayCloseForm({
       </SectionCard>
     );
   const data = preview.data;
-  const report = close.data ?? data.close;
   const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
@@ -269,7 +309,7 @@ function DayCloseForm({
             {open.length === 1 ? 'drawer' : 'drawers'} counted.
           </p>
         )}
-        <div className="mt-4 space-y-2" aria-label="Tender totals">
+        <div className="mt-4 space-y-2" role="group" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <p key={row.type} className="text-sm text-text-body">
               <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
@@ -366,7 +406,7 @@ function DayCloseForm({
                       disabled={busy}
                       aria-invalid={counts[d.id] !== undefined && cashMinor(counts[d.id]) === null}
                       onChange={(e) => {
-                        setCounts({ ...counts, [d.id]: e.target.value });
+                        updateDraft({ ...draft, counts: { ...counts, [d.id]: e.target.value } });
                         setConfirmed(false);
                       }}
                     />
@@ -391,7 +431,7 @@ function DayCloseForm({
                 value={note}
                 disabled={busy}
                 required={hasVariance}
-                onChange={(e) => setNote(e.target.value)}
+                onChange={(e) => updateDraft({ ...draft, note: e.target.value })}
               />
               <span className="text-sm text-text-muted">
                 Required when any drawer count differs from expected cash.
@@ -421,6 +461,9 @@ function DayCloseForm({
               I have counted every drawer and understand that locking this day is permanent.
             </label>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
+            {draftWarning && (
+              <p role="alert" className="text-sm text-destructive">{draftWarning}</p>
+            )}
             <div className="flex flex-wrap gap-3">
               <Button
                 className="min-h-11"
@@ -436,7 +479,7 @@ function DayCloseForm({
                 variant="outline"
                 disabled={busy}
                 onClick={() => {
-                  setCounts({});
+                  updateDraft({ ...draft, counts: {} });
                   setConfirmed(false);
                   close.reset();
                   void preview.refetch();
