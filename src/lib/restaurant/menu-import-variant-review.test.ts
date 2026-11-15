@@ -141,6 +141,23 @@ describe('reviewing a line with extracted sizes', () => {
     ]);
   });
 
+  it.each(['REJECTED', 'MERGED'] as const)(
+    'refuses sizes on a %s decision, so it cannot stand in for a later acceptance',
+    async (decision) => {
+      const { db, update } = reviewDb();
+      await expect(
+        reviewMenuImportLine(db, {
+          lineId: 'line_1',
+          decision,
+          reviewedById: 'user_1',
+          mergeProductId: decision === 'MERGED' ? 'prod_1' : undefined,
+          variants: [{ name: 'Small 9"', priceAmount: '1' }],
+        })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
   it('accepts an explicit confirmation that the line has no sizes', async () => {
     const { db, update } = reviewDb();
     await reviewMenuImportLine(db, {

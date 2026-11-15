@@ -725,6 +725,11 @@ export async function reviewMenuImportLine(
     }
   }
 
+  // Only an acceptance review confirms sizes. Accepting the line later reuses
+  // that confirmation, so a reject or merge must never be able to create one.
+  if (input.variants !== undefined && input.decision !== 'ACCEPTED') {
+    throw new MenuImportError('Sizes are confirmed only when accepting a line.', 'INVALID');
+  }
   const reviewedVariants =
     input.variants === undefined
       ? undefined
