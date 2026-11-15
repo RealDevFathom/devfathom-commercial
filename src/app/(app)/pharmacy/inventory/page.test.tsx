@@ -123,6 +123,23 @@ beforeEach(() => {
   lots.mockResolvedValue([lot]);
 });
 
+describe('inventory table keyboard scrolling', () => {
+  it('focuses the named viewport that directly scrolls the table', async () => {
+    await show();
+    const region = screen.getByRole('region', { name: 'Pharmacy inventory batches' });
+    const table = within(region).getByRole('table');
+    expect(table.parentElement).toBe(region);
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(region).toHaveClass(
+      'overflow-x-auto',
+      'focus-visible:outline-2',
+      'focus-visible:outline-ring'
+    );
+    region.focus();
+    expect(region).toHaveFocus();
+  });
+});
+
 describe('inventory success notice', () => {
   const css = readFileSync(join(__dirname, '../../../globals.css'), 'utf8');
   function themeVariables(theme: 'light' | 'dark') {
