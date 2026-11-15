@@ -55,6 +55,7 @@ import {
   type CounterTenderType,
   type CounterTenderResult,
   type CounterTenderBillState,
+  type KhataSignupInput,
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
@@ -648,6 +649,7 @@ function ScopedPharmacyCounterConsole({
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
@@ -1363,6 +1365,31 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  // A signup started on one bill must not link its customer to another branch or bill.
+  const counterScopeRef = useRef('');
+  useEffect(() => {
+    counterScopeRef.current = `${branchId}:${saleId ?? ''}`;
+  }, [branchId, saleId]);
+  const signUpKhata = useCallback(
+    async (input: KhataSignupInput) => {
+      if (!saleId) throw new Error('Open a bill');
+      const startedIn = `${branchId}:${saleId}`;
+      let result;
+      try {
+        result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      } catch (error) {
+        throw new Error(messageFrom(error));
+      }
+      if (counterScopeRef.current !== startedIn) return;
+      setCustomerId(result.customerId);
+      setNotice({ tone: 'success', message: 'Khata account opened and linked to this bill.' });
+    },
+    [branchId, khataSignup, saleId]
+  );
+  const khataSignupPatient = useMemo(
+    () => (patient ? { patientId: patient.patientId, displayName: patient.displayName } : null),
+    [patient]
+  );
   const reauthenticateOwner = useCallback(
     async (password: string, totp: string) => {
       const response = await fetch('/api/login', {
@@ -2845,6 +2872,8 @@ function ScopedPharmacyCounterConsole({
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
           printKhataStatement={printKhataStatement}
+          signUpKhata={signUpKhata}
+          khataSignupPatient={khataSignupPatient}
           balanceMinor={balanceMinor}
           state={billState}
           blocked={blocked}

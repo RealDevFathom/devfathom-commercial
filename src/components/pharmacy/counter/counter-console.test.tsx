@@ -157,6 +157,7 @@ vi.mock('@/lib/trpc', async () => {
         'captureDemand',
         'declineSubstitute',
         'linkCustomer',
+        'khataSignup',
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
@@ -465,6 +466,7 @@ beforeEach(() => {
     'captureDemand',
     'declineSubstitute',
     'linkCustomer',
+    'khataSignup',
     'redeemPoints',
     'authenticatePack',
   ])
