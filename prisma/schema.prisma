@@ -1306,6 +1306,7 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
+  hostedReceipts            PharmacyHostedReceipt[]
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -1319,6 +1320,7 @@ model PharmacySale {
 model PharmacyCustomer {
   churnScores      PharmacyCustomerChurnScore[]
   whatsappMessages PharmacyMessageLog[]
+  hostedReceipts   PharmacyHostedReceipt[]
   id               String                       @id @default(cuid())
   organizationId   String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   patientId        String
@@ -5539,6 +5541,7 @@ model Organization {
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]
   pharmacyMessageLogs           PharmacyMessageLog[]
+  pharmacyHostedReceipts        PharmacyHostedReceipt[]
   pharmacyWhatsAppAccountEvents PharmacyWhatsAppAccountEvent[]
   id                            String                         @id @default(cuid())
   slug                          String                         @unique
@@ -15382,6 +15385,33 @@ model PharmacyMessageLog {
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+/// DEV-16: a tokenized hosted receipt sent by WhatsApp on the customer's request.
+/// Only the SHA-256 of the 160-bit random token is stored. Links expire (30-90
+/// days, configured); the link holder sees the whole receipt (owner decision).
+/// `rxProtected` records, for audit, whether the sale had Rx lines.
+model PharmacyHostedReceipt {
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  saleId          String
+  customerId      String
+  tokenHash       String    @unique
+  rxProtected     Boolean
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sale         PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  customer     PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_hosted_receipts_org_id_key")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_hosted_receipts_sale_idx")
+  @@map("pharmacy_hosted_receipts")
 }
 
 /// DEV-22: append-only evidence of Meta `account_update` and
