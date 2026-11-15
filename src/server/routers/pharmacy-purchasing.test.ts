@@ -28,6 +28,7 @@ vi.mock('@/server/audit', () => ({
 
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
+import { matchReceiptLine } from '@/lib/pharmacy/receiving';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
@@ -2321,9 +2322,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
-  // DEV-145: a serialized invoice files one line per pack, so an ordered line may
-  // need as many receipt lines as it ordered packs, and no more.
-  it('receives an ordered line of N serialized packs as N lines and refuses N+1', async () => {
+  // DEV-145: a serialized invoice files one line per pack. A supplier invoice is
+  // received once, so an over-delivered ordered line still drafts in full and is
+  // raised as an OVERAGE exception at posting instead of blocking the invoice.
+  it('drafts an over-delivered serialized line in full and matches it as an overage', async () => {
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
       {
         id: 'poline_a',
@@ -2333,22 +2335,41 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         bonusPacks: 2,
       },
     ]);
-    const serialized = (count: number) => ({
-      ...RECEIPT,
-      lines: Array.from({ length: count }, (_, index) => ({
-        ...SERIAL_LINE,
-        gtin: '08961234567894',
-        serialNumber: `SN${String(index).padStart(6, '0')}`,
-      })),
-    });
-    await expect(caller().createGoodsReceipt(serialized(42))).resolves.toBeDefined();
-    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create).toHaveLength(42);
-    db.pharmacyGoodsReceipt.create.mockClear();
-    await expect(caller().createGoodsReceipt(serialized(43))).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'SERIALIZED_PACKS_EXCEED_ORDER',
-    });
-    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    const packs = 43;
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: Array.from({ length: packs }, (_, index) => ({
+          ...SERIAL_LINE,
+          gtin: '08961234567894',
+          serialNumber: `SN${String(index).padStart(6, '0')}`,
+        })),
+      })
+    ).resolves.toBeDefined();
+    const drafted = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(drafted).toHaveLength(packs);
+    // Posting matches each lot cumulatively; the last serialized pack tips the ordered
+    // line over its 40 paid + 2 bonus packs and is raised for someone to resolve.
+    expect(
+      matchReceiptLine({
+        ordered: {
+          canonicalUnitsPerPack: 10,
+          orderedCanonicalUnits: 400,
+          bonusCanonicalUnits: 20,
+          listPricePerPackMinor: 10_000,
+          previouslyReceivedUnits: (packs - 1) * 10,
+        },
+        received: {
+          canonicalUnitsPerPack: 10,
+          arrivedCanonicalUnits: 10,
+          rejectedCanonicalUnits: 0,
+          rejectionReason: null,
+          invoicedPricePerPackMinor: 10_000,
+        },
+      })
+    ).toEqual([
+      expect.objectContaining({ kind: 'OVERAGE', expectedUnits: 420, observedUnits: 430 }),
+    ]);
   });
 
   it('drafts a mixed-lot delivery as separate lines against one order line', async () => {
