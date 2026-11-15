@@ -153,4 +153,18 @@ describe('TopbarBreadcrumbs hydration', () => {
     expect(container).not.toHaveTextContent('Sop');
     await act(async () => root.unmount());
   });
+
+  it('names the pharmacist queue with its page heading, not the raw slug', async () => {
+    navigation.pathname = '/pharmacy/pharmacist-queue';
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent('Pharmacist queue');
+    expect(container).not.toHaveTextContent('Pharmacist-queue');
+    await act(async () => root.unmount());
+  });
 });

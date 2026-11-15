@@ -257,6 +257,61 @@ suite('PV security persistence and compatibility', () => {
     }
   );
 
+  it('files, reviews, submits and exports a report when the request has no branch bound (#1244)', async () => {
+    await fixture(async ({ db, owner, branch, api }) => {
+      // A real tRPC request starts without app.current_branch_id. Under FORCE RLS each
+      // procedure must bind its own authorized branch, or the insert is refused and every read
+      // is empty.
+      const unbind = () => db.$executeRaw`SELECT set_config('app.current_branch_id', '', true)`;
+      await unbind();
+      const filed = await api(owner).createPharmacovigilanceReport({
+        branchId: branch,
+        kind: 'ADVERSE_DRUG_REACTION',
+        occurredAt: new Date(),
+        assertedDescription: 'Patient reported dizziness after the second dose.',
+      });
+      expect(filed).toMatchObject({ state: 'DRAFT', branchId: branch, createdByUserId: owner });
+
+      await unbind();
+      await api(owner).transitionPharmacovigilanceReport({
+        id: filed.id,
+        branchId: branch,
+        state: 'UNDER_REVIEW',
+      });
+      await unbind();
+      await api(owner).transitionPharmacovigilanceReport({
+        id: filed.id,
+        branchId: branch,
+        state: 'READY',
+        pin: '1234',
+      });
+      await unbind();
+      await expect(
+        api(owner).recordPharmacovigilanceSubmission({
+          id: filed.id,
+          branchId: branch,
+          state: 'SUBMITTED',
+          externalReference: 'DRAP-QA-1',
+        })
+      ).resolves.toMatchObject({ externalSubmissionState: 'SUBMITTED' });
+
+      await unbind();
+      const exported = await api(owner).exportPharmacovigilanceDrap({
+        branchId: branch,
+        from: new Date('2020-01-01'),
+        to: new Date('2099-01-01'),
+      });
+      expect(exported.reports).toEqual([
+        expect.objectContaining({
+          id: filed.id,
+          reportState: 'READY',
+          externalSubmissionState: 'SUBMITTED',
+          externalReference: 'DRAP-QA-1',
+        }),
+      ]);
+    });
+  });
+
   it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
     await fixture(async ({ db, owner, branch, api }) => {
       const report = await reviewable(db, branch, owner);
