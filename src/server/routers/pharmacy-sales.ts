@@ -10,6 +10,7 @@ import {
   fefoOverrideApprovalPolicy,
   isSoleActiveApprover,
   listCounterApprovers,
+  mayApproveCounterLine,
   type CounterApproval,
   type CounterApprovalKind,
   type CounterApprovalPin,
@@ -941,16 +942,15 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
  * different manager's or owner's PIN at the till.
  */
 async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
-  const user = ctx.session!.user;
-  const subject = subjectFromSession(user);
-  const options = { db: ctx.db, source: 'TRPC' as const };
-  const approver =
-    (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options))) ||
-    (await can(subject, 'pharmacy:manage', undefined, options));
-  return (
-    approver &&
-    (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'))
+  const db = ctx.db as unknown as ScopedDb;
+  // DEV-806: the same approver check the till's PIN route applies to the PIN holder.
+  const approver = await mayApproveCounterLine(
+    db,
+    subjectFromSession(ctx.session!.user),
+    'KHATA_OVER_LIMIT',
+    { source: 'TRPC' }
   );
+  return approver && (await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'));
 }
 
 export const pharmacySalesRouter = router({

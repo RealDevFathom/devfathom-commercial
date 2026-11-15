@@ -31,6 +31,10 @@ vi.mock('@/lib/pharmacy/counter-line-approval', async (original) => ({
   authorizeCounterApproval: vi.fn(),
   confirmCounterApproval: vi.fn(),
   listCounterApprovers: vi.fn(),
+  // DEV-806: the real shared approver check, observed so the password route is seen to use it.
+  mayApproveCounterLine: vi.fn(
+    (await original<typeof import('@/lib/pharmacy/counter-line-approval')>()).mayApproveCounterLine
+  ),
   // Most fixtures model a solo owner/manager; the second-person tests override this.
   isSoleActiveApprover: vi.fn(async () => true),
 }));
@@ -51,6 +55,7 @@ import {
   CounterApprovalDenied,
   isSoleActiveApprover,
   listCounterApprovers,
+  mayApproveCounterLine,
 } from '@/lib/pharmacy/counter-line-approval';
 import {
   recordKhataRepayment,
@@ -904,6 +909,18 @@ describe('Khata router trust and recovery boundary', () => {
           }),
         });
         expect(applyPharmacyTender).toHaveBeenCalledOnce();
+      });
+
+      it("checks the signed-in approver with the PIN route's shared approver check", async () => {
+        const f = fixture(manager, 'EMPLOYEE');
+        await f.caller().tender(overLimit);
+        expect(mayApproveCounterLine).toHaveBeenCalledWith(
+          f.db,
+          expect.objectContaining({ id: 'owner-a', role: 'EMPLOYEE' }),
+          'KHATA_OVER_LIMIT',
+          { source: 'TRPC' }
+        );
+        expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledOnce();
       });
 
       it('does not consult the sole rule for a cashier, who is refused outright', async () => {
