@@ -138,8 +138,14 @@ export async function recordDeliveryCommand(
    * DEV-647 / DEV-786: refunds and returns of a completed sale need a manager or owner.
    * Without an authorizer, neither runs.
    */
-  options: { authorizeRefund?: () => Promise<void> } = {}
+  options: {
+    authorizeRefund?: () => Promise<void>;
+    /** DEV-821: whether the actor is a manager or owner, who may use any open till. */
+    actorIsManager?: boolean;
+  } = {}
 ) {
+  // DEV-821: a COD remit goes only into a till the actor runs, unless a manager or owner.
+  const drawerOperator = { kind: 'COUNTER', actorIsManager: options.actorIsManager === true } as const;
   deliveryCommandInput.parse(input);
   if (input.branchId !== scope.branchId) throw new PharmacyDeliveryError('ORDER_NOT_FOUND');
   const [restriction] = await db.$queryRaw<{ branchId: string | null }[]>(
@@ -183,15 +189,21 @@ export async function recordDeliveryCommand(
   );
   if (input.action === 'REMIT') {
     if (!input.deviceId || !input.businessDate) throw new PharmacyDeliveryError('DRAWER_REQUIRED');
-    await applyPharmacyTender(db, scope, {
-      saleId: order.counterSaleId!,
-      deviceId: input.deviceId,
-      businessDate: input.businessDate,
-      type: 'CASH',
-      amountMinor: input.amountMinor!,
-      cashReceivedMinor: input.amountMinor!,
-      idempotencyKey: `cod:${order.id}:${input.requestKey}`,
-    });
+    await applyPharmacyTender(
+      db,
+      scope,
+      {
+        saleId: order.counterSaleId!,
+        deviceId: input.deviceId,
+        businessDate: input.businessDate,
+        type: 'CASH',
+        amountMinor: input.amountMinor!,
+        cashReceivedMinor: input.amountMinor!,
+        idempotencyKey: `cod:${order.id}:${input.requestKey}`,
+      },
+      undefined,
+      { drawerOperator }
+    );
   }
   if (input.action === 'PHYSICAL_RETURN') {
     if (order.counterSaleId) {
@@ -229,14 +241,20 @@ export async function recordDeliveryCommand(
           const remaining =
             tender.amountMinor - tender.refunds.reduce((n, refund) => n + refund.amountMinor, 0);
           if (remaining > 0)
-            await refundPharmacyTender(db, scope, {
-              originalTenderId: tender.id,
-              deviceId: input.deviceId,
-              businessDate: input.businessDate,
-              amountMinor: remaining,
-              reason: `Physical failed-delivery return: ${input.reference}`,
-              idempotencyKey: `delivery-cancel:${order.id}:${tender.id}`,
-            });
+            await refundPharmacyTender(
+              db,
+              scope,
+              {
+                originalTenderId: tender.id,
+                deviceId: input.deviceId,
+                businessDate: input.businessDate,
+                amountMinor: remaining,
+                reason: `Physical failed-delivery return: ${input.reference}`,
+                idempotencyKey: `delivery-cancel:${order.id}:${tender.id}`,
+              },
+              // Reached only after the manager/owner refund authorization above.
+              { drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
+            );
         }
       }
       if (sale.status === 'COMPLETED') {

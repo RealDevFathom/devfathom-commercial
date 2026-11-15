@@ -17,6 +17,7 @@ import {
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
 import {
+  OwnerDataExportTimeLimitError,
   OwnerDataExportTooLargeError,
   purgeExpiredOwnerDataExports,
   runPharmacyOwnerDataExportJob,
@@ -897,10 +898,11 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
 
 async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
   const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  // An export over its size cap stays over it: retrying only repeats the work.
+  // An export over its size cap or build time limit stays over it: retrying only repeats the work.
   const retry =
     !(error instanceof PermanentJobError) &&
     !(error instanceof OwnerDataExportTooLargeError) &&
+    !(error instanceof OwnerDataExportTimeLimitError) &&
     job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
     const current = await db.platformJob.findUnique({

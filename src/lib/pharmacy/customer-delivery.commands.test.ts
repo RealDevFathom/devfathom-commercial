@@ -64,7 +64,9 @@ it('refunds actual partial cash before voiding a physically returned open sale',
   expect(refundPharmacyTender).toHaveBeenCalledWith(
     db,
     scope,
-    expect.objectContaining({ originalTenderId: 'tender-a', amountMinor: 400 })
+    expect.objectContaining({ originalTenderId: 'tender-a', amountMinor: 400 }),
+    // DEV-821: reached only after the manager/owner refund authorization.
+    { drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
   );
   expect(changeSaleStatus).toHaveBeenCalledWith(
     db,
@@ -181,7 +183,10 @@ it('records actual remittance through ordinary cash tender before custody eviden
   expect(applyPharmacyTender).toHaveBeenCalledWith(
     db,
     scope,
-    expect.objectContaining({ type: 'CASH', amountMinor: 300, cashReceivedMinor: 300 })
+    expect.objectContaining({ type: 'CASH', amountMinor: 300, cashReceivedMinor: 300 }),
+    undefined,
+    // DEV-821: without a manager decision, the remit goes only into a till the actor runs.
+    { drawerOperator: { kind: 'COUNTER', actorIsManager: false } }
   );
 });
 

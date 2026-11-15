@@ -32,8 +32,8 @@ function fixture() {
           openedByActorId: 'owner',
           countedCashMinor: null,
           movements: [
-            { kind: 'OPENING_FLOAT', amountMinor: 10000 },
-            { kind: 'CASH_SALE', amountMinor: 2500 },
+            { kind: 'OPENING_FLOAT', amountMinor: 10000, actorId: 'owner' },
+            { kind: 'CASH_SALE', amountMinor: 2500, actorId: 'owner' },
           ],
         },
       ]),

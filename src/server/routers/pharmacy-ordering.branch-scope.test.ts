@@ -43,6 +43,7 @@ const recorded = { evidence: { id: 'evidence-1' }, totals: {}, replayed: false }
 let db: {
   user: { findUnique: ReturnType<typeof vi.fn> };
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findFirst: ReturnType<typeof vi.fn> };
   $transaction: ReturnType<typeof vi.fn>;
   $queryRaw: ReturnType<typeof vi.fn>;
 };
@@ -76,6 +77,8 @@ beforeEach(() => {
     },
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
     pharmacyBranch: { findMany: vi.fn().mockResolvedValue([]) },
+    // DEV-845: this staff member is assigned to the branch.
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment-1' }) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
   };
@@ -103,7 +106,8 @@ describe('pharmacyOrdering.deliveryCommand: the branch in the input', () => {
       db,
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
       remittance,
-      { authorizeRefund: expect.any(Function) }
+      // DEV-821: whether the actor may remit into a till they do not run.
+      { authorizeRefund: expect.any(Function), actorIsManager: false }
     );
   });
 });

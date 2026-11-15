@@ -7,9 +7,11 @@ import {
   closePharmacyDrawer,
   computePharmacyClose,
   cutPharmacyDailyClose,
+  drawerOperatingCashierId,
   foldExpectedCash,
   lockPharmacyDay,
   manualConfirmerNames,
+  movementsByOtherThanOperator,
   saleTotalMinor,
   type DrawerMovement,
 } from './settlement';
@@ -26,7 +28,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
-      include: { movements: true },
+      include: { movements: true, handovers: true },
       orderBy: { id: 'asc' },
     }),
     db.pharmacySale.findMany({
@@ -56,9 +58,20 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       select: { status: true },
     }),
   ]);
+  // DEV-821: cash moved into or out of a till by anyone but the cashier running it.
+  const otherOperator = new Map(
+    drawers.map((d) => [d.id, movementsByOtherThanOperator(d, d.movements, d.handovers ?? [])])
+  );
   // Who opened each drawer, so the close screen can name the drawer by its
-  // opener and time rather than by the counter's device identifier.
-  const openerIds = [...new Set(drawers.map((d) => d.openedByActorId))];
+  // opener and time rather than by the counter's device identifier, plus the
+  // cashiers and actors the operator check names.
+  const openerIds = [
+    ...new Set([
+      ...drawers.map((d) => d.openedByActorId),
+      ...drawers.map((d) => drawerOperatingCashierId(d)),
+      ...[...otherOperator.values()].flat().map((m) => m.actorId),
+    ]),
+  ];
   const openers = openerIds.length
     ? await db.user.findMany({
         where: { organizationId: scope.organizationId, id: { in: openerIds } },
@@ -72,6 +85,14 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     status: d.status,
     openedAt: d.openedAt,
     openedBy: openerNames.get(d.openedByActorId) ?? null,
+    operatingCashier: openerNames.get(drawerOperatingCashierId(d)) ?? null,
+    otherOperatorMovements: (otherOperator.get(d.id) ?? []).map((m) => ({
+      id: m.id,
+      kind: m.kind,
+      amountMinor: m.amountMinor,
+      createdAt: m.createdAt,
+      actor: openerNames.get(m.actorId) ?? null,
+    })),
     expectedMinor: foldExpectedCash(
       d.movements.filter((m) => m.kind !== 'CLOSING_COUNT') as DrawerMovement[]
     ),

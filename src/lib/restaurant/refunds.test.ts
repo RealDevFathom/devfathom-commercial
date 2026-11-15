@@ -163,6 +163,25 @@ async function cardTender(
   return { billId, tenderId: result.tenderId, paymentId: result.paymentId! };
 }
 
+/** Settle a single-item (12.50) bill with a cashier-confirmed MANUAL card tender. */
+async function manualCardTender(
+  tip = '0.00'
+): Promise<{ billId: string; tenderId: string; paymentId: string }> {
+  const billId = await openBill(1);
+  const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+    billId,
+    tender: {
+      type: 'CARD',
+      amount: '12.50',
+      tipAmount: tip,
+      manualConfirmation: { approvalCode: 'AB12CD', reference: '4242' },
+    },
+    actor: actor(),
+    now: AT,
+  });
+  return { billId, tenderId: result.tenderId, paymentId: result.paymentId! };
+}
+
 /** Settle a single-item bill with cash on `device` (which must have an open drawer). */
 async function cashTender(device: string): Promise<{ billId: string; tenderId: string }> {
   const billId = await openBill(1);
@@ -804,6 +823,102 @@ describeIfDatabase('card refunds (real DB)', () => {
       tx.restaurantTender.findUnique({ where: { id: tenderId }, select: { businessDate: true } })
     );
     expect(tender?.businessDate.toISOString().slice(0, 10)).toBe('2026-08-19');
+  });
+});
+
+describeIfDatabase('MANUAL card refunds (real DB)', () => {
+  async function paymentOf(paymentId: string) {
+    return read((tx) =>
+      tx.restaurantPayment.findUnique({
+        where: { id: paymentId },
+        select: {
+          provider: true,
+          status: true,
+          events: {
+            orderBy: { createdAt: 'asc' },
+            select: { capability: true, eventType: true, payload: true },
+          },
+        },
+      })
+    );
+  }
+
+  it('records partial then full refunds with manager co-authorization, tip included', async () => {
+    const { tenderId, paymentId } = await manualCardTender('2.00');
+    const partial = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '5.00',
+      tipRefundAmount: '0.00',
+      reason: 'partial return',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(partial.paymentStatus).toBe('PARTIALLY_REFUNDED');
+    const rest = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '7.50',
+      tipRefundAmount: '2.00',
+      reason: 'rest and tip returned',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(rest.paymentStatus).toBe('REFUNDED');
+
+    const payment = await paymentOf(paymentId);
+    expect(payment?.provider).toBe('MANUAL');
+    expect(payment?.status).toBe('REFUNDED');
+    // Only recorded events: the MOCK adapter (which writes REFUND_APPROVED) was never used.
+    expect(payment?.events.map((e) => e.eventType)).toEqual([
+      'MANUAL_CONFIRMED',
+      'REFUND_MANUALLY_RECORDED',
+      'REFUND_MANUALLY_RECORDED',
+    ]);
+    expect(payment?.events[2]?.payload).toMatchObject({
+      provider: 'MANUAL',
+      manuallyConfirmed: true,
+      amount: '7.5',
+      tipAmount: '2',
+      recordedByStaffProfileId: ids.operator,
+    });
+  });
+
+  it('refuses a MANUAL refund without a distinct approving manager and records nothing', async () => {
+    const { tenderId, paymentId } = await manualCardTender();
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '5.00',
+        reason: 'self approval',
+        approvingStaffProfileId: ids.operator, // same as the actor
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toThrow(/second identity/);
+    const payment = await paymentOf(paymentId);
+    expect(payment?.status).toBe('CAPTURED');
+    expect(payment?.events.map((e) => e.eventType)).toEqual(['MANUAL_CONFIRMED']);
+  });
+
+  it('records a same-day full VOID_REVERSAL of a MANUAL payment', async () => {
+    const { tenderId, paymentId } = await manualCardTender();
+    const reversal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '12.50',
+      kind: 'VOID_REVERSAL',
+      reason: 'wrong card',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(reversal.paymentStatus).toBe('VOIDED');
+    const payment = await paymentOf(paymentId);
+    expect(payment?.status).toBe('VOIDED');
+    expect(payment?.events.map((e) => e.eventType)).toEqual([
+      'MANUAL_CONFIRMED',
+      'VOID_MANUALLY_RECORDED',
+    ]);
   });
 });
 

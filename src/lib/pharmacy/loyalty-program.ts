@@ -3,7 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import {
   assertLoyaltyEarnRule,
-  LOYALTY_PERCENT_SPEND_MINOR,
+  LOYALTY_POINT_VALUE_MINOR,
   type LoyaltyEarnMode,
   type LoyaltyEarnRule,
 } from '@/lib/commerce/loyalty-arithmetic';
@@ -24,11 +24,19 @@ export const LOYALTY_EARN_PRESETS = [
 ] as const;
 export type LoyaltyEarnPresetId = (typeof LOYALTY_EARN_PRESETS)[number]['id'];
 
-export function percentRule(basisPoints: number): LoyaltyEarnRule & { earnMode: LoyaltyEarnMode } {
+/**
+ * A percentage of spend paid back in points. DEV-764: at a redemption value of V minor per
+ * point, `basisPoints` per (10,000 x V) minor pays back exactly that percentage; at the
+ * original PKR 1 per point this is LOYALTY_PERCENT_SPEND_MINOR, as DEV-746 stored it.
+ */
+export function percentRule(
+  basisPoints: number,
+  pointValueMinor = LOYALTY_POINT_VALUE_MINOR
+): LoyaltyEarnRule & { earnMode: LoyaltyEarnMode } {
   return {
     earnMode: 'PERCENT_OF_SPEND',
     earnPoints: basisPoints,
-    perSpendMinor: LOYALTY_PERCENT_SPEND_MINOR,
+    perSpendMinor: 10_000 * pointValueMinor,
   };
 }
 
@@ -47,6 +55,19 @@ export async function currentLoyaltyProgram(db: ScopedDb, organizationId: string
   });
 }
 
+/**
+ * DEV-764: the version in force, read under a shared lock on the program, inside the caller's
+ * transaction. A concurrent owner save (which takes the exclusive lock) either commits before
+ * this read or waits until the caller's transaction ends, so a redemption value or adjustment
+ * ceiling cannot change under a redemption or adjustment that is using it.
+ */
+export async function lockedLoyaltyProgram(db: ScopedDb, organizationId: string) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${`pharmacy-loyalty-program:${organizationId}`}, 0))`
+  );
+  return currentLoyaltyProgram(db, organizationId);
+}
+
 export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: string) {
   return db.pharmacyLoyaltyProgramVersion.findMany({
     where: { organizationId },
@@ -56,28 +77,70 @@ export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: s
 }
 
 /**
+ * DEV-764: the largest manual adjustment a manager may make before the owner sets one (the
+ * column default); the owner can change it in the program settings.
+ */
+export const DEFAULT_MANAGER_ADJUST_LIMIT_POINTS = 500;
+export const LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS = 1_000_000;
+
+/** DEV-764: the most days an owner may let a point last (ten years). */
+export const LOYALTY_MAX_EXPIRY_DAYS = 3650;
+
+/** A version's full settings: the earning rule plus DEV-764's program settings. */
+export type LoyaltyProgramSettings = LoyaltyEarnRule & {
+  expiryDays?: number | null;
+  khataEarns?: boolean;
+  managerAdjustLimitPoints?: number;
+};
+type PriorVersion = Awaited<ReturnType<typeof currentLoyaltyProgram>>;
+
+export function assertLoyaltyProgramSettings(settings: LoyaltyProgramSettings) {
+  const { expiryDays, managerAdjustLimitPoints: limit } = settings;
+  if (
+    limit !== undefined &&
+    (!Number.isSafeInteger(limit) || limit < 0 || limit > LOYALTY_MAX_MANAGER_ADJUST_LIMIT_POINTS)
+  )
+    throw new RangeError('INVALID_ADJUST_LIMIT');
+  assertLoyaltyEarnRule(settings);
+  if (
+    expiryDays !== undefined &&
+    expiryDays !== null &&
+    (!Number.isSafeInteger(expiryDays) || expiryDays < 1 || expiryDays > LOYALTY_MAX_EXPIRY_DAYS)
+  )
+    throw new RangeError('INVALID_EXPIRY');
+}
+
+/**
  * Appends the next program version. Caller is the audited owner procedure, inside its
  * tenant transaction. Earlier versions and every points entry stay as they are. Returns
  * the version it replaced, read under the same lock, so the audit records the real change.
+ * DEV-764: `settings` may be built from that version, so a setting the owner did not change
+ * is carried forward from what is in force, never from a stale read.
  */
 export async function publishLoyaltyProgramVersion(
   db: ScopedDb,
   scope: { organizationId: string; actorId: string },
-  rule: LoyaltyEarnRule
+  settings: LoyaltyProgramSettings | ((prior: PriorVersion) => LoyaltyProgramSettings)
 ) {
-  assertLoyaltyEarnRule(rule);
+  if (typeof settings !== 'function') assertLoyaltyProgramSettings(settings);
   // Serializes concurrent owner saves so version numbers stay dense and ordered.
   await db.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-loyalty-program:${scope.organizationId}`}, 0))`
   );
   const prior = await currentLoyaltyProgram(db, scope.organizationId);
+  const rule = typeof settings === 'function' ? settings(prior) : settings;
+  assertLoyaltyProgramSettings(rule);
   const version = await db.pharmacyLoyaltyProgramVersion.create({
     data: {
       organizationId: scope.organizationId,
       version: (prior?.version ?? 0) + 1,
-      earnMode: rule.earnMode,
+      earnMode: rule.earnMode as LoyaltyEarnMode,
       earnPoints: rule.earnPoints,
       perSpendMinor: rule.perSpendMinor,
+      redemptionValueMinor: rule.redemptionValueMinor,
+      expiryDays: rule.expiryDays,
+      khataEarns: rule.khataEarns,
+      managerAdjustLimitPoints: rule.managerAdjustLimitPoints,
       actorId: scope.actorId,
     },
   });

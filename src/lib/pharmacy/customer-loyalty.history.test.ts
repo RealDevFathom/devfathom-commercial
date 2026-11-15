@@ -41,13 +41,18 @@ describe('ordinary loyalty history reads', () => {
       where: { id: 'branch-a', organizationId: 'org-a', active: true },
       select: { id: true },
     });
-    for (const method of Object.values(db.pharmacyLoyaltyPointsEntry)) {
+    const where = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    // DEV-764: the balance sums every entry; the listing leaves out only zero-point lot closures.
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ where })
+    );
+    for (const method of [
+      db.pharmacyLoyaltyPointsEntry.count,
+      db.pharmacyLoyaltyPointsEntry.findMany,
+    ])
       expect(method).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' },
-        })
+        expect.objectContaining({ where: { ...where, NOT: { kind: 'EXPIRY', points: 0 } } })
       );
-    }
     expect(db.pharmacyLoyaltyPointsEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         skip: 25,
@@ -128,6 +133,8 @@ describe('ordinary loyalty history reads', () => {
           saleId: true,
           tenderId: true,
           refundId: true,
+          reason: true,
+          expiresAt: true,
           sale: { select: { receiptNumber: true, receiptDeviceId: true } },
         },
       })
@@ -136,11 +143,18 @@ describe('ordinary loyalty history reads', () => {
   it('keeps a sibling branch selection explicit in all ledger predicates', async () => {
     const db = fixture();
     await readLoyaltyHistory(db as never, { ...scope, branchId: 'branch-b' }, 'customer-a');
-    for (const method of Object.values(db.pharmacyLoyaltyPointsEntry))
+    const where = { organizationId: 'org-a', branchId: 'branch-b', customerId: 'customer-a' };
+    // Exact predicates for every ledger read. The balance sums every entry; the listing leaves
+    // out only zero-point lot closures (DEV-764).
+    const exact = {
+      aggregate: where,
+      count: { ...where, NOT: { kind: 'EXPIRY', points: 0 } },
+      findMany: { ...where, NOT: { kind: 'EXPIRY', points: 0 } },
+    };
+    expect(Object.keys(db.pharmacyLoyaltyPointsEntry).sort()).toEqual(Object.keys(exact).sort());
+    for (const [name, method] of Object.entries(db.pharmacyLoyaltyPointsEntry))
       expect(method).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { organizationId: 'org-a', branchId: 'branch-b', customerId: 'customer-a' },
-        })
+        expect.objectContaining({ where: exact[name as keyof typeof exact] })
       );
   });
   it('stops at the maximum page without generating an invalid next request', async () => {
