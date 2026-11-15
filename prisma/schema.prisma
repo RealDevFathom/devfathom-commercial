@@ -2813,6 +2813,8 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
   PHARMACY_JOURNAL_VOUCHER
+  /// DEV-103: a native non-stock supplier operating-expense invoice.
+  PHARMACY_AP_INVOICE
 }
 
 /// CEO-JVCORE-20261025: the only journal-voucher purpose the pharmacy general
@@ -2895,6 +2897,100 @@ model PharmacyJournalVoucherLine {
   @@unique([organizationId, voucherId, lineNumber], map: "pharmacy_jv_lines_org_voucher_line_key")
   @@index([organizationId, branchId, voucherId], map: "pharmacy_jv_lines_org_branch_voucher_idx")
   @@map("pharmacy_journal_voucher_lines")
+}
+
+/// DEV-103: lifecycle of a native non-stock AP invoice. It is POSTED when it is
+/// recorded (one canonical OPERATING_EXPENSE / ACCOUNTS_PAYABLE entry) and may
+/// only be REVERSED while no native settlement against it is ACTIVE.
+enum PharmacyApInvoiceStatus {
+  POSTED
+  REVERSED
+}
+
+enum PharmacyApSettlementStatus {
+  ACTIVE
+  REVERSED
+}
+
+/// DEV-103: a non-stock supplier operating-expense invoice (rent, utilities,
+/// services). Its durable identity is the normalized payee plus the supplier's
+/// own invoice reference; a partial unique index (SQL only) allows one
+/// non-reversed invoice per identity. Rows are never deleted and their
+/// financial fields are immutable (database trigger).
+model PharmacyApInvoice {
+  id                 String                  @id @default(cuid())
+  organizationId     String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  reference          String
+  payeeName          String
+  payeeKey           String
+  supplierInvoiceRef String
+  invoiceDate        DateTime
+  dueDate            DateTime
+  amountMinor        Int
+  currency           Currency                @default(PKR)
+  description        String
+  evidenceReference  String
+  status             PharmacyApInvoiceStatus @default(POSTED)
+  createKey          String
+  createPayloadHash  String
+  createdByUserId    String
+  journalEntryId     String
+  reversedAt         DateTime?
+  reversedByUserId   String?
+  reversalReason     String?
+  reverseCommandKey  String?
+  reversePayloadHash String?
+  reversalEntryId    String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  settlements PharmacyApInvoiceSettlement[]
+
+  @@unique([organizationId, id], map: "pharmacy_ap_invoices_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_ap_invoices_org_branch_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_ap_invoices_org_reference_key")
+  @@unique([organizationId, createKey], map: "pharmacy_ap_invoices_org_create_key")
+  @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_invoices_org_reverse_command_key")
+  @@unique([organizationId, journalEntryId], map: "pharmacy_ap_invoices_org_entry_key")
+  @@unique([organizationId, reversalEntryId], map: "pharmacy_ap_invoices_org_reversal_entry_key")
+  @@index([organizationId, branchId, status, dueDate], map: "pharmacy_ap_invoices_org_branch_status_due_idx")
+  @@map("pharmacy_ap_invoices")
+}
+
+/// DEV-103: one invoice-directed payment. The money movement itself is a
+/// canonical SUPPLIER_PAYMENT bookkeeping transaction (posted exactly once);
+/// this row is the native link that AP aging counts. Reversal goes only
+/// through the AP settlement command, which reverses the transaction too.
+model PharmacyApInvoiceSettlement {
+  id                 String                     @id @default(cuid())
+  organizationId     String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  invoiceId          String
+  transactionId      String
+  amountMinor        Int
+  paidAt             DateTime
+  fundingAccount     String
+  status             PharmacyApSettlementStatus @default(ACTIVE)
+  commandKey         String
+  payloadHash        String
+  createdByUserId    String
+  reversedAt         DateTime?
+  reversedByUserId   String?
+  reversalReason     String?
+  reverseCommandKey  String?
+  reversePayloadHash String?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  invoice PharmacyApInvoice @relation(fields: [organizationId, branchId, invoiceId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_ap_invoice_settlements_invoice_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_ap_settlements_org_id_key")
+  @@unique([organizationId, transactionId], map: "pharmacy_ap_settlements_org_transaction_key")
+  @@unique([organizationId, commandKey], map: "pharmacy_ap_settlements_org_command_key")
+  @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_settlements_org_reverse_command_key")
+  @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_settlements_org_branch_invoice_idx")
+  @@map("pharmacy_ap_invoice_settlements")
 }
 
 enum PharmacyBookkeepingKind {
