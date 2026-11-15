@@ -714,7 +714,9 @@ export async function resolveTerminalEffectiveMenu(
         where: {
           branchId: input.branchId,
           status: 'PUBLISHED',
-          channels: { has: input.channel },
+          // An empty channel set means "every operational channel" (see
+          // `channelPublished`), so it must resolve for any requested channel.
+          OR: [{ channels: { has: input.channel } }, { channels: { isEmpty: true } }],
         },
         orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
         select: publicationSelect,
