@@ -167,11 +167,24 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+    // Approval is settled before the sale transaction takes a connection.
+    expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(lastAudit()).toMatchObject({
       outcome: 'FAILURE',
       detail: { action: 'fefo_override' },
     });
+  });
+
+  it('re-checks the approver inside the sale transaction before any stock is touched (#520)', async () => {
+    const f = fixture();
+    // Authorized before the transaction, revoked by the time the sale re-checks.
+    vi.mocked(can).mockResolvedValueOnce(true).mockResolvedValue(false);
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(f.transaction).toHaveBeenCalledOnce();
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 });
 

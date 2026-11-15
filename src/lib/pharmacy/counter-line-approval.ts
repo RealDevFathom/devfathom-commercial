@@ -50,9 +50,10 @@ export class CounterApprovalDenied extends Error {
 type ActiveUser = Subject & { organizationId: string | null };
 
 /**
- * Resolve the approval inside the sale transaction, before stock is allocated. PIN checks run
- * in their own tenant transaction so a refusal (or a later sale failure) never rolls back the
- * credential's failed-attempt counter and lockout.
+ * Resolve the approval BEFORE the sale transaction opens. PIN checks run in their own tenant
+ * transaction so a refusal (or a later sale failure) never rolls back the credential's
+ * failed-attempt counter and lockout, and no request holds a sale connection while it waits
+ * for a credential connection. `confirmCounterApproval` re-checks the result inside the sale.
  */
 export async function authorizeCounterApproval(
   db: ScopedDb,
@@ -82,6 +83,28 @@ export async function authorizeCounterApproval(
   // Throw only after the credential transaction has committed any failed attempt.
   if (!approval) throw new CounterApprovalDenied(kind);
   return approval;
+}
+
+/**
+ * Inside the sale transaction, before stock is allocated: the approver resolved by
+ * `authorizeCounterApproval` must still be an active member holding the capability.
+ */
+export async function confirmCounterApproval(
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  approval: CounterApproval
+): Promise<void> {
+  const approver = (await db.user.findFirst({
+    where: {
+      id: approval.approvedByUserId,
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+    },
+  })) as ActiveUser | null;
+  if (!approver || !(await can(approver, COUNTER_APPROVAL_CAPABILITY[kind], undefined, { db }))) {
+    throw new CounterApprovalDenied(kind);
+  }
 }
 
 async function verifyApproverPin(
@@ -136,13 +159,34 @@ async function verifyApproverPin(
   return { approvedByUserId: approver.id, approvalPolicy, selfApproved };
 }
 
-/** True when no other active member of the organization holds the approval capability. */
+/**
+ * True when nobody else could approve: approval needs an active member with an active staff
+ * profile and a live counter PIN, so only those members are checked for the capability.
+ */
 async function isSoleApprover(db: ScopedDb, scope: LedgerScope, capability: Action, now: Date) {
-  const others = await db.user.findMany({
-    where: { organizationId: scope.organizationId, status: 'ACTIVE', id: { not: scope.actorId } },
+  const credentials = await db.restaurantOperatorCredential.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          id: { not: scope.actorId },
+        },
+      },
+    },
+    include: { staffProfile: { include: { user: true } } },
   });
-  for (const other of others) {
-    if (await can(other as ActiveUser, capability, undefined, { db, now })) return false;
+  const checked = new Set<string>();
+  for (const credential of credentials) {
+    const other = credential.staffProfile.user;
+    if (!other || other.id === scope.actorId || checked.has(other.id)) continue;
+    checked.add(other.id);
+    if (await can(other, capability, undefined, { db, now })) return false;
   }
   return true;
 }

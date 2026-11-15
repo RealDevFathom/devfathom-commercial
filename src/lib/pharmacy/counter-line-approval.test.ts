@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { authorizeCounterApproval, CounterApprovalDenied } from './counter-line-approval';
+import {
+  authorizeCounterApproval,
+  confirmCounterApproval,
+  CounterApprovalDenied,
+} from './counter-line-approval';
 import { can } from '@/lib/abac';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -18,7 +22,7 @@ const pin = { staffProfileId: 'staff-manager', pin: '1234' };
 const actor = { id: 'cashier', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
 const manager = { id: 'manager', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
 
-/** `holders` are the user ids that hold the checked capability. */
+/** `holders` hold the checked capability; `others` are the other members with a live PIN. */
 function fixture(approver = manager, holders: string[] = ['manager'], others = [manager]) {
   vi.mocked(can).mockImplementation(async (subject) => holders.includes(subject.id));
   vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
@@ -26,7 +30,6 @@ function fixture(approver = manager, holders: string[] = ['manager'], others = [
     $queryRaw: vi.fn(),
     user: {
       findFirst: vi.fn().mockResolvedValue(actor),
-      findMany: vi.fn().mockResolvedValue(others),
     },
     restaurantOperatorCredential: {
       findFirst: vi.fn().mockResolvedValue({
@@ -34,6 +37,12 @@ function fixture(approver = manager, holders: string[] = ['manager'], others = [
         credentialHash: 'hash',
         staffProfile: { status: 'ACTIVE', user: approver },
       }),
+      findMany: vi.fn().mockResolvedValue(
+        others.map((user, index) => ({
+          id: `cred-${index}`,
+          staffProfile: { status: 'ACTIVE', user },
+        }))
+      ),
       update: vi.fn(),
     },
   };
@@ -142,6 +151,35 @@ describe('counter discount approval (#520)', () => {
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
   });
 
+  it('only counts other members with an active staff profile and a live PIN', async () => {
+    const self = { ...actor };
+    const db = fixture(self, ['cashier'], []);
+    await authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin);
+    expect(db.restaurantOperatorCredential.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org',
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: {
+          status: 'ACTIVE',
+          user: { organizationId: 'org', status: 'ACTIVE', id: { not: 'cashier' } },
+        },
+      },
+      include: { staffProfile: { include: { user: true } } },
+    });
+  });
+
+  it('checks each other member once, even with several PIN credentials', async () => {
+    const self = { ...actor };
+    const other = { ...actor, id: 'other-cashier' };
+    const db = fixture(self, ['cashier'], [other, other, other]);
+    await authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin);
+    expect(
+      vi.mocked(can).mock.calls.filter(([subject]) => subject.id === 'other-cashier')
+    ).toHaveLength(1);
+  });
+
   it('refuses a sole approver whose fresh PIN is wrong', async () => {
     const self = { ...actor };
     const db = fixture(self, ['cashier'], []);
@@ -190,5 +228,41 @@ describe('counter FEFO-override approval (#520)', () => {
       authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
     expect(withTenantDb).not.toHaveBeenCalled();
+  });
+});
+
+describe('in-transaction approval re-check (#520)', () => {
+  const approval = {
+    approvedByUserId: 'manager',
+    approvalPolicy: 'MANAGER_PIN',
+    selfApproved: false,
+  };
+
+  it('accepts an approver who is still active and still holds the capability', async () => {
+    const db = fixture();
+    db.user.findFirst.mockResolvedValue(manager);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'DISCOUNT', approval)
+    ).resolves.toBeUndefined();
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'manager', organizationId: 'org', status: 'ACTIVE' },
+    });
+    expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
+  });
+
+  it('refuses an approver deactivated since the PIN check', async () => {
+    const db = fixture();
+    db.user.findFirst.mockResolvedValue(null);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'DISCOUNT', approval)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+  });
+
+  it('refuses an approver whose capability was revoked since the PIN check', async () => {
+    const db = fixture(manager, []);
+    db.user.findFirst.mockResolvedValue(manager);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'FEFO_OVERRIDE', approval)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
   });
 });

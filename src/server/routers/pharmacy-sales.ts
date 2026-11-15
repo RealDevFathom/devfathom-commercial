@@ -1,7 +1,10 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import {
   authorizeCounterApproval,
+  confirmCounterApproval,
   CounterApprovalDenied,
+  type CounterApproval,
+  type CounterApprovalKind,
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
@@ -215,13 +218,18 @@ type CounterLineRequest = Omit<
  * #520: build the domain line input with server-verified approvals only. A discount needs a
  * manager's PIN (solo rule: the sole approver re-enters their own); a FEFO override needs the
  * pharmacist on duty or a pharmacist's PIN. Each approval is labelled on the audit row.
+ * Runs before the sale transaction opens; `confirmLineApprovals` re-checks inside it.
  */
 async function approvedLineInput(
   ctx: TRPCContext,
   db: ScopedDb,
   scope: LedgerScope,
   input: CounterLineRequest
-): Promise<SaleLineInput> {
+): Promise<{
+  lineInput: SaleLineInput;
+  approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }>;
+}> {
+  const approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }> = [];
   const lineInput: SaleLineInput = {
     saleId: input.saleId,
     medicineId: input.medicineId,
@@ -237,12 +245,14 @@ async function approvedLineInput(
   const { override } = input;
   if ((input.discountMinor ?? 0) > 0) {
     const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
+    approvals.push({ kind: 'DISCOUNT', approval });
     lineInput.approvedByUserId = approval.approvedByUserId;
     lineInput.approvalPolicy = approval.approvalPolicy;
     annotateAudit(ctx, { metadata: { discountApproval: approval } });
   }
   if (override) {
     const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
+    approvals.push({ kind: 'FEFO_OVERRIDE', approval });
     lineInput.override = {
       inventoryLotId: override.inventoryLotId,
       reason: override.reason,
@@ -258,7 +268,7 @@ async function approvedLineInput(
       },
     });
   }
-  return lineInput;
+  return { lineInput, approvals };
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -1277,10 +1287,18 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        const scope = await scopeFor(ctx, input.branchId);
+        // #520: PINs are verified before the sale transaction takes a connection.
+        const { lineInput, approvals } = await approvedLineInput(
+          ctx,
+          ctx.db as unknown as ScopedDb,
+          scope,
+          input
+        );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
-          const lineInput = await approvedLineInput(ctx, db, scope, input);
+          for (const { kind, approval } of approvals)
+            await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
