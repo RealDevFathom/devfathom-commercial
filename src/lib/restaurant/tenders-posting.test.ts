@@ -9,7 +9,11 @@ import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
 import { reverseLoyaltyForRefund } from './loyalty';
 import { refundTender } from './refunds';
-import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
+import {
+  applyTenderInTransaction,
+  quoteOpenBillSettlement,
+  type ApplyTenderInput,
+} from './tenders';
 
 vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
@@ -811,7 +815,7 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
 });
 
 describe('DEV-773 fractional settlement tax evidence (no DB)', () => {
-  it('freezes per-tender tax for a taxed fractional bill and a full refund reverses it', async () => {
+  it('quotes, settles and fully refunds a taxed fractional bill with exact frozen tax', async () => {
     const f = fixture();
     // Order net 20.00, 10% exclusive tax, cut into two equal fractional bills.
     Object.assign(f.bill, {
@@ -877,9 +881,34 @@ describe('DEV-773 fractional settlement tax evidence (no DB)', () => {
       where: { originalTenderId: string };
     }) => frozen.filter((row) => row.originalTenderId === where.originalTenderId)) as never);
 
-    const collected = await f.collect({ tender: { type: 'OTHER', amount: '11.00' } });
+    const quote = await quoteOpenBillSettlement(f.db, 'bill', NOW);
+    expect(quote?.tax.toFixed(2)).toBe('1.00');
+    expect(quote?.remainingDue.toFixed(2)).toBe('11.00');
+    const collected = await f.collect({
+      tender: { type: 'OTHER', amount: quote!.remainingDue.toFixed(2) },
+    });
     expect(collected.settled).toBe(true);
     const settlement = vi.mocked(finalizeBillSettlement).mock.calls[0]![1];
+    // The real settlement guards (totals, fractional evidence, bucket/tender tax
+    // reconciliation and tender ownership) accept the input up to the first write.
+    const persistenceReached = 'settlement validation passed; persistence reached';
+    const actual = await vi.importActual<typeof import('./bills')>('./bills');
+    await expect(
+      actual.finalizeBillSettlement(
+        {
+          restaurantBill: { findUnique: vi.fn(async () => ({ ...f.bill, status: 'OPEN' })) },
+          restaurantTender: {
+            findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+              f.tenders.filter((tender) => where.id.in.includes(tender.id))
+            ),
+          },
+          $queryRaw: vi.fn(async () => {
+            throw new Error(persistenceReached);
+          }),
+        } as unknown as ScopedDb,
+        settlement
+      )
+    ).rejects.toThrow(persistenceReached);
     expect(settlement.taxTotal.toFixed(2)).toBe('1.00');
     expect(settlement.lines.flatMap((line) => line.buckets)).toHaveLength(1);
     expect(settlement.tenderTaxAllocations).toEqual([
