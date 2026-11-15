@@ -740,6 +740,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog
     .getByLabel('Refund amount (PKR)')
     .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminRefundPin);
   await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
   await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
@@ -762,6 +763,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog
     .getByLabel('Refund amount (PKR)')
     .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
+  await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminRefundPin);
   await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
   await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   const popupPromise = page.waitForEvent('popup');
@@ -826,6 +828,8 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(otc.name);
   await expect(receipt).toContainText(otc.batchNumber);
+  // DEV-645: refunds belong to managers and owners; a cashier never sees the entry.
+  await expect(page.getByRole('button', { name: 'Returns & refunds' })).toHaveCount(0);
 });
 
 test('day close — open sell count lock and print Z-report', async ({ page, context }) => {

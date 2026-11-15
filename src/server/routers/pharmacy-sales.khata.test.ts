@@ -13,6 +13,14 @@ vi.mock('@/server/audit', async (original) => ({
   recordTrpcAudit: vi.fn(),
   recordAudit: vi.fn(),
 }));
+// DEV-645: every refund is approved by the signed-in manager/owner's own PIN.
+vi.mock('@/lib/pharmacy/refund-approval', () => ({
+  REFUND_APPROVAL_POLICY: 'PHARMACY_REFUND_MANAGER_PIN',
+  verifyRefundApproverPin: vi.fn(async () => ({
+    staffProfileId: 'staff-owner-a',
+    pinReauthenticatedAt: new Date('2026-10-02T09:00:00Z'),
+  })),
+}));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   refundPharmacyTender: vi.fn(),
@@ -25,6 +33,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can, subjectFromSession } from '@/lib/abac';
+import { verifyRefundApproverPin } from '@/lib/pharmacy/refund-approval';
 import * as abac from '@/lib/abac';
 import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
 import { recordAudit } from '@/server/audit';
@@ -43,6 +52,8 @@ const input = {
   familyAccountId: 'family-a',
 };
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+const APPROVAL_PIN = '2468';
+const manage = { capability: 'pharmacy:manage', effect: 'ALLOW' } as const;
 
 function fixture(
   permissions: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
@@ -226,9 +237,14 @@ describe('Khata read and write permissions (#831)', () => {
     }
   );
 
-  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
-    'preserves owner %s access to charges and credit refunds',
-    async (capability) => {
+  it.each([
+    ['*', true],
+    ['pharmacy:*', true],
+    // DEV-645: a counter-only (cashier) grant still charges Khata but cannot refund.
+    ['pharmacy:counter', false],
+  ] as const)(
+    'preserves owner %s access to charges and credit refunds (refund allowed: %s)',
+    async (capability, refundAllowed) => {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       await expect(f.caller().tender(input)).resolves.toMatchObject({ tenderId: 'tender-a' });
       expect(applyPharmacyTender).toHaveBeenCalledExactlyOnceWith(
@@ -250,9 +266,27 @@ describe('Khata read and write permissions (#831)', () => {
         id: 'khata:tender-a',
         familyAccountId: 'family-a',
       });
-      await expect(f.caller().refundTender(refund)).resolves.toMatchObject({
+      if (!refundAllowed) {
+        await expect(
+          f.caller().refundTender({ ...refund, approvalPin: APPROVAL_PIN })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Only a manager or owner can refund.',
+        });
+        expect(verifyRefundApproverPin).not.toHaveBeenCalled();
+        expect(refundPharmacyTender).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(
+        f.caller().refundTender({ ...refund, approvalPin: APPROVAL_PIN })
+      ).resolves.toMatchObject({
         refundId: 'refund-a',
       });
+      expect(verifyRefundApproverPin).toHaveBeenCalledExactlyOnceWith(
+        'org-a',
+        'owner-a',
+        APPROVAL_PIN
+      );
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
@@ -293,55 +327,62 @@ describe('Khata read and write permissions (#831)', () => {
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
-const khataPaths: { name: string; run: (caller: Caller, branchId: string) => Promise<unknown> }[] =
-  [
-    {
-      name: 'accounts',
-      run: (c, branchId) => c.khataAccounts({ branchId, saleId: input.saleId }),
-    },
-    {
-      name: 'statement',
-      run: (c, branchId) =>
-        c.khataStatement({
-          branchId,
-          saleId: input.saleId,
-          familyAccountId: input.familyAccountId,
-        }),
-    },
-    { name: 'Khata charge', run: (c, branchId) => c.tender({ ...input, branchId }) },
-    {
-      name: 'credit charge',
-      run: (c, branchId) => c.tender({ ...input, branchId, type: 'CREDIT' }),
-    },
-    { name: 'Khata outcome', run: (c, branchId) => c.tenderOutcome({ ...input, branchId }) },
-    {
-      name: 'credit outcome',
-      run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
-    },
-    {
-      name: 'legacy credit outcome without a family account',
-      run: (c, branchId) =>
-        c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
-    },
-    {
-      name: 'credit refund',
-      run: (c, branchId) =>
-        c.refundTender({
-          branchId,
-          originalTenderId: 'tender-a',
-          deviceId: input.deviceId,
-          businessDate: input.businessDate,
-          amountMinor: 50,
-          reason: 'Return',
-          idempotencyKey: 'refund-a',
-        }),
-    },
-  ];
+const khataPaths: {
+  name: string;
+  run: (caller: Caller, branchId: string) => Promise<unknown>;
+  /** DEV-645: refunds additionally need a manager/owner grant and the actor's PIN. */
+  refund?: true;
+}[] = [
+  {
+    name: 'accounts',
+    run: (c, branchId) => c.khataAccounts({ branchId, saleId: input.saleId }),
+  },
+  {
+    name: 'statement',
+    run: (c, branchId) =>
+      c.khataStatement({
+        branchId,
+        saleId: input.saleId,
+        familyAccountId: input.familyAccountId,
+      }),
+  },
+  { name: 'Khata charge', run: (c, branchId) => c.tender({ ...input, branchId }) },
+  {
+    name: 'credit charge',
+    run: (c, branchId) => c.tender({ ...input, branchId, type: 'CREDIT' }),
+  },
+  { name: 'Khata outcome', run: (c, branchId) => c.tenderOutcome({ ...input, branchId }) },
+  {
+    name: 'credit outcome',
+    run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
+  },
+  {
+    name: 'legacy credit outcome without a family account',
+    run: (c, branchId) =>
+      c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
+  },
+  {
+    name: 'credit refund',
+    refund: true,
+    run: (c, branchId) =>
+      c.refundTender({
+        branchId,
+        originalTenderId: 'tender-a',
+        deviceId: input.deviceId,
+        businessDate: input.businessDate,
+        amountMinor: 50,
+        reason: 'Return',
+        idempotencyKey: 'refund-a',
+        approvalPin: APPROVAL_PIN,
+      }),
+  },
+];
 
-describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
+describe.each(khataPaths)('Khata $name authorization', ({ run, refund }) => {
   it('allows the assigned branch with real counter permissions and no dispense grant', async () => {
     const f = fixture();
     f.user.role = 'EMPLOYEE';
+    if (refund) f.member.organizationRole.permissions.push(manage);
     await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
   });
 
@@ -350,6 +391,7 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
     async (source) => {
       const f = fixture();
       f.user.role = 'EMPLOYEE';
+      if (refund) f.member.organizationRole.permissions.push(manage);
       const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
       if (source === 'user') f.member.permissionOverrides = [denial];
       else f.member.organizationRole.permissions.push(denial);
@@ -423,6 +465,7 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
     'preserves and audits tenant-admin access with assignments $assignments',
     async ({ assignments }) => {
       const f = fixture();
+      if (refund) f.member.organizationRole.permissions.push(manage);
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({
@@ -800,7 +843,7 @@ describe('Khata router trust and recovery boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
   it('appends a refund payment once without editing the original charge', async () => {
-    const f = fixture();
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }, manage]);
     const charge = { id: 'khata:tender-a', familyAccountId: 'family-a' };
     f.db.pharmacyKhataEvent.findFirst
       .mockResolvedValueOnce(charge)
@@ -821,6 +864,7 @@ describe('Khata router trust and recovery boundary', () => {
       amountMinor: 50,
       reason: 'Return',
       idempotencyKey: 'refund-a',
+      approvalPin: APPROVAL_PIN,
     };
     await f.caller().refundTender(refund);
     await f.caller().refundTender(refund);

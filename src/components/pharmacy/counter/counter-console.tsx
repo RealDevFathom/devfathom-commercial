@@ -2245,6 +2245,7 @@ function ScopedPharmacyCounterConsole({
             className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
           >
             <CounterReturnPanel
+              refundsAuthorized={branchesQuery.data?.refundsAuthorized === true}
               branchId={branchId}
               organizationId={organizationId}
               accountId={accountId}

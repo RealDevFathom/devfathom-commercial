@@ -9,6 +9,10 @@ export const PHARMACY_E2E = {
   packageId: 'package_pharmacy_counter_e2e',
   roleId: 'role_pharmacy_counter_e2e_admin',
   adminId: 'user_pharmacy_counter_e2e_admin',
+  /** DEV-645: the administrator's own staff PIN approves counter refunds. E2E only. */
+  adminStaffProfileId: 'staff_pharmacy_counter_e2e_admin',
+  adminPinCredentialId: 'cred_pharmacy_counter_e2e_admin_pin',
+  adminRefundPin: '4826',
   cashierRoleId: 'role_pharmacy_counter_e2e_cashier',
   cashierId: 'user_pharmacy_counter_e2e_cashier',
   cashierEmail: 'cashier.counter@pharmacy-counter-e2e.devfathom.invalid',

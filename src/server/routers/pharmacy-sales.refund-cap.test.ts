@@ -14,6 +14,14 @@ vi.mock('@/lib/pharmacy/counter-evidence', async (importOriginal) => ({
 }));
 
 vi.mock('server-only', () => ({}));
+// DEV-645: refunds are approved by the manager's own PIN; this suite is about the cap.
+vi.mock('@/lib/pharmacy/refund-approval', () => ({
+  REFUND_APPROVAL_POLICY: 'PHARMACY_REFUND_MANAGER_PIN',
+  verifyRefundApproverPin: vi.fn(async () => ({
+    staffProfileId: 'staff-1',
+    pinReauthenticatedAt: new Date('2026-09-29T10:00:00Z'),
+  })),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -24,6 +32,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 
 import { refundPharmacyTender } from '@/lib/pharmacy/settlement';
@@ -51,7 +60,10 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+          permissions: [
+            { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+            { capability: 'pharmacy:manage', effect: 'ALLOW' },
+          ],
         },
         permissionOverrides: [],
       }),
@@ -137,7 +149,7 @@ for (const boundary of ['service', 'API'] as const) {
       const run = (f: ReturnType<typeof fixture>, amountMinor = 100) => {
         const request = { ...input, ...flag, amountMinor };
         return boundary === 'API'
-          ? f.caller.refundTender(request)
+          ? f.caller.refundTender({ ...request, approvalPin: '2468' })
           : refundPharmacyTender(f.db as unknown as ScopedDb, scope, request);
       };
       const assertLocked = (f: ReturnType<typeof fixture>) => {
@@ -199,11 +211,13 @@ it('includes unidentified quarantine holdings in the mandatory refund cap', asyn
   const f = fixture(0);
   const sale = await f.db.pharmacySale.findFirst();
   sale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
-  await expect(f.caller.refundTender({ ...input, amountMinor: 201 })).rejects.toThrow(
-    'REFUND_EXCEEDS_TENDER'
-  );
+  await expect(
+    f.caller.refundTender({ ...input, amountMinor: 201, approvalPin: '2468' })
+  ).rejects.toThrow('REFUND_EXCEEDS_TENDER');
   expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
-  await expect(f.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
+  await expect(
+    f.caller.refundTender({ ...input, amountMinor: 200, approvalPin: '2468' })
+  ).resolves.toMatchObject({
     refundId: 'refund-1',
   });
 });

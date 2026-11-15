@@ -127,6 +127,7 @@ import {
   recordPharmacyCashMovement,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
+import { REFUND_APPROVAL_POLICY, verifyRefundApproverPin } from '@/lib/pharmacy/refund-approval';
 
 import { assertInOrganization } from '../org-refs';
 import {
@@ -533,6 +534,46 @@ async function requireCounterReceiptAccess(
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+/**
+ * DEV-645: refunds belong to managers and owners (`pharmacy:manage`; Owner, Owner /
+ * Operator and Manager roles), never cashiers, and each one is approved by a fresh
+ * server-side check of the actor's own PIN. A sole owner therefore self-approves with
+ * a PIN re-authentication. The approval is recorded on the request's audit row.
+ */
+async function approveRefund(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  scope: LedgerScope,
+  pin: string | undefined
+): Promise<void> {
+  if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, { db }))) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Only a manager or owner can refund.',
+    });
+  }
+  if (!pin) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Enter your manager or owner PIN.' });
+  }
+  const approval = await verifyRefundApproverPin(scope.organizationId, scope.actorId, pin);
+  if (!approval) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Your PIN was not accepted. Refund not recorded.',
+    });
+  }
+  annotateAudit(ctx, {
+    metadata: {
+      refundApproval: {
+        policy: REFUND_APPROVAL_POLICY,
+        approverId: scope.actorId,
+        staffProfileId: approval.staffProfileId,
+        pinReauthenticatedAt: approval.pinReauthenticatedAt.toISOString(),
+      },
+    },
+  });
 }
 
 /** Navigation uses the counter's grant and branch rules without recording an access. */
@@ -1043,10 +1084,17 @@ export const pharmacySalesRouter = router({
           // true additionally caps a refund on a sale that is not settled.
           requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-645: the signed-in manager or owner's own PIN, re-entered for every refund.
+          approvalPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: request }) => {
+      // The PIN is never part of the idempotent refund payload or its hash.
+      const { approvalPin, ...input } = request;
       try {
         let receiptAccess = false;
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, false, (rules) => {
@@ -1070,9 +1118,11 @@ export const pharmacySalesRouter = router({
                 code: 'FORBIDDEN',
                 message: 'You do not have permission for this action.',
               });
+            await approveRefund(ctx, db, scope, approvalPin);
             return refundPharmacyTender(db, scope, input);
           }
           await khataScope(ctx, input.branchId, 'write');
+          await approveRefund(ctx, db, scope, approvalPin);
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
             where: {
@@ -1948,6 +1998,13 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      // DEV-645: only managers and owners see Returns & refunds; refundTender enforces it.
+      refundsAuthorized: await can(
+        subjectFromSession(ctx.session.user),
+        'pharmacy:manage',
+        undefined,
+        { db: ctx.db }
+      ),
     };
   }),
 

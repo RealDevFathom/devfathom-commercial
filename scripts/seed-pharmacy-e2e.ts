@@ -260,6 +260,49 @@ async function seedWorkspace(email: string, passwordHash: string) {
   });
 }
 
+/**
+ * DEV-645: refunds need the signed-in manager/owner's own PIN. The browser spec refunds as the
+ * administrator, so the E2E workspace gives that account a staff PIN. Not seeded for the staging
+ * demo: its owner sets their own PIN.
+ */
+async function seedAdminRefundPin() {
+  await asTenant(async (tx) => {
+    await tx.restaurantStaffProfile.upsert({
+      where: { id: PHARMACY_E2E.adminStaffProfileId },
+      update: { userId: PHARMACY_E2E.adminId, status: 'ACTIVE' },
+      create: {
+        id: PHARMACY_E2E.adminStaffProfileId,
+        organizationId: PHARMACY_E2E.organizationId,
+        userId: PHARMACY_E2E.adminId,
+        displayName: 'Counter Gate Admin',
+        status: 'ACTIVE',
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    const credential = {
+      staffProfileId: PHARMACY_E2E.adminStaffProfileId,
+      type: 'PIN' as const,
+      credentialHash: hashSync(PHARMACY_E2E.adminRefundPin, 10),
+      failedAttempts: 0,
+      lockedUntil: null,
+      revokedAt: null,
+      deviceId: null,
+    };
+    await tx.restaurantOperatorCredential.upsert({
+      where: { id: PHARMACY_E2E.adminPinCredentialId },
+      update: credential,
+      create: {
+        id: PHARMACY_E2E.adminPinCredentialId,
+        organizationId: PHARMACY_E2E.organizationId,
+        ...credential,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+}
+
 async function seedBranch() {
   await asTenant(async (tx) => {
     const branch = {
@@ -992,6 +1035,8 @@ async function main() {
     if (stagingDemo) {
       await seedStagingDemoSensitiveGrants();
       await seedStagingDemoPharmacist(passwordHash);
+    } else {
+      await seedAdminRefundPin();
     }
 
     console.log('Pharmacy counter E2E seed complete.');

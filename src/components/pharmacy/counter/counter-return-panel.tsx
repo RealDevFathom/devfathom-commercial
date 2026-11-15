@@ -80,8 +80,16 @@ type Props = {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-export function CounterReturnPanel(props: Props) {
+/**
+ * DEV-645: Returns & refunds is a manager/owner tool. The entry is not rendered for
+ * anyone else (cashiers); the server refuses their refunds regardless.
+ */
+export function CounterReturnPanel({
+  refundsAuthorized,
+  ...props
+}: Props & { refundsAuthorized: boolean }) {
   const [open, setOpen] = useState(false);
+  if (!refundsAuthorized) return null;
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
@@ -155,6 +163,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
+  // The approving manager/owner's own PIN. Single-use and never saved on this device.
+  const [approvalPin, setApprovalPin] = useState('');
+  const approvalReady = witnessPinPattern.test(approvalPin);
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -206,18 +217,23 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(next: Attempt, controlledWitness?: ControlledWitness) {
+  async function execute(
+    next: Attempt,
+    controlledWitness?: ControlledWitness,
+    refundApprovalPin?: string
+  ) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
     const retry = !!attempt;
     setBusy(true);
     setError('');
     setMessage('');
-    // A witness PIN is single-use: clear it whatever the outcome.
+    // Witness and approval PINs are single-use: clear them whatever the outcome.
     setWitnessPin('');
+    setApprovalPin('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
-      // The witness PIN is deliberately excluded from persistent storage.
+      // Witness and approval PINs are deliberately excluded from persistent storage.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') {
@@ -245,6 +261,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
+          approvalPin: refundApprovalPin,
         });
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
@@ -259,7 +276,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
+      // A refused PIN on a retried refund keeps its saved reference: an earlier ambiguous
+      // outcome must still be reconciled with the same idempotency key.
+      const keepForPin = retry && next.kind === 'refund' && code === 'FORBIDDEN';
+      if (
+        !keepForPin &&
+        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')
+      ) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -333,6 +356,27 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     </section>
   );
 
+  const approvalField = (
+    <div className="space-y-2">
+      <Label htmlFor="refund-approval-pin">Your manager or owner PIN</Label>
+      <Input
+        id="refund-approval-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={8}
+        className="h-11"
+        aria-describedby="refund-approval-pin-hint"
+        disabled={busy || !online || !ready}
+        value={approvalPin}
+        onChange={(event) => setApprovalPin(event.target.value.replace(/\D/g, ''))}
+      />
+      <p id="refund-approval-pin-hint" className="text-sm text-text-muted">
+        Every refund needs your PIN. It is checked by the server and never saved on this device.
+      </p>
+    </div>
+  );
+
   function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
@@ -378,16 +422,18 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       )}
       {message && <p role="status">{message}</p>}
+      {attempt?.kind === 'refund' && approvalField}
       {attempt && (
         <Button
           className="h-11"
-          onClick={() => void execute(attempt, witness)}
+          onClick={() => void execute(attempt, witness, approvalPin)}
           disabled={
             busy ||
             !online ||
             !ready ||
             // A saved return waits for its line details so a controlled line gets a witness.
-            (attempt.kind === 'return' && (!data || !witnessReady))
+            (attempt.kind === 'return' && (!data || !witnessReady)) ||
+            (attempt.kind === 'refund' && !approvalReady)
           }
         >
           Retry saved {attempt.kind}
@@ -720,6 +766,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 reversal required. I will reconcile the original provider separately.
               </label>
             )}
+            {!attempt && approvalField}
             <Button
               variant="destructive"
               className="h-11"
@@ -728,23 +775,28 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 !Number.isSafeInteger(amountMinor) ||
                 amountMinor <= 0 ||
                 amountMinor > available ||
-                (manualRequired && !manual)
+                (manualRequired && !manual) ||
+                !approvalReady
               }
               onClick={() =>
-                void execute({
-                  kind: 'refund',
-                  saleId,
-                  input: {
-                    branchId,
-                    originalTenderId: tenderId,
-                    amountMinor,
-                    deviceId: deviceId(),
-                    businessDate: businessDate().toISOString(),
-                    reason,
-                    idempotencyKey: browserUuid(),
-                    manualCashFallback: manualRequired && manual,
+                void execute(
+                  {
+                    kind: 'refund',
+                    saleId,
+                    input: {
+                      branchId,
+                      originalTenderId: tenderId,
+                      amountMinor,
+                      deviceId: deviceId(),
+                      businessDate: businessDate().toISOString(),
+                      reason,
+                      idempotencyKey: browserUuid(),
+                      manualCashFallback: manualRequired && manual,
+                    },
                   },
-                })
+                  undefined,
+                  approvalPin
+                )
               }
             >
               Confirm refund
