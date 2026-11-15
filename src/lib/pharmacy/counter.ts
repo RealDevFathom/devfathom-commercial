@@ -12,6 +12,7 @@
  * READ-ONLY. Nothing here writes, allocates, or issues a receipt number.
  */
 
+import { counterLabel } from './counter-label';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
@@ -766,9 +767,20 @@ export async function readCounterReceipt(
     changeGivenMinor: tender.changeGivenMinor,
   }));
 
+  const device = sale.receiptDeviceId
+    ? await db.pharmacyRegisteredDevice.findFirst({
+        where: {
+          id: sale.receiptDeviceId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+        select: { name: true },
+      })
+    : null;
   return {
     saleId: sale.id,
     receiptNumber: sale.receiptNumber,
+    counterLabel: counterLabel(sale.receiptDeviceId, device?.name),
     branchName: branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,

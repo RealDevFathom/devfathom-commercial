@@ -1,4 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { counterLabel } from '@/lib/pharmacy/counter-label';
 import {
   authorizeCounterApproval,
   confirmCounterApproval,
@@ -2016,7 +2017,27 @@ export const pharmacySalesRouter = router({
         take: 50,
       });
       const otherBranches = [...assigned].filter((id) => id !== scope.branchId);
-      if (!otherBranches.length || active.length === 50) return active;
+      const withLabels = async <T extends { branchId: string; receiptDeviceId: string | null }>(
+        rows: T[]
+      ) => {
+        const ids = [
+          ...new Set(rows.flatMap((row) => (row.receiptDeviceId ? [row.receiptDeviceId] : []))),
+        ];
+        const devices = ids.length
+          ? await ctx.db.pharmacyRegisteredDevice.findMany({
+              where: { organizationId: scope.organizationId, id: { in: ids } },
+              select: { id: true, branchId: true, name: true },
+            })
+          : [];
+        return rows.map((row) => ({
+          ...row,
+          counterLabel: counterLabel(
+            row.receiptDeviceId,
+            devices.find((d) => d.id === row.receiptDeviceId && d.branchId === row.branchId)?.name
+          ),
+        }));
+      };
+      if (!otherBranches.length || active.length === 50) return withLabels(active);
       const others = await ctx.db.pharmacySale.findMany({
         where: {
           organizationId: scope.organizationId,
@@ -2028,7 +2049,7 @@ export const pharmacySalesRouter = router({
         orderBy: [{ completedAt: 'desc' }, { id: 'asc' }],
         take: 50 - active.length,
       });
-      return [...active, ...others];
+      return withLabels([...active, ...others]);
     }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
