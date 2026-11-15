@@ -907,7 +907,16 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    // #1241: a pharmacist completes their own dispensing sale. Tender needs the
+    // counter grant and every Rx line needs the payer's exact pharmacy:dispense,
+    // so without `pharmacy:counter` only the Owner / Operator could finish an Rx
+    // sale. Refunds stay behind pharmacy:manage and a PIN (DEV-647).
+    capabilities: [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:close',
+      'pharmacy:counter',
+    ],
   },
   {
     key: 'manager',

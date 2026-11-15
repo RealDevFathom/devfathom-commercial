@@ -371,6 +371,27 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  // #1241: tender needs pharmacy:counter and every Rx line needs the payer's exact
+  // pharmacy:dispense, so the Pharmacist template must hold both to finish an Rx sale.
+  it.each(['pharmacy:counter', 'pharmacy:dispense'] as const)(
+    'lets the Pharmacist template take payment for their own Rx sale (%s, #1241)',
+    async (action) => {
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+        })
+      ).resolves.toBe(true);
+    }
+  );
+
+  it('keeps refunds and drawer management away from the Pharmacist template (#1241)', async () => {
+    await expect(
+      can(employee, 'pharmacy:manage', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
