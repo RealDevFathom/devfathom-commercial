@@ -12,6 +12,7 @@ function run(overrides: Partial<KhataReminderRunResult> = {}): KhataReminderRunR
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     skippedConfiguration: 0,
     notDue: 0,
     configurationErrors: [],
@@ -50,6 +51,7 @@ describe('DEV-730 owner reminder outcome', () => {
     expect(reminderOutcome(run({ configured: false, scanned: 0 }))).toBe('reminder-not-configured');
     expect(reminderOutcome(run({ skippedConfiguration: 1 }))).toBe('reminder-not-configured');
     expect(reminderOutcome(run({ skippedNoConsent: 1 }))).toBe('reminder-no-consent');
+    expect(reminderOutcome(run({ skippedQuietHours: 1 }))).toBe('reminder-quiet-hours');
     expect(reminderOutcome(run({ notDue: 1 }))).toBe('reminder-not-due');
     expect(reminderOutcome(run({ scanned: 0 }))).toBe('reminder-not-due');
   });

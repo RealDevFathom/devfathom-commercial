@@ -173,6 +173,7 @@ export class PharmacySaleError extends Error {
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'NOT_BILL_OWNER'
   ) {
     super(reason);
   }
@@ -695,15 +696,40 @@ async function addSaleLineWithAllocation(
   return { line, allocation };
 }
 
+/**
+ * DEV-821: who is changing a bill's status, decided by the caller. Required on every
+ * call, so no caller can void without stating it. A counter user may void only a
+ * bill they created unless they are a manager or owner. A failed delivery that the
+ * delivery path has already authorized voids its own order sale.
+ */
+export type SaleTransitionAuthority =
+  | { kind: 'COUNTER'; actorIsManager: boolean }
+  | { kind: 'FAILED_DELIVERY_RETURN' };
+
+function mayVoidSale(
+  authority: SaleTransitionAuthority | undefined,
+  sale: { createdByUserId: string },
+  scope: LedgerScope
+) {
+  if (authority?.kind === 'FAILED_DELIVERY_RETURN') return true;
+  if (authority?.kind !== 'COUNTER') return false;
+  return authority.actorIsManager || sale.createdByUserId === scope.actorId;
+}
+
 export async function changeSaleStatus(
   db: ScopedDb,
   scope: LedgerScope,
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'void',
+  authority: SaleTransitionAuthority,
   reason?: string,
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-821: fails closed. A void releases the bill's stock, so a missing or
+  // insufficient authority is refused before the bill is claimed.
+  if (action === 'void' && !mayVoidSale(authority, sale, scope))
+    throw new PharmacySaleError('NOT_BILL_OWNER');
   // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
   // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {

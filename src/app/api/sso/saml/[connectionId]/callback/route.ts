@@ -7,7 +7,10 @@ import {
   issueSsoTicket,
   PrismaSamlCache,
   provisionIdentityUser,
+  readSsoBrowserBinding,
   requireIdentityConnection,
+  SSO_BROWSER_BINDING_COOKIE,
+  ssoBrowserBindingCookieOptions,
   SSO_TICKET_COOKIE,
   ssoTicketCookieOptions,
 } from '@/lib/sso';
@@ -27,7 +30,11 @@ export async function POST(request: Request, route: { params: Promise<{ connecti
     if (typeof samlResponse !== 'string' || typeof relayState !== 'string') {
       throw new Error('SAML callback is missing its response or relay state.');
     }
+    const browserBinding = readSsoBrowserBinding(request);
     const profile = await withTenantDb(connection.organizationId, async (db) => {
+      // F10: the RelayState must belong to this browser. Checked before the
+      // response is validated, so a transferred POST consumes nothing.
+      await consumeAuthorizationState(db, connection.id, relayState, 'SAML_RELAY', browserBinding);
       const saml = new SAML({
         callbackUrl: callbackUrl(request, 'saml', connection.id),
         entryPoint: connection.ssoUrl!,
@@ -40,11 +47,12 @@ export async function POST(request: Request, route: { params: Promise<{ connecti
         validateInResponseTo: ValidateInResponseTo.always,
         requestIdExpirationPeriodMs: 10 * 60_000,
         acceptedClockSkewMs: 120_000,
-        cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id),
+        cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id, {
+          presented: browserBinding,
+        }),
       });
       const result = await saml.validatePostResponseAsync({ SAMLResponse: samlResponse });
       if (!result.profile || result.loggedOut) throw new Error('SAML profile was not returned.');
-      await consumeAuthorizationState(db, connection.id, relayState, 'SAML_RELAY');
       return result.profile;
     });
     const claims: Record<string, unknown> = {
@@ -66,6 +74,10 @@ export async function POST(request: Request, route: { params: Promise<{ connecti
     );
     const response = NextResponse.redirect(new URL('/sso/complete', publicOrigin), 303);
     response.cookies.set(SSO_TICKET_COOKIE, ticket.token, ssoTicketCookieOptions(ticket.expiresAt));
+    response.cookies.set(SSO_BROWSER_BINDING_COOKIE, '', {
+      ...ssoBrowserBindingCookieOptions(),
+      maxAge: 0,
+    });
     return response;
   } catch (error) {
     console.error('[sso:saml:callback]', error);

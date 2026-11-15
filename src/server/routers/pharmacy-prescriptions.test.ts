@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   medicines: vi.fn(),
   prescriptionLine: vi.fn(),
+  portalRequest: vi.fn(),
   objects: new Map<string, Buffer>(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -70,6 +71,7 @@ function context(
       prescription: { findFirst: mocks.find, create: mocks.create },
       prescriptionLine: { findFirst: mocks.prescriptionLine },
       medicine: { findMany: mocks.medicines },
+      pharmacyCustomerPortalRequest: { findFirst: mocks.portalRequest },
     },
     entitlements: { organizationId, modules: [], enabledModules },
     session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
@@ -756,6 +758,26 @@ describe('prescription capture and private delivery', () => {
     });
   });
 
+  it('DEV-15: shows staff a photo only when it is on that patient’s customer-app order', async () => {
+    const receipt = await upload();
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mocks.portalRequest.mockResolvedValue({ id: 'portal-request-1' });
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).resolves.toHaveProperty('dataBase64');
+    expect(mocks.portalRequest).toHaveBeenLastCalledWith({
+      where: {
+        organizationId: 'org-a',
+        kind: 'RX_ORDER',
+        prescriptionFileRef: receipt.url,
+        customer: { patientId: 'patient-a' },
+      },
+      select: { id: true },
+    });
+  });
+
   it('delivers private image bytes with no-store/nosniff headers', async () => {
     const receipt = await upload();
     const response = await GET(new Request(`http://localhost${receipt.url}`));
@@ -952,6 +974,59 @@ describe('protected patient operations', () => {
       expect(createPatient).not.toHaveBeenCalled();
       expect(transaction).not.toHaveBeenCalled();
       expect(createConsent).not.toHaveBeenCalled();
+    });
+  });
+
+  // DEV-832 (F09): a new grant is refused to staff outside consent capture,
+  // exactly like the withdrawal above, and still recorded for a pharmacist.
+  describe('recordConsent grant authorization', () => {
+    const createConsent = vi.fn();
+    const transaction = vi.fn();
+    const grant = (api: ReturnType<typeof caller>) =>
+      api.recordConsent({
+        patientId: patient.id,
+        purpose: 'REMINDERS',
+        channel: 'SMS',
+        granted: true,
+      });
+    function grantContext(role: string) {
+      const ctx = patientContext(role);
+      ctx.db = { ...ctx.db, $transaction: transaction } as typeof ctx.db;
+      return ctx;
+    }
+
+    beforeEach(() => {
+      createConsent.mockImplementation(async ({ data }) => data);
+      transaction.mockImplementation(async (run) =>
+        run({
+          $queryRaw: vi.fn().mockResolvedValue([{ id: patient.id }]),
+          patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create: createConsent },
+        })
+      );
+    });
+
+    it.each(['manager', 'cashier', 'procurement', 'inventory', 'finance', 'auditor'])(
+      'refuses a %s grant before any consent write',
+      async (role) => {
+        await expect(grant(caller(grantContext(role)))).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(transaction).not.toHaveBeenCalled();
+        expect(createConsent).not.toHaveBeenCalled();
+      }
+    );
+
+    it('records a pharmacist grant bound to the exact purpose, channel and decision', async () => {
+      await expect(grant(caller(grantContext('pharmacist')))).resolves.toMatchObject({
+        patientId: patient.id,
+        purpose: 'REMINDERS',
+        channel: 'SMS',
+        granted: true,
+        revokedAt: null,
+        staffId: 'pharmacist',
+        recordedByUserId: 'pharmacist',
+      });
+      expect(createConsent).toHaveBeenCalledOnce();
     });
   });
 

@@ -13,6 +13,7 @@ import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
 import { pharmacySopEvidenceReadDecision } from '@/lib/pharmacy/sop-evidence';
+import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -52,6 +53,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   }
   // Camera stills require their evidence reader's grant and retention checks.
   if (/^camera-snapshot-/iu.test(name)) {
+    return new Response('Not found', { status: 404 });
+  }
+  // DEV-783: an owner data export is released only by its own PIN-gated,
+  // audited, expiry-checked download route, never as a generic file.
+  if (isOwnerDataExportObjectName(name)) {
     return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;
