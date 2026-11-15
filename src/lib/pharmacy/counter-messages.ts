@@ -42,6 +42,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
+  VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
@@ -77,8 +78,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
-  UNCERTIFIED_PROVIDER:
-    'This tender needs a connected provider. Take another tender.',
+  UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:

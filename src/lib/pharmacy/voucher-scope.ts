@@ -7,6 +7,8 @@
  * allowlisted: the POS refuses a voucher on those lines on the server.
  */
 
+import { namesDrugContent } from './rfm-winback';
+
 export const VOUCHER_DRUG_CATEGORIES = ['RX', 'OTC_DRUG', 'SUPPLEMENT', 'MEDICAL_DEVICE'] as const;
 export const VOUCHER_NON_DRUG_CATEGORIES = ['NON_DRUG'] as const;
 
@@ -19,8 +21,15 @@ export const DEFAULT_VOUCHER_ELIGIBLE_CATEGORIES: readonly VoucherNonDrugCategor
   ...VOUCHER_NON_DRUG_CATEGORIES,
 ];
 
-/** Required footer, auto-added to every voucher message. */
-export const VOUCHER_MESSAGE_FOOTER = 'Medicines excluded / Adviyaat shamil nahin';
+/**
+ * Required footer on printed and in-app vouchers. It names "medicines", so it is
+ * never used on WhatsApp, where text may not name a medicine category.
+ */
+export const VOUCHER_PRINT_FOOTER = 'Medicines excluded / Adviyaat shamil nahin';
+/** Required footer on WhatsApp voucher messages (no medicine wording). */
+export const VOUCHER_WHATSAPP_FOOTER = 'Valid on selected items only / Sirf muntakhib ashya par';
+
+export type VoucherMessageChannel = 'WHATSAPP' | 'PRINT' | 'IN_APP';
 
 export type VoucherProductFacts = {
   rx: boolean;
@@ -41,7 +50,8 @@ export function voucherCategoryFor(product: VoucherProductFacts): VoucherCategor
 
 export class VoucherScopeError extends Error {
   constructor(
-    readonly reason: 'VOUCHER_CATEGORY_REFUSED' | 'VOUCHER_ALLOWLIST_INVALID',
+    readonly reason:
+      'VOUCHER_CATEGORY_REFUSED' | 'VOUCHER_ALLOWLIST_INVALID' | 'VOUCHER_COPY_REFUSED',
     readonly category?: VoucherCategory
   ) {
     super(reason);
@@ -73,9 +83,19 @@ export function assertVoucherEligibleLine(
     throw new VoucherScopeError('VOUCHER_CATEGORY_REFUSED', category);
 }
 
-/** Appends the required footer to voucher copy exactly once. */
-export function withVoucherFooter(text: string): string {
-  const body = text.trimEnd();
-  if (body.endsWith(VOUCHER_MESSAGE_FOOTER)) return body;
-  return `${body}\n${VOUCHER_MESSAGE_FOOTER}`;
+export function voucherFooterFor(channel: VoucherMessageChannel): string {
+  return channel === 'WHATSAPP' ? VOUCHER_WHATSAPP_FOOTER : VOUCHER_PRINT_FOOTER;
+}
+
+/**
+ * Renders voucher copy with its channel's required footer, added exactly once.
+ * WhatsApp text, footer included, must pass the drug-content policy.
+ */
+export function renderVoucherMessage(body: string, channel: VoucherMessageChannel): string {
+  const footer = voucherFooterFor(channel);
+  const trimmed = body.trimEnd();
+  const text = trimmed.endsWith(footer) ? trimmed : `${trimmed}\n${footer}`;
+  if (channel === 'WHATSAPP' && namesDrugContent(text))
+    throw new VoucherScopeError('VOUCHER_COPY_REFUSED');
+  return text;
 }

@@ -3,11 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assertVoucherEligibleLine,
   DEFAULT_VOUCHER_ELIGIBLE_CATEGORIES,
-  VOUCHER_MESSAGE_FOOTER,
+  renderVoucherMessage,
+  VOUCHER_PRINT_FOOTER,
+  VOUCHER_WHATSAPP_FOOTER,
   voucherCategoryFor,
   voucherEligibleCategories,
   VoucherScopeError,
-  withVoucherFooter,
 } from './voucher-scope';
 
 const base = { rx: false, otc: false, restricted: false, controlled: false };
@@ -55,10 +56,25 @@ describe('DEV-27 voucher category scoping', () => {
     expect(() => assertVoucherEligibleLine(frontShop)).not.toThrow();
   });
 
-  it('adds the required footer to voucher messages exactly once', () => {
-    expect(VOUCHER_MESSAGE_FOOTER).toBe('Medicines excluded / Adviyaat shamil nahin');
-    const text = withVoucherFooter('10% off gift sets this week. Reply STOP to opt out.');
-    expect(text.endsWith(`\n${VOUCHER_MESSAGE_FOOTER}`)).toBe(true);
-    expect(withVoucherFooter(text)).toBe(text);
+  it('adds the printed footer to printed and in-app vouchers exactly once', () => {
+    expect(VOUCHER_PRINT_FOOTER).toBe('Medicines excluded / Adviyaat shamil nahin');
+    for (const channel of ['PRINT', 'IN_APP'] as const) {
+      const text = renderVoucherMessage('10% off gift sets this week.', channel);
+      expect(text).toBe(`10% off gift sets this week.\n${VOUCHER_PRINT_FOOTER}`);
+      expect(renderVoucherMessage(text, channel)).toBe(text);
+    }
+  });
+
+  it('uses the WhatsApp footer without medicine wording and keeps the content check', () => {
+    expect(VOUCHER_WHATSAPP_FOOTER).toBe('Valid on selected items only / Sirf muntakhib ashya par');
+    const text = renderVoucherMessage('10% off gift sets. Reply STOP to opt out.', 'WHATSAPP');
+    expect(text.endsWith(`\n${VOUCHER_WHATSAPP_FOOTER}`)).toBe(true);
+    expect(text).not.toMatch(/medicine/i);
+    expect(() => renderVoucherMessage('Save on vitamins. Reply STOP.', 'WHATSAPP')).toThrow(
+      'VOUCHER_COPY_REFUSED'
+    );
+    expect(() =>
+      renderVoucherMessage(`Gift sets. Reply STOP.\n${VOUCHER_PRINT_FOOTER}`, 'WHATSAPP')
+    ).toThrow('VOUCHER_COPY_REFUSED');
   });
 });

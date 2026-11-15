@@ -6,8 +6,6 @@
  * explainable segment and a policy-safe next action.
  */
 
-import { withVoucherFooter } from './voucher-scope';
-
 export type RfmWinBackConfig = {
   recencyDays: readonly [number, number, number, number];
   frequencyReceipts: readonly [number, number, number, number];
@@ -145,6 +143,11 @@ const PROHIBITED_OFFER_CONTENT = new RegExp(
   'i'
 );
 
+/** True when copy names a drug, salt, dose or medicine category (WhatsApp-unsafe). */
+export function namesDrugContent(text: string): boolean {
+  return PROHIBITED_OFFER_CONTENT.test(text);
+}
+
 /** Rejects unreviewed copy and any drug, salt or medicine-category content. */
 export function validateNonDrugOffer(offer: ReviewedNonDrugOffer): string {
   const body = typeof offer?.body === 'string' ? offer.body.trim() : '';
@@ -174,9 +177,7 @@ export function planRfmWinBack(
   nonDrugOffer: ReviewedNonDrugOffer
 ): WinBackAction[] {
   validateChurnScore(config.winBackChurnScore, 'winBackChurnScore');
-  // DEV-27: the required voucher footer is fixed system copy, added after the
-  // content policy check on the owner's text.
-  const nonDrugOfferText = withVoucherFooter(validateNonDrugOffer(nonDrugOffer));
+  const nonDrugOfferText = validateNonDrugOffer(nonDrugOffer);
   return customers.flatMap((customer): WinBackAction[] => {
     validateChurnScore(customer.churnScore, 'churnScore');
     if (customer.churnScore < config.winBackChurnScore) return [];
