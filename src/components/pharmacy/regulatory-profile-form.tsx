@@ -43,7 +43,7 @@ type Jurisdiction = Regulatory['jurisdictions'][number];
 type Version = Regulatory['versions'][number];
 
 const labelClass =
-  'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
+  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
 
@@ -783,7 +783,7 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
                 {['Version', 'From', 'To', 'Province', 'Licence', 'Qualified person', ''].map(
                   (heading, index) => (
                     <th
-                      className="py-2 pr-4 font-mono text-[0.6875rem] font-semibold tracking-wide text-text-muted uppercase"
+                      className="py-2 pr-4 font-mono text-xs font-semibold tracking-wide text-text-muted uppercase"
                       key={heading || `status-${index}`}
                       scope="col"
                     >

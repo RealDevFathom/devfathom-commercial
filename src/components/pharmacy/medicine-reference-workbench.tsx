@@ -532,7 +532,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         {preview.length ? (
           <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
             <table className="w-full min-w-[780px] text-left text-sm">
-              <thead className="bg-surface-sunken font-mono text-[10px] uppercase tracking-wide text-text-muted">
+              <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wide text-text-muted">
                 <tr>
                   <th className="px-3 py-3">Source row</th>
                   <th className="px-3 py-3">Product</th>
@@ -714,17 +714,17 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     const envelope = assertionEnvelope(assertion.assertedValue);
                     return (
                       <div key={assertion.id} className="rounded-sm bg-surface-sunken p-3">
-                        <dt className="font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                        <dt className="font-mono text-xs uppercase tracking-wide text-text-muted">
                           {assertion.field}
                         </dt>
                         <dd className="mt-1 text-sm text-text-body">
                           {String(envelope?.value ?? '—')}
                         </dd>
-                        <dd className="mt-2 text-[11px] text-text-muted">
+                        <dd className="mt-2 text-xs text-text-muted">
                           Batch {String(envelope?.batchId ?? '—')} · row{' '}
                           {String(envelope?.rowSourceKey ?? '—')}
                         </dd>
-                        <dd className="mt-1 text-[11px] text-text-muted">
+                        <dd className="mt-1 text-xs text-text-muted">
                           Rights: {String(envelope?.rights?.acquisition ?? 'Not recorded')}
                         </dd>
                       </div>
