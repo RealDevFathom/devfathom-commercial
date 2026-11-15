@@ -205,6 +205,27 @@ describe('pharmacy report catalog filters', () => {
     }
   );
 
+  it('renders a sales detail section for ?section=sales and not otherwise', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ section: 'sales', branch: 'b1' }),
+      })
+    );
+    const detail = screen.getByRole('heading', { name: 'Sales and margin for the selected period' });
+    expect(detail.closest('[id="sales"]')).not.toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports?branch=b1'
+    );
+  });
+
+  it('omits the sales detail section without ?section=sales', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(
+      screen.queryByRole('heading', { name: 'Sales and margin for the selected period' })
+    ).toBeNull();
+  });
+
   it('names the missing reports capability and who can grant it', async () => {
     actor.role = 'MEMBER';
     reportBranches.mockRejectedValueOnce(
