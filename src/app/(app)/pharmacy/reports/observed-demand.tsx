@@ -1,7 +1,7 @@
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { demandAggregate } from '@/lib/pharmacy/sales';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
 
 type Demand = Awaited<ReturnType<typeof demandAggregate>>;
 
@@ -36,7 +36,7 @@ export function ObservedDemand({
             Explicit recorded requests, not unique customers or total market demand. Selected
             branch; event dates {workspaceToday(timeZone, report.window.from)} to{' '}
             {workspaceToday(timeZone, report.window.to)} (end exclusive) in{' '}
-            {workspaceTimezone(timeZone)}. Supplier, ingredient and batch filters do not apply.
+            {workspaceZoneLabel(timeZone)}. Supplier, ingredient and batch filters do not apply.
             Events may subsequently be recovered; this is not an open backlog.
           </p>
           <div className="grid gap-4 sm:grid-cols-2">

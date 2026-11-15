@@ -7,6 +7,7 @@ import {
   workspaceDateRange,
   workspaceTimezone,
   workspaceToday,
+  workspaceZoneLabel,
 } from './timezone';
 
 // 22:30 UTC on 21 October: already the 22nd in Asia/Tokyo, still the 21st in UTC.
@@ -84,5 +85,11 @@ describe('workspace time zones', () => {
       from: new Date('2026-02-28T00:00:00.000Z'),
       to: new Date('2026-03-01T00:00:00.000Z'),
     });
+  });
+
+  it('names the workspace zone the way the owner reads it', () => {
+    expect(workspaceZoneLabel('Asia/Karachi')).toBe('PKT');
+    expect(workspaceZoneLabel(null)).toBe('UTC');
+    expect(workspaceZoneLabel('Asia/Dubai')).toBe('GMT+4');
   });
 });

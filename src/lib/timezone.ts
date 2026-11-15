@@ -75,6 +75,24 @@ export function formatWorkspaceDateTime(
 }
 
 /**
+ * The workspace zone as the owner reads it beside a date: "PKT" for
+ * Asia/Karachi, as {@link formatWorkspaceDateTime} names it, otherwise Intl's
+ * short name at `at` ("UTC", "GMT+4", "EST").
+ */
+export function workspaceZoneLabel(
+  timeZone: string | null | undefined,
+  at: Date = new Date()
+): string {
+  const zone = workspaceTimezone(timeZone);
+  if (zone === 'Asia/Karachi') return 'PKT';
+  return (
+    new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' })
+      .formatToParts(at)
+      .find((part) => part.type === 'timeZoneName')?.value ?? zone
+  );
+}
+
+/**
  * The first instant of `date` (`YYYY-MM-DD`) on the clock of a valid IANA
  * `zone`: usually local midnight, or the end of a daylight-saving gap that
  * swallows midnight. Every zone's offset lies within ±15 hours, so the local

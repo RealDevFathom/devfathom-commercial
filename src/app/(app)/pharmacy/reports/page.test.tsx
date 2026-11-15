@@ -241,7 +241,9 @@ describe('pharmacy report catalog filters', () => {
     });
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
     expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
-    expect(screen.getByText(/on the Asia\/Karachi clock/)).toBeVisible();
+    expect(
+      screen.getByText(/to the start of the day after the last, in PKT\. Finance/)
+    ).toBeVisible();
     expect(screen.queryByText(/UTC posting dates/)).toBeNull();
   });
 

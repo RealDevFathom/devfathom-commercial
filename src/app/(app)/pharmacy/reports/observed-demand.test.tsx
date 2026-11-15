@@ -73,7 +73,7 @@ describe('observed demand evidence', () => {
     const html = renderToStaticMarkup(
       <ObservedDemand report={karachi} failed={false} selected financial timeZone="Asia/Karachi" />
     );
-    expect(html).toContain('event dates 2026-11-09 to 2026-11-16 (end exclusive) in Asia/Karachi');
+    expect(html).toContain('event dates 2026-11-09 to 2026-11-16 (end exclusive) in PKT');
     expect(html).not.toContain('UTC event dates');
   });
 });
