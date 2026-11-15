@@ -108,6 +108,37 @@ describe('TopbarBreadcrumbs hydration', () => {
     await act(async () => root.unmount());
   });
 
+  it('names pharmacy accounts sub-pages by their page headings', async () => {
+    const pages = [
+      ['account-activity-bridge', 'Account activity bridge'],
+      ['account-code-reference', 'Account code reference'],
+      ['balance-sheet', 'Balance sheet'],
+      ['cash-flow', 'Classified cash-flow projection'],
+      ['cheque-maturity', 'Recorded cheque maturity'],
+      ['fiscal-exceptions', 'Fiscal exception evidence'],
+      ['journal-entry-lookup', 'Journal entry lookup'],
+      ['journal-evidence-export', 'Journal evidence export'],
+      ['profit-loss', 'Profit and loss'],
+      ['tax-profile-review', 'Tax profile review'],
+      ['trial-balance-control', 'Trial-balance control'],
+    ];
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    for (const [slug, label] of pages) {
+      navigation.pathname = `/pharmacy/accounts/${slug}`;
+      await act(async () => root.render(<TopbarBreadcrumbs />));
+      expect(container.querySelector('[aria-current="page"]'), slug).toHaveTextContent(label);
+      expect(container).toHaveTextContent('PharmacyAccounts');
+      expect(container.querySelector('a[href="/pharmacy/accounts"]')).toBeNull();
+    }
+    await act(async () => root.unmount());
+  });
+
   it('names the pharmacy SOP workspace "Procedures", not "Sop"', async () => {
     navigation.pathname = '/pharmacy/sop';
     const container = document.createElement('nav');
