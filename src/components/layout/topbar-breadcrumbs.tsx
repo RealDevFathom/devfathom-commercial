@@ -46,6 +46,8 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/accounts/trial-balance-control': 'Trial-balance control',
   // DEV-751: the pharmacy SOP workspace is named "Procedures" in the UI.
   '/pharmacy/sop': 'Procedures',
+  // DEV-111: the slug is hyphenated; the breadcrumb uses the page heading.
+  '/pharmacy/pharmacist-queue': 'Pharmacist queue',
 };
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
