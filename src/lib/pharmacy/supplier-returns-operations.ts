@@ -18,7 +18,11 @@
  * CONCURRENCY. `submitPurchaseReturn` locks the lot's AVAILABLE balance rows
  * FOR UPDATE before it measures what is still claimable, so two clerks claiming
  * the same last units serialize and the loser is refused rather than both
- * succeeding against a stale read.
+ * succeeding against a stale read. `allocateSupplierCredit` does the same for
+ * money: it locks the credit row and then the debit note row FOR UPDATE before
+ * it reads what is already allocated against either, so two competing
+ * allocations against one note (or from one credit) serialize and only one of
+ * them can spend the shared remainder.
  */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -407,6 +411,38 @@ export async function recordSupplierCredit(
 }
 
 /**
+ * Lock the supplier credit row, then the debit note row, FOR UPDATE. Every
+ * allocation takes them in that order, so two allocations never wait on each
+ * other in opposite order. Under READ COMMITTED the reads that follow the locks
+ * see every allocation a competing transaction committed while this one waited,
+ * so both ceilings are measured against the true remainder. A missing row
+ * simply locks nothing; the reads below still refuse it as NOT_FOUND.
+ */
+async function lockAllocationPair(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { supplierCreditId: string; debitNoteId: string }
+): Promise<void> {
+  await db.$queryRaw(
+    Prisma.sql`
+      SELECT credit."id"
+      FROM "pharmacy_supplier_credits" credit
+      WHERE credit."organizationId" = ${scope.organizationId}
+        AND credit."id" = ${input.supplierCreditId}
+      FOR UPDATE`
+  );
+  await db.$queryRaw(
+    Prisma.sql`
+      SELECT note."id"
+      FROM "pharmacy_debit_notes" note
+      WHERE note."organizationId" = ${scope.organizationId}
+        AND note."branchId" = ${scope.branchId}
+        AND note."id" = ${input.debitNoteId}
+      FOR UPDATE`
+  );
+}
+
+/**
  * Settle part or all of a debit note from a recorded credit. The two ceilings —
  * the credit's unallocated remainder and the note's outstanding balance — are
  * both enforced, and the actor who submitted the return may not be the one
@@ -417,6 +453,7 @@ export async function allocateSupplierCredit(
   scope: LedgerScope,
   input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
 ) {
+  await lockAllocationPair(db, scope, input);
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
       where: { id: input.supplierCreditId, organizationId: scope.organizationId },

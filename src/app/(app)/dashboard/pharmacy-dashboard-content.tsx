@@ -199,6 +199,9 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
+  // DEV-95: a refused branch read is an access boundary, not an outage. Say so
+  // plainly and offer no Retry that can only be refused again.
+  const branchesDenied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(branches.error?.data?.code ?? '');
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -268,11 +271,13 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data
             ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : branches.error
-              ? 'Branches could not be loaded.'
-              : branches.data?.branches.length === 0
-                ? 'Waiting for a reportable branch.'
-                : 'Loading today’s figures…'}
+            : branchesDenied
+              ? 'Branch reports are outside your access.'
+              : branches.error
+                ? 'Branches could not be loaded.'
+                : branches.data?.branches.length === 0
+                  ? 'Waiting for a reportable branch.'
+                  : 'Loading today’s figures…'}
         </p>
       </SectionCard>
       {editing ? (
@@ -351,7 +356,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           ) : null}
         </SectionCard>
       ) : null}
-      {branches.error ? (
+      {branchesDenied ? (
+        <SectionCard title="Command centre restricted">
+          <div role="status" className="space-y-3">
+            <StatusPill status="Restricted" tone="warning" />
+            <p className="text-sm text-text-body">
+              reports:operational is required. No protected values are shown, and the pharmacy tools
+              in your menu remain available.
+            </p>
+          </div>
+        </SectionCard>
+      ) : branches.error ? (
         <SectionCard title="Command centre unavailable">
           <div role="alert" className="space-y-3">
             <StatusPill status="Unavailable" tone="warning" />

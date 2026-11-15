@@ -56,7 +56,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
-  DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
+  // #1338: only cash needs the drawer. Shared by cash payments, cash refunds
+  // and drawer counts/close, so it names cash in or out, not one operation.
+  DRAWER_NOT_OPEN:
+    'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
   SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
@@ -84,6 +87,13 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
 const RAW_REASON_CODE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 
 /** Shown when a reason is unmapped, so no code can reach the counter. */
+/**
+ * #1338: shown on the Cash tender button while this counter's drawer is closed.
+ * Payment-specific, so it may say the other tenders still work.
+ */
+export const COUNTER_CASH_DRAWER_CLOSED_MESSAGE =
+  'Open the cash drawer to take cash. Other tenders do not need the drawer.';
+
 export const COUNTER_UNKNOWN_ERROR_MESSAGE =
   'That action could not be completed at the counter. Refresh and try again, or ask a supervisor.';
 

@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
+// DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: async () => true,
+  authenticateRefundPin: async () => ({ verified: true }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -158,7 +164,8 @@ beforeEach(() => {
 
 describe('Khata read and write permissions (#831)', () => {
   const finance: Permission[] = [{ capability: 'reports:financial', effect: 'ALLOW' }];
-  const refund = {
+  // DEV-647: the manager PIN is checked by the router and never reaches settlement.
+  const settlement = {
     branchId: 'branch-a',
     originalTenderId: 'tender-a',
     deviceId: 'device-a',
@@ -167,6 +174,7 @@ describe('Khata read and write permissions (#831)', () => {
     reason: 'Return',
     idempotencyKey: 'refund-a',
   };
+  const refund = { ...settlement, managerPin: '1234' };
 
   it('allows reports-only account, statement and tender-outcome reads without posting', async () => {
     const f = fixture(finance, 'EMPLOYEE');
@@ -266,7 +274,7 @@ describe('Khata read and write permissions (#831)', () => {
       expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
         f.db,
         { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
-        refund
+        settlement
       );
       expect(f.db.pharmacyKhataEvent.create).toHaveBeenLastCalledWith({
         data: expect.objectContaining({ kind: 'PAYMENT', amountMinor: 50 }),
@@ -344,6 +352,7 @@ const khataPaths: { name: string; run: (caller: Caller, branchId: string) => Pro
           amountMinor: 50,
           reason: 'Return',
           idempotencyKey: 'refund-a',
+          managerPin: '1234',
         }),
     },
   ];
@@ -565,6 +574,7 @@ describe('Khata router trust and recovery boundary', () => {
           amountMinor: 50,
           reason: 'Return',
           idempotencyKey: 'refund-a',
+          managerPin: '1234',
         })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(refundPharmacyTender).not.toHaveBeenCalled();
@@ -702,6 +712,7 @@ describe('Khata router trust and recovery boundary', () => {
       amountMinor: 50,
       reason: 'Return',
       idempotencyKey: 'refund-a',
+      managerPin: '1234',
     };
 
     await expect(f.caller().tender(input)).rejects.toMatchObject({
@@ -831,6 +842,7 @@ describe('Khata router trust and recovery boundary', () => {
       amountMinor: 50,
       reason: 'Return',
       idempotencyKey: 'refund-a',
+      managerPin: '1234',
     };
     await f.caller().refundTender(refund);
     await f.caller().refundTender(refund);

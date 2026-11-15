@@ -287,6 +287,33 @@ describe('audit evidence is ids only', () => {
     ]);
   });
 
+  it('passes the confirmed sizes through to the domain review (DEV-175)', async () => {
+    mocks.reviewMenuImportLine.mockResolvedValue({
+      id: 'line_1',
+      reviewStatus: 'ACCEPTED',
+      mergeProductId: null,
+      mergeVariantId: null,
+      reviewedAt: new Date('2026-08-27T00:00:00.000Z'),
+    });
+
+    await caller().reviewLine({
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      variants: [{ name: 'Small', priceAmount: '1200' }],
+    });
+
+    expect(mocks.reviewMenuImportLine.mock.calls[0]![1].variants).toEqual([
+      { name: 'Small', priceAmount: '1200' },
+    ]);
+    await expect(
+      caller().reviewLine({
+        lineId: 'line_1',
+        decision: 'ACCEPTED',
+        variants: [{ name: 'Small', priceAmount: '1200', currency: 'USD' }],
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
   it('says plainly when a commit was a replay that created nothing', async () => {
     mocks.commitMenuImport.mockResolvedValue({
       importId: 'imp_1',

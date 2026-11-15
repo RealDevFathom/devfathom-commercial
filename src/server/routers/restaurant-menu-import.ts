@@ -191,6 +191,18 @@ export const restaurantMenuImportRouter = router({
           note: z.string().max(1_000).nullable().optional(),
           mergeProductId: z.string().min(1).nullable().optional(),
           mergeVariantId: z.string().min(1).nullable().optional(),
+          // Every size the reviewer saw and confirmed; commit imports only these.
+          variants: z
+            .array(
+              z
+                .object({
+                  name: z.string().max(120),
+                  priceAmount: z.string().max(20).nullable(),
+                })
+                .strict()
+            )
+            .max(20)
+            .optional(),
         })
         .strict()
     )
