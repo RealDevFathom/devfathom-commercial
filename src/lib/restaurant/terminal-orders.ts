@@ -562,7 +562,11 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       },
       bills: {
         where: { status: { not: 'VOID' } },
-        select: { serviceChargeTotal: true },
+        select: {
+          serviceChargeTotal: true,
+          splitKind: true,
+          lines: { select: { orderItemId: true } },
+        },
       },
       deliveryFulfillment: { select: { deliveryFeeSnapshot: true, status: true } },
     },
@@ -576,15 +580,29 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
   );
   const at = new Date();
   const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
+  // Each live bill freezes service on its own payable (post-comp) basis at its
+  // pinned rate. Items not yet on a live bill still carry the live quoted
+  // service, so a partly cut order shows billed service plus unbilled service.
+  // Fractional bills each cover the whole order, mirroring settlement.
+  const billedItemIds = new Set(
+    order.bills.flatMap((bill) => bill.lines.map((l) => l.orderItemId))
+  );
+  const fractional =
+    order.bills.length > 0 && order.bills.every((bill) => bill.splitKind === 'FRACTIONAL');
+  const unbilledItems = fractional
+    ? []
+    : purchasedItems.filter((item) => !billedItemIds.has(item.id));
+  const toDraftLine = (item: (typeof purchasedItems)[number]) => ({
+    id: item.id,
+    unitPrice: item.unitPrice.toString(),
+    quantity: item.quantity,
+    modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
+  });
+  const serviceChargeRate = order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0';
   const quoted = quoteDraftCheckBreakdown({
     at,
-    lines: purchasedItems.map((item) => ({
-      id: item.id,
-      unitPrice: item.unitPrice.toString(),
-      quantity: item.quantity,
-      modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
-    })),
-    serviceChargeRate: order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
+    lines: purchasedItems.map(toDraftLine),
+    serviceChargeRate,
     deliveryFee: (
       order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)
     ).toString(),
@@ -594,6 +612,14 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     (total, bill) => total.plus(bill.serviceChargeTotal),
     new Prisma.Decimal(0)
   );
+  const unbilledServiceCharge =
+    unbilledItems.length === 0
+      ? '0'
+      : quoteDraftCheckBreakdown({
+          at,
+          lines: unbilledItems.map(toDraftLine),
+          serviceChargeRate,
+        }).serviceCharge;
   const settlement = order.deliveryFulfillment
     ? await evaluateOrderSettlement(db, order.id)
     : null;
@@ -649,7 +675,10 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     totals: {
       subtotal: money(deriveSubtotal(purchasedItems)),
       tax: quoted.tax,
-      serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
+      serviceCharge:
+        order.bills.length > 0
+          ? money(billedServiceCharge.plus(unbilledServiceCharge))
+          : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };
