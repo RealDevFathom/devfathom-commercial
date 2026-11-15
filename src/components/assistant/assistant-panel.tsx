@@ -262,6 +262,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
       <SheetContent
         side="right"
         showCloseButton={false}
+        initialFocus={() => {
+          const input = inputRef.current;
+          return input && !input.disabled ? input : true;
+        }}
         className="gap-0 p-0 motion-reduce:transition-none motion-reduce:transform-none"
         style={{ width: '100%', maxWidth: 460 }}
       >
@@ -315,7 +319,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                   ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
                   : requestError === 'configuration'
                     ? "Ask Fathom isn't set up yet, contact support."
-                    : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
+                    : "Ask Fathom can't answer right now. Your question is saved. Try again in a few minutes; if it keeps happening, contact support."}
               </p>
               {requestError === 'provider' && (
                 <Button
@@ -327,7 +331,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
                     inputRef.current?.focus();
                   }}
                 >
-                  Review and retry
+                  Try again
                 </Button>
               )}
             </div>
@@ -771,7 +775,9 @@ function EmptyState({
       </p>
       {entry.canChat && entry.suggestions.length === 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
-          No suggested actions are available for your current access.
+          {entry.accessLimited
+            ? 'No suggested actions are available for your current access.'
+            : 'Type a question below to get started.'}
         </p>
       )}
       <div className="mt-5 grid w-full gap-2">

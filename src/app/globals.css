@@ -1694,6 +1694,39 @@
     align-items: start;
   }
 }
+/* DEV-674: sign-in fits one desktop screen. The shell is exactly one viewport
+   tall, the hero compacts to fit it, and the form panel scrolls on its own only
+   when its content is taller than the screen. Registration keeps the long-form
+   sticky layout above; phones keep normal page scrolling. */
+@media (min-width: 1024px) {
+  .studio-auth:not(.studio-auth-register) {
+    block-size: 100dvh;
+  }
+  .studio-auth:not(.studio-auth-register) .studio-auth-hero {
+    block-size: 100dvh;
+    min-block-size: 0;
+    padding-block: clamp(24px, 5dvh, 48px);
+  }
+  .studio-auth:not(.studio-auth-register) .studio-auth-main {
+    block-size: 100dvh;
+    min-block-size: 0;
+    overflow-y: auto;
+    align-items: safe center;
+  }
+}
+@media (min-width: 1024px) and (max-height: 800px) {
+  .studio-auth:not(.studio-auth-register) .studio-auth-main {
+    padding-block: 16px;
+  }
+  .studio-auth:not(.studio-auth-register) .studio-auth-hero [data-sample-extra] {
+    display: none;
+  }
+}
+@media (min-width: 1024px) and (max-height: 680px) {
+  .studio-auth:not(.studio-auth-register) .studio-auth-hero [data-hero-description] {
+    display: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .studio-auth *,
   .studio-auth *::before,

@@ -52,6 +52,22 @@ describe('staged medicine review UI', () => {
     expect(mocks.batches).toHaveBeenCalledWith({ branchId: 'branch_a', page: 1 });
     expect(screen.getByText('Existing workbench')).toBeTruthy();
   });
+  it('builds the request context once and starts explicit-selection loads concurrently', async () => {
+    let releaseBranches: (value: unknown) => void = () => undefined;
+    mocks.branches.mockReturnValue(new Promise((resolve) => (releaseBranches = resolve)));
+    const pending = MedicinePage({
+      searchParams: Promise.resolve({
+        branchId: 'branch_a',
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+      }),
+    });
+    await vi.waitFor(() => expect(mocks.rows).toHaveBeenCalled());
+    expect(mocks.batches).toHaveBeenCalled();
+    releaseBranches([{ id: 'branch_a', name: 'Branch A' }]);
+    render(await pending);
+    expect(mocks.context).toHaveBeenCalledTimes(1);
+  });
   it('defaults to an authorized branch and explains workflow states', async () => {
     render(await Page({ searchParams: Promise.resolve({}) }));
     expect(screen.getByRole('heading', { level: 1, name: 'Staged medicines' })).toBeTruthy();

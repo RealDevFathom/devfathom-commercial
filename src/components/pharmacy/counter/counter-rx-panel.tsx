@@ -9,6 +9,7 @@ import {
   imageBase64,
   isImageType,
 } from '@/components/pharmacy/dispensing/prescriptions-console';
+import { PRESCRIPTION_DIRECTORY_ID } from '@/components/pharmacy/dispensing/prescription-directory';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -866,7 +867,18 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </p>
               ) : null}
               {state === 'ready' && candidates.length === 0 ? (
-                <p className="text-sm text-text-muted">No patient matches that search.</p>
+                <p className="text-sm text-text-muted">
+                  No patient matches that search.{' '}
+                  <Link
+                    href={`/pharmacy/prescriptions#${PRESCRIPTION_DIRECTORY_ID}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
+                  >
+                    Add the patient or prescriber in Prescriptions (opens in a new tab)
+                  </Link>
+                  . This bill stays open.
+                </p>
               ) : null}
 
               {candidates.map((candidate) => (

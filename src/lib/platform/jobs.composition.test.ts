@@ -19,6 +19,8 @@ const m = vi.hoisted(() => ({
   consent: vi.fn(),
   archiveCreate: vi.fn(),
   archiveDelete: vi.fn(),
+  platformAudit: vi.fn(),
+  exportJobs: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -36,9 +38,11 @@ const db = {
     updateMany: m.updateMany,
     update: m.update,
     findUnique: m.findJob,
+    findMany: m.exportJobs,
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
+  platformAuditLog: { create: m.platformAudit },
   organizationDeployment: { updateMany: m.deployment },
   platformSupportSession: { updateMany: m.support },
   pharmacyCustomer: { findMany: m.consent },
@@ -53,10 +57,22 @@ function job(type: string, extra = {}) {
     payload: { arbitrary: true },
     attempts: 1,
     maxAttempts: 3,
+    requestedById: 'platform-admin-1',
     ...extra,
   };
 }
-function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
+const AUDIT_SUMMARY = {
+  rows: 2,
+  earliest: new Date('2026-01-02T03:04:05.000Z'),
+  latest: new Date('2026-09-10T11:12:13.000Z'),
+  digest: 'abc123',
+};
+const NO_AUDIT = { rows: 0, earliest: null, latest: null, digest: null };
+function queue(
+  item: ReturnType<typeof job>,
+  dependencies: unknown[] = [],
+  auditSummary: unknown = NO_AUDIT
+) {
   let claimed = false;
   m.query.mockImplementation(async (sql: { text?: string; strings?: string[] }) => {
     const text = sql.text ?? sql.strings?.join('') ?? '';
@@ -66,6 +82,7 @@ function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
       return [{ id: item.id }];
     }
     if (text.includes('WITH tenant_tables')) return dependencies;
+    if (text.includes('FROM "audit_logs"')) return [auditSummary];
     return [];
   });
   m.update.mockImplementation(async ({ data }) => (data.status === 'RUNNING' ? item : data));
@@ -76,6 +93,7 @@ beforeEach(() => {
   vi.setSystemTime(now);
   m.scope.mockImplementation(async (work) => work(db));
   m.query.mockResolvedValue([]);
+  m.exportJobs.mockResolvedValue([]);
   m.updateMany.mockResolvedValue({ count: 2 });
   m.findJob.mockResolvedValue({ status: 'RUNNING' });
   m.createMany.mockResolvedValue({ count: 0 });
@@ -87,6 +105,7 @@ beforeEach(() => {
   m.consent.mockResolvedValue([]);
   m.archiveCreate.mockResolvedValue({ count: 0 });
   m.archiveDelete.mockResolvedValue({ count: 0 });
+  m.platformAudit.mockResolvedValue({ id: 'purge-record-1' });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -101,6 +120,59 @@ describe('composed platform worker boundaries', () => {
       where: { expiresAt: { lte: now } },
     });
     expect(m.archiveCreate).not.toHaveBeenCalled();
+  });
+
+  const purgeScans = () =>
+    m.query.mock.calls.filter(([sql]) =>
+      String(sql?.text ?? '').includes('pharmacy_retention_days(')
+    );
+
+  it('enqueues exactly one platform-wide pharmacy record retention purge per UTC hour', async () => {
+    await processPlatformJobs();
+    await processPlatformJobs();
+    const keys = m.createMany.mock.calls.flatMap(([{ data }]) =>
+      data
+        .filter((row: { type: string }) => row.type === 'PHARMACY_RECORD_RETENTION_V1')
+        .map((row: { idempotencyKey: string; organizationId: unknown }) => [
+          row.idempotencyKey,
+          row.organizationId,
+        ])
+    );
+    expect(keys).toEqual([
+      ['pharmacy.record.retention.v1:2026-10-12T01', null],
+      ['pharmacy.record.retention.v1:2026-10-12T01', null],
+    ]);
+    expect(m.createMany.mock.calls.every(([args]) => args.skipDuplicates === true)).toBe(true);
+    // Enqueueing never runs the purge inline.
+    expect(purgeScans()).toHaveLength(0);
+  });
+
+  it('runs the retention purge as its own job with the long timeout', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+    // One scan per purgeable class: register, prescription, fiscal. Never audit_logs.
+    expect(purgeScans()).toHaveLength(3);
+    expect(purgeScans().some(([sql]) => String(sql?.text ?? '').includes('"audit_logs" r'))).toBe(
+      false
+    );
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
+  });
+
+  it('retries a failed retention purge without affecting other work', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    const query = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql: { text?: string }) => {
+      if (String(sql?.text ?? '').includes('pharmacy_retention_days(')) {
+        throw new Error('retention purge timed out');
+      }
+      return query(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({
+      recovered: 2,
+      claimed: 1,
+      retried: 1,
+      failed: 0,
+    });
   });
 
   it('propagates enqueue failure before stale recovery or any claim', async () => {
@@ -182,6 +254,11 @@ describe('composed platform worker boundaries', () => {
         organizationId: 'tenant-b',
         type: 'CAMERA_EVIDENCE_RETENTION_V1',
         idempotencyKey: 'camera.evidence.retention.v1:tenant-b:2026-10-12T01',
+      },
+      {
+        organizationId: null,
+        type: 'PHARMACY_RECORD_RETENTION_V1',
+        idempotencyKey: 'pharmacy.record.retention.v1:2026-10-12T01',
       },
     ]);
   });
@@ -306,4 +383,106 @@ describe('composed platform worker boundaries', () => {
       expect(m.organizationUpdate).not.toHaveBeenCalled();
     }
   );
+  it('writes the permanent platform record of the audit purge before deleting any tenant row', async () => {
+    queue(
+      job('PURGE_DATA', { payload: { reason: 'Contract ended; retention elapsed.' } }),
+      [{ tableName: 'audit_logs', parentTable: null, nullableColumns: [] }],
+      AUDIT_SUMMARY
+    );
+    m.execute.mockResolvedValue(2);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.platformAudit).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'tenant-a',
+        actorPlatformUserId: 'platform-admin-1',
+        action: 'organization.audit_logs.purge',
+        targetType: 'AuditLog',
+        requestId: 'job-1',
+        reason: 'Contract ended; retention elapsed.',
+        metadata: {
+          jobId: 'job-1',
+          table: 'audit_logs',
+          rows: 2,
+          earliestCreatedAt: '2026-01-02T03:04:05.000Z',
+          latestCreatedAt: '2026-09-10T11:12:13.000Z',
+          idDigest: 'sha256:abc123',
+        },
+      },
+      select: { id: true },
+    });
+    // `$queryRaw` is called both as a tag (strings, ...values) and with Prisma.sql.
+    const sql = m.query.mock.calls.map(([q, ...rest]) => {
+      if (Array.isArray(q)) return { text: q.join('?'), values: rest };
+      const query = q as { strings?: string[]; values?: unknown[] };
+      return { text: query.strings?.join('?') ?? '', values: query.values ?? [] };
+    });
+    const nameRecord = sql.findIndex(
+      ({ text, values }) =>
+        text.includes("set_config('app.audit_purge_record_id'") && values[0] === 'purge-record-1'
+    );
+    expect(nameRecord).toBeGreaterThan(-1);
+    const recordCall = m.platformAudit.mock.invocationCallOrder[0];
+    const nameCall = m.query.mock.invocationCallOrder[nameRecord];
+    const deleteCall = m.execute.mock.invocationCallOrder[0];
+    expect(recordCall).toBeLessThan(nameCall);
+    expect(nameCall).toBeLessThan(deleteCall);
+    expect(m.execute.mock.calls).toEqual([
+      ['DELETE FROM "audit_logs" WHERE "organizationId" = $1', 'tenant-a'],
+    ]);
+  });
+  it('falls back to the retention reason when the purge request carried none', async () => {
+    queue(job('PURGE_DATA', { payload: {} }), []);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    expect(m.platformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reason: 'Retention window elapsed and the organization is being purged.',
+        }),
+      })
+    );
+  });
+  it('fails a purge with no platform actor at once, before recording or deleting anything', async () => {
+    // First attempt of three: no retry can supply the missing actor.
+    queue(job('PURGE_DATA', { attempts: 1, requestedById: null }), [
+      { tableName: 'audit_logs', parentTable: null, nullableColumns: [] },
+    ]);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({
+      failed: 1,
+      retried: 0,
+      succeeded: 0,
+    });
+    expect(m.platformAudit).not.toHaveBeenCalled();
+    expect(m.execute).not.toHaveBeenCalled();
+    expect(m.organizationUpdate).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          error: expect.stringContaining(
+            'A purge requires the platform actor who requested it: this job names no requesting platform administrator.'
+          ),
+        }),
+      })
+    );
+  });
+  it('rolls the purge back when audit rows arrive between the record and the delete', async () => {
+    queue(
+      job('PURGE_DATA', { attempts: 1 }),
+      [{ tableName: 'audit_logs', parentTable: null, nullableColumns: [] }],
+      AUDIT_SUMMARY
+    );
+    // The record summarised two rows; a third was written before the DELETE.
+    m.execute.mockResolvedValue(3);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ retried: 1, succeeded: 0 });
+    expect(m.organizationUpdate).not.toHaveBeenCalled();
+    expect(m.lifecycle).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'QUEUED',
+          error: 'Audit rows changed during the purge: recorded 2, deleted 3.',
+        }),
+      })
+    );
+  });
 });

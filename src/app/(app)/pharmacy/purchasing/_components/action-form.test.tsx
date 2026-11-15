@@ -40,6 +40,22 @@ describe('purchasing outcome delivery', () => {
     expect(action.mock.calls[0][0].get('decision')).toBe('approve');
   });
 
+  it('accepts a rejected reorder outcome and unlocks the form for correction (DEV-678)', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue(
+        '/pharmacy/purchasing/reorder?kind=error&outcome=rejected&notice=Keep+at+least+one+line&field=reference&branch=b1'
+      );
+    setup(action);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(screen.getByLabelText('Reference')).toHaveAccessibleDescription(
+      'Keep at least one line'
+    );
+    expect(screen.getByRole('button')).not.toBeDisabled();
+  });
+
   it('retains edited values and focuses the invalid field on server validation failure', async () => {
     const action = vi
       .fn()

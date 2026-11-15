@@ -8,6 +8,8 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { workspaceToday } from '@/lib/timezone';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import {
   pharmacyRegulatoryFixture,
   retirePharmacyRegulatoryRules,
@@ -33,9 +35,20 @@ const ids = {
   userDenied: `user_r518_udeny_${suffix}`,
   /** Role DENYs pharmacy:dispense; a user override ALLOWs it. */
   roleDenied: `user_r518_rdeny_${suffix}`,
+  /** DEV-622: the shipped role templates, persisted exactly as onboarding creates them. */
+  templatePharmacist: `user_r518_tpharm_${suffix}`,
+  templateCashier: `user_r518_tcash_${suffix}`,
+  pharmacistCashier: `user_r518_combined_${suffix}`,
 };
+/** The grants a shipped pharmacy role template materialises. */
+const templateGrants = (key: string): Array<[string, 'ALLOW' | 'DENY']> =>
+  PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => [
+    capability,
+    'ALLOW',
+  ]);
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
-const businessDate = new Date('2026-10-22T00:00:00.000Z');
+// DEV-630: drawers and tenders book on the workspace's current business day (UTC here).
+const businessDate = new Date(`${workspaceToday('UTC')}T00:00:00.000Z`);
 const deviceFor = (userId: string) => `device-${userId}`;
 /** DEV-725: bills start on a counter device with an OPEN drawer; the pharmacist opens this one. */
 const counterDevice = () => deviceFor(ids.pharmacist);
@@ -265,6 +278,9 @@ beforeAll(async () => {
         ],
         override: 'ALLOW',
       },
+      { id: ids.templatePharmacist, role: templateGrants('pharmacist') },
+      { id: ids.templateCashier, role: templateGrants('cashier') },
+      { id: ids.pharmacistCashier, role: templateGrants('pharmacist-cashier') },
     ];
     for (const user of users) {
       await tx.organizationRole.create({
@@ -375,7 +391,7 @@ beforeAll(async () => {
         openingFloatMinor: 0,
       })
     );
-  for (const userId of [ids.cashier, ids.pharmacist]) await openDrawer(userId);
+  for (const userId of [ids.cashier, ids.pharmacist, ids.templateCashier]) await openDrawer(userId);
   // DEV-279 / DEV-659: a drawer takes the cash-tender gate. Its counter family
   // check includes pharmacy:dispense, and an explicit DENY there (user over a role
   // ALLOW, or role over a user ALLOW) revokes the family. So neither user can open
@@ -414,6 +430,63 @@ describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fi
     const byPoints = await pharmacistSale({ customer: true });
     await expect(payInPoints(ids.pharmacist, byPoints)).resolves.toMatchObject({ settled: true });
     expect(await cart(byPoints.saleId)).toMatchObject({ status: 'COMPLETED' });
+  });
+
+  // DEV-622 (#1241, owner decision 15 Nov): the default templates keep their limits, and the
+  // opt-in Pharmacist and cashier role lets one person finish a prescription sale alone.
+  describe('shipped role templates (DEV-622)', () => {
+    it('lets the Pharmacist and cashier role sell a prescription line end to end', async () => {
+      const combined = ids.pharmacistCashier;
+      await act(combined, (api) =>
+        api.openDrawer({
+          branchId: ids.branch,
+          deviceId: deviceFor(combined),
+          businessDate,
+          openingFloatMinor: 0,
+        })
+      );
+      const sale = await act(combined, async (api) => {
+        const created = await api.create({ branchId: ids.branch, deviceId: deviceFor(combined) });
+        await api.addLine(rxLine(created.id));
+        const bill = await api.counterCart({ branchId: ids.branch, saleId: created.id });
+        return { saleId: created.id, netMinor: bill.totals.netMinor };
+      });
+      expect(sale.netMinor).toBeGreaterThan(0);
+      await expect(payInCash(combined, sale)).resolves.toMatchObject({ settled: true });
+      expect(await cart(sale.saleId)).toMatchObject({
+        status: 'COMPLETED',
+        totals: { tenderedMinor: sale.netMinor },
+      });
+    });
+
+    it('still refuses the default Pharmacist at payment and at the drawer', async () => {
+      const pharmacist = ids.templatePharmacist;
+      const NO_PERMISSION = {
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      };
+      await expect(
+        act(pharmacist, (api) =>
+          api.openDrawer({
+            branchId: ids.branch,
+            deviceId: deviceFor(pharmacist),
+            businessDate,
+            openingFloatMinor: 0,
+          })
+        )
+      ).rejects.toMatchObject(NO_PERMISSION);
+      // A prescription bill the default Pharmacist cannot pay, whether for cash or points.
+      const sale = await pharmacistSale();
+      await expect(payInCash(pharmacist, sale)).rejects.toMatchObject(NO_PERMISSION);
+      expect(await cart(sale.saleId)).toMatchObject({
+        status: 'OPEN',
+        totals: { tenderedMinor: 0 },
+      });
+    });
+
+    it('still refuses the default Cashier on a prescription line', async () => {
+      await expectRefusedEverywhere(ids.templateCashier);
+    });
   });
 
   describe('with an owner-policy row that says allow', () => {

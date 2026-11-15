@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { capabilityProcedure, router } from '../trpc';
+import { can, subjectFromSession } from '@/lib/abac';
+import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
@@ -45,20 +46,41 @@ export const pharmacyDispensingRouter = router({
       },
     }),
   })),
-  substitutionWorkspace: dispense.query(async ({ ctx }) => ({
-    lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
-      orderBy: { requestedAt: 'desc' },
-      include: {
-        line: {
-          include: {
-            medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
-            presentation: true,
-            prescription: { include: { patient: true } },
+  // DEV-35: the substitution workspace opens for a dispensing pharmacist or a
+  // Pharmacy Safety holder (the same pair the rail offers it to). Only a
+  // dispensing pharmacist may record evidence (`recordSubstitution`), so the
+  // read says which of the two this caller is.
+  substitutionWorkspace: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const subject = subjectFromSession(user);
+    const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+    const canRecord =
+      Boolean(user.id) && (await can(subject, 'pharmacy:dispense', undefined, options));
+    if (
+      !canRecord &&
+      !(Boolean(user.id) && (await can(subject, 'pharmacy:safety', undefined, options)))
+    ) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    }
+    return {
+      canRecord,
+      lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+        orderBy: { requestedAt: 'desc' },
+        include: {
+          line: {
+            include: {
+              medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
+              presentation: true,
+              prescription: { include: { patient: true } },
+            },
           },
         },
-      },
-    }),
-  })),
+      }),
+    };
+  }),
   enqueueReview: dispense
     .input(
       z.object({ prescriptionLineId: z.string().min(1), saleLineId: z.string().min(1) }).strict()

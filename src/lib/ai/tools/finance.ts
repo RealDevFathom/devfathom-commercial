@@ -24,7 +24,8 @@ import {
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
-import { multiplyMoney, roundMoney } from '@/lib/finance/money';
+import { invoiceTotals, invoiceTotalsError } from '@/lib/finance/invoice-totals';
+import { isPersistableMoney, multiplyMoney } from '@/lib/finance/money';
 import { paymentLedgerDeleteError, paymentLedgerUpdateError } from '@/lib/finance/payment-ledger';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
@@ -64,8 +65,6 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
   }
   return next;
 }
-
-const round2 = roundMoney;
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -288,7 +287,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.getInvoice = tool({
     description:
-      'Full detail for ONE invoice: client + primary contact, project, line items, subtotal/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
+      'Full detail for ONE invoice: client + primary contact, project, line items, subtotal/discount/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
     inputSchema: z.object({
       invoiceNumber: z.string().nullish().describe('Invoice number, e.g. "INV-2026-001"'),
       clientName: z
@@ -363,6 +362,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         currency: invoice.currency,
         subtotal: Number(invoice.subtotal),
         tax: Number(invoice.tax),
+        discount: Number(invoice.discount),
         total: Number(invoice.total),
         dueDate: invoice.dueDate,
         sentAt: invoice.sentAt,
@@ -456,7 +456,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.createInvoice = tool({
     description:
-      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), an optional tax amount, currency and due date. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
+      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), optional tax and fixed discount amounts, currency and due date. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
     inputSchema: z.object({
       clientName: z.string().describe('Client to bill (fuzzy name match)'),
       projectName: z.string().nullish().describe('Optional project to attach the invoice to'),
@@ -471,12 +471,26 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         .min(1)
         .describe('Line items; each amount = quantity × unitPrice'),
       tax: nonNegativeMoney().nullish().describe('Tax amount to add to the subtotal (default 0)'),
+      discount: nonNegativeMoney()
+        .nullish()
+        .describe(
+          'Fixed discount deducted from subtotal before adding tax (default 0; at most subtotal)'
+        ),
       currency: z.enum(['USD', 'PKR']).nullish().describe('Default USD'),
       dueDate: z.string().describe('ISO date the invoice is due'),
       notes: z.string().nullish(),
     }),
     needsApproval: true,
-    execute: async ({ clientName, projectName, items, tax, currency, dueDate, notes }) => {
+    execute: async ({
+      clientName,
+      projectName,
+      items,
+      tax,
+      discount,
+      currency,
+      dueDate,
+      notes,
+    }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
 
       const rc = await resolveClient(clientName);
@@ -501,9 +515,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         rate: it.unitPrice,
         amount: multiplyMoney(it.quantity, it.unitPrice),
       }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const taxAmount = round2(tax ?? 0);
-      const total = round2(subtotal + taxAmount);
+      const totals = invoiceTotals(
+        lineItems.map((it) => it.amount),
+        tax ?? 0,
+        discount ?? 0
+      );
+      const totalsError = invoiceTotalsError(totals);
+      if (totalsError) return { error: totalsError };
+      if (lineItems.some((it) => !isPersistableMoney(it.amount))) {
+        return { error: 'Derived invoice amount exceeds the allowed range' };
+      }
+      const { subtotal, tax: taxAmount, discount: discountAmount, total } = totals;
       const invCurrency = currency ?? 'USD';
 
       // Same per-organization, per-year INV sequence as the tRPC mutation. The
@@ -518,6 +540,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
             items: lineItems,
             subtotal,
             tax: taxAmount,
+            discount: discountAmount,
             total,
             currency: invCurrency,
             status: 'DRAFT',
@@ -558,6 +581,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         project: resolvedProject ?? null,
         subtotal,
         tax: taxAmount,
+        discount: discountAmount,
         total,
         currency: invCurrency,
         status: invoice.status,

@@ -13,6 +13,7 @@ import {
   PHARMACY_LIMIT_KEYS,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
+  PHARMACY_OPT_IN_ROLE_KEYS,
   PHARMACY_ROLE_TEMPLATES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_CAPABILITIES,
@@ -126,6 +127,7 @@ describe('pharmacy registry (PLAT-01)', () => {
       'pharmacist',
       'manager',
       'cashier',
+      'pharmacist-cashier',
       'procurement',
       'inventory',
       'finance',
@@ -517,11 +519,13 @@ describe('optional pharmacy Owner / Operator', () => {
 
   it('preserves all eight standard roles and their intended grants', () => {
     expect(
-      PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
-        key: role.key,
-        // DEV-751 SOP grants are appended separately and pinned below.
-        capabilities: role.capabilities.filter((grant) => !grant.startsWith('sop:')),
-      }))
+      PHARMACY_ROLE_TEMPLATES.filter((role) => !PHARMACY_OPT_IN_ROLE_KEYS.has(role.key)).map(
+        (role) => ({
+          key: role.key,
+          // DEV-751 SOP grants are appended separately and pinned below.
+          capabilities: role.capabilities.filter((grant) => !grant.startsWith('sop:')),
+        })
+      )
     ).toEqual([
       {
         key: 'owner',
@@ -543,9 +547,77 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },
-      { key: 'finance', capabilities: ['reports:financial'] },
+      { key: 'finance', capabilities: ['reports:operational', 'reports:financial'] },
       { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
+  });
+
+  // DEV-622 (#1241, owner decision 15 Nov): one person can dispense and take payment.
+  describe('opt-in Pharmacist and cashier role', () => {
+    const byKey = (key: string) => PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    const base = (key: string) =>
+      byKey(key).capabilities.filter((grant) => !grant.startsWith('sop:'));
+
+    it('holds exactly the default Pharmacist and Cashier grants together', () => {
+      const combined = byKey('pharmacist-cashier');
+      expect(combined).toMatchObject({ name: 'Pharmacist and cashier', isSystem: true });
+      expect(combined.description).toMatch(/one-person shop/);
+      expect(base('pharmacist-cashier')).toEqual([
+        'pharmacy:dispense',
+        'pharmacy:catalogue-review',
+        'pharmacy:close',
+        'pharmacy:counter',
+        'pharmacy:orders',
+      ]);
+      expect(new Set(base('pharmacist-cashier'))).toEqual(
+        new Set([...base('pharmacist'), ...base('cashier')])
+      );
+      // DEV-751's approved SOP grant list is unchanged; the owner can add SOP actions.
+      expect(combined.capabilities).toEqual(base('pharmacist-cashier'));
+    });
+
+    it('grants no management, refund, safety or purchasing power', () => {
+      for (const action of [
+        'pharmacy:manage',
+        'pharmacy:safety',
+        'pharmacy:procurement',
+        'pharmacy:procurement-approve',
+        'pharmacy:inventory',
+        'reports:financial',
+      ])
+        expect(
+          byKey('pharmacist-cashier').capabilities.some((grant) =>
+            capabilityMatches(grant, action)
+          ),
+          action
+        ).toBe(false);
+    });
+
+    it('is opt-in and never a pharmacy activation prerequisite', () => {
+      expect([...PHARMACY_OPT_IN_ROLE_KEYS]).toEqual(['owner-operator', 'pharmacist-cashier']);
+      for (const vertical of ['AGENCY', 'RESTAURANT', 'HOSPITALITY'] as const)
+        expect(roleTemplatesForVertical(vertical).map((role) => role.key)).not.toContain(
+          'pharmacist-cashier'
+        );
+    });
+  });
+
+  // DEV-519: the pharmacy financial reports (Reports command centre sections,
+  // supplier-credit follow-up) are reached through the Reports rail entry and
+  // page, which check `reports:operational`. A template granting financial
+  // reports must also grant the access those pages check.
+  it('grants every financial-reports template the operational reports access its pages check', () => {
+    const financial = PHARMACY_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.some((grant) => capabilityMatches(grant, 'reports:financial'))
+    );
+    expect(financial.map((role) => role.key)).toEqual(
+      expect.arrayContaining(['owner', 'owner-operator', 'finance'])
+    );
+    for (const role of financial) {
+      expect(
+        role.capabilities.some((grant) => capabilityMatches(grant, 'reports:operational'))
+      ).toBe(true);
+    }
   });
 });
 

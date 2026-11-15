@@ -37,6 +37,7 @@ import {
   formatReceiptDate,
   formatReceiptIssuedAt,
   receiptCashReceived,
+  receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLocale,
   type PharmacyReceiptTaxIdentity,
@@ -93,6 +94,7 @@ function escPosFacts(
     issuedAt: `${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
+      const promotion = receiptPromotionLabel(line, 'en');
       return [
         lineIdentity(line),
         counterLinePricing(line, 'en', 'x'),
@@ -103,6 +105,7 @@ function escPosFacts(
             expiry ? formatReceiptDate(expiry) : 'Unavailable'
           } | Tablets/units: ${allocation.canonicalUnits}`;
         }),
+        ...(promotion ? [promotion] : []),
         `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
       ].join('\n');
     }),

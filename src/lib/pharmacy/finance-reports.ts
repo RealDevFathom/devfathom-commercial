@@ -89,7 +89,55 @@ export async function perpetualValuation(
      ORDER BY line."branchId", line."lotId", line."locationId"`);
 }
 
-export type MarginDimension = 'line' | 'batch' | 'product' | 'branch';
+/**
+ * Inventory value posted without a lot, e.g. opening stock migrated as one
+ * branch total. Sales from those lots still credit inventory per lot, so the
+ * per-lot rows above can read negative while the branch's stock is not; this
+ * amount is what reconciles them.
+ */
+export async function unallocatedInventoryValue(
+  db: ScopedDb,
+  scope: ReportScope,
+  at: Date
+): Promise<bigint> {
+  const [row] = await db.$queryRaw<{ valueMinor: bigint }[]>(Prisma.sql`
+    SELECT COALESCE(SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor"::bigint ELSE -line."amountMinor"::bigint END), 0)::bigint AS "valueMinor"
+      FROM "finance_journal_lines" line
+      JOIN "finance_journal_entries" entry
+        ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."accountCode" IN ('INVENTORY', 'INVENTORY_IN_TRANSIT')
+       AND line."lotId" IS NULL
+       AND entry."occurredAt" <= ${at}
+       ${branchFilter(scope)}`);
+  return BigInt(row?.valueMinor ?? 0);
+}
+
+/**
+ * Currencies the journal entries behind a report were posted in. Amounts in
+ * these reports are summed across entries, so the report can only name a
+ * currency when every contributing entry shares it.
+ */
+export async function ledgerCurrencies(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { accountCodes: readonly string[]; from?: Date; to: Date; inclusive?: boolean }
+): Promise<string[]> {
+  const rows = await db.$queryRaw<{ currency: string }[]>(Prisma.sql`
+    SELECT DISTINCT entry."currency"::text AS "currency"
+      FROM "finance_journal_lines" line
+      JOIN "finance_journal_entries" entry
+        ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."accountCode"::text IN (${Prisma.join(input.accountCodes)})
+       ${input.from ? Prisma.sql`AND entry."occurredAt" >= ${input.from}` : Prisma.empty}
+       ${input.inclusive ? Prisma.sql`AND entry."occurredAt" <= ${input.to}` : Prisma.sql`AND entry."occurredAt" < ${input.to}`}
+       ${branchFilter(scope)}
+     ORDER BY 1`);
+  return rows.map((row) => row.currency);
+}
+
+export type MarginDimension = 'line' | 'batch' | 'product' | 'branch' | 'productClass';
 
 export type MarginRow = {
   key: string | null;
@@ -100,7 +148,8 @@ export type MarginRow = {
 };
 
 /**
- * FIN-03: gross margin by sale line, manufacturing batch, product or branch.
+ * FIN-03: gross margin by sale line, manufacturing batch, product, branch or product class
+ * (#718: medicine vs non-drug retail).
  *
  * Gross margin is `revenue - discount - cost`: revenue is recognised gross and
  * the discount is subtracted explicitly, so a report can always say how much of
@@ -129,7 +178,15 @@ export function grossMarginQuery(
     batch: Prisma.sql`lot."manufacturingBatchId"`,
     product: Prisma.sql`line."productId"`,
     branch: Prisma.sql`line."branchId"`,
+    // #718: medicine vs non-drug retail margin, derived from the existing FRONT_SHOP family.
+    // A leg with no catalogue product stays unclassified (NULL) rather than guessed.
+    productClass: Prisma.sql`CASE WHEN product."id" IS NULL THEN NULL WHEN product."productFamily" = 'FRONT_SHOP' THEN 'NON_DRUG_RETAIL' ELSE 'MEDICINE' END`,
   }[input.by];
+  const productJoin =
+    input.by === 'productClass'
+      ? Prisma.sql`LEFT JOIN "pharmacy_medicines" product
+          ON product."organizationId" = line."organizationId" AND product."id" = line."productId"`
+      : Prisma.empty;
 
   return Prisma.sql`
     WITH signed AS (
@@ -141,6 +198,7 @@ export function grossMarginQuery(
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
         LEFT JOIN "pharmacy_inventory_lots" lot
           ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
+        ${productJoin}
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}

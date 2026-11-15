@@ -36,9 +36,15 @@ import {
 } from '@/lib/pharmacy/sop-evidence';
 import {
   PHARMACY_SOP_CHANGED_MESSAGE,
+  PHARMACY_SOP_ESCALATION_DELAY,
   PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
   PHARMACY_SOP_SCHEDULE_LIMITS,
 } from '@/lib/pharmacy/sop-shared';
+import {
+  PharmacySopEscalationError,
+  pharmacySopOverdueEscalation,
+  setPharmacySopOverdueEscalation,
+} from '@/lib/pharmacy/sop-overdue-escalation';
 import {
   PHARMACY_SOP_PACKS,
   PharmacySopLibraryScopeError,
@@ -322,6 +328,9 @@ export function mapSopError(err: unknown, command: SopCommand = 'other'): never 
           message: 'Check the procedure details and try again.',
         });
     }
+  }
+  if (err instanceof PharmacySopEscalationError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
   }
   if (err instanceof PharmacySopLibraryScopeError) {
     throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
@@ -1193,6 +1202,8 @@ const BOARD_SELECT = {
     select: { graceMinutes: true, template: { select: { id: true, name: true, category: true } } },
   },
   steps: { select: { completed: true } },
+  // Only set when the branch opted in to overdue escalation and a step fired.
+  escalationEvents: { where: { kind: 'FIRED' }, select: { id: true }, take: 1 },
 } as const;
 
 type BoardRow = {
@@ -1211,6 +1222,7 @@ type BoardRow = {
     template: { id: string; name: string; category: string | null };
   };
   steps: Array<{ completed: boolean }>;
+  escalationEvents?: Array<{ id: string }>;
 };
 
 function boardItem(row: BoardRow, now: Date, roleById: Map<string, PharmacySopRoleKey>) {
@@ -1233,6 +1245,8 @@ function boardItem(row: BoardRow, now: Date, roleById: Map<string, PharmacySopRo
     stepsTotal: row.steps.length,
     stepsCompleted: row.steps.filter((step) => step.completed).length,
     overdue: isOverdue(row, now),
+    /** A manager was notified (opt-in overdue escalation); never set otherwise. */
+    escalated: (row.escalationEvents?.length ?? 0) > 0,
     missedRisk:
       (OPEN_STATUSES as readonly string[]).includes(row.status) &&
       isMissedAt(now, row.windowEndsAt, row.assignment.graceMinutes),
@@ -1890,6 +1904,83 @@ export const pharmacySopRouter = router({
           changed: result.changed,
           generated: started ? started.generated.created : null,
           nextRunAt: started ? started.job.slot : null,
+        };
+      })
+    ),
+
+  /**
+   * The branch's overdue-escalation setting. OFF unless a manager turned it
+   * on: with it off, overdue work is only flagged on the board.
+   */
+  overdueEscalation: manageProcedure.input(z.object(BRANCH).strict()).query(({ ctx, input }) =>
+    guarded(async () => {
+      const site = await siteFor(ctx, input.pharmacyBranchId);
+      const setting = await pharmacySopOverdueEscalation(ctx.db, { site });
+      return {
+        pharmacyBranchId: site.pharmacyBranchId,
+        enabled: setting.enabled,
+        delayMinutes: setting.delayMinutes,
+        changedAt: setting.changedAt,
+      };
+    })
+  ),
+
+  /**
+   * Turn overdue escalation on or off for one branch (audited). ON: the
+   * manager making the change (from the session, never from input) is told in
+   * the app once a procedure is still unsubmitted `delayMinutes` after its
+   * window closed, through the shared SOP escalation engine. OFF: the branch's
+   * policy is deactivated and nothing more is sent. Notification only: it never
+   * blocks or changes any pharmacy workflow.
+   */
+  setOverdueEscalation: manageProcedure
+    .input(
+      z
+        .object({
+          ...BRANCH,
+          enabled: z.boolean(),
+          delayMinutes: z
+            .number()
+            .int()
+            .min(PHARMACY_SOP_ESCALATION_DELAY.minMinutes)
+            .max(PHARMACY_SOP_ESCALATION_DELAY.maxMinutes)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      guarded(async () => {
+        const site = await siteFor(ctx, input.pharmacyBranchId);
+        const actor = await actorFor(ctx);
+        const result = await setPharmacySopOverdueEscalation(ctx.db, {
+          organizationId: sessionScope(ctx).organizationId,
+          site,
+          enabled: input.enabled,
+          delayMinutes: input.delayMinutes,
+          targetStaffProfileId: actor.staffProfileId,
+          now: new Date(),
+        });
+        audit(ctx, site, {
+          action: 'pharmacy.sop.setOverdueEscalation',
+          targetType: 'PharmacySopSite',
+          targetId: site.pharmacyBranchId,
+          description: input.enabled
+            ? `Turned on overdue SOP escalation after ${result.setting.delayMinutes} minute(s)`
+            : 'Turned off overdue SOP escalation',
+          metadata: {
+            enabled: result.setting.enabled,
+            changed: result.changed,
+            delayMinutes: result.setting.delayMinutes,
+            ...(result.setting.enabled ? { notifyStaffProfileId: actor.staffProfileId } : {}),
+          },
+        });
+        return {
+          pharmacyBranchId: site.pharmacyBranchId,
+          enabled: result.setting.enabled,
+          delayMinutes: result.setting.delayMinutes,
+          changedAt: result.setting.changedAt,
+          changed: result.changed,
+          nextRunAt: result.nextRunAt,
         };
       })
     ),

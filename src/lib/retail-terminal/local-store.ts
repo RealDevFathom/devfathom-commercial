@@ -49,7 +49,8 @@ export type TerminalStorageErrorReason =
   | 'SCOPE_MISMATCH'
   | 'SCHEMA_VERSION'
   | 'MALFORMED_CATALOG'
-  | 'UNSUPPORTED_ENVIRONMENT';
+  | 'UNSUPPORTED_ENVIRONMENT'
+  | 'UNRECOVERABLE';
 
 /** A refused or impossible persistence attempt. Never carries the offending value —
  * only the key path — so an error report cannot itself leak a secret. */
@@ -378,6 +379,39 @@ export function createMemoryDriver(
     },
     close: () => undefined,
   };
+}
+
+// ── Cross-tab single writer ─────────────────────────────────────────────────
+
+/**
+ * Run `run` while holding an exclusive lock named `name`. Every tab of one terminal
+ * shares one scope document, so a read-modify-write that is not serialized lets a
+ * second tab overwrite work the first tab already reported as saved. The Web Locks
+ * API serializes across every tab and worker of the origin, and the browser releases
+ * the lock if the holding tab crashes or closes. Where it is absent (old browsers,
+ * jsdom, SSR) an in-process queue still serializes runtimes inside one realm.
+ */
+export type TerminalScopeLock = <T>(name: string, run: () => Promise<T>) => Promise<T>;
+
+const inProcessLocks = new Map<string, Promise<unknown>>();
+
+function inProcessLock<T>(name: string, run: () => Promise<T>): Promise<T> {
+  const previous = inProcessLocks.get(name) ?? Promise.resolve();
+  const current = previous.then(run);
+  const tail = current.catch(() => undefined);
+  inProcessLocks.set(name, tail);
+  void tail.then(() => {
+    if (inProcessLocks.get(name) === tail) inProcessLocks.delete(name);
+  });
+  return current;
+}
+
+export function withTerminalScopeLock<T>(name: string, run: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(name, { mode: 'exclusive' }, run) as Promise<T>;
+  }
+  return inProcessLock(name, run);
 }
 
 // ── The persisted document ───────────────────────────────────────────────────

@@ -46,7 +46,7 @@ export function assistantEntry(
   user: Session['user'] | undefined,
   sessionStatus: 'loading' | 'authenticated' | 'unauthenticated'
 ) {
-  const neutral = { title: 'Ask Fathom', suggestions: [] as string[], canChat: false };
+  const neutral = { title: 'Ask Fathom', suggestions: [] as string[], canChat: false, accessLimited: true };
   if (sessionStatus === 'loading') {
     return { ...neutral, description: 'Loading your workspace access…' };
   }
@@ -95,5 +95,8 @@ export function assistantEntry(
     description,
     suggestions,
     canChat: true,
+    // Owners/admins have full workspace access, so an empty list is not an
+    // access problem for them; other roles keep the access-based wording.
+    accessLimited: user.role !== 'ADMIN',
   };
 }

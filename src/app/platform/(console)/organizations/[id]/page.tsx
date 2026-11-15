@@ -1098,6 +1098,7 @@ export default async function OrganizationDetailPage({
                       compact
                       action="organization.user.password"
                       submitLabel="Reset password"
+                      confirm={`Reset the password for ${user.name} (${user.email}, ${user.role}) in ${organization.displayName}? Their sessions end immediately, they must choose a new password at the next sign-in, and the organization's administrators are notified.`}
                       fields={[
                         { name: 'id', label: 'User', type: 'hidden', defaultValue: user.id },
                         {
@@ -1107,7 +1108,7 @@ export default async function OrganizationDetailPage({
                           label: 'Temporary password',
                           type: 'password',
                           required: true,
-                          help: 'Minimum 12 characters. Existing sessions are revoked.',
+                          help: 'Minimum 12 characters. One-time only: existing sessions are revoked and the user must set a new password at the next sign-in.',
                         },
                       ]}
                     />
@@ -2179,7 +2180,7 @@ export default async function OrganizationDetailPage({
           </section>
 
           {organization.status === 'TERMINATED' ? (
-            <section className="border border-destructive bg-red-100 p-5">
+            <section className="border border-destructive bg-destructive/10 p-5">
               <h2 className="text-sm font-semibold text-destructive">Destructive lifecycle</h2>
               <p className="mt-2 text-xs leading-5 text-text-body">
                 Scheduling purge starts the retention window and queues data destruction.

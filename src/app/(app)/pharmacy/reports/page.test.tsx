@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
+const actor = vi.hoisted(() => ({ id: 'user_1', role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
 const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
@@ -10,6 +10,7 @@ const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
 const expiryEmpty = vi.hoisted(() => ({ value: false }));
 const suppliers = vi.hoisted(() => vi.fn());
 const demandAggregate = vi.hoisted(() => vi.fn());
+const staffingSuggestions = vi.hoisted(() => vi.fn(async () => null));
 const extraCatalog = vi.hoisted(() => ({
   reports: [] as Array<{ key: string; label: string; metrics: string[]; filters: string[] }>,
   metrics: [] as Array<Record<string, string | null>>,
@@ -29,15 +30,25 @@ const commandCentre = vi.fn(async () => ({
     expiryValueMinor90: 0,
   },
 }));
+const reportAccess = vi.hoisted(() => ({
+  can: vi.fn(async (..._args: unknown[]) => true),
+  session: true,
+}));
+vi.mock('@/lib/abac', () => ({
+  can: reportAccess.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
+    db: {},
+    requestMeta: { ip: null, userAgent: null },
     organization: { id: 'org-a', currency: 'PKR', timezone: 'Asia/Karachi' },
     entitlements: {
       organizationId: 'org-a',
       enabledModules: reportModules.enabled,
       modules: [{ key: 'pharmacy-reports', name: 'Pharmacy Reports' }],
     },
-    session: { user: actor },
+    session: reportAccess.session ? { user: actor } : null,
   })),
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
@@ -66,6 +77,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
     createCaller: () => ({
       branches: reportBranches,
       suppliers,
+      staffingSuggestions,
       commandCentre,
       anomalySignals: async () => [
         {
@@ -164,6 +176,8 @@ import PharmacyReportsPage from './page';
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
+    reportAccess.can.mockReset().mockResolvedValue(true);
+    reportAccess.session = true;
     signalStaff.userId = 'cashier_1';
     reportModules.enabled = ['pharmacy-reports'];
     reportBranches.mockClear();
@@ -211,13 +225,42 @@ describe('pharmacy report catalog filters', () => {
     }
   );
 
+  it('locks a member without the reports permission before any report read (DEV-35)', async () => {
+    actor.role = 'MANAGER';
+    reportAccess.can.mockResolvedValue(false);
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/You need the operational reports permission/)).toBeVisible();
+    expect(reportAccess.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_1' }),
+      'reports:operational',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(reportBranches).not.toHaveBeenCalled();
+    expect(commandCentre).not.toHaveBeenCalled();
+  });
+
+  it('asks a signed-out visitor to sign in before any report read (DEV-35)', async () => {
+    reportAccess.session = false;
+
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Sign in again to access pharmacy reports.')).toBeVisible();
+    expect(reportAccess.can).not.toHaveBeenCalled();
+    expect(reportBranches).not.toHaveBeenCalled();
+  });
+
   it('renders a sales detail section for ?section=sales and not otherwise', async () => {
     render(
       await PharmacyReportsPage({
         searchParams: Promise.resolve({ section: 'sales', branch: 'b1' }),
       })
     );
-    const detail = screen.getByRole('heading', { name: 'Sales and margin for the selected period' });
+    const detail = screen.getByRole('heading', {
+      name: 'Sales and margin for the selected period',
+    });
     expect(detail.closest('[id="sales"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
       'href',
@@ -307,6 +350,13 @@ describe('pharmacy report catalog filters', () => {
       from: new Date('2026-11-08T19:00:00.000Z'),
       to: new Date('2026-11-15T19:00:00.000Z'),
     });
+    expect(staffingSuggestions).toHaveBeenCalledWith({
+      branchId: 'b1',
+      from: '2026-11-09',
+      to: '2026-11-15',
+      receiptsPerStaffHour: 12,
+      minimumStaff: 1,
+    });
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
     expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
     expect(
@@ -341,7 +391,10 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
-    expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
+    expect(screen.getByText('Source:').parentElement).toHaveTextContent('sales');
+    expect(screen.getByText('Source:').parentElement).not.toHaveTextContent('pharmacy_sales');
+    expect(screen.getByText('Access:').parentElement).toHaveTextContent('Financial reports');
+    expect(screen.queryByText(/reports:financial/)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(

@@ -103,89 +103,32 @@ export async function lockPrices(db: ScopedDb, scope: PriceScope) {
   );
 }
 
-export async function confirmPriceChanges(db: ScopedDb, scope: PriceScope, ids: readonly string[]) {
+/** DEV-693 owner decision (#1318): the one answer to any attempt to confirm a DRAP notice. */
+export const DRAP_PRICE_INFORMATION_ONLY =
+  'DRAP price notices are for information only and never change a price. Set the pack price yourself from the MRP printed on the pack.';
+
+/**
+ * DEV-693: a DRAP notice must never change a price, because shelf stock can
+ * predate a DRAP price order. Every price-change proposal was drafted from a
+ * DRAP notice (its ingest is required), so confirming one is refused before any
+ * write. The proposal rows stay exactly as they are, as history. Owners set
+ * prices with `setManualPackPrice`, which this does not touch.
+ */
+export async function confirmPriceChanges(
+  db: ScopedDb,
+  scope: PriceScope,
+  ids: readonly string[]
+): Promise<never> {
   if (!ids.length || ids.length > 100 || new Set(ids).size !== ids.length)
     return invalid('Select 1–100 distinct notices');
-  return db.$transaction(async (tx) => {
-    const scoped = tx as ScopedDb;
-    await lockPrices(scoped, scope);
-    const results = [];
-    for (const id of [...ids].sort()) {
-      const proposal = await scoped.pharmacyPriceChangeProposal.findFirst({
-        where: { organizationId: scope.organizationId, id },
-        include: { ingest: true },
-      });
-      if (!proposal) throw new TRPCError({ code: 'NOT_FOUND', message: 'Price notice not found' });
-      const existing = await scoped.pharmacyPackPrice.findFirst({
-        where: { organizationId: scope.organizationId, proposalId: id },
-      });
-      if (proposal.status === 'CONFIRMED') {
-        if (!existing) return invalid('Legacy confirmation needs pack mapping and review');
-        results.push(proposal);
-        continue;
-      }
-      const notice = proposal.ingest.priceNotice as {
-        presentation?: string;
-        packLevel?: string;
-      } | null;
-      const pack = await resolveNoticePack(
-        scoped,
-        scope.organizationId,
-        proposal.medicineId,
-        notice?.presentation,
-        notice?.packLevel,
-        proposal.effectiveDate
-      );
-      if (!pack || pack.id !== proposal.packLevelId || proposal.ingest.matchStatus !== 'MATCHED')
-        return invalid('Notice needs unambiguous presentation/pack mapping');
-      const previous = await currentPackPrice(
-        scoped,
-        scope.organizationId,
-        pack.id,
-        proposal.effectiveDate
-      );
-      const price = await scoped.pharmacyPackPrice.create({
-        data: {
-          organizationId: scope.organizationId,
-          presentationId: pack.presentationId,
-          packLevelId: pack.id,
-          mrpMinor: proposal.notifiedPriceMinor,
-          sellingPriceMinor: previous?.sellingPriceMinor ?? null,
-          effectiveFrom: proposal.effectiveDate,
-          source: 'drap',
-          proposalId: id,
-          createdById: scope.actorId,
-        },
-      });
-      results.push(
-        await scoped.pharmacyPriceChangeProposal.update({
-          where: { organizationId_id: { organizationId: scope.organizationId, id } },
-          data: { status: 'CONFIRMED', confirmedById: scope.actorId, confirmedAt: new Date() },
-        })
-      );
-      await scoped.auditLog.create({
-        data: {
-          organizationId: scope.organizationId,
-          actorId: scope.actorId,
-          source: 'TRPC',
-          category: 'PHARMACY',
-          operation: 'UPDATE',
-          action: 'pharmacyMedicine.confirmPrices',
-          targetType: 'PharmacyPackPrice',
-          targetId: price.id,
-          changes: {
-            previousMrpMinor: previous?.mrpMinor ?? null,
-            mrpMinor: price.mrpMinor,
-            packLevelId: pack.id,
-            effectiveFrom: price.effectiveFrom.toISOString(),
-            proposalId: id,
-            branchOverrides: 'preserved; review derived from org version',
-          },
-        },
-      });
-    }
-    return results;
-  });
+  for (const id of [...ids].sort()) {
+    const proposal = await db.pharmacyPriceChangeProposal.findFirst({
+      where: { organizationId: scope.organizationId, id },
+      select: { id: true, ingestId: true },
+    });
+    if (!proposal) throw new TRPCError({ code: 'NOT_FOUND', message: 'Price notice not found' });
+  }
+  return invalid(DRAP_PRICE_INFORMATION_ONLY);
 }
 
 /** Explicit policy input, never inferred from the last sale. Admin-only router. */
@@ -259,7 +202,9 @@ export async function setManualPackPrice(
 export async function priceIntelligence(db: ScopedDb, scope: PriceScope) {
   const now = new Date();
   const notices = await db.pharmacyDrapIngest.findMany({
-    where: { organizationId: scope.organizationId, kind: 'PRICE' },
+    // DEV-693: a notice that raised an official-price alert is information only
+    // and is listed with the alerts, not in this confirm queue.
+    where: { organizationId: scope.organizationId, kind: 'PRICE', priceAlerts: { none: {} } },
     include: { priceChanges: { include: { medicine: { include: { aliases: true } } } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
@@ -308,7 +253,8 @@ export async function priceIntelligence(db: ScopedDb, scope: PriceScope) {
       packLevelId: pack?.id ?? null,
       units,
       status: !mapped ? 'NEEDS_MAPPING' : proposal!.status,
-      eligible: mapped && proposal?.status === 'PROPOSED',
+      // DEV-693: DRAP notices are information only; none can be confirmed.
+      eligible: false,
       effectiveDate:
         proposal?.effectiveDate ?? (notice?.effectiveDate ? new Date(notice.effectiveDate) : null),
       notifiedMrpMinor: proposal?.notifiedPriceMinor ?? notice?.notifiedPriceMinor ?? null,

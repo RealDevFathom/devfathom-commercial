@@ -60,6 +60,7 @@ import {
   parseStoredFbrTier1Answers,
   type FbrTier1Answers,
 } from '@/lib/pharmacy/fbr-tier1';
+import { readLicenceRenewalReminders } from '@/lib/pharmacy/licence-renewal-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from '../audit';
 import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
@@ -359,6 +360,15 @@ export const pharmacyOnboardingRouter = router({
 
   /** #709 — the latest FBR Tier-1 self-check, and whether it is due again. */
   fbrTier1Status: fbrTier1Procedure.query(({ ctx }) => readFbrTier1Status(ctx)),
+
+  /**
+   * #720 — branch licences, qualified-person registrations and supplier
+   * licences inside a 90/60/30/7-day renewal window, with each one's renewal
+   * checklist. Owner/admin only, like the rest of this router.
+   */
+  licenceRenewals: fbrTier1Procedure.query(({ ctx }) =>
+    readLicenceRenewalReminders(ctx.db, { organizationId: ctx.entitlements.organizationId })
+  ),
 
   /**
    * #709 — record an FBR Tier-1 self-check. The verdict is computed here from

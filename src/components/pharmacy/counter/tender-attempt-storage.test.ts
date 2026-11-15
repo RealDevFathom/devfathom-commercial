@@ -243,6 +243,12 @@ describe('original tender attempt storage', () => {
         record.draft.amount = 'Never displayed';
       },
     ],
+    [
+      'Khata override reason on a non-Khata tender',
+      (record: UntrustedRecord) => {
+        record.input.overrideReason = 'Paying on Friday';
+      },
+    ],
   ])('quarantines %s without deleting or exposing its contents', (_name, change) => {
     const attempt = original();
     const value = JSON.parse(JSON.stringify(attempt));
@@ -319,6 +325,7 @@ it('round-trips Khata recovery without storing authentication credentials', () =
     type: 'KHATA',
     familyAccountId: 'family-a',
     ownerOverride: true,
+    overrideReason: 'Paying on Friday',
   };
   delete attempt.input.cashReceivedMinor;
   attempt.draft.cashReceived = '';

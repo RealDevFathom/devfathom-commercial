@@ -4,7 +4,11 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { bundleProposalWhatsAppText } from '@/lib/pharmacy/basket-analysis';
 import type { listBasketInsights } from '@/lib/pharmacy/basket-workflow';
-import { recentCompletedDays, timeZoneLabel } from '@/lib/pharmacy/marketing-dates';
+import {
+  localDateTimeLabel,
+  recentCompletedDays,
+  timeZoneLabel,
+} from '@/lib/pharmacy/marketing-dates';
 import { workspaceTimezone } from '@/lib/timezone';
 import { MarketingActionForm } from './action-form';
 
@@ -144,8 +148,9 @@ export function BasketPanel({
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
             <p className="break-words text-sm text-text-muted">
-              {insight.snapshot.from} to {insight.snapshot.cutoff} (exclusive). Saved{' '}
-              {insight.createdAt.toISOString()}.
+              {localDateTimeLabel(new Date(insight.snapshot.from), zone)} to{' '}
+              {localDateTimeLabel(new Date(insight.snapshot.cutoff), zone)} (exclusive). Saved{' '}
+              {localDateTimeLabel(insight.createdAt, zone)} ({zoneLabel}).
             </p>
             {!insight.output.recommendations.length && (
               <p className="text-sm">
