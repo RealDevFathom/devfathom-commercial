@@ -804,6 +804,120 @@ describe('review before a stale submission (criterion 5)', () => {
       expect(built.request.body).not.toHaveProperty('quotedModifiers');
       expect(addItemBody.safeParse(built.request.body).success).toBe(true);
     });
+
+    it('records the reviewed catalog as the accepted quote when the operator sends a draft', () => {
+      const legacy = seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+            },
+          ],
+        }),
+      ]);
+      const current = withModifiers('50.00');
+      const flagged = markDraftsForCatalogReview(legacy, current).snapshot;
+      expect(flagged.drafts[0].status).toBe('NEEDS_REVIEW');
+
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        current.version,
+        current
+      );
+      // Unchanged since the review: the accepted draft is not flagged again.
+      const refreshed = markDraftsForCatalogReview(accepted, current);
+      expect(refreshed.flagged).toBe(0);
+      expect(refreshed.snapshot.drafts[0].status).toBe('QUEUED');
+      // A change made after the review still needs a fresh one.
+      expect(markDraftsForCatalogReview(accepted, withModifiers('80.00')).flagged).toBe(1);
+    });
+
+    it('does not take another channel menu as the accepted quote', () => {
+      const legacy = seeded([
+        draftInput({
+          lines: [
+            {
+              menuItemId: 'mi-1',
+              quantity: 1,
+              quotedUnitPrice: '450.00',
+              modifierOptionIds: ['opt-cheese'],
+            },
+          ],
+        }),
+      ]);
+      const takeaway = { ...withModifiers('50.00'), channel: 'TAKEAWAY' as const };
+      const flagged = markDraftsForCatalogReview(legacy, takeaway).snapshot;
+      const accepted = resolveReviewedDraft(
+        flagged,
+        flagged.drafts[0].draftId,
+        'REPLAY',
+        takeaway.version,
+        takeaway
+      );
+      expect(accepted.drafts[0].commands[1]).toEqual(legacy.drafts[0].commands[1]);
+      expect(markDraftsForCatalogReview(accepted, withModifiers('50.00')).flagged).toBe(1);
+    });
+
+    describe('a review raised while a command is in flight', () => {
+      const twoLines = () => {
+        let snapshot = seeded([
+          draftInput({
+            lines: [
+              { menuItemId: 'mi-1', quantity: 1, quotedUnitPrice: '450.00' },
+              {
+                menuItemId: 'mi-1',
+                quantity: 1,
+                quotedUnitPrice: '450.00',
+                modifierOptionIds: ['opt-cheese'],
+                quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '50.00' }],
+              },
+            ],
+          }),
+        ]);
+        const draft = snapshot.drafts[0];
+        snapshot = applyReplayOutcome(beginReplay(snapshot, draft.draftId, 'c1'), {
+          draftId: draft.draftId,
+          commandId: 'c1',
+          outcome: { action: 'ACK' },
+          serverRef: 'order-1',
+        }).snapshot;
+        // The first line is on the wire when the refresh reprices the second line.
+        snapshot = beginReplay(snapshot, draft.draftId, 'c2');
+        snapshot = markDraftsForCatalogReview(snapshot, withModifiers('80.00')).snapshot;
+        expect(snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(snapshot.drafts[0].review?.atCommandId).toBe('c3');
+        return snapshot;
+      };
+
+      it('survives the acknowledgement of the in-flight command', () => {
+        const snapshot = twoLines();
+        const acked = applyReplayOutcome(snapshot, {
+          draftId: snapshot.drafts[0].draftId,
+          commandId: 'c2',
+          outcome: { action: 'ACK' },
+          serverRef: 'item-1',
+        }).snapshot;
+        expect(acked.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(acked.drafts[0].review?.reason).toBe('PRICE_CHANGED');
+        expect(nextReplayCommand(acked, DEVICE, OPERATOR).status).toBe('IDLE');
+      });
+
+      it('survives a retry of the in-flight command', () => {
+        const snapshot = twoLines();
+        const retried = applyReplayOutcome(snapshot, {
+          draftId: snapshot.drafts[0].draftId,
+          commandId: 'c2',
+          outcome: classifyReplayOutcome({ status: 0 }),
+        }).snapshot;
+        expect(retried.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(nextReplayCommand(retried, DEVICE, OPERATOR).status).toBe('IDLE');
+      });
+    });
   });
 
   it('does not re-price lines the server already accepted', () => {

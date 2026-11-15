@@ -592,11 +592,18 @@ export function applyReplayOutcome(
       const opened = acknowledged.commands.find((command) => command.kind === 'OPEN_ORDER');
       const serverOrderId = draft.serverOrderId ?? opened?.serverRef ?? null;
       const done = firstUnacknowledged(acknowledged) === null;
+      // A catalog review raised while this command was in flight still governs the
+      // remaining lines: only a review about the command just acknowledged is settled.
+      const keepReview =
+        !done &&
+        draft.status === 'NEEDS_REVIEW' &&
+        draft.review !== null &&
+        draft.review.atCommandId !== input.commandId;
       return {
         ...acknowledged,
         serverOrderId,
-        status: done ? 'COMPLETED' : 'REPLAYING',
-        review: null,
+        status: done ? 'COMPLETED' : keepReview ? 'NEEDS_REVIEW' : 'REPLAYING',
+        review: keepReview ? draft.review : null,
       };
     }),
     discarded: null,
@@ -610,7 +617,8 @@ function pauseCommand(
 ): PosQueueSnapshot {
   return mapDraft(snapshot, draftId, (draft) => ({
     ...mapCommand(draft, commandId, (command) => ({ ...command, status: 'PENDING' })),
-    status: 'QUEUED',
+    // A catalog review raised meanwhile keeps the draft out of replay.
+    status: draft.status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : 'QUEUED',
   }));
 }
 
@@ -760,12 +768,43 @@ export function markDraftsForCatalogReview(
   return { snapshot: { ...snapshot, drafts }, flagged };
 }
 
+/**
+ * Record the current catalog's prices as the accepted quote of every unsent line, so
+ * a later refresh flags only changes made after the operator's review. Skipped when
+ * the catalog belongs to another channel or publication: it proves nothing about
+ * this draft's menu, and the old quote keeps the draft under review.
+ */
+function rebaselineQuotes(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): PosQueuedDraft {
+  const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
+  if (!open || open.body.channel !== catalog.channel) return draft;
+  if (open.body.publicationId && open.body.publicationId !== catalog.publicationId) return draft;
+  return {
+    ...draft,
+    commands: draft.commands.map((command) => {
+      if (command.kind !== 'ADD_ITEM' || command.status === 'ACKNOWLEDGED') return command;
+      const item = findCatalogItem(catalog, command.body.menuItemId);
+      if (!item) return command;
+      const selected = command.body.modifierOptionIds ?? [];
+      const quotedModifiers = (item.modifierGroups ?? [])
+        .flatMap((group) => group.options)
+        .filter((option) => selected.includes(option.id))
+        .map((option) => ({ optionId: option.id, priceDelta: option.priceDelta }));
+      return {
+        ...command,
+        body: { ...command.body, quotedUnitPrice: item.price, quotedModifiers },
+      };
+    }),
+  };
+}
+
 /** The operator resolved a reviewed draft: send it as composed, or drop it. */
 export function resolveReviewedDraft(
   snapshot: PosQueueSnapshot,
   draftId: string,
   decision: 'REPLAY' | 'DISCARD',
-  catalogVersion: string
+  catalogVersion: string,
+  /** The catalog the operator reviewed against; its prices become the accepted quote. */
+  catalog: PosCatalogSnapshot | null = null
 ): PosQueueSnapshot {
   if (decision === 'DISCARD') {
     return { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) };
@@ -777,7 +816,7 @@ export function resolveReviewedDraft(
   )
     return snapshot;
   return mapDraft(snapshot, draftId, (draft) => ({
-    ...draft,
+    ...(catalog ? rebaselineQuotes(draft, catalog) : draft),
     status: 'QUEUED',
     review: null,
     // Re-baselined: the operator accepted the current catalog for this draft.
