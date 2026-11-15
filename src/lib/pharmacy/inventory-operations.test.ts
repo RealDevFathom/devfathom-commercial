@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { writeOff } from './inventory-operations';
+import { recallTrace, writeOff } from './inventory-operations';
 
 const scope = {
   organizationId: 'org_pharmacy',
@@ -177,5 +177,28 @@ describe('writeOff pack arrangement', () => {
       writeOff(db as unknown as ScopedDb, scope, { ...input, units: 5 })
     ).rejects.toMatchObject({ reason: 'INVALID_ARRANGEMENT' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('recallTrace sold units', () => {
+  it('leaves voided and never-completed sale allocations out of soldUnits', async () => {
+    const db = {
+      pharmacyRecallNotice: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'recall_1', batchId: 'batch_1', medicineId: null }),
+      },
+      $queryRaw: vi.fn().mockResolvedValue([]),
+    };
+
+    await recallTrace(db as unknown as ScopedDb, scope.organizationId, 'recall_1');
+
+    const sql = (db.$queryRaw.mock.calls[0]![0] as { sql: string }).sql.replace(/\s+/g, ' ');
+    // A voided draft restores its SALE movement with a linked reversal.
+    expect(sql).toContain(
+      'NOT EXISTS (SELECT 1 FROM "pharmacy_stock_movements" r WHERE r."organizationId"=m."organizationId" AND r."reversesMovementId"=m.id)'
+    );
+    // A SALE movement still held by an OPEN, HELD or VOID sale was never sold.
+    expect(sql).toContain('a."stockMovementId"=m.id AND s.status<>\'COMPLETED\'');
   });
 });

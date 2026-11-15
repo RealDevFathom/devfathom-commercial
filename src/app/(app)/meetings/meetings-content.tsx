@@ -363,7 +363,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           <button
             onClick={handleCreate}
             disabled={!title.trim() || !date || !startTime || !endTime || isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -604,7 +604,7 @@ const MeetingCard = memo(function MeetingCard({
             <button
               onClick={handleSave}
               disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
-              className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+              className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
             </button>

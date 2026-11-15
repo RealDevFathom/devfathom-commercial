@@ -279,6 +279,27 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
     });
 
+    it('offers day close to a member granted pharmacy:close, such as a Pharmacist (DEV-127)', () => {
+      expect(hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review'])).not.toContain(
+        '/pharmacy/counter/close'
+      );
+      expect(
+        hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'])
+      ).toContain('/pharmacy/counter/close');
+    });
+
+    it('keeps day close behind its module even for a pharmacy:close holder (DEV-127)', () => {
+      const withoutCounter = {
+        ...everyPharmacyModule,
+        enabledModules: everyPharmacyModule.enabledModules.filter(
+          (module) => module !== 'pharmacy-counter'
+        ),
+      };
+      expect(hrefs('EMPLOYEE', ['pharmacy:close'], withoutCounter)).not.toContain(
+        '/pharmacy/counter/close'
+      );
+    });
+
     it('shows Team to administrators, and to members only with the HR directory', () => {
       expect(hrefs('ADMIN')).toContain('/team');
       expect(hrefs('EMPLOYEE')).not.toContain('/team');
