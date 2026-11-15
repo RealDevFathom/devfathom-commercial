@@ -2336,7 +2336,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     scan();
 
     const notice = await screen.findByText(
-      'That bill is already paid or closed. Start the next bill to keep selling.'
+      'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.'
     );
     expect(notice.closest('[role="status"]')).not.toBeNull();
     expect(mocks.mutations.create).not.toHaveBeenCalled();
@@ -2372,7 +2372,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     scan();
 
     await screen.findByText(
-      'That bill is already paid or closed. Start the next bill to keep selling.'
+      'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.'
     );
     expect(mocks.refetch).toHaveBeenCalled();
     expect(mocks.mutations.create).not.toHaveBeenCalled();

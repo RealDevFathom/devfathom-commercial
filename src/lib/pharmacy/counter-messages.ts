@@ -47,7 +47,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
   // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
   // itself, so the sentence never sends the operator to refresh.
-  INVALID_STATE: 'That bill is already paid or closed. Start the next bill to keep selling.',
+  INVALID_STATE:
+    'That bill is no longer open: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -61,7 +62,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
   SALE_NOT_OPEN:
-    'That bill is already paid or closed, so it cannot take another payment. Start the next bill.',
+    'That bill is no longer open for payment: it was paid, voided or put on hold. Resume it if it is on hold, or start the next bill.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',
   OVER_TENDER: 'That payment is more than the amount still due on this bill.',
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',

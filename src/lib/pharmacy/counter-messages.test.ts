@@ -124,6 +124,9 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
       const message = counterErrorMessage(new Error(reason));
       expect(message).not.toMatch(/refresh/i);
       expect(message).toMatch(/next bill/);
+      // A held bill can be resumed, so the sentence must not claim it was paid.
+      expect(message).toMatch(/on hold/);
+      expect(message).toMatch(/Resume/);
     }
   });
 
