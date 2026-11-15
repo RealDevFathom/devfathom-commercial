@@ -192,6 +192,9 @@ type TransactionData = {
   category: string | null;
   description: string;
   date: Date;
+  // DEV-166: set when an invoice payment posted this income; it changes only
+  // through that payment, so the row offers no edit or delete.
+  paymentId?: string | null;
   project: { id: string; name: string } | null;
   client: { id: string; name: string } | null;
 };
@@ -279,7 +282,7 @@ function TransactionsTab({
           </button>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Transaction
@@ -408,7 +411,7 @@ const TransactionRow = memo(function TransactionRow({
               }
             }}
             disabled={!eDesc.trim() || !eAmount || updateTransaction.isPending}
-            className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {updateTransaction.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
           </button>
@@ -437,6 +440,7 @@ const TransactionRow = memo(function TransactionRow({
           {t.category ? categoryLabels[t.category] || t.category : ''}
           {t.project ? ` · ${t.project.name}` : ''}
           {t.client ? ` · ${t.client.name}` : ''}
+          {t.paymentId ? ' · Invoice payment' : ''}
         </p>
       </div>
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
@@ -450,25 +454,29 @@ const TransactionRow = memo(function TransactionRow({
       >
         {t.type === 'INCOME' ? '+' : '-'}${Number(t.amount).toLocaleString()}
       </span>
-      <button
-        onClick={() => {
-          setEDesc(t.description);
-          setEAmount(String(Number(t.amount)));
-          setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
-          setECategory(t.category || '');
-          setIsEditing(true);
-        }}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
-        title="Edit"
-      >
-        <Pencil className="h-3.5 w-3.5" />
-      </button>
-      <button
-        onClick={() => deleteTransaction.mutate({ id: t.id })}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      {!t.paymentId && (
+        <>
+          <button
+            onClick={() => {
+              setEDesc(t.description);
+              setEAmount(String(Number(t.amount)));
+              setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
+              setECategory(t.category || '');
+              setIsEditing(true);
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!bg-secondary hover:!text-foreground transition-all shrink-0"
+            title="Edit"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => deleteTransaction.mutate({ id: t.id })}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/0 group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10 transition-all shrink-0"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </>
+      )}
     </div>
   );
 });
@@ -658,7 +666,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
             disabled={
               !amount || !description.trim() || amountTooLarge || createTransaction.isPending
             }
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createTransaction.isPending ? (
               <>
@@ -744,7 +752,7 @@ function RecurringTab() {
           </button>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
           >
             <Plus className="h-3.5 w-3.5" /> Add Recurring
           </button>
@@ -882,7 +890,7 @@ function RecurringTab() {
               <button
                 onClick={handleCreate}
                 disabled={!name.trim() || !amount || !nextDueDate || createRecurring.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
               >
                 {createRecurring.isPending ? (
                   <>
@@ -1331,7 +1339,7 @@ function AddPaymentForm({
           <button
             onClick={submit}
             disabled={!amountValid || overpay || addPayment.isPending}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
           >
             {addPayment.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             Add

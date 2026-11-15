@@ -125,6 +125,23 @@ describe('RPT-03 owner digest', () => {
     expect(digest.rendered).toContain('Anomaly review signals: 0');
   });
 
+  it('bounds the branch-day by the workspace zone it is a business date in', async () => {
+    await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+      timeZone: 'Asia/Karachi',
+    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-04',
+      to: '2026-09-04',
+      timeZone: 'Asia/Karachi',
+    });
+  });
+
   it('includes explainable anomaly events in the existing owner digest', async () => {
     mocks.readPharmacyAnomalySignals.mockResolvedValue([
       {

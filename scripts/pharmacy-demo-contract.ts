@@ -120,7 +120,7 @@ export type PharmacyDemoResult =
 export type PharmacyDemoEvidence = {
   version: typeof PHARMACY_DEMO_VERSION;
   target: {
-    environment: 'lan' | 'azure-staging' | 'disposable';
+    environment: 'lan' | 'staging' | 'disposable';
     targetKey: string;
     organizationId: string;
     branchId: string;
@@ -134,7 +134,7 @@ export type PharmacyDemoEvidence = {
   };
   observed: {
     targetKey: string;
-    environment: 'lan' | 'azure-staging' | 'disposable';
+    environment: 'lan' | 'staging' | 'disposable';
     observedAt: string;
     organizationId: string;
     vertical: 'PHARMACY';

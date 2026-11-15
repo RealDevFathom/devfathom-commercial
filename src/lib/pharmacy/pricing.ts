@@ -200,6 +200,9 @@ export async function setManualPackPrice(
     effectiveFrom: Date;
   }
 ) {
+  // MRP is the legal ceiling; a selling policy above it is never valid.
+  if (input.sellingPriceMinor !== null && input.sellingPriceMinor > input.mrpMinor)
+    return invalid('Selling price cannot exceed MRP');
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
     await lockPrices(scoped, scope);

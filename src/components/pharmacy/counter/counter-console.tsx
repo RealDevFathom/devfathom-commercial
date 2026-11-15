@@ -32,13 +32,13 @@ import {
 } from './tender-attempt-storage';
 
 import {
-  COUNTER_OVERRIDE_APPROVAL_POLICY,
   CounterCartPanel,
   CounterLotOverride,
   type CounterLotOverrideValue,
 } from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
+import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import {
   CounterReceiptView,
   type CounterReceiptPresentationResult,
@@ -48,12 +48,14 @@ import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
+import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
   CounterTenderPanel,
   type CounterTenderType,
   type CounterTenderResult,
   type CounterTenderBillState,
+  type KhataSignupInput,
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
@@ -93,7 +95,11 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  looseSaleUnitOption,
+  previewSaleLine,
+  type SaleUnitKind,
+} from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
   formatReceiptDate,
@@ -162,6 +168,12 @@ function readCounterDeviceId(): string | null {
  */
 function useCounterDeviceId(): string | null {
   return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
+}
+const hydratedOnClient = () => true;
+const notHydratedOnServer = () => false;
+/** `false` on the server render and during hydration, `true` once on the client. */
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToNothing, hydratedOnClient, notHydratedOnServer);
 }
 
 /**
@@ -299,6 +311,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      keymapPreviewAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
@@ -337,12 +350,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  keymapPreviewAuthorized = false,
   safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  keymapPreviewAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
   accountEmail: string;
@@ -519,7 +534,10 @@ function ScopedPharmacyCounterConsole({
   }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
-  const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
+  const keymap =
+    keymapQuery.data && (keymapQuery.data.preset.confirmed || keymapPreviewAuthorized)
+      ? keymapQuery.data
+      : resolveCounterKeymap({ preset: 'devfathom' });
   // Preserve operator overrides before offering a receipt-only shortcut.
   const lastReceiptShift = !matchCounterAction(keymap.bindings, { key: 'r', altKey: true })
     ? false
@@ -568,12 +586,27 @@ function ScopedPharmacyCounterConsole({
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
   const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
+  // On the client a missing device id means site storage is blocked: no drawer
+  // can be read or opened, so the step says so instead of waiting forever.
+  const deviceUnavailable = useHydrated() && deviceId === null;
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
+  // DEV-725: opening the drawer is the first step of the shift. Until the server
+  // reports an OPEN drawer for this device, the opening-cash step replaces
+  // scan/search, so no bill is built that cannot be charged. A failed status read
+  // keeps the step, with a retry, rather than offering a bill the server refuses.
+  // A failed read is an unknown drawer, even when older data says it was open.
+  const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
+  const drawerRequired = branchAuthorized && !drawerOpen;
+  // Read at call time: a scan or shortcut can finish after the drawer closed.
+  const drawerRequiredRef = useRef(drawerRequired);
+  useEffect(() => {
+    drawerRequiredRef.current = drawerRequired;
+  }, [drawerRequired]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -624,9 +657,11 @@ function ScopedPharmacyCounterConsole({
   const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
     retry: false,
   });
-  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation({
-    retry: false,
-  });
+  const recordBrowserPrintFailure = trpc.pharmacySales.counterReceiptBrowserPrintFailed.useMutation(
+    {
+      retry: false,
+    }
+  );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -635,6 +670,7 @@ function ScopedPharmacyCounterConsole({
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
@@ -868,10 +904,9 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
       ? lastReceipt.receipt
       : null;
-  const currentReceipt =
-    !receiptAccessDenied
-      ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
-      : null;
+  const currentReceipt = !receiptAccessDenied
+    ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
+    : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
 
   const refreshTenderBill = useCallback(
@@ -1099,10 +1134,18 @@ function ScopedPharmacyCounterConsole({
 
   const ensureSale = useCallback(async () => {
     if (saleId) return saleId;
-    const created = await createSale.mutateAsync({ branchId, quotation: false });
+    if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
+    const created = await createSale
+      .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
+      .catch((error: unknown) => {
+        // The drawer was closed elsewhere: re-read it so the opening step returns.
+        if (error instanceof Error && error.message === 'DRAWER_NOT_OPEN')
+          void utils.pharmacySales.drawerStatus.invalidate();
+        throw error;
+      });
     setActiveSale(created.id);
     return created.id;
-  }, [branchId, createSale, saleId, setActiveSale]);
+  }, [branchId, createSale, saleId, setActiveSale, utils]);
 
   const addToCart = useCallback(
     async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
@@ -1140,6 +1183,8 @@ function ScopedPharmacyCounterConsole({
       setPending('addToCart');
       setNotice(null);
       try {
+        // No line is added while the drawer is closed, to a new bill or an open one.
+        if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
         const activeSaleId = await ensureSale();
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
@@ -1197,10 +1242,10 @@ function ScopedPharmacyCounterConsole({
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
+                // #520: the server resolves who approved the override; the counter never names one.
                 override: {
                   inventoryLotId: overrideLotId,
                   reason: batchOverride.reason.trim(),
-                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
                 },
               }
             : {}),
@@ -1353,6 +1398,31 @@ function ScopedPharmacyCounterConsole({
     if (!saleId) return [];
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
+  // A signup started on one bill must not link its customer to another branch or bill.
+  const counterScopeRef = useRef('');
+  useEffect(() => {
+    counterScopeRef.current = `${branchId}:${saleId ?? ''}`;
+  }, [branchId, saleId]);
+  const signUpKhata = useCallback(
+    async (input: KhataSignupInput) => {
+      if (!saleId) throw new Error('Open a bill');
+      const startedIn = `${branchId}:${saleId}`;
+      let result;
+      try {
+        result = await khataSignup.mutateAsync({ branchId, saleId, ...input });
+      } catch (error) {
+        throw new Error(messageFrom(error));
+      }
+      if (counterScopeRef.current !== startedIn) return;
+      setCustomerId(result.customerId);
+      setNotice({ tone: 'success', message: 'Khata account opened and linked to this bill.' });
+    },
+    [branchId, khataSignup, saleId]
+  );
+  const khataSignupPatient = useMemo(
+    () => (patient ? { patientId: patient.patientId, displayName: patient.displayName } : null),
+    [patient]
+  );
   const reauthenticateOwner = useCallback(
     async (password: string, totp: string) => {
       const response = await fetch('/api/login', {
@@ -1435,6 +1505,7 @@ function ScopedPharmacyCounterConsole({
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
+        approvalCode?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1476,7 +1547,7 @@ function ScopedPharmacyCounterConsole({
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined
+            input.familyAccountId || input.payerName !== undefined || input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
@@ -1487,6 +1558,7 @@ function ScopedPharmacyCounterConsole({
           ...(input.referenceSkipped !== undefined
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
+          ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -1912,14 +1984,27 @@ function ScopedPharmacyCounterConsole({
         case 'selectLooseUnit': {
           const kind: SaleUnitKind =
             action === 'selectPackUnit' ? 'PACK' : action === 'selectStripUnit' ? 'STRIP' : 'UNIT';
-          if (activeRow?.saleUnits.some((option) => option.kind === kind)) {
-            setSaleUnit(kind);
-          } else {
-            setNotice({
-              tone: 'warning',
-              message: `This medicine is not sold by ${kind.toLowerCase()}.`,
-            });
+          const options = activeRow?.saleUnits ?? [];
+          const option =
+            kind === 'UNIT'
+              ? looseSaleUnitOption(options)
+              : (options.find((entry) => entry.kind === kind) ?? null);
+          if (option) {
+            setSaleUnit(option.kind);
+            return;
           }
+          setNotice({
+            tone: 'warning',
+            message: !activeRow
+              ? 'Select a medicine before choosing a unit.'
+              : options.length === 0
+                ? 'This medicine has no sellable unit. Check its pack setup or capture the demand.'
+                : kind === 'UNIT'
+                  ? `No loose unit is sellable for this medicine. Sell by ${options
+                      .map((entry) => entry.levelLabel.toLowerCase())
+                      .join(' or ')}.`
+                  : `This medicine is not sold by ${kind.toLowerCase()}.`,
+          });
           return;
         }
         case 'addToCart':
@@ -2032,6 +2117,7 @@ function ScopedPharmacyCounterConsole({
   const keymapLegend = (
     <CounterKeymapLegend
       keymap={keymap}
+      allowUnconfirmed={keymapPreviewAuthorized}
       saving={saveKeymap.isPending}
       disabled={pending === 'tender'}
       error={saveKeymap.error ? messageFrom(saveKeymap.error) : null}
@@ -2042,16 +2128,7 @@ function ScopedPharmacyCounterConsole({
   );
 
   if (branchesQuery.isLoading) {
-    return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
-          <p className="text-sm text-text-muted" role="status">
-            Loading branches…
-          </p>
-        </SectionCard>
-      </div>
-    );
+    return <CounterSkeleton />;
   }
 
   if (branchesQuery.isError) {
@@ -2219,46 +2296,11 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-              {openDrawerSession ? (
+              {drawerOpen ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                  disabled={drawerBusy || !drawerStatusKnown}
-                  onClick={() => {
-                    const rereadBill = tenderReadRequired && tenderOutcome?.status === 'rejected';
-                    setPending('drawer');
-                    openDrawer
-                      .mutateAsync({
-                        branchId,
-                        deviceId: counterDeviceId(),
-                        businessDate: todayBusinessDate(),
-                        openingFloatMinor: 0,
-                      })
-                      .then(() => {
-                        setNotice({
-                          tone: 'success',
-                          message: 'Cash drawer opened for this counter.',
-                        });
-                        // #1254: after a refusal, re-read the bill (as "Refresh bill"
-                        // does) so the counter is ready to take the payment again.
-                        if (rereadBill) void refreshTenderBill('rejected');
-                      })
-                      .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: messageFrom(error) })
-                      )
-                      // Either way the server now holds the truth about this device's drawer.
-                      .finally(() => {
-                        setPending(null);
-                        void utils.pharmacySales.drawerStatus.invalidate();
-                      });
-                  }}
-                >
-                  Open drawer
-                </Button>
-              )}
+              ) : drawerRequired && drawerQuery.isSuccess ? (
+                <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
+              ) : null}
             </div>
           </div>
           <div
@@ -2375,86 +2417,129 @@ function ScopedPharmacyCounterConsole({
                 </div>
               ) : null}
 
-              <div className="space-y-2">
-                <div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-search" className="sr-only">
-                      Scan or search
-                    </Label>
-                    <Input
-                      id="counter-search"
-                      ref={searchRef}
-                      // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
-                      data-counter-scan=""
-                      autoFocus
-                      autoComplete="off"
-                      value={query}
-                      disabled={busy}
-                      placeholder="Brand, generic or barcode"
-                      aria-describedby="counter-search-help"
-                      onChange={(event) => {
-                        scannerRevision.current += 1;
-                        setQuery(event.target.value);
-                        setActiveRow(null);
-                        setSaleUnit(null);
-                        setQuantityText('1');
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter') return;
-                        event.preventDefault();
-                        const trimmed = event.currentTarget.value.trim();
-                        const barcode =
-                          /^\d{6,}$/.test(trimmed) ||
-                          trimmed.startsWith(']d2') ||
-                          trimmed.startsWith('(01)');
-                        if (barcode) {
-                          void addBarcode(trimmed);
-                          return;
-                        }
-                        if (activeRow) {
-                          void addToCart();
-                          return;
-                        }
-                        void runSearch();
-                      }}
-                      className="h-12"
-                    />
-                    <p id="counter-search-help" className="text-xs text-text-muted">
-                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                      opens pay.
-                    </p>
-                  </div>
-                </div>
-
-                <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={
-                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
-                      ? 'idle'
-                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                        ? 'loading'
-                        : searchQuery.isError
-                          ? 'error'
-                          : 'ready'
-                  }
-                  query={trimmedQuery}
-                  disabled={busy || !branchAuthorized}
-                  activeMedicineId={activeRow?.medicineId ?? null}
-                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                  onSelect={stageRow}
-                  onCaptureDemand={() => void captureShortfall()}
-                  onRetry={() => {
-                    if (searchCurrent) void searchQuery.refetch();
+              {drawerRequired ? (
+                <CounterOpenDrawerStep
+                  disabled={drawerBusy || !drawerStatusKnown}
+                  statusError={drawerQuery.isError}
+                  deviceUnavailable={deviceUnavailable}
+                  checking={drawerQuery.isFetching}
+                  onRetry={() => void drawerQuery.refetch()}
+                  onOpen={(openingFloatMinor) => {
+                    const rereadBill = tenderReadRequired && tenderOutcome?.status === 'rejected';
+                    setPending('drawer');
+                    setNotice(null);
+                    openDrawer
+                      .mutateAsync({
+                        branchId,
+                        deviceId: counterDeviceId(),
+                        businessDate: todayBusinessDate(),
+                        openingFloatMinor,
+                      })
+                      .then(() => {
+                        setNotice({
+                          tone: 'success',
+                          message: 'Cash drawer opened for this counter.',
+                        });
+                        // #1254: after a refusal, re-read the bill (as "Refresh bill"
+                        // does) so the counter is ready to take the payment again.
+                        if (rereadBill) void refreshTenderBill('rejected');
+                      })
+                      .catch((error: unknown) =>
+                        setNotice({ tone: 'warning', message: messageFrom(error) })
+                      )
+                      // Either way the server now holds the truth about this device's drawer;
+                      // stay busy until it is read back, so the step cannot be sent twice.
+                      .finally(() =>
+                        Promise.resolve(utils.pharmacySales.drawerStatus.invalidate())
+                          .catch(() => undefined)
+                          .finally(() => setPending(null))
+                      );
                   }}
                 />
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="counter-search" className="sr-only">
+                        Scan or search
+                      </Label>
+                      <Input
+                        id="counter-search"
+                        ref={searchRef}
+                        // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                        data-counter-scan=""
+                        autoFocus
+                        autoComplete="off"
+                        value={query}
+                        disabled={busy}
+                        placeholder="Brand, generic or barcode"
+                        aria-describedby="counter-search-help"
+                        onChange={(event) => {
+                          scannerRevision.current += 1;
+                          setQuery(event.target.value);
+                          setActiveRow(null);
+                          setSaleUnit(null);
+                          setQuantityText('1');
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter') return;
+                          event.preventDefault();
+                          const trimmed = event.currentTarget.value.trim();
+                          const barcode =
+                            /^\d{6,}$/.test(trimmed) ||
+                            trimmed.startsWith(']d2') ||
+                            trimmed.startsWith('(01)');
+                          if (barcode) {
+                            void addBarcode(trimmed);
+                            return;
+                          }
+                          if (activeRow) {
+                            void addToCart();
+                            return;
+                          }
+                          void runSearch();
+                        }}
+                        className="h-12"
+                      />
+                      <p id="counter-search-help" className="text-xs text-text-muted">
+                        {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                        selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                        opens pay.
+                      </p>
+                    </div>
+                  </div>
+
+                  <CounterSearchResults
+                    rows={
+                      searchCurrent && !searchQuery.isPlaceholderData
+                        ? (searchQuery.data?.rows ?? [])
+                        : []
+                    }
+                    state={
+                      !branchAuthorized ||
+                      trimmedQuery.length < 2 ||
+                      (scannerQuery && !searchCurrent)
+                        ? 'idle'
+                        : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                          ? 'loading'
+                          : searchQuery.isError
+                            ? 'error'
+                            : 'ready'
+                    }
+                    query={trimmedQuery}
+                    disabled={busy || !branchAuthorized}
+                    activeMedicineId={activeRow?.medicineId ?? null}
+                    error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                    onSelect={stageRow}
+                    onCaptureDemand={() => void captureShortfall()}
+                    onRetry={() => {
+                      if (searchCurrent) void searchQuery.refetch();
+                    }}
+                  />
+                </div>
+              )}
             </div>
-            {activeRow ? (
+            {activeRow && !drawerRequired ? (
               <section
                 aria-label="Next line"
                 className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
@@ -2491,6 +2576,7 @@ function ScopedPharmacyCounterConsole({
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
+                      onHandUnits={activeRow.onHandUnits}
                       selected={saleUnit}
                       quantity={quantityText}
                       preview={preview}
@@ -2687,7 +2773,11 @@ function ScopedPharmacyCounterConsole({
                 >
                   Preview receipt
                 </Button>
-                <Button variant="outline" className="h-11 w-full" onClick={() => void printReceipt()}>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void printReceipt()}
+                >
                   Print · {formatBinding(keymap.bindings.printReceipt)}
                 </Button>
               </div>
@@ -2835,6 +2925,8 @@ function ScopedPharmacyCounterConsole({
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
           printKhataStatement={printKhataStatement}
+          signUpKhata={signUpKhata}
+          khataSignupPatient={khataSignupPatient}
           balanceMinor={balanceMinor}
           state={billState}
           blocked={blocked}
@@ -2848,6 +2940,7 @@ function ScopedPharmacyCounterConsole({
                   payerName: restoredAttempt.input.payerName,
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
+                  approvalCode: restoredAttempt.input.approvalCode,
                 }
               : undefined
           }

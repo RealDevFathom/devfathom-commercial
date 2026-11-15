@@ -78,6 +78,8 @@ export async function composeOwnerDigest(
     branchId: string;
     branchName: string;
     businessDate: string;
+    /** Workspace zone the business date is on: bounds event timestamps (UTC when absent). */
+    timeZone?: string | null;
   }
 ): Promise<OwnerDigest> {
   const filters = {
@@ -86,7 +88,7 @@ export async function composeOwnerDigest(
     to: input.businessDate,
   };
   const [report, anomalies] = await Promise.all([
-    readPharmacyOwnerCommandCentre(db, filters),
+    readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
     readPharmacyAnomalySignals(db, filters),
   ]);
   const contracts = new Map(PHARMACY_METRIC_CONTRACT.map((contract) => [contract.key, contract]));
@@ -302,6 +304,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
       const digest = await composeOwnerDigest(db, {
         ...key,
         branchName: authorized.branch.name,
+        timeZone: authorized.organization.timezone,
       });
       if (!(await readAuthorizedDigestSetting(db, item.id, item.organizationId))) {
         // Throw through withTenantDb so the claim and anomaly writes roll back.

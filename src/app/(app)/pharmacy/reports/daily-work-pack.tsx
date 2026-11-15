@@ -83,6 +83,9 @@ export async function DailyWorkPack({
     );
   }
   const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? id;
+  const missingSources = pack.sources
+    .filter((source) => source.status === 'unavailable')
+    .map((source) => sourceNames[source.kind].toLowerCase());
   const tasks = pack.groups.flatMap((group) => group.tasks).filter((task) => task.evidence.length);
   return (
     <SectionCard
@@ -92,31 +95,36 @@ export async function DailyWorkPack({
       titleLevel={2}
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <StatusPill status={`${pack.completeness.status} coverage`} tone="warning" />
         <Refresh fields={refreshFields} />
       </div>
-      <div className="space-y-2 text-sm text-text-muted">
-        <p>
-          Requested period: {pack.period.from} to {pack.period.to}. Branch scope:{' '}
-          {pack.scope.branchIds.map(branchName).join(', ')}.
+      {missingSources.length ? (
+        <p role="status" className="mb-4 text-sm text-text-body">
+          Could not check {missingSources.join(' or ')} just now. Refresh to try again; the rest of
+          this list is still good to use.
         </p>
-        <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
+      ) : null}
+      {!pack.permissions.financial ? (
+        <p className="mb-4 text-sm text-text-muted">
+          Money-related checks are not shown for your role.
         </p>
-        <p>
-          Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
-          apply to this pack. Current records are not a historical snapshot.
-        </p>
-        <p>{pack.completeness.definition}</p>
-        <p>
-          Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
-          money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
-        </p>
-        {!pack.permissions.financial ? (
-          <p>Operational evidence only. Financial sources were not queried for your role.</p>
-        ) : null}
-      </div>
+      ) : null}
+      <details className="mb-2 text-sm text-text-muted">
+        <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
+          How this list was prepared
+        </summary>
+        <div className="space-y-2">
+          <p>
+            Period: {pack.period.from} to {pack.period.to}. Branches:{' '}
+            {pack.scope.branchIds.map(branchName).join(', ')}.
+          </p>
+          <p className="break-words">Prepared at {pack.readAt}.</p>
+          <p>
+            This list only reads your records; it does not change stock or create drafts. Supplier,
+            ingredient and batch filters do not apply. Amounts are shown to two decimal places; a
+            dash means the figure was not available, not zero.
+          </p>
+        </div>
+      </details>
       {tasks.length ? (
         <ol className="mt-5 divide-y divide-border-subtle">
           {tasks.map((task) => (
@@ -133,7 +141,7 @@ export async function DailyWorkPack({
               </div>
               <details className="mt-2">
                 <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                  Evidence and missing inputs
+                  Details
                 </summary>
                 <ul className="space-y-4 text-sm text-text-body">
                   {task.evidence.map((evidence) => (
@@ -202,11 +210,12 @@ export async function DailyWorkPack({
         </ol>
       ) : (
         <p role="status" className="mt-5 text-sm text-text-muted">
-          No review evidence returned from available sources. This is not an all-clear result; check
-          source coverage and unavailable inputs below.
+          {missingSources.length
+            ? 'Nothing to do from the checks that loaded.'
+            : 'Nothing needs your attention right now.'}
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">Source coverage and freshness</h3>
+      <h3 className="mt-6 font-semibold text-text-strong">What was checked</h3>
       <ul className="mt-3 divide-y divide-border-subtle">
         {pack.sources.map((source) => (
           <li
@@ -232,33 +241,39 @@ export async function DailyWorkPack({
                 }
                 tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
               />
-              <StatusPill status={`${source.coverage} coverage`} tone="warning" />
             </div>
-            {source.kind === 'expiry' && source.status === 'available' && source.returnedRows === 0 ? (
+            {source.kind === 'expiry' &&
+            source.status === 'available' &&
+            source.returnedRows === 0 ? (
               <p role="status" className="text-text-muted">
-                No available, unexpired stock was found for expiry advice in this branch. This
-                does not assess expired or quarantined stock. Refresh daily work pack after stock
-                is received or updated.
+                No available, unexpired stock was found for expiry advice in this branch. This does
+                not assess expired or quarantined stock. Refresh daily work pack after stock is
+                received or updated.
               </p>
             ) : null}
-            <p className="text-text-muted">{source.timeBasis}</p>
-            <p className="text-text-muted">
-              Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-              {source.rowLimit ?? 'Not established'}.{' '}
-              {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
-            </p>
-            <p className="break-words text-text-muted">
-              Window:{' '}
-              {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
-              Freshness:{' '}
-              {source.freshness === 'persisted-unverified'
-                ? 'Persisted; freshness unverified'
-                : 'Live inputs; not historical'}
-              .
-            </p>
+            <details className="text-text-muted">
+              <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                Technical details
+              </summary>
+              <p className="text-text-muted">{source.timeBasis}</p>
+              <p className="text-text-muted">
+                Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
+                {source.rowLimit ?? 'Not established'}.{' '}
+                {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
+              </p>
+              <p className="break-words text-text-muted">
+                Window:{' '}
+                {source.window
+                  ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
+                  : 'Not period-bounded'}
+                . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}
+                . Freshness:{' '}
+                {source.freshness === 'persisted-unverified'
+                  ? 'Persisted; freshness unverified'
+                  : 'Live inputs; not historical'}
+                .
+              </p>
+            </details>
             {Array.from(
               new Set([
                 ...source.missingInputs,
@@ -269,7 +284,9 @@ export async function DailyWorkPack({
             ).map((reason) => (
               <p
                 key={reason}
-                role={source.kind === 'expiry' && source.status === 'unavailable' ? 'alert' : undefined}
+                role={
+                  source.kind === 'expiry' && source.status === 'unavailable' ? 'alert' : undefined
+                }
                 className="text-text-muted"
               >
                 {reason}

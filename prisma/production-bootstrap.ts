@@ -284,7 +284,7 @@ export async function bootstrapProduction(
       environment: 'production',
       mode: 'SHARED',
       status: 'READY',
-      provider: 'AZURE_CONTAINER_APPS',
+      provider: 'AWS_ECS',
       url: deploymentUrl,
     },
   });

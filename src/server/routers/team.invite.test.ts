@@ -148,6 +148,39 @@ describe('team.inviteMember duplicate guard', () => {
     );
   });
 
+  it.each([undefined, null])(
+    'preserves the pending role when no template is selected (%s)',
+    async (organizationRoleId) => {
+      mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+      mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+      mocks.invitationUpsert.mockResolvedValue({});
+
+      await caller().inviteMember({ ...invite, email: 'manager@company.com', organizationRoleId });
+
+      const data = mocks.update.mock.calls[0]![0].data;
+      expect(data).not.toHaveProperty('organizationRoleId');
+      expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('replaces a pending role when a valid template is explicitly selected', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+    mocks.roleFindFirst.mockResolvedValue({ id: 'role_branch', name: 'Branch Manager' });
+
+    await caller().inviteMember({
+      ...invite,
+      email: 'manager@company.com',
+      organizationRoleId: 'role_branch',
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationRoleId: 'role_branch' }),
+      })
+    );
+  });
+
   it('rejects a role template outside the tenant catalog', async () => {
     mocks.roleFindFirst.mockResolvedValue(null);
 

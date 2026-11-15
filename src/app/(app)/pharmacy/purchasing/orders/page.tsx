@@ -1,3 +1,4 @@
+import { ProgressiveLines } from '../_components/progressive-lines';
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
@@ -611,17 +612,12 @@ export default async function PharmacyOrdersPage({
                   <TextField label="Needed by" name="neededBy" notice={notice} type="date" />
                 </div>
                 <fieldset className="space-y-3">
-                  <legend className="text-sm font-medium text-text-body">
-                    Lines — leave a slot empty to skip it
-                  </legend>
-                  {LINE_SLOTS.map((slot) => (
-                    <RequisitionLineSlot
-                      key={slot}
-                      medicines={medicinesWithPacks}
-                      notice={notice}
-                      slot={slot}
-                    />
-                  ))}
+                  <legend className="text-sm font-medium text-text-body">Lines</legend>
+                  <ProgressiveLines
+                    lines={LINE_SLOTS.map((slot) =>
+                      requisitionLineSlot(slot, medicinesWithPacks, notice)
+                    )}
+                  />
                 </fieldset>
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft requisition</SubmitButton>
@@ -761,17 +757,12 @@ export default async function PharmacyOrdersPage({
                   />
                 </div>
                 <fieldset className="space-y-3">
-                  <legend className="text-sm font-medium text-text-body">
-                    Lines — leave a slot empty to skip it
-                  </legend>
-                  {LINE_SLOTS.map((slot) => (
-                    <OrderLineSlot
-                      key={slot}
-                      medicines={medicinesWithPacks}
-                      notice={notice}
-                      slot={slot}
-                    />
-                  ))}
+                  <legend className="text-sm font-medium text-text-body">Lines</legend>
+                  <ProgressiveLines
+                    lines={LINE_SLOTS.map((slot) =>
+                      orderLineSlot(slot, medicinesWithPacks, notice)
+                    )}
+                  />
                 </fieldset>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <TextField
@@ -1409,17 +1400,9 @@ function packOptions(medicines: MedicineOption[]) {
   );
 }
 
-function RequisitionLineSlot({
-  slot,
-  medicines,
-  notice,
-}: {
-  slot: number;
-  medicines: MedicineOption[];
-  notice: Notice | null;
-}) {
-  return (
-    <div className="grid gap-3 sm:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
+function requisitionLineSlot(slot: number, medicines: MedicineOption[], notice: Notice | null) {
+  return {
+    selector: (
       <SelectField
         emptyHint="No medicine has an effective pack level."
         label={`Line ${slot + 1} — medicine and pack`}
@@ -1428,29 +1411,25 @@ function RequisitionLineSlot({
         options={packOptions(medicines)}
         placeholder="Skip this line"
       />
-      <TextField
-        inputMode="numeric"
-        label="Packs"
-        min={1}
-        name={`quantityPacks-${slot}`}
-        notice={notice}
-        type="number"
-      />
-    </div>
-  );
+    ),
+    fields: (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <TextField
+          inputMode="numeric"
+          label="Packs"
+          min={1}
+          name={`quantityPacks-${slot}`}
+          notice={notice}
+          type="number"
+        />
+      </div>
+    ),
+  };
 }
 
-function OrderLineSlot({
-  slot,
-  medicines,
-  notice,
-}: {
-  slot: number;
-  medicines: MedicineOption[];
-  notice: Notice | null;
-}) {
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+function orderLineSlot(slot: number, medicines: MedicineOption[], notice: Notice | null) {
+  return {
+    selector: (
       <SelectField
         className="lg:col-span-2"
         emptyHint="No medicine has an effective pack level."
@@ -1460,36 +1439,40 @@ function OrderLineSlot({
         options={packOptions(medicines)}
         placeholder="Skip this line"
       />
-      <TextField
-        inputMode="numeric"
-        label="Packs"
-        min={1}
-        name={`orderedPacks-${slot}`}
-        notice={notice}
-        type="number"
-      />
-      <TextField
-        inputMode="numeric"
-        label="Free packs"
-        min={0}
-        name={`bonusPacks-${slot}`}
-        notice={notice}
-        type="number"
-      />
-      <TextField
-        inputMode="decimal"
-        label="List price / pack (PKR)"
-        name={`listPrice-${slot}`}
-        notice={notice}
-      />
-      <TextField
-        inputMode="decimal"
-        label="Discount %"
-        name={`orderDiscount-${slot}`}
-        notice={notice}
-      />
-    </div>
-  );
+    ),
+    fields: (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <TextField
+          inputMode="numeric"
+          label="Packs"
+          min={1}
+          name={`orderedPacks-${slot}`}
+          notice={notice}
+          type="number"
+        />
+        <TextField
+          inputMode="numeric"
+          label="Free packs"
+          min={0}
+          name={`bonusPacks-${slot}`}
+          notice={notice}
+          type="number"
+        />
+        <TextField
+          inputMode="decimal"
+          label="List price / pack (PKR)"
+          name={`listPrice-${slot}`}
+          notice={notice}
+        />
+        <TextField
+          inputMode="decimal"
+          label="Discount %"
+          name={`orderDiscount-${slot}`}
+          notice={notice}
+        />
+      </div>
+    ),
+  };
 }
 
 // ---------------------------------------------------------------------------

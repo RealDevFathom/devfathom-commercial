@@ -201,6 +201,61 @@ beforeEach(() => {
 
 const params = (query: Record<string, string> = {}) => Promise.resolve(query);
 
+it.each([0, 1_800])(
+  'reconciles supplier identities only for positive input-tax claims (tax basis points: %s)',
+  async (taxBps) => {
+    const receipt = {
+      id: 'gr-tax',
+      reference: 'GR-TAX',
+      status: 'POSTED',
+      supplier: licensedSupplier,
+      supplierInvoiceRef: 'INV-TAX',
+      receivedAt: new Date('2026-09-01'),
+      distributorNtn: null,
+      distributorStrn: '  ',
+      lines: [
+        {
+          receivedPacks: 10,
+          invoicedPricePerPackMinor: 1_000,
+          discountBps: 1_000,
+          taxBps,
+          taxCreditable: true,
+        },
+      ],
+      exceptions: [],
+    };
+    mocks.createCaller.mockReturnValue(
+      callerStub({ goodsReceipts: vi.fn().mockResolvedValue([receipt]) })
+    );
+
+    render(await ReceivingPage({ searchParams: params() }));
+    const report = within(
+      screen
+        .getByRole('heading', { name: 'Purchase bill reconciliation' })
+        .closest('[data-slot="section-card"]')! as HTMLElement
+    );
+
+    if (taxBps > 0) {
+      const row = report.getByRole('listitem');
+      const supplier = within(row).getByText('Karachi Distributors');
+      const references = within(row).getByText('GR-TAX · invoice INV-TAX');
+      expect(supplier).toBeVisible();
+      expect(references).toBeVisible();
+      expect(
+        supplier.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(references).toHaveClass('text-text-muted');
+      expect(row).toHaveTextContent(/Missing NTN and STRN · claim.*16\.20/);
+    } else {
+      expect(report.queryByRole('list')).not.toBeInTheDocument();
+      expect(report.queryByText(/Missing NTN and STRN/)).not.toBeInTheDocument();
+      expect(
+        report.getByText('No bills with a positive input-tax claim are missing NTN or STRN.')
+      ).toBeVisible();
+    }
+  }
+);
+
 it.each([undefined, 'req-other', 'req-source'])(
   'shows a draft quote ranking from its own requisition with req=%s',
   async (selectedRequisition) => {
