@@ -67,6 +67,19 @@ describe('workspace time zones', () => {
       from: new Date('2026-11-08T19:00:00.000Z'),
       to: new Date('2026-11-15T19:00:00.000Z'),
     });
+    // Daylight-saving days far from UTC: 27 Sep starts on NZST (+12), 5 Apr on NZDT (+13).
+    expect(workspaceDateRange('2026-09-27', '2026-09-27', 'Pacific/Auckland')).toEqual({
+      from: new Date('2026-09-26T12:00:00.000Z'),
+      to: new Date('2026-09-27T11:00:00.000Z'),
+    });
+    expect(workspaceDateRange('2026-04-05', '2026-04-05', 'Pacific/Auckland')).toEqual({
+      from: new Date('2026-04-04T11:00:00.000Z'),
+      to: new Date('2026-04-05T12:00:00.000Z'),
+    });
+    // Santiago skips 00:00–00:59 on 6 Sep 2026: the day starts at 01:00 (-03).
+    expect(workspaceDateRange('2026-09-06', '2026-09-06', 'America/Santiago').from).toEqual(
+      new Date('2026-09-06T04:00:00.000Z')
+    );
     expect(workspaceDateRange('2026-02-28', '2026-02-28', null)).toEqual({
       from: new Date('2026-02-28T00:00:00.000Z'),
       to: new Date('2026-03-01T00:00:00.000Z'),

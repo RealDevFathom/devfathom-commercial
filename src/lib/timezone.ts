@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-import { zonedWallTimeToUtc } from '@/lib/restaurant/sop-recurrence';
-
 /**
  * Whether this runtime's Intl accepts `value` as a time zone: an IANA name such
  * as "Asia/Karachi", or "UTC". Intl refuses an abbreviation or a loose offset
@@ -77,8 +75,34 @@ export function formatWorkspaceDateTime(
 }
 
 /**
- * The instants bounding the inclusive workspace dates `from`..`to`: midnight
- * starting `from` and midnight after `to`, both on the workspace clock
+ * The first instant of `date` (`YYYY-MM-DD`) on the clock of a valid IANA
+ * `zone`: usually local midnight, or the end of a daylight-saving gap that
+ * swallows midnight. Every zone's offset lies within ±15 hours, so the local
+ * date is still the day before at `date` 00:00 UTC − 15 h and has reached
+ * `date` by 00:00 UTC + 15 h; a binary search between them finds the boundary
+ * to the millisecond, whatever transitions fall nearby.
+ */
+function workspaceDayStart(date: string, zone: string): Date {
+  const localDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const naive = new Date(`${date}T00:00:00.000Z`).getTime();
+  let before = naive - 15 * 3_600_000;
+  let reached = naive + 15 * 3_600_000;
+  while (reached - before > 1) {
+    const middle = before + Math.floor((reached - before) / 2);
+    if (localDate.format(new Date(middle)) < date) before = middle;
+    else reached = middle;
+  }
+  return new Date(reached);
+}
+
+/**
+ * The instants bounding the inclusive workspace dates `from`..`to`: the start
+ * of `from` and the start of the day after `to`, both on the workspace clock
  * ({@link workspaceTimezone}). Filter event timestamps with `>= from` and `< to`.
  */
 export function workspaceDateRange(
@@ -90,7 +114,7 @@ export function workspaceDateRange(
   const dayAfter = new Date(`${to}T00:00:00.000Z`);
   dayAfter.setUTCDate(dayAfter.getUTCDate() + 1);
   return {
-    from: zonedWallTimeToUtc(from, 0, zone).instant,
-    to: zonedWallTimeToUtc(dayAfter.toISOString().slice(0, 10), 0, zone).instant,
+    from: workspaceDayStart(from, zone),
+    to: workspaceDayStart(dayAfter.toISOString().slice(0, 10), zone),
   };
 }
