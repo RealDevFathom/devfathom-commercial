@@ -173,7 +173,7 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(60);
+    expect(priorHrefs).toHaveLength(61);
     expect(navigation).toHaveLength(66);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
