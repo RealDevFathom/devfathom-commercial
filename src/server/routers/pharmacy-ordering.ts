@@ -27,6 +27,7 @@ import {
   PharmacyPortalError,
   type PortalRequestKind,
 } from '@/lib/pharmacy/customer-portal';
+import { actorManagesBranchDrawers } from '@/lib/pharmacy/counter-capability';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { PharmacySettlementError } from '@/lib/pharmacy/settlement';
@@ -257,6 +258,16 @@ export const pharmacyOrderingRouter = router({
       return await ctx.db.$transaction(async (tx) => {
         const scope = await staffScopeFor(ctx, input.branchId);
         return recordDeliveryCommand(txDb(tx), scope, input, {
+          // DEV-821: a COD remit goes into a till the actor runs, unless a manager or owner.
+          actorIsManager:
+            input.action === 'REMIT' &&
+            (await actorManagesBranchDrawers(
+              ctx.db,
+              ctx.session.user,
+              scope.organizationId,
+              scope.branchId,
+              { source: 'TRPC' }
+            )),
           // DEV-647 / DEV-786: a physical return that refunds cash or returns a completed sale
           // needs a manager or owner PIN.
           authorizeRefund: async () => {

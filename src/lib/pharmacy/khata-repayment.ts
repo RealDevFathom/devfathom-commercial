@@ -17,6 +17,8 @@ import {
   PharmacySettlementError,
   recordPharmacyCashMovement,
   requirePharmacyDayOpen,
+  resolveOperatingPharmacyDrawer,
+  type PharmacyDrawerOperator,
 } from './settlement';
 
 /** Counter tenders a khata repayment can arrive in. Cash lands in the open drawer. */
@@ -119,7 +121,9 @@ export async function searchKhataRepaymentAccounts(
 export async function recordKhataRepayment(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: KhataRepaymentInput
+  input: KhataRepaymentInput,
+  /** DEV-821: omitted, cash goes only into a drawer the caller runs. */
+  drawerOperator?: PharmacyDrawerOperator
 ): Promise<KhataRepaymentSlip> {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -197,26 +201,26 @@ export async function recordKhataRepayment(
   if (!account.active) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
 
   if (input.tender === 'CASH') {
-    // As for a cash sale tender: the server resolves this device's open drawer for the
-    // business date, so cash cannot be credited to another counter's drawer.
-    const drawer = await db.pharmacyDrawerSession.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        deviceId: input.deviceId!,
-        businessDate: input.businessDate,
-        status: 'OPEN',
-      },
-      select: { id: true },
-    });
-    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    // DEV-821: the shared cash-drawer resolver: this device's open drawer for the
+    // business date on the caller's branch, run by the caller or a manager/owner.
+    const drawer = await resolveOperatingPharmacyDrawer(
+      db,
+      scope,
+      { deviceId: input.deviceId!, businessDate: input.businessDate },
+      drawerOperator
+    );
     // Takes the day lock and refuses a closed day or a drawer that is not open.
-    await recordPharmacyCashMovement(db, scope, {
-      drawerSessionId: drawer.id,
-      kind: 'PAID_IN',
-      amountMinor: input.amountMinor,
-      reason: drawerReason,
-    });
+    await recordPharmacyCashMovement(
+      db,
+      scope,
+      {
+        drawerSessionId: drawer.id,
+        kind: 'PAID_IN',
+        amountMinor: input.amountMinor,
+        reason: drawerReason,
+      },
+      drawerOperator
+    );
   } else {
     await requirePharmacyDayOpen(db, scope, input.businessDate);
   }

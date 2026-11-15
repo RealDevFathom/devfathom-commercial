@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -867,6 +868,21 @@ function ScopedPharmacyCounterConsole({
     { enabled: Boolean(branchId) && canSettlePayments }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
+  // DEV-821: a manager or owner names who runs a till and can hand it over. The
+  // cashier list is a manager read; a cashier's request is refused and shows nothing.
+  const managerAccess = trpc.pharmacySales.refundAccess.useQuery(undefined, {
+    enabled: branchAuthorized && !settlementDenied,
+    retry: false,
+  });
+  const actorIsManager = managerAccess.data?.authorized === true;
+  const drawerCashiers = trpc.pharmacySales.drawerCashiers.useQuery(
+    { branchId },
+    { enabled: actorIsManager && Boolean(branchId), retry: false, staleTime: 60_000 }
+  );
+  const handoverDrawer = trpc.pharmacySales.handoverDrawer.useMutation();
+  const drawerOperatingCashier = settlementDenied
+    ? null
+    : (drawerQuery.data?.operatingCashier ?? null);
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const setDemandOutcome = trpc.pharmacySales.setDemandOutcome.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -2985,6 +3001,8 @@ function ScopedPharmacyCounterConsole({
                   deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
                   onRetry={() => void drawerQuery.refetch()}
+                  cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                  currentUserId={accountId}
                   context={{
                     branch: (() => {
                       const branch = branches.find((entry) => entry.id === branchId);
@@ -3000,7 +3018,7 @@ function ScopedPharmacyCounterConsole({
                       timeZone: 'UTC',
                     }),
                   }}
-                  onOpen={(openingFloatMinor) => {
+                  onOpen={(openingFloatMinor, operatingCashierId) => {
                     setPending('drawer');
                     setNotice(null);
                     openDrawer
@@ -3009,6 +3027,7 @@ function ScopedPharmacyCounterConsole({
                         deviceId: counterDeviceId(),
                         businessDate: todayBusinessDate(),
                         openingFloatMinor,
+                        ...(operatingCashierId ? { operatingCashierId } : {}),
                       })
                       .then(() =>
                         setNotice({
@@ -3030,6 +3049,34 @@ function ScopedPharmacyCounterConsole({
                 />
               ) : (
                 <div className="space-y-2">
+                  {openDrawerSession && drawerOperatingCashier ? (
+                    <CounterDrawerOperator
+                      operatingCashier={drawerOperatingCashier}
+                      cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                      pending={handoverDrawer.isPending}
+                      onHandover={(toCashierId, reason) => {
+                        setNotice(null);
+                        return handoverDrawer
+                          .mutateAsync({
+                            branchId,
+                            drawerSessionId: openDrawerSession.id,
+                            toCashierId,
+                            reason,
+                          })
+                          .then(() => {
+                            setNotice({ tone: 'success', message: 'Till handed over.' });
+                            void utils.pharmacySales.drawerStatus.invalidate();
+                          })
+                          .catch((error: unknown) => {
+                            setNotice({
+                              tone: 'warning',
+                              message: counterPaymentErrorMessage(error),
+                            });
+                            throw error;
+                          });
+                      }}
+                    />
+                  ) : null}
                   <div>
                     <div className="space-y-1.5">
                       <Label htmlFor="counter-search" className="sr-only">
