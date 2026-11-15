@@ -12580,6 +12580,12 @@ enum PharmacyReceivingExceptionKind {
   BONUS_SHORTAGE
   /// DEV-690 — goods arrived after the scheme on the order line had lapsed.
   SCHEME_EXPIRED
+  /// DEV-691 — the distributor bill charges for more paid packs than arrived.
+  BILLED_SHORTAGE
+  /// DEV-691 — the packs are a different batch from the one the bill names.
+  BATCH_CONFLICT
+  /// DEV-691 — the packs' expiry disagrees with the bill or is shorter than the order accepts.
+  EXPIRY_CONFLICT
 }
 
 enum PharmacyReceivingExceptionStatus {
@@ -12614,6 +12620,7 @@ model PharmacySupplier {
   goodsReceipts   PharmacyGoodsReceipt[]
   purchaseReturns PharmacyPurchaseReturn[]
   debitNotes      PharmacyDebitNote[]
+  receiptDebitNotes PharmacyReceiptDebitNote[]
   credits         PharmacySupplierCredit[]
   relationships   PharmacySupplierRelationship[]
 
@@ -13483,6 +13490,7 @@ model PharmacyGoodsReceipt {
   purchaseOrder PharmacyPurchaseOrder?       @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_goods_receipts_order_fkey")
   lines         PharmacyGoodsReceiptLine[]
   exceptions    PharmacyReceivingException[]
+  debitNoteDrafts PharmacyReceiptDebitNote[]
 
   @@unique([organizationId, id], map: "pharmacy_goods_receipts_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_goods_receipts_org_branch_id_key")
@@ -13551,6 +13559,11 @@ model PharmacyGoodsReceiptLine {
   /// Uppercase serial. Duplicate stock-in is rejected per organization and GTIN.
   serialKey                 String?
   gs1Warnings               String[]                @default([])
+  /// DEV-691: the distributor bill's own line, captured for the three-way
+  /// match. Null when the bill was not captured or does not print the field.
+  billedPacks               Int?
+  billedBatchNumber         String?
+  billedPrintedExpiry       DateTime?
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
@@ -13600,12 +13613,75 @@ model PharmacyReceivingException {
   goodsReceipt      PharmacyGoodsReceipt       @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_receipt_fkey")
   goodsReceiptLine  PharmacyGoodsReceiptLine   @relation(fields: [organizationId, branchId, goodsReceiptLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rex_line_fkey")
   purchaseOrderLine PharmacyPurchaseOrderLine? @relation(fields: [organizationId, purchaseOrderLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rex_order_line_fkey")
+  debitNoteLines    PharmacyReceiptDebitNoteLine[]
 
   @@unique([organizationId, id], map: "pharmacy_rex_org_id_key")
   @@unique([organizationId, goodsReceiptLineId, kind], map: "pharmacy_rex_org_line_kind_key")
   @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rex_org_branch_status_idx")
   @@index([organizationId, goodsReceiptId], map: "pharmacy_rex_org_receipt_idx")
   @@map("pharmacy_receiving_exceptions")
+}
+
+/// DEV-691 — a debit note the three-way match proposes. Raised as DRAFT when a
+/// receipt posts with packs billed but not delivered or an overcharge, and stays a draft until a person confirms or discards it. The
+/// amounts are computed from recorded numbers and never edited (trigger).
+enum PharmacyReceiptDebitNoteStatus {
+  DRAFT
+  CONFIRMED
+  DISCARDED
+}
+
+enum PharmacyReceiptDebitNoteReason {
+  BILLED_SHORTAGE
+  PRICE_OVERCHARGE
+}
+
+model PharmacyReceiptDebitNote {
+  id              String                         @id @default(cuid())
+  organizationId  String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  goodsReceiptId  String
+  supplierId      String
+  status          PharmacyReceiptDebitNoteStatus @default(DRAFT)
+  totalMinor      Int
+  raisedAt        DateTime                       @default(now())
+  decidedAt       DateTime?
+  decidedByUserId String?
+  decisionNote    String?
+
+  goodsReceipt PharmacyGoodsReceipt           @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_rdn_receipt_fkey")
+  supplier     PharmacySupplier               @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdn_supplier_fkey")
+  lines        PharmacyReceiptDebitNoteLine[]
+
+  @@unique([organizationId, id], map: "pharmacy_rdn_org_id_key")
+  @@unique([organizationId, goodsReceiptId], map: "pharmacy_rdn_org_receipt_key")
+  @@index([organizationId, branchId, status, raisedAt], map: "pharmacy_rdn_org_branch_status_idx")
+  @@map("pharmacy_receipt_debit_notes")
+}
+
+/// DEV-691 — one claim on a draft receipt debit note, tied to the match
+/// exception that justifies it. Append-only.
+model PharmacyReceiptDebitNoteLine {
+  id                   String                         @id @default(cuid())
+  organizationId       String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  debitNoteId          String
+  receivingExceptionId String
+  lineNumber           Int
+  reason               PharmacyReceiptDebitNoteReason
+  detail               String
+  packs                Int
+  pricePerPackMinor    Int
+  amountMinor          Int
+  createdAt            DateTime                       @default(now())
+
+  debitNote          PharmacyReceiptDebitNote   @relation(fields: [organizationId, debitNoteId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdnl_note_fkey")
+  receivingException PharmacyReceivingException @relation(fields: [organizationId, receivingExceptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_rdnl_exception_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_rdnl_org_id_key")
+  @@unique([organizationId, debitNoteId, lineNumber], map: "pharmacy_rdnl_org_note_line_key")
+  @@index([organizationId, receivingExceptionId], map: "pharmacy_rdnl_org_exception_idx")
+  @@map("pharmacy_receipt_debit_note_lines")
 }
 
 // ===========================================================================
