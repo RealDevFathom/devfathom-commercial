@@ -6,8 +6,8 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
-  pause: vi.fn(),
   blockRate: vi.fn(),
+  tenantDb: {} as unknown,
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
   readWhatsAppConfig: mocks.config,
@@ -15,18 +15,11 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
-vi.mock('@/lib/pharmacy/marketing-send-policy', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/pharmacy/marketing-send-policy')>(
-    '@/lib/pharmacy/marketing-send-policy'
-  );
-  return {
-    marketingPauseSignal: actual.marketingPauseSignal,
-    pauseMarketingSending: mocks.pause,
-    evaluateMarketingBlockRate: mocks.blockRate,
-  };
-});
+vi.mock('@/lib/pharmacy/marketing-send-policy', () => ({
+  evaluateMarketingBlockRate: mocks.blockRate,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
-  withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
+  withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn(mocks.tenantDb),
 }));
 vi.mock('@/lib/rate-limit', () => ({ clientIp: () => 'local', rateLimit: () => ({ ok: true }) }));
 vi.mock('@/lib/tenancy/host', () => ({
@@ -34,6 +27,7 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.organization,
   isTenantLifecycleAccessible: (status: string) => status === 'ACTIVE',
 }));
+import { createHmac } from 'node:crypto';
 import { POST } from './route';
 const request = () =>
   new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
@@ -42,6 +36,7 @@ const request = () =>
   });
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.tenantDb = {};
   mocks.config.mockReturnValue({ phoneNumberId: 'sender-a', organizationId: 'org-a' });
   mocks.verify.mockReturnValue(true);
   mocks.organization.mockResolvedValue({
@@ -118,36 +113,6 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   expect(mocks.callback).not.toHaveBeenCalled();
 });
 
-const accountUpdate = (field: string, value: Record<string, unknown>) =>
-  new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
-    method: 'POST',
-    body: JSON.stringify({ entry: [{ id: 'waba-a', changes: [{ field, value }] }] }),
-  });
-it.each([
-  ['phone_number_quality_update', { event: 'DOWNGRADE', current_limit: 'TIER_1K' }],
-  ['phone_number_quality_update', { event: 'FLAGGED' }],
-  ['account_update', { event: 'ACCOUNT_RESTRICTION' }],
-  ['account_update', { quality_rating: 'RED' }],
-])('pauses marketing sending on a %s quality drop %j', async (field, value) => {
-  mocks.parse.mockReturnValue([]);
-  expect((await POST(accountUpdate(field, value))).status).toBe(200);
-  expect(mocks.pause).toHaveBeenCalledWith(
-    {},
-    'org-a',
-    expect.objectContaining({ reason: expect.stringMatching(/QUALITY_DROP|ACCOUNT_RESTRICTION/) })
-  );
-});
-it('does not pause on benign account updates or before signature verification', async () => {
-  mocks.parse.mockReturnValue([]);
-  await POST(accountUpdate('phone_number_quality_update', { event: 'UPGRADE' }));
-  await POST(accountUpdate('account_update', { event: 'VERIFIED_ACCOUNT' }));
-  expect(mocks.pause).not.toHaveBeenCalled();
-  mocks.verify.mockReturnValue(false);
-  expect(
-    (await POST(accountUpdate('account_update', { event: 'ACCOUNT_RESTRICTION' }))).status
-  ).toBe(401);
-  expect(mocks.pause).not.toHaveBeenCalled();
-});
 it('re-checks the block rate after a STOP and after a replayed STOP', async () => {
   await POST(request());
   expect(mocks.blockRate).toHaveBeenCalledWith({}, 'org-a');
@@ -161,4 +126,89 @@ it('skips the block-rate check when no sender message was handled', async () => 
   mocks.parse.mockReturnValue([]);
   await POST(request());
   expect(mocks.blockRate).not.toHaveBeenCalled();
+});
+it('records a signed account_update fixture as an owner alert, and nothing when unsigned', async () => {
+  const secret = 'app-secret-a';
+  const { verifyMetaSignature } = await vi.importActual<
+    typeof import('@/lib/pharmacy/whatsapp/provider')
+  >('@/lib/pharmacy/whatsapp/provider');
+  mocks.verify.mockImplementation((body: string, header: string | null) =>
+    verifyMetaSignature(secret, body, header)
+  );
+  mocks.parse.mockReturnValue([]);
+  mocks.config.mockReturnValue({
+    phoneNumberId: 'sender-a',
+    organizationId: 'org-a',
+    businessAccountId: 'waba-a',
+  });
+  const events: Array<Record<string, unknown>> = [];
+  const notifications: Array<Record<string, unknown>> = [];
+  mocks.tenantDb = {
+    pharmacyWhatsAppAccountEvent: {
+      createMany: async ({ data }: { data: Record<string, unknown> }) => {
+        events.push({ ...data, id: `evt-${events.length + 1}` });
+        return { count: 1 };
+      },
+      findFirst: async () => events.at(-1),
+    },
+    user: {
+      findMany: async () => [
+        {
+          id: 'owner-a',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+          permissionOverrides: [],
+        },
+      ],
+    },
+    notification: {
+      createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
+        notifications.push(...data);
+        return { count: data.length };
+      },
+    },
+  };
+  const body = JSON.stringify({
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: 'waba-a',
+        time: 1790000000,
+        changes: [
+          {
+            field: 'account_update',
+            value: { event: 'DISABLED_UPDATE', ban_info: { waba_ban_state: 'DISABLE' } },
+          },
+        ],
+      },
+    ],
+  });
+  const signed = (signature: string) =>
+    new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+      method: 'POST',
+      body,
+      headers: { 'x-hub-signature-256': signature },
+    });
+  expect((await POST(signed('sha256=' + '0'.repeat(64)))).status).toBe(401);
+  expect(events).toHaveLength(0);
+  expect(notifications).toHaveLength(0);
+
+  const signature = 'sha256=' + createHmac('sha256', secret).update(body).digest('hex');
+  expect((await POST(signed(signature))).status).toBe(200);
+  expect(events).toEqual([
+    expect.objectContaining({
+      organizationId: 'org-a',
+      businessAccountId: 'waba-a',
+      event: 'DISABLED_UPDATE',
+      severity: 'BLOCK',
+    }),
+  ]);
+  expect(notifications).toEqual([
+    expect.objectContaining({
+      userId: 'owner-a',
+      title: 'WhatsApp account blocked',
+      message: expect.stringContaining('appeal'),
+    }),
+  ]);
 });

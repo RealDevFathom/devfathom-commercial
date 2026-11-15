@@ -19,6 +19,7 @@ import {
   formatMinor,
   formatReceiptDate,
   receiptCashReceived,
+  receiptPromotionLabel,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -454,9 +455,9 @@ export function CounterReceiptView({
         </p>
       ) : null}
       <p className="text-sm text-text-muted">
-        Browser / OS print fallback: allow pop-ups, then select your printer and matching paper size
-        in the print dialog. These paper choices apply to this session; saved designer settings are
-        not connected yet. Printing cannot be confirmed here.
+        Browser / OS print: allow pop-ups, then select your printer and matching paper size in the
+        print dialog. The format starts on this branch&apos;s saved printer settings; a change here
+        applies to this session only. Printing cannot be confirmed here.
       </p>
 
       {presentation?.saleId === receipt.saleId &&
@@ -557,6 +558,11 @@ export function CounterReceiptView({
                   </span>
                 </div>
                 <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
+                {receiptPromotionLabel(line, locale) ? (
+                  <p className="break-words tabular-nums text-text-muted">
+                    {receiptPromotionLabel(line, locale)}
+                  </p>
+                ) : null}
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
                     key={line.allocations![index]!.allocationId}

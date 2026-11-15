@@ -12,17 +12,22 @@ import {
   readMarketingSendPolicy,
   type MarketingSendPolicy,
 } from './marketing-send-policy';
+import { assertPromotableProducts, PharmacyProductClassError } from './product-class';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
 export const marketingCampaignInput = marketingScopeInput.extend({ campaignId: id }).strict();
 const rule = z
   .object({
-    field: z.enum(['receiptCount', 'daysSinceLastReceipt']),
+    field: z.enum(['receiptCount', 'daysSinceLastReceipt', 'churnScore']),
     operator: z.enum(['eq', 'gte', 'lte']),
     value: z.number().int().min(0).max(100000),
   })
-  .strict();
+  .strict()
+  .refine((r) => r.field !== 'churnScore' || r.value <= 100, {
+    message: 'Churn score rules use a value from 0 to 100.',
+    path: ['value'],
+  });
 const definition = z.object({ version: z.literal(1), all: z.array(rule).min(1).max(10) }).strict();
 const quietHours = z
   .object({ startHour: z.number().int().min(0).max(23), endHour: z.number().int().min(0).max(23) })
@@ -46,6 +51,8 @@ export const marketingTemplateInput = marketingScopeInput
     name: z.string().trim().min(1).max(100),
     body: z.string().trim().min(1).max(1000),
     reviewed: z.literal(true),
+    // #718: catalogue items this template promotes. Only NON_DRUG_RETAIL items qualify.
+    featuredMedicineIds: z.array(id).max(20).default([]),
   })
   .strict();
 export type MarketingScope = {
@@ -71,20 +78,52 @@ const whereScope = (scope: MarketingScope) => ({
   branchId: scope.branchId,
 });
 
+/**
+ * #718 server-side product guard, layered on `validateMarketingBody`: every featured item must be a
+ * same-tenant NON_DRUG_RETAIL item without Rx, restricted or controlled flags. Re-run whenever a
+ * template is used, so an item reclassified as a medicine after approval refuses the campaign too.
+ */
+export async function assertPromotableTemplateItems(
+  db: ScopedDb,
+  scope: MarketingScope,
+  featuredMedicineIds: readonly string[]
+) {
+  const ids = [...new Set(featuredMedicineIds)];
+  if (ids.length === 0) return;
+  const products = await db.medicine.findMany({
+    where: { organizationId: scope.organizationId, id: { in: ids } },
+    select: { id: true, productFamily: true, rx: true, restricted: true, controlled: true },
+  });
+  try {
+    assertPromotableProducts(ids, products);
+  } catch (error) {
+    if (error instanceof PharmacyProductClassError)
+      throw new MarketingWorkflowError(
+        error.reason === 'PROMOTED_ITEM_NOT_FOUND'
+          ? 'A featured item is not in this catalogue.'
+          : 'Medicines cannot be promoted. Feature only non-drug retail items.'
+      );
+    throw error;
+  }
+}
+
 /** Human-reviewed templates are immutable; AI assistance never calls this writer. */
 export async function approveMarketingTemplate(
   db: ScopedDb,
   scope: MarketingScope,
-  input: z.infer<typeof marketingTemplateInput>,
+  input: z.input<typeof marketingTemplateInput>,
   now = new Date()
 ) {
-  marketingTemplateInput.parse(input);
-  validateMarketingBody(input.body);
+  const parsed = marketingTemplateInput.parse(input);
+  validateMarketingBody(parsed.body);
+  const featuredMedicineIds = [...new Set(parsed.featuredMedicineIds)];
+  await assertPromotableTemplateItems(db, scope, featuredMedicineIds);
   return db.pharmacyMarketingTemplate.create({
     data: {
       ...whereScope(scope),
-      name: input.name,
-      body: input.body,
+      name: parsed.name,
+      body: parsed.body,
+      featuredMedicineIds,
       channel: 'WHATSAPP',
       approvedByUserId: scope.actorId,
       approvedAt: now,
@@ -99,6 +138,7 @@ async function templateFor(db: ScopedDb, scope: MarketingScope, templateId: stri
   if (!template || !template.approvedByUserId || !template.approvedAt)
     throw new MarketingWorkflowError('Select a reviewed template in this branch.');
   validateMarketingBody(template.body);
+  await assertPromotableTemplateItems(db, scope, template.featuredMedicineIds);
   return template;
 }
 
@@ -305,22 +345,37 @@ async function evaluateCampaign(
     throw new MarketingWorkflowError(
       'Audience exceeds the 500-customer sandbox limit. Narrow the branch audience before capture.'
     );
+  // Nightly churn scores (DEV-83). A customer without a stored score never
+  // matches a churn rule, so a missing nightly run narrows, never widens.
+  const churnScores = new Map<string, number>();
+  if (rules.all.some((r) => r.field === 'churnScore')) {
+    const customerIds = sales.flatMap((sale) => (sale.customerId ? [sale.customerId] : []));
+    if (customerIds.length)
+      for (const row of await db.pharmacyCustomerChurnScore.findMany({
+        where: { ...whereScope(scope), customerId: { in: customerIds } },
+        select: { customerId: true, score: true },
+      }))
+        churnScores.set(row.customerId, row.score);
+  }
   let prepared = 0;
   const exclusions: Record<string, number> = {};
   for (const sale of sales) {
     if (!sale.customerId || !sale._max.completedAt) continue;
-    const values = {
+    const values: Record<'receiptCount' | 'daysSinceLastReceipt' | 'churnScore', number | null> = {
       receiptCount: sale._count._all,
       daysSinceLastReceipt: Math.floor((now.getTime() - sale._max.completedAt.getTime()) / DAY),
+      churnScore: churnScores.get(sale.customerId) ?? null,
     };
     if (
-      !rules.all.every((r) =>
-        r.operator === 'eq'
-          ? values[r.field] === r.value
+      !rules.all.every((r) => {
+        const value = values[r.field];
+        if (value === null) return false;
+        return r.operator === 'eq'
+          ? value === r.value
           : r.operator === 'gte'
-            ? values[r.field] >= r.value
-            : values[r.field] <= r.value
-      )
+            ? value >= r.value
+            : value <= r.value;
+      })
     )
       continue;
     // A shared row lock serializes captures across campaigns AND branches.

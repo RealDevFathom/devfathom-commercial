@@ -7,7 +7,10 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
-import { PHARMACY_SOP_SCHEDULE_LIMITS } from '@/lib/pharmacy/sop-shared';
+import {
+  PHARMACY_SOP_ESCALATION_DELAY,
+  PHARMACY_SOP_SCHEDULE_LIMITS,
+} from '@/lib/pharmacy/sop-shared';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
 import { isIanaTimezone, workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
@@ -1164,6 +1167,7 @@ function Schedules({
       }
     >
       <AutoScheduling pharmacyBranchId={pharmacyBranchId} timezone={timezone} />
+      <OverdueEscalation pharmacyBranchId={pharmacyBranchId} />
       {error ? (
         <p className="mb-3 text-sm text-destructive" role="alert">
           {error}
@@ -1367,6 +1371,165 @@ function AutoScheduling({
         <div className="flex flex-wrap items-center gap-3" role="alert">
           <p className="text-sm text-destructive">
             {errorMessage(settings.error, 'Automatic scheduling could not be loaded.')}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="touch"
+            onClick={() => void settings.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+export const OVERDUE_ESCALATION_COPY =
+  'Off by default: overdue procedures are only flagged on the board. When on, you are told in the app once a procedure is still not sent for review this many minutes after its window closes. It never blocks pharmacy work.';
+
+/** The result of turning overdue escalation on or off, said beside the control. */
+export function overdueEscalationNotice(result: { enabled: boolean; delayMinutes: number }) {
+  if (!result.enabled) return 'Escalation turned off. Overdue procedures are only flagged.';
+  return `Escalation turned on. You will be told about procedures still overdue ${result.delayMinutes} ${
+    result.delayMinutes === 1 ? 'minute' : 'minutes'
+  } after their window closes.`;
+}
+
+/**
+ * Per-branch overdue escalation. OFF until a manager turns it on; a missing or
+ * unreadable setting is shown as off and the control stays disabled. The
+ * person notified is always the manager who turned it on (from the session).
+ */
+function OverdueEscalation({ pharmacyBranchId }: { pharmacyBranchId: string }) {
+  const headingId = useId();
+  const copyId = useId();
+  const delayId = useId();
+  const delayErrorId = useId();
+  const utils = trpc.useUtils();
+  const settings = trpc.pharmacySop.overdueEscalation.useQuery(
+    { pharmacyBranchId },
+    { retry: false }
+  );
+  const [delay, setDelay] = useState<string | null>(null);
+  const [delayError, setDelayError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const setEscalation = trpc.pharmacySop.setOverdueEscalation.useMutation({
+    onSuccess: async (result: { enabled: boolean; delayMinutes: number }) => {
+      setError(null);
+      setNotice(overdueEscalationNotice(result));
+      await utils.pharmacySop.overdueEscalation.invalidate({ pharmacyBranchId });
+    },
+    onError: (cause) => {
+      setNotice(null);
+      setError(errorMessage(cause, 'Overdue escalation could not be changed. Retry.'));
+    },
+  });
+  const data = settings.data as { enabled?: boolean; delayMinutes?: number } | undefined;
+  const enabled = data?.enabled ?? false;
+  const savedDelay = data?.delayMinutes ?? PHARMACY_SOP_ESCALATION_DELAY.defaultMinutes;
+  const delayValue = delay ?? String(savedDelay);
+  const disabled = settings.isLoading || !settings.data || setEscalation.isPending;
+
+  function submit(next: boolean) {
+    setNotice(null);
+    if (!next) {
+      setEscalation.mutate({ pharmacyBranchId, enabled: false });
+      return;
+    }
+    const minutes = wholeMinutes(delayValue, PHARMACY_SOP_ESCALATION_DELAY.maxMinutes);
+    if (minutes === null) {
+      setDelayError(
+        `Enter whole minutes from ${PHARMACY_SOP_ESCALATION_DELAY.minMinutes} to ${PHARMACY_SOP_ESCALATION_DELAY.maxMinutes}.`
+      );
+      return;
+    }
+    setDelayError(null);
+    setEscalation.mutate({ pharmacyBranchId, enabled: true, delayMinutes: minutes });
+  }
+
+  return (
+    <div
+      role="group"
+      aria-labelledby={headingId}
+      aria-describedby={copyId}
+      className="mb-4 grid gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p id={headingId} className="text-sm font-medium text-text-strong">
+          Overdue escalation
+        </p>
+        <StatusPill
+          status={enabled ? 'active' : 'inactive'}
+          tone={enabled ? 'success' : 'neutral'}
+          label={settings.isLoading ? 'Loading…' : enabled ? 'Escalation on' : 'Escalation off'}
+        />
+      </div>
+      <p id={copyId} className="max-w-2xl text-xs text-text-muted">
+        {OVERDUE_ESCALATION_COPY}
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="grid min-w-0 gap-1.5">
+          <label htmlFor={delayId} className="text-sm font-medium text-text-strong">
+            Minutes after the window closes
+          </label>
+          <input
+            id={delayId}
+            inputMode="numeric"
+            className={`${fieldClass} w-32`}
+            value={delayValue}
+            disabled={disabled}
+            aria-invalid={delayError ? true : undefined}
+            aria-describedby={delayError ? delayErrorId : undefined}
+            onChange={(event) => {
+              setDelay(event.target.value);
+              setDelayError(null);
+            }}
+          />
+        </div>
+        <Button
+          type="button"
+          size="touch"
+          className="w-full sm:w-auto"
+          disabled={disabled}
+          onClick={() => submit(true)}
+        >
+          {enabled ? 'Save escalation' : 'Turn on escalation'}
+        </Button>
+        {enabled ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="touch"
+            className="w-full sm:w-auto"
+            disabled={disabled}
+            onClick={() => submit(false)}
+          >
+            Turn off escalation
+          </Button>
+        ) : null}
+      </div>
+      {delayError ? (
+        <p id={delayErrorId} className="text-sm text-destructive">
+          {delayError}
+        </p>
+      ) : null}
+      {/* A polite live region without the status role: the automatic-scheduling
+          notice above owns this section's status. */}
+      <p aria-live="polite" className="text-sm text-text-body empty:hidden">
+        {notice}
+      </p>
+      {settings.error ? (
+        <div className="flex flex-wrap items-center gap-3" role="alert">
+          <p className="text-sm text-destructive">
+            {errorMessage(settings.error, 'Overdue escalation could not be loaded.')}
           </p>
           <Button
             type="button"

@@ -4,7 +4,6 @@ import {
   evaluateMarketingBlockRate,
   isQuietHour,
   MARKETING_SEND_POLICY_DEFAULTS,
-  marketingPauseSignal,
   marketingPolicyCapReason,
   marketingSendPolicyInput,
   pauseMarketingSending,
@@ -101,30 +100,7 @@ describe('marketing policy caps', () => {
   });
 });
 
-describe('quality auto-pause', () => {
-  it.each([
-    ['phone_number_quality_update', { event: 'DOWNGRADE' }, 'QUALITY_DROP'],
-    ['phone_number_quality_update', { event: 'FLAGGED' }, 'QUALITY_DROP'],
-    ['account_update', { new_quality_score: 'yellow' }, 'QUALITY_DROP'],
-    ['account_update', { event: 'ACCOUNT_VIOLATION' }, 'ACCOUNT_RESTRICTION'],
-  ])('pauses on %s %j', (field, value, reason) => {
-    expect(marketingPauseSignal(field, value)).toMatchObject({ reason });
-  });
-  it.each([
-    ['phone_number_quality_update', { event: 'UPGRADE' }],
-    ['account_update', { quality_rating: 'GREEN' }],
-    ['messages', { event: 'DOWNGRADE' }],
-    ['account_update', null],
-  ])('ignores %s %j', (field, value) => {
-    expect(marketingPauseSignal(field, value)).toBeNull();
-  });
-  it('keeps no phone number in the pause evidence', () => {
-    const signal = marketingPauseSignal('phone_number_quality_update', {
-      display_phone_number: '923001234567',
-      event: 'DOWNGRADE',
-    });
-    expect(JSON.stringify(signal)).not.toContain('923001234567');
-  });
+describe('pause state', () => {
   it('pauses once and keeps the original evidence', async () => {
     const fresh = database(null);
     expect(

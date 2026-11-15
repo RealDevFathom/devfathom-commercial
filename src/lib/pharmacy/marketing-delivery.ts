@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PharmacyCampaignDeliveryEvent } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockCustomerConsent } from './consent-writer';
+import { whatsappMarketingPause } from './whatsapp/account-quality';
 import {
   marketingConsent,
   requireCaptureWindow,
@@ -240,6 +241,12 @@ export async function dispatchSandboxCampaign(
 ) {
   const input = sandboxDispatchInput.parse(raw);
   const captures = await transaction(async (db, scope) => {
+    // DEV-22: a WhatsApp account block or quality flag pauses every marketing send.
+    const pause = await whatsappMarketingPause(db, scope.organizationId, now);
+    if (pause.paused)
+      throw new MarketingWorkflowError(
+        `Marketing sends are paused: WhatsApp reported ${pause.reason}. Review or appeal the account first.`
+      );
     const rows = await db.pharmacyCampaignCapture.findMany({
       where: {
         organizationId: scope.organizationId,

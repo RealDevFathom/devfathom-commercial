@@ -6,6 +6,9 @@ import { z } from 'zod';
 /**
  * DEV-24 — organization-wide marketing send policy.
  *
+ * WhatsApp account and quality webhooks pause sends through DEV-22
+ * (`whatsapp/account-quality.ts`); this policy adds the block-rate pause.
+ *
  * Defaults follow the growth research (max 2 marketing messages per customer per
  * month and 1 per week; no messages 22:00-09:00 workspace time). They are
  * configurable values stored per organization, never facts baked into the
@@ -109,40 +112,6 @@ export async function marketingPolicyCapReason(
   if ((await count(MARKETING_WEEK_DAYS)) >= policy.weeklyMax) return 'FREQUENCY_CAP';
   if ((await count(MARKETING_MONTH_DAYS)) >= policy.monthlyMax) return 'FREQUENCY_CAP';
   return null;
-}
-
-const PAUSING_EVENTS = new Set([
-  'FLAGGED',
-  'DOWNGRADE',
-  'ACCOUNT_RESTRICTION',
-  'ACCOUNT_VIOLATION',
-  'DISABLED_UPDATE',
-]);
-const DROPPED_QUALITY = new Set(['YELLOW', 'RED', 'MEDIUM', 'LOW', 'FLAGGED']);
-
-export type MarketingPauseSignal = {
-  reason: 'QUALITY_DROP' | 'ACCOUNT_RESTRICTION';
-  evidence: { version: 1; field: string; event: string | null; quality: string | null };
-};
-
-const text = (value: unknown) =>
-  typeof value === 'string' && value.trim() ? value.trim().toUpperCase().slice(0, 64) : null;
-
-/** Reads a Meta `account_update` / `phone_number_quality_update` change; never stores phone data. */
-export function marketingPauseSignal(field: string, value: unknown): MarketingPauseSignal | null {
-  if (field !== 'account_update' && field !== 'phone_number_quality_update') return null;
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Record<string, unknown>;
-  const event = text(record.event);
-  const quality = text(record.quality_rating) ?? text(record.new_quality_score);
-  const qualityDropped = quality !== null && DROPPED_QUALITY.has(quality);
-  if (!qualityDropped && !(event && PAUSING_EVENTS.has(event))) return null;
-  const restriction =
-    event === 'ACCOUNT_RESTRICTION' || event === 'ACCOUNT_VIOLATION' || event === 'DISABLED_UPDATE';
-  return {
-    reason: restriction ? 'ACCOUNT_RESTRICTION' : 'QUALITY_DROP',
-    evidence: { version: 1, field: field.slice(0, 64), event, quality },
-  };
 }
 
 /** Idempotent: an already-paused organization keeps its original pause evidence. */

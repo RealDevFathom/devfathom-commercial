@@ -1,15 +1,12 @@
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
-import {
-  evaluateMarketingBlockRate,
-  marketingPauseSignal,
-  pauseMarketingSending,
-} from '@/lib/pharmacy/marketing-send-policy';
+import { evaluateMarketingBlockRate } from '@/lib/pharmacy/marketing-send-policy';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { parseAccountChanges, recordAccountChanges } from '@/lib/pharmacy/whatsapp/account-quality';
 import { handleInboundWhatsAppMessage } from '@/lib/pharmacy/whatsapp/inbound';
 import { createWhatsAppProvider, readWhatsAppConfig } from '@/lib/pharmacy/whatsapp/provider';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -155,31 +152,12 @@ export async function POST(request: Request) {
           );
         }
       }
-  // DEV-24 — a quality drop or account restriction pauses marketing sending.
-  // The signature and the tenant-bound app config authenticate these changes;
-  // pausing is fail-safe, so no sender metadata is required on them.
-  const accountPayload = z
-    .object({
-      entry: z
-        .array(
-          z.object({
-            changes: z
-              .array(z.object({ field: z.string().max(64).optional(), value: z.unknown() }))
-              .max(500),
-          })
-        )
-        .max(500),
-    })
-    .safeParse(payload);
-  if (accountPayload.success)
-    for (const entry of accountPayload.data.entry)
-      for (const change of entry.changes) {
-        const signal = change.field ? marketingPauseSignal(change.field, change.value) : null;
-        if (signal)
-          await withTenantDb(organization.id, (db) =>
-            pauseMarketingSending(db, organization.id, signal)
-          );
-      }
+  // DEV-22: account strikes, restrictions and quality flags for the bound account only.
+  const accountChanges = parseAccountChanges(payload, config.businessAccountId);
+  if (accountChanges.length)
+    await withTenantDb(organization.id, (db) =>
+      recordAccountChanges(db, organization.id, accountChanges)
+    );
   const messages = provider
     .parseInbound(payload)
     .filter(

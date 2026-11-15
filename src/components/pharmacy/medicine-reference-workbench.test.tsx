@@ -382,9 +382,7 @@ it('rejects a file above 20,000 rows before any upload', async () => {
       expect.stringContaining('A reference file is limited to 20,000 rows')
     )
   );
-  expect(
-    screen.queryByRole('button', { name: 'Preview normalized rows' })
-  ).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Preview normalized rows' })).not.toBeInTheDocument();
   expect(mocks.runNow).not.toHaveBeenCalled();
 });
 
@@ -395,4 +393,47 @@ it('allows the upload controls to shrink within a narrow viewport', () => {
   expect(input).toHaveClass('min-w-0');
   expect(label).toHaveClass('min-w-0');
   expect(label?.parentElement).toHaveClass('grid-cols-[minmax(0,1fr)]');
+});
+
+it('auto-maps an official DRAP export and sends it as regulator data for review', async () => {
+  mocks.runNow.mockResolvedValue(completed);
+  render(<MedicineReferenceWorkbench health={[]} />);
+  fireEvent.click(screen.getByRole('radio', { name: 'Official DRAP registry file' }));
+  expect(screen.getByText(/Nothing is saved until a pharmacist confirms it/)).toBeVisible();
+  const csv = [
+    'Registration No,Brand Name,Strength,Dosage Form,Pack Size,Prescription Status',
+    '012345,Amoxil,500 mg,Capsule,2 x 10,Prescription Only',
+  ].join('\n');
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
+    target: { files: [new File([csv], 'drap.csv', { type: 'text/csv' })] },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview normalized rows' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Run 1 rows now' }));
+
+  await waitFor(() => expect(mocks.runNow).toHaveBeenCalledOnce());
+  const input = mocks.runNow.mock.calls[0]![0] as {
+    connectorId: string;
+    rows: Array<{
+      rowSourceKey: string;
+      values: Record<string, string>;
+      assertions: Array<{ sourceType: string }>;
+    }>;
+  };
+  expect(input.connectorId).toBe('drap-registry');
+  expect(input.rows[0]).toMatchObject({
+    rowSourceKey: 'drap-012345',
+    values: { productName: 'Amoxil', strength: '500 mg', dosageForm: 'Capsule', rx: 'true' },
+  });
+  expect(input.rows[0]!.assertions.every((item) => item.sourceType === 'REGULATOR')).toBe(true);
+});
+
+it('names the source of each proposal', () => {
+  mocks.proposals.data = [
+    {
+      ...proposal,
+      payload: { ...proposal.payload, source: { label: 'DRAP registry file' } },
+    },
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByText('Source: DRAP registry file')).toBeVisible();
 });

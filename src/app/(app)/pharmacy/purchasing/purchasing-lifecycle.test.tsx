@@ -256,6 +256,18 @@ it.each([0, 1_800])(
   }
 );
 
+it('says no bills to check, not all-clear, when nothing was received (DEV-522)', async () => {
+  mocks.createCaller.mockReturnValue(callerStub({ goodsReceipts: vi.fn().mockResolvedValue([]) }));
+  render(await ReceivingPage({ searchParams: params() }));
+  const report = within(
+    screen
+      .getByRole('heading', { name: 'Purchase bill reconciliation' })
+      .closest('[data-slot="section-card"]')! as HTMLElement
+  );
+  expect(report.getByText(/^No bills to check\./)).toBeVisible();
+  expect(report.queryByText(/missing NTN or STRN/)).not.toBeInTheDocument();
+});
+
 it.each([undefined, 'req-other', 'req-source'])(
   'shows a draft quote ranking from its own requisition with req=%s',
   async (selectedRequisition) => {

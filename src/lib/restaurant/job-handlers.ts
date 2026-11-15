@@ -13,6 +13,10 @@ import {
   pharmacySopAutoGenerateHandler,
 } from '@/lib/pharmacy/sop-auto-schedule-job';
 import {
+  PHARMACY_SOP_ESCALATE_OVERDUE_JOB,
+  pharmacySopEscalateOverdueHandler,
+} from '@/lib/pharmacy/sop-overdue-escalation';
+import {
   coreRestaurantJobHandlers,
   resolveRestaurantJobHandler as resolveHandler,
   runRestaurantJob as runJob,
@@ -35,6 +39,10 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   // The hourly parent enqueues one per-branch child per ON branch.
   [PHARMACY_SOP_AUTO_GENERATE_JOB]: pharmacySopAutoGenerateHandler,
   [PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB]: pharmacySopAutoGenerateBranchHandler,
+  // DEV-751: opt-in pharmacy overdue escalation (enqueued only once a pharmacy
+  // branch turns it on; stops when none is on). It hands overdue occurrences to
+  // the shared `sop.runEscalation` handler above.
+  [PHARMACY_SOP_ESCALATE_OVERDUE_JOB]: pharmacySopEscalateOverdueHandler,
 };
 
 export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler | undefined {

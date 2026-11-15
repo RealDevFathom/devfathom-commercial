@@ -71,6 +71,7 @@ export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSid
 /** Sources whose idempotent replay must also match the original source row. */
 export const REPLAY_IDENTITY_CHECKED_SOURCES: ReadonlySet<FinanceSourceKind> = new Set([
   'PHARMACY_JOURNAL_VOUCHER',
+  'PHARMACY_AP_INVOICE',
 ]);
 
 export type JournalScope = {

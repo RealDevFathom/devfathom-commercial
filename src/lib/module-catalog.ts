@@ -116,9 +116,7 @@ export function moduleDefinitionForKey(key: string): ModuleDefinition | undefine
  * missing tenant vertical must fail closed. Role and procedure checks remain
  * separate requirements at their existing enforcement points.
  */
-export function supportsRestaurantPrintSettings(
-  vertical: string | null | undefined
-): boolean {
+export function supportsRestaurantPrintSettings(vertical: string | null | undefined): boolean {
   return vertical != null && vertical === verticalForModuleKey('restaurant-core');
 }
 
@@ -240,6 +238,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyPurchasing: 'pharmacy-procurement',
   // DEV-752: pack-photo batch/expiry suggestions on the receiving bench.
   pharmacyPackLabel: 'pharmacy-procurement',
+  // DEV-679: distributor invoice (photo/PDF) read into a draft-receipt proposal.
+  pharmacyInvoiceCapture: 'pharmacy-procurement',
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
@@ -260,6 +260,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyFinance: 'pharmacy-finance',
   // CEO-JVCORE-20261025: manual journal vouchers are Pharmacy Finance bookkeeping.
   pharmacyGeneralJournal: 'pharmacy-finance',
+  // DEV-103: native non-stock AP invoices, settlements and aging.
+  pharmacyApInvoices: 'pharmacy-finance',
   pharmacyOffline: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
   // DEV-753: the owner switch for supplier compliance checks belongs to the
@@ -411,12 +413,15 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/inventory', 'pharmacy-inventory'],
   ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
   ['/pharmacy/accounts/general-journal', 'pharmacy-finance'],
+  ['/pharmacy/accounts/ap-aging', 'pharmacy-finance'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/settings/branches', 'pharmacy-core'],
+  ['/pharmacy/settings/printers', 'pharmacy-counter'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
+  ['/pharmacy/khata', 'pharmacy-counter'],
   ['/pharmacy/cameras', 'pharmacy-core'],
   ['/pharmacy/sop', 'pharmacy-safety'],
   ['/pharmacy/orders', 'pharmacy-counter'],

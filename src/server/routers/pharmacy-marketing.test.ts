@@ -137,14 +137,20 @@ describe('marketing workflow authorization', () => {
   it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
     'denies nonowner %s before reading data',
     async (role) => {
-      await expect(caller(role).history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller(role).history(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: expect.stringContaining('owner account is required'),
+      });
       expect(mocks.organization).not.toHaveBeenCalled();
       expect(mocks.history).not.toHaveBeenCalled();
     }
   );
   it('denies the wrong package before reading data', async () => {
     mocks.licensed.mockReturnValue(false);
-    await expect(caller().history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().history(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('Pharmacy CRM license'),
+    });
     expect(mocks.organization).not.toHaveBeenCalled();
   });
   it('denies a foreign or inactive branch before mutation', async () => {
@@ -368,9 +374,13 @@ describe('marketing send policy procedures (DEV-24)', () => {
   it.each(['MANAGER', 'CASHIER', 'PHARMACIST'])(
     'refuses %s before reading, changing or resuming the policy',
     async (role) => {
-      await expect(caller(role).sendPolicy(input)).rejects.toThrow('Owner access');
-      await expect(caller(role).updateSendPolicy(settings)).rejects.toThrow('Owner access');
-      await expect(caller(role).resumeSending(input)).rejects.toThrow('Owner access');
+      await expect(caller(role).sendPolicy(input)).rejects.toThrow('An owner account is required');
+      await expect(caller(role).updateSendPolicy(settings)).rejects.toThrow(
+        'An owner account is required'
+      );
+      await expect(caller(role).resumeSending(input)).rejects.toThrow(
+        'An owner account is required'
+      );
       expect(mocks.transaction).not.toHaveBeenCalled();
     }
   );

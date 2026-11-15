@@ -472,6 +472,7 @@ it('packages the complete catalog source graph and generates Prisma through post
     for (const path of [
       'prisma/sync-catalog.ts',
       'prisma/catalog-sync.ts',
+      'prisma/load-env.ts',
       'prisma.config.ts',
       'package.json',
       'tsconfig.json',

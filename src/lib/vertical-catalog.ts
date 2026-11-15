@@ -41,6 +41,16 @@ export interface InviteCopy {
   titlePlaceholder: string;
   phonePlaceholder: string;
   baseRoleLabels: Record<BaseRole, string>;
+  /**
+   * DEV-673: when set, the invite form shows one role picker instead of a base-role
+   * switch beside a role-template select. Each role template then also sets the
+   * member's base role, looked up here by template key; a template not listed here,
+   * and "no role", invite at EMPLOYEE. The server still checks the inviter may grant
+   * the resulting base role.
+   */
+  roleTemplateBaseRoles?: Readonly<Record<string, BaseRole>>;
+  /** One-line explanations shown under the picker for roles that look alike. */
+  roleTemplateDescriptions?: Readonly<Record<string, string>>;
 }
 
 const PHONE_PLACEHOLDER = '+92 300 1234567';
@@ -285,6 +295,22 @@ const INVITE_COPY_BY_VERTICAL: Record<OrganizationVertical, InviteCopy> = {
     titlePlaceholder: 'Pharmacist',
     phonePlaceholder: PHONE_PLACEHOLDER,
     baseRoleLabels: { EMPLOYEE: 'Staff', HR: 'Manager', ADMIN: 'Admin' },
+    // `admin` is the bootstrap Organization administrator role. Owner / Operator pairs
+    // with ADMIN for the guards that require a literal ADMIN (see its template).
+    roleTemplateBaseRoles: {
+      admin: 'ADMIN',
+      owner: 'ADMIN',
+      'owner-operator': 'ADMIN',
+      manager: 'HR',
+    },
+    // The three owner-type roles grant different access, so each says how.
+    roleTemplateDescriptions: {
+      admin:
+        'Every module and setting in the workspace, including billing and team; no dispensing.',
+      owner: 'All pharmacy work and reports across every branch; no dispensing.',
+      'owner-operator':
+        'Works the counter too: daily pharmacy operations and purchasing, plus dispensing.',
+    },
   },
   HOSPITALITY: {
     staffRoleLabel: 'Hotel staff role',
@@ -310,7 +336,16 @@ export function inviteCopyForVertical(
     throw new Error(`Unhandled vertical: ${String(v)}`);
   }
   const copy = INVITE_COPY_BY_VERTICAL[v];
-  return { ...copy, baseRoleLabels: { ...copy.baseRoleLabels } };
+  return {
+    ...copy,
+    baseRoleLabels: { ...copy.baseRoleLabels },
+    ...(copy.roleTemplateBaseRoles
+      ? { roleTemplateBaseRoles: { ...copy.roleTemplateBaseRoles } }
+      : {}),
+    ...(copy.roleTemplateDescriptions
+      ? { roleTemplateDescriptions: { ...copy.roleTemplateDescriptions } }
+      : {}),
+  };
 }
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = [
@@ -936,7 +971,15 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     capabilities: ['pharmacy:procurement'],
   },
   { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
-  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
+  {
+    key: 'finance',
+    name: 'Finance',
+    isSystem: true,
+    // DEV-519: every pharmacy financial report lives inside the Reports command
+    // centre, whose rail entry, page and procedures check `reports:operational`.
+    // Granting only `reports:financial` left Finance with no reachable report.
+    capabilities: ['reports:operational', 'reports:financial'],
+  },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
 
