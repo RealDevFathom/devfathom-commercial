@@ -1324,6 +1324,82 @@ describeIfDatabase('bills command layer (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
   });
 
+  it('reverses a retained comp after partial tender without recutting or changing accepted money', async () => {
+    const { orderId, db } = await openWithItems([{}, {}]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) => tx.restaurantBillLine.findFirstOrThrow({ where: { billId } }));
+    const original = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'mistake',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const comped = await read((tx) =>
+      tx.restaurantBillLine.findUniqueOrThrow({ where: { id: line.id } })
+    );
+    const tender = await read((tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId,
+          type: 'CARD',
+          amount: D('1.00'),
+          businessDate: original.businessDate,
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+      })
+    );
+    await expect(
+      deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: { kind: 'NONE' },
+        recut: { reason: 'cannot undo this way', approvingStaffProfileId: ids.manager },
+        actor: actor(),
+      })
+    ).rejects.toMatchObject({ reason: 'RESPLIT_LOCKED' });
+    const request = {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'reverse mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    };
+    expect((await deps.bills.reverseCompLine(db, request)).replayed).toBe(false);
+    expect((await deps.bills.reverseCompLine(db, request)).replayed).toBe(true);
+    const after = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }),
+      line: await tx.restaurantBillLine.findUniqueOrThrow({ where: { id: line.id } }),
+      tenders: await tx.restaurantTender.findMany({ where: { billId } }),
+      approvals: await tx.restaurantCoAuthorization.findMany({ where: { targetId: line.id } }),
+    }));
+    expect(after.bill.grandTotal.toFixed(2)).toBe(original.grandTotal.toFixed(2));
+    expect(after.bill.compTotal.toFixed(2)).toBe('0.00');
+    expect(after.bill.status).toBe('OPEN');
+    expect(after.line.compAmount.toFixed(2)).toBe('0.00');
+    expect(after.line.compReason).toBe('mistake');
+    expect(after.line.compCoAuthorizationId).toBe(comped.compCoAuthorizationId);
+    expect(after.tenders).toEqual([tender]);
+    expect(after.approvals).toHaveLength(2);
+    expect(
+      after.approvals.some((approval) => approval.reason.includes('reverse mistaken comp'))
+    ).toBe(true);
+    const settlement = await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId));
+    expect(settlement.accountedTotal.toFixed(2)).toBe(settlement.derivedOrderTotal.toFixed(2));
+  });
+
   it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
     await read((tx) =>
