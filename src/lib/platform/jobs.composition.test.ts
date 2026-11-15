@@ -103,6 +103,15 @@ describe('composed platform worker boundaries', () => {
     expect(m.archiveCreate).not.toHaveBeenCalled();
   });
 
+  it('runs the DEV-96 pharmacy retention purge on every worker run', async () => {
+    await processPlatformJobs();
+    const purgeScans = m.query.mock.calls.filter(([sql]) =>
+      String(sql?.text ?? '').includes('pharmacy_retention_days(')
+    );
+    expect(purgeScans).toHaveLength(4);
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
+  });
+
   it('propagates enqueue failure before stale recovery or any claim', async () => {
     const error = new Error('camera enqueue unavailable');
     m.createMany.mockRejectedValue(error);

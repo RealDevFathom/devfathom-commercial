@@ -20,6 +20,7 @@ import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
+import { purgeExpiredPharmacyRecords } from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -889,6 +890,8 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
+  // DEV-96: pharmacy records past their rule-set retention window, bounded per run.
+  await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), { timeout: 120_000 });
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,
