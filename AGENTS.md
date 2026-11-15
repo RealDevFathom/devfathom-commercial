@@ -28,6 +28,12 @@ Before planning, designing, reviewing, or implementing any user interface, read
 
 # DevFathom Commercial CLI contract
 
+This section applies only on the owner's workstation. A cloud task (Codex cloud or any other
+hosted agent with no access to that workstation) skips every bullet below: it implements the
+change, runs the repository checks itself, and opens a pull request against `develop` without
+merging it. Ponytail, Caveman, Claude-Mem and Codebase Memory are not available there and are not
+required.
+
 - Use Codex Desktop GUI for planning, product decisions, and status only.
 - Run implementation, Git mutations, migrations, QA, builds, and deployment through Codex CLI
   rooted at this repository with `codex -p devfathom-commercial -C <repo-path>`.
