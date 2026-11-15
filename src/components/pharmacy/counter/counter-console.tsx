@@ -220,6 +220,22 @@ const EMPTY_CONTROLLED_AUTH = {
   refSerial: '',
 };
 
+/**
+ * DEV-712: keep only the authorization fields entered after the bill closed.
+ * A field still holding the closed bill's value (its prescriber, Rx serial,
+ * emergency flag or pharmacist) is reset, so it never follows a new patient.
+ */
+function freshControlledAuth(
+  current: typeof EMPTY_CONTROLLED_AUTH,
+  closed: typeof EMPTY_CONTROLLED_AUTH
+): typeof EMPTY_CONTROLLED_AUTH {
+  const fresh = { ...EMPTY_CONTROLLED_AUTH };
+  for (const key of Object.keys(fresh) as (keyof typeof fresh)[]) {
+    if (current[key] !== closed[key]) Object.assign(fresh, { [key]: current[key] });
+  }
+  return fresh;
+}
+
 function tenderAcknowledgement(value: unknown): value is {
   tenderId: string;
   settled: boolean;
@@ -415,8 +431,13 @@ function ScopedPharmacyCounterConsole({
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const paymentAttempt = useRef<{ saleId: string; id: string } | null>(null);
-  // The patient on the bill when it was first seen paid or voided (DEV-712).
-  const closedBillPatient = useRef<{ saleId: string; patientId: string | null } | null>(null);
+  // The patient and controlled authorization on the bill when it was first seen
+  // paid or voided (DEV-712).
+  const closedBillPatient = useRef<{
+    saleId: string;
+    patientId: string | null;
+    auth: typeof EMPTY_CONTROLLED_AUTH;
+  } | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -799,8 +820,8 @@ function ScopedPharmacyCounterConsole({
   const currentBillClosed = billClosed(cart, saleId);
   useEffect(() => {
     if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
-      closedBillPatient.current = { saleId, patientId };
-  }, [currentBillClosed, patientId, saleId]);
+      closedBillPatient.current = { saleId, patientId, auth: controlledAuth };
+  }, [controlledAuth, currentBillClosed, patientId, saleId]);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
@@ -1152,17 +1173,22 @@ function ScopedPharmacyCounterConsole({
       // DEV-712: once a bill is paid (or voided) the next scan starts a new bill.
       // A pending, unresolved payment attempt keeps its bill until it is resolved.
       // The closed bill's patient and authorization are cleared; a patient the
-      // operator picked for the next customer after the bill closed is kept.
+      // operator picked for the next customer after the bill closed is kept,
+      // with only the authorization fields entered since then.
       let billPatient = patient;
+      let billAuth = controlledAuth;
       const replaceClosedBill =
         Boolean(saleId) && !attemptRef.current && billClosed(cartQuery.data, saleId);
       if (replaceClosedBill) {
         const closed = closedBillPatient.current;
         if (closed?.saleId === saleId && closed.patientId !== patientId) {
+          billAuth = freshControlledAuth(controlledAuth, closed.auth);
           setActiveSale(null);
+          setControlledAuth(billAuth);
         } else {
           clearBill();
           billPatient = null;
+          billAuth = EMPTY_CONTROLLED_AUTH;
         }
       }
       try {
@@ -1173,18 +1199,16 @@ function ScopedPharmacyCounterConsole({
         const controlled = row.restriction.controlled;
         const patient = billPatient;
         const addressOk = patientAddress.trim().length >= 3;
-        const prescriptionOk =
-          controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
-        const emergencyOk =
-          !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+        const prescriptionOk = billAuth.emergency || Boolean(billAuth.prescriptionLineId);
+        const emergencyOk = !billAuth.emergency || billAuth.prescriberName.trim().length > 0;
         if (
           controlled &&
           (!patient ||
             !addressOk ||
             !prescriptionOk ||
             !emergencyOk ||
-            !controlledAuth.staffProfileId ||
-            !/^\d{4,8}$/.test(controlledAuth.pin) ||
+            !billAuth.staffProfileId ||
+            !/^\d{4,8}$/.test(billAuth.pin) ||
             !navigator.onLine)
         ) {
           setNotice({
@@ -1195,7 +1219,7 @@ function ScopedPharmacyCounterConsole({
           openChecks();
           return;
         }
-        const refSerial = Number(controlledAuth.refSerial);
+        const refSerial = Number(billAuth.refSerial);
         const postLine = (lineSaleId: string) =>
           addLine.mutateAsync({
             controlledAuthorization:
@@ -1203,13 +1227,13 @@ function ScopedPharmacyCounterConsole({
                 ? {
                     patientId: patient.patientId,
                     patientAddress: patientAddress.trim(),
-                    staffProfileId: controlledAuth.staffProfileId,
-                    pin: controlledAuth.pin,
-                    rxSerialWritten: controlledAuth.rxSerialWritten,
-                    emergency: controlledAuth.emergency,
-                    prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
-                    prescriberName: controlledAuth.prescriberName.trim() || undefined,
-                    prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
+                    staffProfileId: billAuth.staffProfileId,
+                    pin: billAuth.pin,
+                    rxSerialWritten: billAuth.rxSerialWritten,
+                    emergency: billAuth.emergency,
+                    prescriptionLineId: billAuth.prescriptionLineId || undefined,
+                    prescriberName: billAuth.prescriberName.trim() || undefined,
+                    prescriberRegNo: billAuth.prescriberRegNo.trim() || undefined,
                     refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
                   }
                 : undefined,

@@ -2404,6 +2404,45 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     );
   });
 
+  it("drops the paid bill's prescriber details when a new patient is kept", async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-a');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.onSelectPatient('patient-a');
+      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
+      props.controlled!.onChange('emergency', true);
+      props.controlled!.onChange('prescriberName', 'Old prescriber');
+      props.controlled!.onChange('refSerial', '77');
+    });
+    mocks.queries.counterCart!.data = settled();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(() => {
+      const props = mocks.rxPanelProps.mock.lastCall![0];
+      props.controlled!.onChange('staffProfileId', 'pharmacist-b');
+      props.controlled!.onChange('pin', '1234');
+      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+    });
+
+    scan();
+
+    await screen.findByText('New bill started. 1 × Paracetamol added.');
+    const sent = mocks.mutations.addLine!.mock.calls[0]![0].controlledAuthorization;
+    expect(sent).toMatchObject({
+      patientId: 'patient-b',
+      staffProfileId: 'pharmacist-b',
+      prescriptionLineId: 'rx-line-b',
+      emergency: false,
+    });
+    expect(sent.prescriberName).toBeUndefined();
+    expect(sent.refSerial).toBeUndefined();
+  });
+
   it("never carries the paid bill's patient onto the next bill", async () => {
     controlledScanSetup();
     mocks.queries.counterPatientPanel = patientPanel('patient-a');
