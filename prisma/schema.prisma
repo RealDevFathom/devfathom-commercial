@@ -7207,6 +7207,8 @@ model RestaurantOrderIdempotencyKey {
   key            String
   commandType    String
   resultRef      String?
+  /// SHA-256 of the canonical command payload; NULL only on pre-binding keys.
+  payloadHash    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

@@ -92,7 +92,8 @@ export type OrderCommandErrorReason =
   | 'LIMIT_REACHED'
   | 'LIMIT_UNAVAILABLE'
   | 'PRINT_ROUTE_NOT_FOUND'
-  | 'TICKET_NOT_FOUND';
+  | 'TICKET_NOT_FOUND'
+  | 'IDEMPOTENCY_CONFLICT';
 
 export class OrderCommandError extends Error {
   constructor(
@@ -167,26 +168,74 @@ export async function lockRestaurantOrder(tx: ScopedDb, orderId: string): Promis
 
 type IdempotencyOutcome = { replay: false } | { replay: true; resultRef: string | null };
 
+/** Input members that are not part of the command a key is bound to: the actor
+ * carries the key itself, `now` is the server instant (C6), and entitlement limits
+ * are server-resolved context that may legitimately change between retries. */
+const NON_PAYLOAD_INPUT_KEYS: ReadonlySet<string> = new Set(['actor', 'now', 'entitlementLimits']);
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry ?? null));
+  if (value instanceof Date) return value.toISOString();
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      if (record[key] !== undefined) out[key] = canonicalize(record[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Deterministic SHA-256 of a command's payload (key order independent; transport
+ * and server-time members excluded), so a reused key cannot replay a different
+ * command or the same command against different targets. */
+export function orderCommandPayloadHash(input: Readonly<Record<string, unknown>>): string {
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!NON_PAYLOAD_INPUT_KEYS.has(key)) payload[key] = value;
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(payload)), 'utf8')
+    .digest('hex');
+}
+
 /**
- * Begin an idempotent command. If this (deviceId, key) has already run, returns a
- * replay with the stored result reference (the caller then re-reads and returns
- * the original result, creating nothing). Otherwise records the key and proceeds.
- * A concurrent duplicate that loses the unique-index race rolls the whole
- * transaction back (fail-closed); the client's retry then observes the committed
- * key and replays.
+ * Begin an idempotent command. If this (deviceId, key) has already run for the
+ * same command type and canonical payload, returns a replay with the stored result
+ * reference (the caller then re-reads and returns the original result, creating
+ * nothing). A key already bound to a different command type or payload is
+ * rejected (`IDEMPOTENCY_CONFLICT`) rather than reported as a successful replay.
+ * Otherwise records the key and proceeds. A concurrent duplicate that loses the
+ * unique-index race rolls the whole transaction back (fail-closed); the client's
+ * retry then observes the committed key and replays.
  */
 async function beginIdempotent(
   tx: ScopedDb,
   actor: CommandActor,
-  commandType: string
+  commandType: string,
+  input: Readonly<Record<string, unknown>>
 ): Promise<IdempotencyOutcome> {
+  const payloadHash = orderCommandPayloadHash(input);
   const existing = await tx.restaurantOrderIdempotencyKey.findUnique({
     where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
-    select: { resultRef: true },
+    select: { commandType: true, payloadHash: true, resultRef: true },
   });
-  if (existing) return { replay: true, resultRef: existing.resultRef };
+  if (existing) {
+    // A key minted before payload binding (NULL hash) is still bound to its type.
+    if (
+      existing.commandType !== commandType ||
+      (existing.payloadHash !== null && existing.payloadHash !== payloadHash)
+    ) {
+      throw new OrderCommandError(
+        'This idempotency key is already bound to a different order command.',
+        'IDEMPOTENCY_CONFLICT'
+      );
+    }
+    return { replay: true, resultRef: existing.resultRef };
+  }
   await tx.restaurantOrderIdempotencyKey.create({
-    data: { deviceId: actor.deviceId, key: actor.idempotencyKey, commandType },
+    data: { deviceId: actor.deviceId, key: actor.idempotencyKey, commandType, payloadHash },
   });
   return { replay: false };
 }
@@ -476,7 +525,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
   }
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'order.open');
+    const idem = await beginIdempotent(tx, input.actor, 'order.open', input);
     if (idem.replay) {
       const order = await requireOrderSummary(tx, idem.resultRef);
       return {
@@ -507,8 +556,12 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
-    await assertMoneyDayOpen(tx, branch.id, businessDate, () =>
-      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    await assertMoneyDayOpen(
+      tx,
+      branch.id,
+      businessDate,
+      () =>
+        new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
     );
     await enforceMonthlyOrderLimit(tx, input, businessDate);
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
@@ -613,7 +666,7 @@ export type ItemResult = { itemId: string; replayed: boolean };
 export async function addItem(db: ScopedDb, input: AddItemInput): Promise<ItemResult> {
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.add');
+    const idem = await beginIdempotent(tx, input.actor, 'item.add', input);
     if (idem.replay) return { itemId: idem.resultRef ?? '', replayed: true };
 
     await lockRestaurantOrder(tx, input.orderId);
@@ -703,7 +756,7 @@ export type AdjustItemInput = {
 
 export async function adjustItem(db: ScopedDb, input: AdjustItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.adjust');
+    const idem = await beginIdempotent(tx, input.actor, 'item.adjust', input);
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const order = await loadOrder(tx, input.orderId);
@@ -770,7 +823,7 @@ export type RemoveItemInput = {
  * no co-authorization is required; it moves HELD→VOIDED and its history is kept. */
 export async function removeItem(db: ScopedDb, input: RemoveItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.remove');
+    const idem = await beginIdempotent(tx, input.actor, 'item.remove', input);
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const order = await loadOrder(tx, input.orderId);
@@ -812,9 +865,14 @@ export type FireResult = {
  * HELD→QUEUED and KOTs are generated. Order aggregate follows (→SENT). */
 export async function sendOrder(db: ScopedDb, input: SendOrderInput): Promise<FireResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'order.send');
+    const idem = await beginIdempotent(tx, input.actor, 'order.send', input);
     if (idem.replay) {
-      return { orderId: input.orderId, itemIds: [], tickets: [], replayed: true };
+      return {
+        orderId: idem.resultRef ?? input.orderId,
+        itemIds: [],
+        tickets: [],
+        replayed: true,
+      };
     }
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
@@ -834,9 +892,14 @@ export type FireCourseInput = { orderId: string; course: number; actor: CommandA
  * get KOTs (§11.1 — unrelated courses are untouched). */
 export async function fireCourse(db: ScopedDb, input: FireCourseInput): Promise<FireResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'course.fire');
+    const idem = await beginIdempotent(tx, input.actor, 'course.fire', input);
     if (idem.replay) {
-      return { orderId: input.orderId, itemIds: [], tickets: [], replayed: true };
+      return {
+        orderId: idem.resultRef ?? input.orderId,
+        itemIds: [],
+        tickets: [],
+        replayed: true,
+      };
     }
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
@@ -912,7 +975,7 @@ export async function reprintKitchenTicket(
   input: ReprintKitchenTicketInput
 ): Promise<{ orderId: string; ticketId: string; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'kot.reprint');
+    const idem = await beginIdempotent(tx, input.actor, 'kot.reprint', input);
     if (idem.replay) {
       return { orderId: input.orderId, ticketId: idem.resultRef ?? input.ticketId, replayed: true };
     }
@@ -976,8 +1039,9 @@ export async function holdCourse(
   input: HoldCourseInput
 ): Promise<{ orderId: string; itemIds: string[]; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'course.hold');
-    if (idem.replay) return { orderId: input.orderId, itemIds: [], replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'course.hold', input);
+    if (idem.replay)
+      return { orderId: idem.resultRef ?? input.orderId, itemIds: [], replayed: true };
 
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
@@ -1016,7 +1080,7 @@ export type AdvanceItemInput = {
  * machine; the order aggregate is re-derived afterwards. */
 export async function advanceItem(db: ScopedDb, input: AdvanceItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.advance');
+    const idem = await beginIdempotent(tx, input.actor, 'item.advance', input);
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const order = await loadOrder(tx, input.orderId);
@@ -1058,7 +1122,7 @@ export async function requestRemake(
   input: RequestRemakeInput
 ): Promise<RemakeResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.remake');
+    const idem = await beginIdempotent(tx, input.actor, 'item.remake', input);
     if (idem.replay) {
       return { itemId: input.itemId, remakeItemId: idem.resultRef ?? '', replayed: true };
     }
@@ -1134,7 +1198,7 @@ export type VoidItemInput = {
  * milestone (C6 / BUILD-ASSUMPTIONS). Item + event history is preserved. */
 export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'item.void');
+    const idem = await beginIdempotent(tx, input.actor, 'item.void', input);
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const reason = requireReason(input.reason);
@@ -1239,8 +1303,8 @@ export async function cancelOrder(
   input: CancelOrderInput
 ): Promise<{ orderId: string; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'order.cancel');
-    if (idem.replay) return { orderId: input.orderId, replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'order.cancel', input);
+    if (idem.replay) return { orderId: idem.resultRef ?? input.orderId, replayed: true };
 
     const reason = requireReason(input.reason);
     await tx.$queryRaw`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} FOR UPDATE`;
@@ -1361,8 +1425,8 @@ export async function closeOrder(
     throw new OrderCommandError('The close timestamp is invalid.', 'INVALID');
   }
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'order.close');
-    if (idem.replay) return { orderId: input.orderId, replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'order.close', input);
+    if (idem.replay) return { orderId: idem.resultRef ?? input.orderId, replayed: true };
 
     await tx.$queryRaw`SELECT "id" FROM "restaurant_orders" WHERE "id" = ${input.orderId} FOR UPDATE`;
     const order = await loadOrder(tx, input.orderId);
@@ -1437,8 +1501,8 @@ export async function moveTable(
   input: MoveTableInput
 ): Promise<{ orderId: string; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'table.move');
-    if (idem.replay) return { orderId: input.orderId, replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'table.move', input);
+    if (idem.replay) return { orderId: idem.resultRef ?? input.orderId, replayed: true };
 
     // The active table links are a child-row set whose validity is owned by the
     // order. Lock the parent before reading that set so concurrent moves cannot
@@ -1496,8 +1560,10 @@ export async function mergeTables(
   input: MergeTablesInput
 ): Promise<{ orderId: string; addedTableIds: string[]; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'table.merge');
-    if (idem.replay) return { orderId: input.orderId, addedTableIds: [], replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'table.merge', input);
+    if (idem.replay) {
+      return { orderId: idem.resultRef ?? input.orderId, addedTableIds: [], replayed: true };
+    }
 
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
@@ -1534,8 +1600,8 @@ export async function unlinkTable(
   input: UnlinkTableInput
 ): Promise<{ orderId: string; replayed: boolean }> {
   return runInTransaction(db, async (tx) => {
-    const idem = await beginIdempotent(tx, input.actor, 'table.unlink');
-    if (idem.replay) return { orderId: input.orderId, replayed: true };
+    const idem = await beginIdempotent(tx, input.actor, 'table.unlink', input);
+    if (idem.replay) return { orderId: idem.resultRef ?? input.orderId, replayed: true };
 
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
