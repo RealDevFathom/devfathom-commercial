@@ -142,6 +142,17 @@ export const pharmacySupplierLinksRouter = router({
           branchId: link.branchId,
         },
         data: { revokedAt: new Date() },
+        // DEV-848: never return `tokenHash`; it verifies the supplier's bearer link.
+        select: {
+          id: true,
+          branchId: true,
+          supplierRelationshipId: true,
+          purchaseOrderId: true,
+          expiresAt: true,
+          revokedAt: true,
+          createdByUserId: true,
+          createdAt: true,
+        },
       });
     }),
   recordManual: staff
