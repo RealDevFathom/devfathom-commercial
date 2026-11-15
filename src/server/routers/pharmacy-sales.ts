@@ -1,4 +1,13 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import {
+  authorizeCounterApproval,
+  confirmCounterApproval,
+  CounterApprovalDenied,
+  fefoOverrideApprovalPolicy,
+  type CounterApproval,
+  type CounterApprovalKind,
+  type CounterApprovalPin,
+} from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
   PharmacyRxReferenceError,
@@ -185,6 +194,9 @@ const tenderInput = z
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
+const counterApprovalPin = z
+  .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
+  .strict();
 const demandReason = z.enum([
   'STOCKOUT',
   'NOT_CARRIED',
@@ -206,6 +218,69 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+type SaleLineInput = Parameters<typeof addSaleLine>[2];
+type CounterLineRequest = Omit<
+  SaleLineInput,
+  'override' | 'approvedByUserId' | 'approvalPolicy'
+> & {
+  discountApproval?: CounterApprovalPin;
+  override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
+};
+
+/**
+ * #520: build the domain line input with server-verified approvals only. A discount needs a
+ * manager's PIN (solo rule: the sole approver re-enters their own); a FEFO override needs the
+ * pharmacist on duty or a pharmacist's PIN. Each approval is labelled on the audit row.
+ * Runs before the sale transaction opens; `confirmLineApprovals` re-checks inside it.
+ */
+async function approvedLineInput(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: CounterLineRequest
+): Promise<{
+  lineInput: SaleLineInput;
+  approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }>;
+}> {
+  const approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }> = [];
+  const lineInput: SaleLineInput = {
+    saleId: input.saleId,
+    medicineId: input.medicineId,
+    presentationId: input.presentationId,
+    packLevelId: input.packLevelId,
+    saleUnit: input.saleUnit,
+    quantity: input.quantity,
+    canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+    discountKind: input.discountKind,
+    discountMinor: input.discountMinor,
+    idempotencyKey: input.idempotencyKey,
+  };
+  const { override } = input;
+  if ((input.discountMinor ?? 0) > 0) {
+    const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
+    approvals.push({ kind: 'DISCOUNT', approval });
+    lineInput.approvedByUserId = approval.approvedByUserId;
+    lineInput.approvalPolicy = approval.approvalPolicy;
+    annotateAudit(ctx, { metadata: { discountApproval: approval } });
+  }
+  if (override) {
+    const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
+    approvals.push({ kind: 'FEFO_OVERRIDE', approval });
+    lineInput.override = {
+      inventoryLotId: override.inventoryLotId,
+      reason: override.reason,
+      approvalPolicy: fefoOverrideApprovalPolicy(approval, scope.actorId),
+    };
+    annotateAudit(ctx, {
+      metadata: {
+        approvalPolicy: approval.approvalPolicy,
+        approvedByUserId: approval.approvedByUserId,
+      },
+    });
+  }
+  return { lineInput, approvals };
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -265,6 +340,8 @@ function fail(error: unknown): never {
       message: error.message,
     });
   if (error instanceof ControlledRestorationDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof CounterApprovalDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
@@ -1370,13 +1447,13 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
-          approvedByUserId: z.string().min(1).optional(),
-          approvalPolicy: z.string().trim().min(1).optional(),
+          // #520: the approver is proven by a PIN the server verifies, never named by the caller.
+          discountApproval: counterApprovalPin.optional(),
           override: z
             .object({
               inventoryLotId: z.string().min(1),
               reason: z.string().trim().min(1).max(500),
-              approvalPolicy: z.string().trim().min(1).max(200),
+              approval: counterApprovalPin.optional(),
             })
             .strict()
             .optional(),
@@ -1403,15 +1480,23 @@ export const pharmacySalesRouter = router({
             medicineId: input.medicineId,
             selectedLotId: input.override.inventoryLotId,
             reason: input.override.reason,
-            approvalPolicy: input.override.approvalPolicy,
           },
         });
       }
       try {
         // DEV-607: refused before any stock is allocated, with the gate `counterCart` uses.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // #520: PINs are verified before the sale transaction takes a connection.
+        const { lineInput, approvals } = await approvedLineInput(
+          ctx,
+          ctx.db as unknown as ScopedDb,
+          scope,
+          input
+        );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          for (const { kind, approval } of approvals)
+            await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -1422,7 +1507,7 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
+            const { prescription } = input;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -1590,7 +1675,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, lineInput);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1689,7 +1774,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, lineInput);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
