@@ -1,4 +1,5 @@
 import 'server-only';
+import { copy } from '@/lib/pharmacy/plain-language';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyAnomalySignals } from './anomaly-signals-operations';
@@ -114,9 +115,9 @@ const groupSections: Record<Group, Section> = {
   'supplier-credit-review': 'procurement-suppliers',
 };
 const titles: Record<Group, string> = {
-  'inventory-review': 'Review stock alerts',
-  'anomaly-review': 'Review unusual money records',
-  'supplier-credit-review': 'Review supplier claims and deliveries',
+  'inventory-review': copy('wp.title.inventory'),
+  'anomaly-review': copy('wp.title.anomaly'),
+  'supplier-credit-review': copy('wp.title.supplier'),
 };
 const anomalyAmounts: Record<string, Record<string, string>> = {
   DISCOUNT_OVERRIDE: {
@@ -158,8 +159,7 @@ export async function readPharmacyDailyWorkPack(
       allClear: false,
       uniqueProblemCount: null,
       additiveSavings: false,
-      definition:
-        'These groups are not separate problems; the same item can appear in more than one. Amounts are what was recorded, not savings you can add up. An empty list does not prove everything is fine.',
+      definition: copy('wp.completeness'),
     },
     sources: [],
     groups: [],
@@ -266,8 +266,8 @@ export async function readPharmacyDailyWorkPack(
             : 'live-inputs-not-historical',
         missingInputs: [
           kind.startsWith('stock') || kind === 'anomalies'
-            ? 'These are saved records and may not be fully up to date.'
-            : 'These are current records, not a snapshot of the past.',
+            ? copy('wp.savedNote')
+            : copy('wp.currentNote'),
         ],
       };
       result.sources.push(source);
@@ -276,14 +276,11 @@ export async function readPharmacyDailyWorkPack(
         if (source.rowLimit !== null) {
           source.limitReached = (source.returnedRows ?? 0) >= source.rowLimit;
           source.missingInputs.push(
-            source.limitReached
-              ? 'Only the first 200 records were read; some may be left out.'
-              : 'Only the first 200 records are read, so the list may be incomplete.'
+            source.limitReached ? copy('wp.capReached') : copy('wp.capIncomplete')
           );
           if (source.limitReached) source.coverage = 'partial';
         }
-        if (source.returnedRows === 0)
-          source.missingInputs.push('Nothing was returned; this is not an all-clear result.');
+        if (source.returnedRows === 0) source.missingInputs.push(copy('wp.noneReturned'));
       } catch {
         // Never expose provider/database messages, raw payloads, or partly projected source rows.
         for (const bucket of result.groups)
@@ -304,49 +301,37 @@ export async function readPharmacyDailyWorkPack(
       );
     };
 
-    await read(
-      'stock-dashboard',
-      'inventory-review',
-      'Current stock alerts across all owners. The chosen dates do not apply.',
-      async (source) => {
-        const rows = await roleDashboard(db, scope, asOf);
-        source.returnedRows = rows.length;
-        const byKind = new Map<string, PharmacyWorkPackEvidence>();
-        for (const row of rows) {
-          const item = byKind.get(row.kind) ?? evidence(source, 'stock-kind', row.kind, 'RECORDED');
-          for (const key of ['open', 'acknowledged', 'snoozed', 'stale', 'overdue'] as const)
-            item.counts[key] = (item.counts[key] ?? 0) + row[key];
-          byKind.set(row.kind, item);
-        }
-        for (const row of byKind.values()) add('inventory-review', row);
+    await read('stock-dashboard', 'inventory-review', copy('wp.dashboardBasis'), async (source) => {
+      const rows = await roleDashboard(db, scope, asOf);
+      source.returnedRows = rows.length;
+      const byKind = new Map<string, PharmacyWorkPackEvidence>();
+      for (const row of rows) {
+        const item = byKind.get(row.kind) ?? evidence(source, 'stock-kind', row.kind, 'RECORDED');
+        for (const key of ['open', 'acknowledged', 'snoozed', 'stale', 'overdue'] as const)
+          item.counts[key] = (item.counts[key] ?? 0) + row[key];
+        byKind.set(row.kind, item);
       }
-    );
-    await read(
-      'stock-digest',
-      'inventory-review',
-      'Current stock alerts assigned to you only. The chosen dates do not apply.',
-      async (source) => {
-        const digest = await ownerDigest(db, scope, input.actorId, asOf);
-        if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
-          throw new Error('Source scope mismatch');
-        const rows = [...digest.overdue, ...digest.dueSoon, ...digest.stale, ...digest.resuming];
-        source.returnedRows = rows.length;
-        source.missingInputs.push(
-          'Digest omits other owners, future-due and still-snoozed signals; dashboard counts overlap this digest.'
-        );
-        for (const row of rows) {
-          const item = evidence(source, 'stock-signal', row.signalId, row.status);
-          item.dueAt = row.dueAt.toISOString();
-          if (row.confidence === 'PARTIAL')
-            item.missingInputs.push('Underlying stock facts are partial.');
-          if (row.status === 'STALE')
-            item.missingInputs.push(
-              'Persisted signal is stale; verify source facts before acting.'
-            );
-          add('inventory-review', item);
-        }
+      for (const row of byKind.values()) add('inventory-review', row);
+    });
+    await read('stock-digest', 'inventory-review', copy('wp.digestBasis'), async (source) => {
+      const digest = await ownerDigest(db, scope, input.actorId, asOf);
+      if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
+        throw new Error('Source scope mismatch');
+      const rows = [...digest.overdue, ...digest.dueSoon, ...digest.stale, ...digest.resuming];
+      source.returnedRows = rows.length;
+      source.missingInputs.push(
+        'Digest omits other owners, future-due and still-snoozed signals; dashboard counts overlap this digest.'
+      );
+      for (const row of rows) {
+        const item = evidence(source, 'stock-signal', row.signalId, row.status);
+        item.dueAt = row.dueAt.toISOString();
+        if (row.confidence === 'PARTIAL')
+          item.missingInputs.push('Underlying stock facts are partial.');
+        if (row.status === 'STALE')
+          item.missingInputs.push('Persisted signal is stale; verify source facts before acting.');
+        add('inventory-review', item);
       }
-    );
+    });
 
     // Financial readers also return financial metadata/free text: skip the entire source before querying.
     if (!input.financial) continue;
@@ -368,12 +353,9 @@ export async function readPharmacyDailyWorkPack(
           item.observedAt = row.sourceObservedAt.toISOString();
           item.computedAt = row.computedAt.toISOString();
           item.freshnessSeconds = row.freshnessSeconds;
-          if (row.status === 'STALE')
-            item.missingInputs.push('This saved record is out of date; check the original facts.');
+          if (row.status === 'STALE') item.missingInputs.push(copy('wp.staleRecord'));
           if (row.computedAt > asOf || row.sourceObservedAt > asOf)
-            item.missingInputs.push(
-              'This record was updated after the time you are viewing.'
-            );
+            item.missingInputs.push(copy('wp.afterAsOf'));
           const numbers =
             row.exactNumbers &&
             typeof row.exactNumbers === 'object' &&

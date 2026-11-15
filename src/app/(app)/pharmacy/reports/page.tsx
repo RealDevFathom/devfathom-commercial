@@ -343,7 +343,7 @@ export default async function PharmacyReportsPage({
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Your pharmacy figures for the dates and branch you choose."
+        description={copy('overview.description')}
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
@@ -501,7 +501,7 @@ export default async function PharmacyReportsPage({
         <>
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
             {result.freshness.status === 'CURRENT' ? null : (
-              <StatusPill status="Out of date" tone="warning" />
+              <StatusPill status={copy('overview.outOfDate')} tone="warning" />
             )}
             <span>
               {copy('overview.updated')} {formatPktTime(result.freshness.asOf)}
@@ -524,8 +524,8 @@ export default async function PharmacyReportsPage({
               </summary>
               <p>
                 {currency
-                  ? `Amounts are in ${currency}, your pharmacy's current currency setting.`
-                  : 'Amounts have no currency because your pharmacy has not set one.'}{' '}
+                  ? copy('overview.currencyKnown').replace('{currency}', currency)
+                  : copy('overview.currencyUnknown')}{' '}
                 {copy('overview.detailsBody')}
               </p>
             </details>

@@ -7,6 +7,7 @@ describe('plain-language helpers', () => {
     expect(formatPktTime('2026-11-03T13:20:00Z', now)).toBe('Today 6:20 PM');
     expect(formatPktTime('2026-11-02T04:05:00Z', now)).toBe('Yesterday 9:05 AM');
     expect(formatPktTime('2026-10-28T04:05:00Z', now)).toBe('28 Oct 9:05 AM');
+    expect(formatPktTime('2027-11-03T04:05:00Z', now)).toBe('3 Nov 2027 9:05 AM');
     expect(formatPktTime('nope', now)).toBe('');
     expect(formatPktTime(null, now)).toBe('');
   });

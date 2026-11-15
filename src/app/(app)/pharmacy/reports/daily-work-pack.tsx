@@ -39,7 +39,7 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
         <input key={name} type="hidden" name={name} value={value} />
       ))}
       <Button variant="outline" className="min-h-11" type="submit">
-        {retry ? 'Try again' : copy('workPack.refresh')}
+        {retry ? copy('workPack.retry') : copy('workPack.refresh')}
       </Button>
     </form>
   );
@@ -47,9 +47,14 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
 
 export function DailyWorkPackLoading() {
   return (
-    <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2} aria-busy="true">
+    <SectionCard
+      id="daily-work-pack"
+      title={copy('workPack.title')}
+      titleLevel={2}
+      aria-busy="true"
+    >
       <p role="status" className="mb-4 text-sm text-text-muted">
-        Getting your daily work pack. Other reports are still available.
+        {copy('workPack.loading')}
       </p>
       <Button variant="outline" className="min-h-11" disabled>
         {copy('workPack.refresh')}
@@ -74,10 +79,9 @@ export async function DailyWorkPack({
   }
   if (!pack) {
     return (
-      <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2}>
+      <SectionCard id="daily-work-pack" title={copy('workPack.title')} titleLevel={2}>
         <p role="alert" className="mb-4 text-sm text-text-muted">
-          The daily work pack could not load. Try again, or ask your administrator to check your
-          access. Nothing was changed.
+          {copy('workPack.failed')}
         </p>
         <Refresh fields={refreshFields} retry />
       </SectionCard>
@@ -88,33 +92,36 @@ export async function DailyWorkPack({
   return (
     <SectionCard
       id="daily-work-pack"
-      eyebrow="Today"
-      title="Daily work pack"
+      eyebrow={copy('workPack.eyebrow')}
+      title={copy('workPack.title')}
       titleLevel={2}
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <StatusPill status={copy(pack.completeness.status === 'partial' ? 'workPack.badge.partial' : 'workPack.badge.unknown')} tone="warning" />
+        <StatusPill
+          status={copy(
+            pack.completeness.status === 'partial'
+              ? 'workPack.badge.partial'
+              : 'workPack.badge.unknown'
+          )}
+          tone="warning"
+        />
         <Refresh fields={refreshFields} />
       </div>
       <p className="text-sm text-text-muted">
         {formatDateRange(pack.period.from, pack.period.to)} ·{' '}
-        {pack.scope.branchIds.map(branchName).join(', ')} · Updated {formatPktTime(pack.readAt)}
+        {pack.scope.branchIds.map(branchName).join(', ')} · {copy('workPack.updated')}{' '}
+        {formatPktTime(pack.readAt)}
       </p>
       <details className="mt-2 text-sm text-text-muted">
         <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-2 focus-visible:outline-ring">
           {copy('workPack.details')}
         </summary>
         <div className="space-y-2">
-          <p>
-            Each source below keeps its own dates. Supplier, ingredient and batch filters do not
-            apply here. These are current records, not a past snapshot.
-          </p>
+          <p>{copy('workPack.periodNote')}</p>
           <p>{pack.completeness.definition}</p>
           <p>{copy('workPack.refreshNote')}</p>
           <p>{copy('workPack.amountNote')}</p>
-          {!pack.permissions.financial ? (
-            <p>Money sources were not read for your role.</p>
-          ) : null}
+          {!pack.permissions.financial ? <p>{copy('workPack.noMoney')}</p> : null}
         </div>
       </details>
       {tasks.length ? (
@@ -170,7 +177,7 @@ export async function DailyWorkPack({
                             <dt className="break-all">{fieldLabel(amount.key)}</dt>
                             <dd className="break-words font-mono tabular-nums">
                               {Number.isSafeInteger(amount.value)
-                                ? `${formatMinor(amount.value)} (no currency set)`
+                                ? `${formatMinor(amount.value)} (${copy('workPack.currencyUnverified')})`
                                 : '—'}
                             </dd>
                             <dd className="text-text-muted">{amount.definition}</dd>
@@ -178,9 +185,12 @@ export async function DailyWorkPack({
                         ))}
                       </dl>
                       <p className="break-words text-text-muted">
-                        Seen: {formatPktTime(evidence.observedAt) || 'Not available'}. Worked out:{' '}
-                        {formatPktTime(evidence.computedAt) || 'Not available'}. Due or expires:{' '}
-                        {formatPktTime(evidence.dueAt) || 'Not available'}.
+                        {copy('workPack.seen')}:{' '}
+                        {formatPktTime(evidence.observedAt) || copy('workPack.notAvailable')}.{' '}
+                        {copy('workPack.workedOut')}:{' '}
+                        {formatPktTime(evidence.computedAt) || copy('workPack.notAvailable')}.{' '}
+                        {copy('workPack.dueOrExpires')}:{' '}
+                        {formatPktTime(evidence.dueAt) || copy('workPack.notAvailable')}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -205,73 +215,87 @@ export async function DailyWorkPack({
         </p>
       )}
       <details className="mt-6" open>
-      <summary className="min-h-11 cursor-pointer py-3 font-semibold text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
-        {copy('workPack.sourcesHeading')}
-      </summary>
-      <ul className="mt-3 divide-y divide-border-subtle">
-        {pack.sources.map((source) => (
-          <li
-            key={source.id}
-            id={sourceAnchor(source.id)}
-            tabIndex={-1}
-            className="space-y-2 py-4 text-sm focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">
-                {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
-              </span>
-              <StatusPill
-                status={source.status}
-                label={
-                  source.kind === 'expiry'
-                    ? source.status === 'unavailable'
-                      ? 'Could not load'
-                      : source.returnedRows === 0
-                        ? 'No eligible stock'
-                        : 'Advice ready'
-                    : undefined
-                }
-                tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
-              />
-              <StatusPill status={copy(source.coverage === 'partial' ? 'workPack.badge.partial' : 'workPack.badge.unknown')} tone="warning" />
-            </div>
-            {source.kind === 'expiry' && source.status === 'available' && source.returnedRows === 0 ? (
-              <p role="status" className="text-text-muted">
-                No available, unexpired stock was found for expiry advice in this branch. This
-                does not assess expired or quarantined stock. Refresh daily work pack after stock
-                is received or updated.
+        <summary className="min-h-11 cursor-pointer py-3 font-semibold text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
+          {copy('workPack.sourcesHeading')}
+        </summary>
+        <ul className="mt-3 divide-y divide-border-subtle">
+          {pack.sources.map((source) => (
+            <li
+              key={source.id}
+              id={sourceAnchor(source.id)}
+              tabIndex={-1}
+              className="space-y-2 py-4 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">
+                  {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
+                </span>
+                <StatusPill
+                  status={source.status}
+                  label={
+                    source.kind === 'expiry'
+                      ? source.status === 'unavailable'
+                        ? copy('workPack.couldNotLoad')
+                        : source.returnedRows === 0
+                          ? copy('workPack.noEligibleStock')
+                          : copy('workPack.adviceReady')
+                      : undefined
+                  }
+                  tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
+                />
+                <StatusPill
+                  status={copy(
+                    source.coverage === 'partial'
+                      ? 'workPack.badge.partial'
+                      : 'workPack.badge.unknown'
+                  )}
+                  tone="warning"
+                />
+              </div>
+              {source.kind === 'expiry' &&
+              source.status === 'available' &&
+              source.returnedRows === 0 ? (
+                <p role="status" className="text-text-muted">
+                  No available, unexpired stock was found for expiry advice in this branch. This
+                  does not assess expired or quarantined stock. Refresh daily work pack after stock
+                  is received or updated.
+                </p>
+              ) : null}
+              <p className="text-text-muted">{source.timeBasis}</p>
+              <p className="text-text-muted">
+                {copy('workPack.recordsRead')}:{' '}
+                {source.returnedRows ?? copy('workPack.notAvailable')}.{' '}
+                {source.limitReached ? copy('workPack.limitReached') : ''}
               </p>
-            ) : null}
-            <p className="text-text-muted">{source.timeBasis}</p>
-            <p className="text-text-muted">
-              Records read: {source.returnedRows ?? 'Not available'}.{' '}
-              {source.limitReached ? 'Only the first records were read; some may be left out.' : ''}
-            </p>
-            <p className="break-words text-text-muted">
-              Checked {formatPktTime(source.readAt)}.{' '}
-              {source.freshness === 'persisted-unverified'
-                ? 'Saved records; may be out of date.'
-                : 'Current records.'}
-            </p>
-            {Array.from(
-              new Set([
-                ...source.missingInputs,
-                ...pack.missingInputs
-                  .filter((item) => item.sourceId === source.id)
-                  .map((item) => item.reason),
-              ])
-            ).map((reason) => (
-              <p
-                key={reason}
-                role={source.kind === 'expiry' && source.status === 'unavailable' ? 'alert' : undefined}
-                className="text-text-muted"
-              >
-                {reason}
+              <p className="break-words text-text-muted">
+                {copy('workPack.checked')} {formatPktTime(source.readAt)}.{' '}
+                {source.freshness === 'persisted-unverified'
+                  ? copy('workPack.savedRecords')
+                  : copy('workPack.currentRecords')}
               </p>
-            ))}
-          </li>
-        ))}
-      </ul>
+              {Array.from(
+                new Set([
+                  ...source.missingInputs,
+                  ...pack.missingInputs
+                    .filter((item) => item.sourceId === source.id)
+                    .map((item) => item.reason),
+                ])
+              ).map((reason) => (
+                <p
+                  key={reason}
+                  role={
+                    source.kind === 'expiry' && source.status === 'unavailable'
+                      ? 'alert'
+                      : undefined
+                  }
+                  className="text-text-muted"
+                >
+                  {reason}
+                </p>
+              ))}
+            </li>
+          ))}
+        </ul>
       </details>
     </SectionCard>
   );

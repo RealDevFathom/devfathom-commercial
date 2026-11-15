@@ -11,10 +11,52 @@ export const plainCopy = {
   'workPack.refreshNote':
     'Refresh reads the latest saved records. It does not create drafts or change any stock or money.',
   'workPack.amountNote':
-    'Amounts are shown in your pharmacy currency to two decimal places. A dash means the amount is not available, not zero.',
+    'Amounts are shown to two decimal places. The currency of these source records is not confirmed. A dash means the amount is not available, not zero.',
   'workPack.noResult':
     'Nothing needs review from the sources we could read. This does not mean everything is fine; open Details to see what was missing.',
   'workPack.sourcesHeading': 'Where this came from',
+  'workPack.title': 'Daily work pack',
+  'workPack.eyebrow': 'Today',
+  'workPack.retry': 'Try again',
+  'workPack.loading': 'Getting your daily work pack. Other reports are still available.',
+  'workPack.failed':
+    'The daily work pack could not load. Try again, or ask your administrator to check your access. Nothing was changed.',
+  'workPack.noMoney': 'Money sources were not read for your role.',
+  'workPack.notAvailable': 'Not available',
+  'workPack.seen': 'Seen',
+  'workPack.workedOut': 'Worked out',
+  'workPack.dueOrExpires': 'Due or expires',
+  'workPack.recordsRead': 'Records read',
+  'workPack.checked': 'Checked',
+  'workPack.limitReached': 'Only the first records were read; some may be left out.',
+  'workPack.savedRecords': 'Saved records; may be out of date.',
+  'workPack.currentRecords': 'Current records.',
+  'workPack.couldNotLoad': 'Could not load',
+  'workPack.noEligibleStock': 'No eligible stock',
+  'workPack.adviceReady': 'Advice ready',
+  'workPack.currencyUnverified': 'currency not confirmed',
+  'workPack.updated': 'Updated',
+  'workPack.periodNote':
+    'Each source below keeps its own dates. Supplier, ingredient and batch filters do not apply here. These are current records, not a past snapshot.',
+  'overview.outOfDate': 'Out of date',
+  'overview.currencyKnown': "Amounts are in {currency}, your pharmacy's current currency setting.",
+  'overview.currencyUnknown': 'Amounts have no currency because your pharmacy has not set one.',
+  'overview.title': 'Reports',
+  'overview.description': 'Your pharmacy figures for the dates and branch you choose.',
+  'wp.title.supplier': 'Review supplier claims and deliveries',
+  'wp.title.inventory': 'Review stock alerts',
+  'wp.title.anomaly': 'Review unusual money records',
+  'wp.completeness':
+    'These groups are not separate problems; the same item can appear in more than one. Amounts are what was recorded, not savings you can add up. An empty list does not prove everything is fine.',
+  'wp.savedNote': 'These are saved records and may not be fully up to date.',
+  'wp.currentNote': 'These are current records, not a snapshot of the past.',
+  'wp.capReached': 'Only the first 200 records were read; some may be left out.',
+  'wp.capIncomplete': 'Only the first 200 records are read, so the list may be incomplete.',
+  'wp.noneReturned': 'Nothing was returned; this is not an all-clear result.',
+  'wp.dashboardBasis': 'Current stock alerts across all owners. The chosen dates do not apply.',
+  'wp.digestBasis': 'Current stock alerts assigned to you only. The chosen dates do not apply.',
+  'wp.staleRecord': 'This saved record is out of date; check the original facts.',
+  'wp.afterAsOf': 'This record was updated after the time you are viewing.',
   'overview.details': 'Details',
   'overview.allBranches': 'All branches',
   'overview.updated': 'Updated',
@@ -44,6 +86,7 @@ function pktParts(date: Date) {
     day: `${parts.year}-${parts.month}-${parts.day}`,
     label: `${parts.day} ${parts.month}`,
     year: parts.year,
+    labelWithYear: `${parts.day} ${parts.month} ${parts.year}`,
     time: `${parts.hour}:${parts.minute} ${String(parts.dayPeriod).toUpperCase()}`,
   };
 }
@@ -56,7 +99,8 @@ export function formatPktTime(value: string | Date | null | undefined, now = new
   const at = pktParts(date);
   if (at.day === pktParts(now).day) return `Today ${at.time}`;
   if (at.day === pktParts(new Date(now.getTime() - 86_400_000)).day) return `Yesterday ${at.time}`;
-  return `${at.label} ${at.time}`;
+  const sameYear = at.year === pktParts(now).year;
+  return `${sameYear ? at.label : at.labelWithYear} ${at.time}`;
 }
 
 /** "28 Oct – 3 Nov" from two YYYY-MM-DD business dates. */
@@ -64,7 +108,11 @@ export function formatDateRange(from: string, to: string): string {
   const fmt = (value: string) => {
     const date = new Date(`${value}T00:00:00Z`);
     if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' }).format(date);
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'UTC',
+      day: 'numeric',
+      month: 'short',
+    }).format(date);
   };
   return from === to ? fmt(from) : `${fmt(from)} – ${fmt(to)}`;
 }
