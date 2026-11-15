@@ -414,11 +414,14 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 
 type CounterReceiptGrant = { scope: LedgerScope; assigned: Set<string>; orgAdmin: boolean };
 
+/** `true` is the counter's own canonical action; a named action replaces it. */
+type CanonicalGate = boolean | 'pharmacy:counter' | 'pharmacy:manage';
+
 /** Session, capability and active-branch checks shared by every counter receipt path. */
 async function counterReceiptGrant(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false,
+  requireCanonical: CanonicalGate = false,
   authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
 ): Promise<CounterReceiptGrant> {
   const scope = await branchScopeOrForbidden(ctx, branch);
@@ -427,9 +430,10 @@ async function counterReceiptGrant(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
+  const canonicalAction = requireCanonical === true ? 'pharmacy:counter' : requireCanonical;
   if (
-    requireCanonicalCounter &&
-    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db: ctx.db }))
+    canonicalAction &&
+    !(await can(subjectFromSession(user), canonicalAction, undefined, { db: ctx.db }))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -518,13 +522,13 @@ function annotateOrgAdminReceiptAccess(ctx: TRPCContext, branch: string, assigne
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false,
+  requireCanonical: CanonicalGate = false,
   authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
 ): Promise<LedgerScope> {
   const { scope, assigned, orgAdmin } = await counterReceiptGrant(
     ctx,
     branch,
-    requireCanonicalCounter,
+    requireCanonical,
     authorizeMember
   );
   if (assigned.has(branch)) return scope;
@@ -578,20 +582,92 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-async function requireCloseAccess(ctx: TRPCContext) {
+const MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;
+
+/**
+ * DEV-31: taking cash out of or into a drawer, closing it with a count, and
+ * declaring an opening float are manager or owner actions. The canonical
+ * `pharmacy:manage` grant (the Manager, Owner and Owner / Operator templates;
+ * a solo owner holds it through `pharmacy:*`) is checked through `can()`, then
+ * as one deny-wins decision with the counter family, so an explicit counter
+ * DENY still binds a manager. The branch rules are the counter's: an active
+ * assignment, or the audited organization-administrator exception. A cashier
+ * holding only `pharmacy:counter` is refused before any lock or write.
+ */
+function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  return requireCounterReceiptAccess(
+    ctx,
+    branch,
+    'pharmacy:manage',
+    (rules) =>
+      counterCapabilityDecision(rules, MANAGER_CAPABILITIES) === 'ALLOW' &&
+      counterCapabilityDecision(rules) !== 'DENY'
+  );
+}
+
+async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   const user = ctx.session?.user;
-  if (
-    !user ||
-    (user.role !== 'ADMIN' &&
-      !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })))
-  )
+  if (!user)
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+  if (user.role === 'ADMIN') return;
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (await can(subject, 'pharmacy:close', undefined, options)) return;
+  // DEV-31: a manager may close the day too, but only on a branch they are
+  // actively assigned to. An explicit `pharmacy:close` DENY, from the role or a
+  // user override, still wins over the manager grant.
+  const organizationId = ctx.entitlements?.organizationId;
+  if (organizationId && (await can(subject, 'pharmacy:manage', undefined, options))) {
+    const member = await ctx.db.user.findUnique({
+      where: { id: user.id },
+      select: {
+        status: true,
+        organizationId: true,
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+          select: { capability: true, effect: true },
+        },
+      },
+    });
+    const rules = [
+      ...(member?.permissionOverrides ?? []),
+      ...(member?.organizationRole?.permissions ?? []),
+    ];
+    const closeDenied = rules.some(
+      (rule) =>
+        rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
+    );
+    // The stored member must still be active in this organization: a session
+    // claim can outlive a suspension until it is revalidated.
+    const activeMember =
+      member?.organizationId === organizationId &&
+      !!member.status &&
+      ACTIVE_STATUSES.has(member.status);
+    const assignment =
+      closeDenied || !activeMember
+        ? null
+        : await ctx.db.pharmacyBranchAssignment.findFirst({
+            where: {
+              organizationId,
+              userId: user.id,
+              branchId: branch,
+              active: true,
+              branch: { organizationId, active: true },
+            },
+            select: { branchId: true },
+          });
+    if (member && assignment) return;
+  }
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Day-close permission is required to reconcile and close a day.',
+  });
 }
 
 export const pharmacySalesRouter = router({
@@ -706,7 +782,7 @@ export const pharmacySalesRouter = router({
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
@@ -737,7 +813,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -881,7 +957,11 @@ export const pharmacySalesRouter = router({
         // lock or write: canonical `pharmacy:counter` through `can()`, then the
         // counter family check, then an active branch assignment. Both checks are
         // deny-wins: a role DENY or user DENY beats any ALLOW (DEV-659).
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        // DEV-31: a cashier opens an empty drawer; declaring a float is a manager's.
+        const scope =
+          input.openingFloatMinor > 0
+            ? await requireDrawerManagerAccess(ctx, input.branchId)
+            : await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
@@ -901,7 +981,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
           recordPharmacyCashMovement(txDb(tx), scope, input)
         );
@@ -922,7 +1002,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
@@ -940,7 +1020,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
