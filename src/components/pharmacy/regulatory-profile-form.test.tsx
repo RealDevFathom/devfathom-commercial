@@ -243,3 +243,104 @@ it("blames DevFathom's unreviewed rule config, not the province, when categories
   expect(text).toContain('operating gate stays in place');
   expect(text).not.toContain('This province has not published');
 });
+
+const jurisdictions = [
+  {
+    id: 'pb',
+    provinceCode: 'PK-PB',
+    provinceName: 'Punjab',
+    version: 1,
+    effectiveFrom: new Date('2026-01-01'),
+    licenceCategories: ['PHARMACY'],
+    permittedSchedules: ['RX'],
+    provisional: false,
+  },
+  {
+    id: 'sd',
+    provinceCode: 'PK-SD',
+    provinceName: 'Sindh',
+    version: 1,
+    effectiveFrom: new Date('2026-01-01'),
+    licenceCategories: [],
+    permittedSchedules: [],
+    provisional: true,
+  },
+];
+
+it('shows a warning for a branch in a provisional province and none for confirmed rules', () => {
+  const { unmount } = render(
+    <PharmacyRegulatoryProfileForm
+      initial={{
+        ...initial,
+        branches: [{ ...initial.branches[0]!, provinceCode: 'PK-SD' }],
+        jurisdictions,
+      }}
+    />
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Sindh rules are provisional');
+  expect(screen.getByText('Pending legal review')).toHaveAttribute('data-tone', 'warning');
+  unmount();
+  render(
+    <PharmacyRegulatoryProfileForm
+      initial={{
+        ...initial,
+        branches: [{ ...initial.branches[0]!, provinceCode: 'PK-PB' }],
+        jurisdictions,
+      }}
+    />
+  );
+  expect(screen.queryByText('Pending legal review')).not.toBeInTheDocument();
+});
+
+it('keeps the effective profile warning when newer published rules and the draft are confirmed', () => {
+  const version = {
+    id: 'version-1',
+    branchId: 'branch-1',
+    version: 1,
+    provinceCode: 'PK-SD',
+    provinceName: 'Sindh',
+    pendingLegalReview: true,
+    effective: true,
+    inForce: false,
+    effectiveFrom: new Date('2026-01-01'),
+    effectiveTo: null,
+    licenceCategory: 'PHARMACY',
+    licenceNumber: 'LIC-1',
+    licenceValidFrom: new Date('2026-01-01'),
+    licenceValidTo: new Date('2027-01-01'),
+    licenceEvidenceFileRef: 'evidence',
+    permittedSchedules: [],
+    qualifiedPersonRegistration: 'QP-1',
+    qualifiedPersonValidFrom: new Date('2026-01-01'),
+    qualifiedPersonValidTo: new Date('2027-01-01'),
+    qualifiedPersonCoverageRosterRef: 'roster',
+    ntn: null,
+    strn: null,
+    fiscalStatus: 'UNREGISTERED',
+    retentionPolicy: {},
+    premises: {},
+    createdAt: new Date('2026-01-01'),
+    isPlaceholder: false,
+    jurisdictionRuleSetId: 'old-sindh',
+    premisesCompletionDue: false,
+    licenceExpired: false,
+    qualifiedPersonCoverageExpired: false,
+  } satisfies Parameters<typeof PharmacyRegulatoryProfileForm>[0]['initial']['versions'][number];
+  render(
+    <PharmacyRegulatoryProfileForm
+      initial={{
+        ...initial,
+        branches: [{ ...initial.branches[0]!, provinceCode: 'PK-SD' }],
+        jurisdictions: jurisdictions.map((jurisdiction) => ({
+          ...jurisdiction,
+          provisional: false,
+        })),
+        versions: [version],
+      }}
+    />
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Sindh rules are provisional');
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Recording a profile does not approve them for production use'
+  );
+});
