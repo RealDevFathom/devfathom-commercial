@@ -594,6 +594,7 @@ export const financeRouter = router({
             total: true,
             currency: true,
             clientId: true,
+            projectId: true,
           },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
@@ -644,6 +645,22 @@ export const financeRouter = router({
             method: input.method?.trim() || null,
             note: input.note?.trim() || null,
             ...(input.paidAt && { paidAt: input.paidAt }),
+          },
+        });
+
+        // DEV-166: money received is revenue. Finance KPIs, P&L and the dashboard
+        // read income from the transactions ledger, so post the payment there in
+        // the same transaction. The FK cascades, so deleting the payment removes it.
+        await tx.transaction.create({
+          data: {
+            type: 'INCOME',
+            amount,
+            currency: invoice.currency,
+            description: `Payment for ${invoice.invoiceNumber}`,
+            clientId: invoice.clientId,
+            projectId: invoice.projectId ?? null,
+            paymentId: payment.id,
+            date: payment.paidAt ?? input.paidAt ?? new Date(),
           },
         });
 
