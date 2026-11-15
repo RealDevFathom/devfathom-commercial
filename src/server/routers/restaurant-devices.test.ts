@@ -823,6 +823,37 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(mocks.annotateAudit.mock.calls).toEqual([[expect.anything(), { skipInput: true }]]);
   });
 
+  it('denies revoke to a branch actor holding devices:manage but not devices:revoke', async () => {
+    // Branch-scoped: the acting role grants devices:manage only, never devices:revoke.
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
+    const api = caller();
+    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-no-revoke' });
+    const coAuthorizationsBefore = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantCoAuthorization.count({ where: { targetId: device.id } })
+    );
+
+    await expect(
+      api.revoke({
+        deviceId: device.id,
+        approvingStaffProfileId: approvingStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: 'manage is not revoke',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const after = await deps.withTenantDb(orgId, (tx) =>
+      Promise.all([
+        tx.restaurantRegisteredDevice.findUniqueOrThrow({
+          where: { id: device.id },
+          select: { status: true, revokedAt: true },
+        }),
+        tx.restaurantCoAuthorization.count({ where: { targetId: device.id } }),
+      ])
+    );
+    expect(after).toEqual([{ status: 'ACTIVE', revokedAt: null }, coAuthorizationsBefore]);
+  });
+
   it('lets an organization-wide owner list approvers and revoke on a branch they are not linked to', async () => {
     // The acting owner's staff profile is linked only to Downtown; the device is at Airport.
     const device = await deps.withTenantDb(orgId, async (tx) => {

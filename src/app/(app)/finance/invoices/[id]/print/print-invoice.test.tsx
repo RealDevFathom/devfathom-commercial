@@ -26,6 +26,12 @@ function invoice(overrides: Record<string, unknown> = {}) {
     // client-side re-summing instead of rendering the server-authoritative values.
     payments: [{ id: 'payment-1', amount: 999 }],
     client: { name: 'Example Client', contacts: [] },
+    issuer: {
+      legalName: 'Northwind Studio LLC',
+      displayName: 'Northwind Studio',
+      logoUrl: null,
+      supportEmail: null,
+    },
     project: null,
     notes: null,
     createdAt: new Date('2026-10-01T00:00:00.000Z'),
@@ -92,5 +98,53 @@ describe('InvoicePrintView', () => {
 
     expect(screen.getByText('Amount paid').nextElementSibling).toHaveTextContent('$1,000');
     expect(screen.getByText('Balance due').nextElementSibling).toHaveTextContent('$0');
+  });
+
+  it('names the issuing workspace as the seller instead of the platform', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({
+        issuer: {
+          legalName: 'Northwind Studio LLC',
+          displayName: 'Northwind Studio',
+          logoUrl: 'https://cdn.example.com/northwind-logo.png',
+          supportEmail: 'billing@northwind.example',
+        },
+      }),
+    });
+
+    const { container } = render(<InvoicePrintView invoiceId="invoice-497" />);
+    const issuer = screen.getByTestId('invoice-issuer');
+
+    expect(issuer).toHaveTextContent('Northwind Studio');
+    expect(issuer).toHaveTextContent('Northwind Studio LLC');
+    expect(issuer).toHaveTextContent('billing@northwind.example');
+    expect(issuer.querySelector('img')).toHaveAttribute(
+      'src',
+      'https://cdn.example.com/northwind-logo.png'
+    );
+    const paper = container.querySelector('#invoice-print');
+    expect(paper).not.toHaveTextContent(/DevFathom/i);
+    expect(paper).not.toHaveTextContent('hub.devfathom.com');
+  });
+
+  it('prints the legal name once when it matches the display name and has no logo', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({
+        issuer: {
+          legalName: 'Harbor Labs',
+          displayName: 'Harbor Labs',
+          logoUrl: null,
+          supportEmail: null,
+        },
+      }),
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+    const issuer = screen.getByTestId('invoice-issuer');
+
+    expect(screen.getAllByText('Harbor Labs')).toHaveLength(1);
+    expect(issuer.querySelector('img')).toBeNull();
   });
 });

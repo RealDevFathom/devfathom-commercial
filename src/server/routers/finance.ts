@@ -305,8 +305,31 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      // DEV-148: the printed invoice names the tenant that issued it, never the
+      // platform. Resolve the seller from the invoice's own organization so the
+      // header always matches the workspace whose ledger holds the invoice.
+      const organization = await ctx.db.organization.findUnique({
+        where: { id: invoice.organizationId },
+        select: {
+          legalName: true,
+          displayName: true,
+          brand: { select: { logoUrl: true, supportEmail: true } },
+        },
+      });
+      if (!organization) return null;
+      const issuer = {
+        legalName: organization.legalName,
+        displayName: organization.displayName,
+        logoUrl: organization.brand?.logoUrl ?? null,
+        supportEmail: organization.brand?.supportEmail ?? null,
+      };
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {

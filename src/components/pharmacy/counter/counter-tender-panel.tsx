@@ -1,6 +1,7 @@
 'use client';
 
 import { forwardRef, useEffect, useRef, useState } from 'react';
+import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,18 +15,25 @@ import {
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
+import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
 
-/** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
+/**
+ * The tenders POS-05 recognises, in button order. Card needs a certified
+ * adapter. `offer` decides which buttons the counter shows: the four core
+ * tenders always, a manual wallet only when the branch has merchant details
+ * for it. Wallet and legacy Credit are no longer offered; they stay here so a
+ * restored attempt of either type still renders and can be resolved.
+ */
 const TENDER_TYPES = [
-  { value: 'CASH', label: 'Cash', requiresAdapter: false },
-  { value: 'CARD', label: 'Card', requiresAdapter: true },
-  { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
-  { value: 'WALLET', label: 'Wallet', requiresAdapter: true },
-  { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
-  { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false },
-  { value: 'RAAST', label: 'Raast / Wallet — Raast', requiresAdapter: false },
-  { value: 'JAZZCASH', label: 'Raast / Wallet — JazzCash', requiresAdapter: false },
-  { value: 'EASYPAISA', label: 'Raast / Wallet — Easypaisa', requiresAdapter: false },
+  { value: 'CASH', label: 'Cash', requiresAdapter: false, offer: 'always' },
+  { value: 'CARD', label: 'Card', requiresAdapter: true, offer: 'always' },
+  { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false, offer: 'always' },
+  { value: 'KHATA', label: 'Khata', requiresAdapter: false, offer: 'always' },
+  { value: 'JAZZCASH', label: 'JazzCash', requiresAdapter: false, offer: 'configured' },
+  { value: 'EASYPAISA', label: 'Easypaisa', requiresAdapter: false, offer: 'configured' },
+  { value: 'RAAST', label: 'Raast', requiresAdapter: false, offer: 'configured' },
+  { value: 'WALLET', label: 'Wallet', requiresAdapter: true, offer: 'restore' },
+  { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false, offer: 'restore' },
 ] as const;
 
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
@@ -50,6 +58,12 @@ export type CounterTenderPanelProps = {
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
   manualSettings?: ManualPaymentSettings;
+  /**
+   * This counter's cash drawer: `false` once the server reports none open,
+   * `undefined` while unknown. Only cash needs the drawer, so a closed drawer
+   * flags the Cash button and leaves every other tender usable.
+   */
+  drawerOpen?: boolean;
   manualSettingsLoading?: boolean;
   manualSettingsError?: boolean;
   onReloadManualSettings?: () => void;
@@ -132,6 +146,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       manualSettingsLoading = false,
       manualSettingsError = false,
       onReloadManualSettings,
+      drawerOpen,
     },
     ref
   ) {
@@ -181,6 +196,15 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         ? cashReceivedMinor - amountMinor
         : null;
     const selected = TENDER_TYPES.find((entry) => entry.value === type)!;
+    const offered = TENDER_TYPES.filter(
+      (entry) =>
+        entry.value === type ||
+        entry.offer === 'always' ||
+        (entry.offer === 'configured' &&
+          !manualSettingsError &&
+          Boolean(manualSettings?.[entry.value]))
+    );
+    const cashDrawerClosed = drawerOpen === false;
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
     const merchant = manual ? manualSettings?.[type] : undefined;
@@ -226,6 +250,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const submittable =
       editable &&
       !blocked &&
+      !(type === 'CASH' && cashDrawerClosed) &&
       amountValid &&
       !cashShort &&
       !cashInvalid &&
@@ -413,25 +438,66 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         ) : null}
 
         <div className="space-y-1.5">
-          <Label htmlFor="tender-type">Tender</Label>
-          <select
-            id="tender-type"
-            value={type}
-            disabled={!editable}
-            onChange={(event) => {
-              setType(event.target.value as CounterTenderType);
-              setProviderRef('');
-              setPayerName('');
-              setReferenceSkipped(false);
-            }}
-            className="h-11 w-full rounded-sm border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          <p id="tender-type-label" className="text-sm leading-none font-medium select-none">
+            Tender
+          </p>
+          <div
+            role="group"
+            aria-labelledby="tender-type-label"
+            className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3"
           >
-            {TENDER_TYPES.map((entry) => (
-              <option key={entry.value} value={entry.value}>
-                {entry.label}
-              </option>
-            ))}
-          </select>
+            {offered.map((entry) => {
+              const active = entry.value === type;
+              const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
+              return (
+                <div key={entry.value} className="min-w-0 space-y-1">
+                  <Button
+                    type="button"
+                    size="touch"
+                    variant={active ? 'secondary' : 'outline'}
+                    className="w-full rounded-sm"
+                    aria-pressed={active}
+                    aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
+                    disabled={!editable}
+                    onClick={() => {
+                      if (active) return;
+                      setType(entry.value);
+                      setProviderRef('');
+                      setPayerName('');
+                      setReferenceSkipped(false);
+                    }}
+                  >
+                    {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
+                    {entry.label}
+                  </Button>
+                  {drawerNote ? (
+                    <p id="tender-cash-drawer" className="text-xs text-destructive">
+                      {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {manualSettingsError && !manual ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p role="alert" className="text-sm text-text-muted">
+                Wallet merchant details could not be loaded, so JazzCash, Easypaisa and Raast are
+                hidden.
+              </p>
+              {onReloadManualSettings ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 rounded-sm"
+                  disabled={takingPayment || manualSettingsLoading}
+                  onClick={onReloadManualSettings}
+                >
+                  Reload merchant details
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           {selected.requiresAdapter ? (
             <p className="text-sm text-text-muted">
               Requires a certified payment provider. Without one configured, the server refuses this
@@ -701,9 +767,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           type="button"
           className="min-h-12 w-full rounded-sm"
           disabled={!submittable}
-          aria-describedby={
-            blocked ? 'tender-status tender-error tender-blocked' : 'tender-status tender-error'
-          }
+          aria-describedby={[
+            'tender-status tender-error',
+            blocked ? 'tender-blocked' : '',
+            type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           onClick={() => void submitTender()}
         >
           {takingPayment ? 'Taking payment…' : 'Take payment'}
