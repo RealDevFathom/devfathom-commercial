@@ -1179,10 +1179,14 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
   });
 
-  it('DEV-629: blocks payment for an Rx line the server holds without a prescription, even when the patient has one', () => {
+  it.each([
+    ['without a prescription', null, false],
+    ['with a prescription no pharmacist has signed for this line', 'rx-line-a', false],
+  ])('DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one', (_label, prescriptionLineId, prescriptionSigned) => {
     const bill = cart();
     bill.lines[0]!.rx = true;
-    bill.lines[0]!.prescriptionLineId = null;
+    bill.lines[0]!.prescriptionLineId = prescriptionLineId;
+    bill.lines[0]!.prescriptionSigned = prescriptionSigned;
     mocks.queries.counterCart!.data = bill;
     mocks.queries.counterPatientPanel = query({
       prescriptions: [
@@ -1234,6 +1238,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
       const bill = cart();
       bill.lines[0]!.rx = true;
       bill.lines[0]!.prescriptionLineId = 'rx-line-a';
+      bill.lines[0]!.prescriptionSigned = true;
       mocks.queries.counterCart!.data = bill;
       mocks.queries.counterBranches = query({
         branches: [{ id: 'branch-a', name: 'Synthetic branch' }],

@@ -4,6 +4,7 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import type { LedgerScope } from './stock-ledger';
 import { prescriptionIsCurrent } from './prescription-calendar';
+import { assertPharmacistApproved } from './dispensing';
 import { needsRxSaleGrant } from './rx-sale-gate';
 
 const REASONS = {
@@ -38,19 +39,26 @@ export class PharmacyRxReferenceError extends Error {
 
 /**
  * DEV-629: the server, not the counter's browser alert, refuses to sell an Rx or restricted,
- * non-controlled line that carries no prescription reference. A reference is only ever attached
- * by a pharmacist through `resolvePrescriptionReference`, which checks it is real, current and
- * not exhausted. Controlled lines keep their own register gate (prescription or witnessed
- * emergency supply), so they are not judged here.
+ * non-controlled line unless a pharmacist attached a prescription reference to it AND a
+ * pharmacist signed the RX-03 review of that sale line. A reference is only ever attached by a
+ * pharmacist through `resolvePrescriptionReference`, which checks it is real, current and not
+ * exhausted; attaching queues the review, and SIGN is the sole sale-release event. A sole
+ * pharmacist may sign their own review through the audited pharmacist queue. Controlled lines
+ * keep their own register gate (prescription or witnessed emergency supply), so they are not
+ * judged here.
  */
-export function assertRxLinesPrescribed(
+export async function assertRxLinesPrescribed(
+  db: ScopedDb,
   lines: ReadonlyArray<{
+    id: string;
     prescriptionLineId: string | null;
     medicine: { rx: boolean; restricted: boolean; controlled: boolean } | null | undefined;
   }>
-): void {
-  if (lines.some((line) => needsRxSaleGrant(line.medicine) && !line.prescriptionLineId))
+): Promise<void> {
+  const regulated = lines.filter((line) => needsRxSaleGrant(line.medicine));
+  if (regulated.some((line) => !line.prescriptionLineId))
     throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+  for (const line of regulated) await assertPharmacistApproved(db, line.id);
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

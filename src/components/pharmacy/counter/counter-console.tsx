@@ -850,7 +850,10 @@ function ScopedPharmacyCounterConsole({
         prescription: prescriptionLine
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
-              verified: prescriptionLine.entry.verified,
+              // DEV-629: settlement needs the signed review of this sale line, not any earlier one.
+              verified: line.controlled
+                ? prescriptionLine.entry.verified
+                : (line.prescriptionSigned ?? false),
               validFrom: new Date(prescriptionLine.prescription.validFrom),
               validUntil: new Date(prescriptionLine.prescription.validUntil),
               remainingAuthorizedUnits:

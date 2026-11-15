@@ -44,8 +44,10 @@ function rxLine(prescriptionLineId: string | null) {
   };
 }
 
-function saleDb() {
+function saleDb(line = rxLine(null)) {
   return {
+    // No pharmacist has signed the RX-03 review of this sale line.
+    pharmacyPharmacistReviewDecision: { findFirst: vi.fn().mockResolvedValue(null) },
     $executeRaw: vi.fn().mockResolvedValue(1),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -57,7 +59,7 @@ function saleDb() {
       findFirst: vi.fn().mockResolvedValue({
         id: 'sale-1',
         status: 'OPEN',
-        lines: [rxLine(null)],
+        lines: [line],
         tenders: [],
       }),
       update: vi.fn(),
@@ -70,54 +72,71 @@ function saleDb() {
 }
 
 describe('DEV-629: the server refuses to sell an Rx line with no prescription', () => {
-  it('refuses the tender before any payment, tender row, receipt or posting', async () => {
-    const adapter = {
-      name: 'CERTIFIED_TEST_PROVIDER',
-      certified: true,
-      execute: vi.fn().mockResolvedValue({ approved: true, providerRef: 'provider-1' }),
-    };
-    const input = {
-      saleId: 'sale-1',
-      deviceId: 'device-1',
-      businessDate: new Date('2026-11-03T00:00:00.000Z'),
-      type: 'CARD' as const,
-      amountMinor: 100,
-      idempotencyKey: 'rx-without-prescription',
-      adapter,
-    };
-    const db = saleDb();
-    db.pharmacyMoneyIdempotencyKey.findUnique.mockResolvedValue({
-      id: 'idem-1',
-      commandType: 'tender',
-      payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
-      resultPayload: null,
-    });
-    const refused = applyPharmacyTender(db as never, scope, input);
-    await expect(refused).rejects.toMatchObject({
-      name: 'PharmacyRxReferenceError',
-      reason: 'PRESCRIPTION_REQUIRED',
-    });
-    expect(adapter.execute).not.toHaveBeenCalled();
-    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
-    expect(db.pharmacySale.update).not.toHaveBeenCalled();
-    expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
-    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
-    expect(postings.postTenderEntry).not.toHaveBeenCalled();
-    expect(postings.postSaleLineEntry).not.toHaveBeenCalled();
-  });
+  const refusals = [
+    [
+      'no prescription',
+      null,
+      { name: 'PharmacyRxReferenceError', reason: 'PRESCRIPTION_REQUIRED' },
+    ],
+    [
+      'an attached prescription no pharmacist signed',
+      'rx-line-1',
+      { name: 'PharmacyDispensingError', code: 'PHARMACIST_APPROVAL_REQUIRED' },
+    ],
+  ] as const;
 
-  it('refuses completion on every settlement path, before a receipt number is drawn', async () => {
-    const db = saleDb();
-    await expect(
-      completePaidPharmacySale(
-        db as never,
-        scope,
-        { id: 'sale-1', lines: [rxLine(null)], tenders: [] } as never,
-        { deviceId: 'device-1', businessDate: new Date('2026-11-03T00:00:00.000Z') }
-      )
-    ).rejects.toMatchObject({ reason: 'PRESCRIPTION_REQUIRED' });
-    expect(batchSafety.assertSaleBatchesSellable).not.toHaveBeenCalled();
-    expect(db.$queryRaw).not.toHaveBeenCalled();
-    expect(db.pharmacySale.update).not.toHaveBeenCalled();
-  });
+  it.each(refusals)(
+    'refuses the tender for %s before any payment, tender row, receipt or posting',
+    async (_label, prescriptionLineId, refusal) => {
+      const adapter = {
+        name: 'CERTIFIED_TEST_PROVIDER',
+        certified: true,
+        execute: vi.fn().mockResolvedValue({ approved: true, providerRef: 'provider-1' }),
+      };
+      const input = {
+        saleId: 'sale-1',
+        deviceId: 'device-1',
+        businessDate: new Date('2026-11-03T00:00:00.000Z'),
+        type: 'CARD' as const,
+        amountMinor: 100,
+        idempotencyKey: 'rx-without-prescription',
+        adapter,
+      };
+      const db = saleDb(rxLine(prescriptionLineId));
+      db.pharmacyMoneyIdempotencyKey.findUnique.mockResolvedValue({
+        id: 'idem-1',
+        commandType: 'tender',
+        payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+        resultPayload: null,
+      });
+      const refused = applyPharmacyTender(db as never, scope, input);
+      await expect(refused).rejects.toMatchObject(refusal);
+      expect(adapter.execute).not.toHaveBeenCalled();
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(db.pharmacySale.update).not.toHaveBeenCalled();
+      expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+      expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+      expect(postings.postTenderEntry).not.toHaveBeenCalled();
+      expect(postings.postSaleLineEntry).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(refusals)(
+    'refuses completion for %s on every settlement path, before a receipt number is drawn',
+    async (_label, prescriptionLineId, refusal) => {
+      const line = rxLine(prescriptionLineId);
+      const db = saleDb(line);
+      await expect(
+        completePaidPharmacySale(
+          db as never,
+          scope,
+          { id: 'sale-1', lines: [line], tenders: [] } as never,
+          { deviceId: 'device-1', businessDate: new Date('2026-11-03T00:00:00.000Z') }
+        )
+      ).rejects.toMatchObject(refusal);
+      expect(batchSafety.assertSaleBatchesSellable).not.toHaveBeenCalled();
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(db.pharmacySale.update).not.toHaveBeenCalled();
+    }
+  );
 });

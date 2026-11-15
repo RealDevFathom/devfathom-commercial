@@ -119,11 +119,27 @@ const rxLine = (saleId: string, quantity = 1) => ({
   idempotencyKey: key(),
 });
 
-/** A sale holding one Rx line the pharmacist added, optionally linked to the loyalty customer. */
-function pharmacistSale({ customer = false, quantity = 1 } = {}) {
-  return act(ids.pharmacist, async (api) => {
+/**
+ * A sale holding one Rx line the pharmacist added against the patient's prescription, optionally
+ * linked to the loyalty customer. DEV-629: unless `signed` is false, the pharmacist then signs the
+ * RX-03 review addLine queued for the line (a sole pharmacist may sign their own).
+ */
+function pharmacistSale({ customer = false, quantity = 1, signed = true } = {}) {
+  return act(ids.pharmacist, async (api, db) => {
     const sale = await api.create({ branchId: ids.branch, deviceId: counterDevice() });
-    await api.addLine(rxLine(sale.id, quantity));
+    const added = await api.addLine(rxLine(sale.id, quantity));
+    const review = await db.pharmacyPharmacistReviewItem.findFirstOrThrow({
+      where: { saleLineId: added.line.id, prescriptionLineId },
+    });
+    if (signed)
+      await db.pharmacyPharmacistReviewDecision.create({
+        data: {
+          reviewItemId: review.id,
+          kind: 'SIGN',
+          actorUserId: ids.pharmacist,
+          signedAt: new Date(),
+        },
+      });
     if (customer)
       await api.linkCustomer({
         branchId: ids.branch,
@@ -451,6 +467,18 @@ describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fi
         'A prescription-only or restricted medicine needs a prescription a pharmacist attached to the line before it can be sold.',
     });
     expect(await cart(unprescribed.saleId)).toMatchObject({
+      status: 'OPEN',
+      totals: { tenderedMinor: 0 },
+    });
+  });
+
+  it('refuses to take payment for an Rx line whose pharmacist review is unsigned (DEV-629)', async () => {
+    const unsigned = await pharmacistSale({ signed: false });
+    await expect(payInCash(ids.pharmacist, unsigned)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'A signed pharmacist decision is required.',
+    });
+    expect(await cart(unsigned.saleId)).toMatchObject({
       status: 'OPEN',
       totals: { tenderedMinor: 0 },
     });
