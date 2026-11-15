@@ -5,6 +5,8 @@ import {
   findRepeatedLot,
   lotSlotKey,
   MAX_PACKS_PER_LOT,
+  minorToRupees,
+  rupeesToMinor,
   sameLotKey,
   type PackPhotoLotDraft,
 } from './pack-photo-receiving';
@@ -32,6 +34,7 @@ describe('checkPackPhotoLot', () => {
         expiryPrecision: 'MONTH',
         receivedPacks: 12,
         canonicalUnits: 120,
+        printedMrpMinor: null,
       },
       notes: [],
     });
@@ -192,5 +195,66 @@ describe('findRepeatedLot', () => {
         lot({ gs1Payload: ']d2010...|21S3' }),
       ])
     ).toBeNull();
+  });
+});
+
+describe('checkPackPhotoLot printed MRP (DEV-770)', () => {
+  it('turns one confirmed scan and a count of ten into one lot with its MRP', () => {
+    const check = checkPackPhotoLot(draft({ packs: '10', mrp: '450.00' }));
+    expect(check).toEqual({
+      ok: true,
+      lot: {
+        batchNumber: 'SYN-B2741',
+        printedExpiry: '2028-06-30',
+        expiryPrecision: 'MONTH',
+        receivedPacks: 10,
+        canonicalUnits: 100,
+        printedMrpMinor: 45_000,
+      },
+      notes: [],
+    });
+  });
+
+  it('refuses a malformed or zero price', () => {
+    for (const mrp of ['45O', '450.005', '0', '-450', 'Rs 450', '1,250']) {
+      const check = checkPackPhotoLot(draft({ mrp }));
+      expect(check.ok).toBe(false);
+      if (!check.ok) expect(check.errors.price).toMatch(/printed MRP per pack/);
+    }
+  });
+
+  it('requires a choice when the printed and current prices differ', () => {
+    const blank = checkPackPhotoLot(draft({ mrp: '', priceChoiceRequired: true }));
+    expect(blank.ok).toBe(false);
+    if (!blank.ok) expect(blank.errors.price).toMatch(/Choose the printed price/);
+    const chosen = checkPackPhotoLot(draft({ mrp: '495', priceChoiceRequired: true }));
+    expect(chosen.ok && chosen.lot.printedMrpMinor).toBe(49_500);
+  });
+
+  it('still needs the confirmation for a price', () => {
+    const check = checkPackPhotoLot(draft({ mrp: '450', confirmedSameLot: false }));
+    expect(check.ok).toBe(false);
+  });
+});
+
+describe('rupee conversion', () => {
+  it.each([
+    ['450', 45_000],
+    ['450.5', 45_050],
+    ['450.50', 45_050],
+    [' 1250.75 ', 125_075],
+  ])('reads %j as %i paisa', (value, minor) => {
+    expect(rupeesToMinor(value)).toBe(minor);
+  });
+
+  it.each(['', '0', '0.00', '.5', '450.', '1e3', '450.005'])('rejects %j', (value) => {
+    expect(rupeesToMinor(value)).toBeNull();
+  });
+
+  it('writes paisa back in the shape the receipt field accepts', () => {
+    expect(minorToRupees(45_000)).toBe('450.00');
+    expect(minorToRupees(45_050)).toBe('450.50');
+    expect(minorToRupees(5)).toBe('0.05');
+    expect(rupeesToMinor(minorToRupees(125_075))).toBe(125_075);
   });
 });

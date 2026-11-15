@@ -479,7 +479,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="licenceCategory"
               hint={
                 categories.length === 0
-                  ? 'This province has not published its licence categories yet, so the profile records a provisional one.'
+                  ? "DevFathom's licence category list for this province is unreviewed or unavailable, so the profile records a provisional one. Ask DevFathom support to review the province rule set; the operating gate stays in place until then."
                   : undefined
               }
               label="Licence category"
@@ -493,7 +493,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               >
                 {categories.length === 0 ? (
                   <option value={PROVISIONAL_LICENCE_CATEGORY}>
-                    Provisional — awaiting published categories
+                    Provisional — awaiting DevFathom rule review
                   </option>
                 ) : (
                   categories.map((category) => (
@@ -574,7 +574,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 htmlFor="permittedSchedules"
                 hint={
                   schedules.length === 0
-                    ? 'This province has not published its medicine schedules yet, so none can be permitted on this version.'
+                    ? "DevFathom's schedule list for this province is unreviewed or unavailable, so none can be permitted on this version. Ask DevFathom support to review the province rule set; the operating gate stays in place until then."
                     : 'Tick every schedule this branch is permitted to hold.'
                 }
                 label="Permitted schedules"

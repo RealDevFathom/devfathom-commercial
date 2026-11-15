@@ -5,7 +5,11 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import type { PackLabelProposal } from '@/lib/pharmacy/pack-label-ocr';
-import { checkPackPhotoLot, type PackPhotoLotField } from '@/lib/pharmacy/pack-photo-receiving';
+import {
+  checkPackPhotoLot,
+  minorToRupees,
+  type PackPhotoLotField,
+} from '@/lib/pharmacy/pack-photo-receiving';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { CONTROL } from './form-controls';
@@ -21,7 +25,7 @@ export type PackPhotoReaderProps = {
   branchId: string;
   purchaseOrderId: string;
   purchaseOrderLineId: string;
-  /** Capture-fieldset key whose batch, expiry, precision, packs and shelf fields are filled. */
+  /** Capture-fieldset key whose batch, expiry, precision, MRP, packs and shelf fields are filled. */
   fieldKey: string;
   lotLabel: string;
   medicineName: string;
@@ -40,6 +44,8 @@ type Draft = {
   batch: string;
   expiryDate: string;
   precision: 'DAY' | 'MONTH' | '';
+  /** Printed MRP per pack in rupees. */
+  mrp: string;
   packs: string;
   shelf: string;
   confirmed: boolean;
@@ -49,10 +55,29 @@ const EMPTY_DRAFT = (shelf: string): Draft => ({
   batch: '',
   expiryDate: '',
   precision: '',
+  mrp: '',
   packs: '',
   shelf,
   confirmed: false,
 });
+
+/** "93% sure" beside a value read from the photo. */
+function sureness(confidence: number): string {
+  return `${Math.round(Math.min(1, Math.max(0, confidence)) * 100)}% sure`;
+}
+
+/**
+ * The printed price and the pack's current price disagree: neither is filled
+ * in, so the receiver has to choose one (or type the price on the pack).
+ */
+function priceConflict(proposal: PackLabelProposal | null): boolean {
+  return (
+    proposal?.price?.kind === 'read' &&
+    proposal.currentMrpMinor !== null &&
+    proposal.currentMrpMinor !== undefined &&
+    proposal.price.amountMinor !== proposal.currentMrpMinor
+  );
+}
 
 function isPhotoType(value: string): value is PhotoType {
   return (PHOTO_TYPES as readonly string[]).includes(value);
@@ -120,10 +145,12 @@ function fieldValue(form: HTMLFormElement | null | undefined, name: string): str
 }
 
 /**
- * DEV-752: photograph ONE pack, review the batch and expiry it suggests, enter
- * how many packs carry that same lot, optionally pick a shelf, then copy the
- * reviewed values into this line's capture fields. Nothing is drafted or posted
- * here: the receipt is still filed and posted through the existing actions.
+ * DEV-752: photograph ONE pack, review the batch, expiry and (DEV-770) printed
+ * MRP it suggests, enter how many packs carry that same lot, optionally pick a
+ * shelf, then copy the reviewed values into this line's capture fields. Ten
+ * packs of one batch are one scan and a typed count of 10. Nothing is drafted
+ * or posted here: the receipt is still filed and posted through the existing
+ * actions.
  */
 export function PackPhotoReader(props: PackPhotoReaderProps) {
   const id = useId();
@@ -189,6 +216,11 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
         batch: result.batch.value ?? '',
         expiryDate: result.expiry.kind === 'read' ? result.expiry.candidate.date : '',
         precision: result.expiry.kind === 'read' ? result.expiry.candidate.precision : '',
+        // A price that disagrees with the current one is left for the receiver to choose.
+        mrp:
+          result.price?.kind === 'read' && !priceConflict(result)
+            ? minorToRupees(result.price.amountMinor)
+            : '',
         packs: '',
         shelf: currentShelf || props.defaultLocationId || '',
         confirmed: false,
@@ -239,6 +271,8 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
       serialLocked:
         Boolean(props.serialLocked) || fieldValue(form, `serialNumber:${props.fieldKey}`) !== '',
       unitsPerPack: props.unitsPerPack,
+      mrp: draft.mrp,
+      priceChoiceRequired: priceConflict(proposal),
       outstandingPacks:
         props.outstandingPacks === null ? null : Math.max(0, props.outstandingPacks - otherLots),
     });
@@ -252,7 +286,9 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
       fill(form, `batchNumber:${key}`, check.lot.batchNumber) &&
       fill(form, `printedExpiry:${key}`, check.lot.printedExpiry) &&
       fill(form, `expiryPrecision:${key}`, check.lot.expiryPrecision) &&
-      fill(form, `receivedPacks:${key}`, String(check.lot.receivedPacks));
+      fill(form, `receivedPacks:${key}`, String(check.lot.receivedPacks)) &&
+      (check.lot.printedMrpMinor === null ||
+        fill(form, `printedMrp:${key}`, minorToRupees(check.lot.printedMrpMinor)));
     // An untouched shelf keeps whatever the line already had (the branch default).
     if (filled && shelfTouched && draft.shelf) fill(form, `stockLocation:${key}`, draft.shelf);
     if (!filled) {
@@ -261,7 +297,11 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
     }
     setNotes(check.notes);
     setApplied(
-      `${props.lotLabel}: batch ${check.lot.batchNumber}, expiry ${check.lot.printedExpiry}, ${check.lot.receivedPacks} ${props.packLevel} (${check.lot.canonicalUnits} units). Check the rest of the line, then file the receipt. Nothing is in stock yet.`
+      `${props.lotLabel}: batch ${check.lot.batchNumber}, expiry ${check.lot.printedExpiry}${
+        check.lot.printedMrpMinor === null
+          ? ''
+          : `, MRP Rs ${minorToRupees(check.lot.printedMrpMinor)}`
+      }, ${check.lot.receivedPacks} ${props.packLevel} (${check.lot.canonicalUnits} units). Check the rest of the line, then file the receipt. Nothing is in stock yet.`
     );
     setPreview(null);
     setProposal(null);
@@ -292,7 +332,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
       variant="outline"
     >
       <Camera aria-hidden="true" />
-      Read batch and expiry from a pack photo
+      Read batch and expiry, plus printed MRP, from a pack photo
     </Button>
   );
 
@@ -360,7 +400,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
               type="file"
             />
             <p className="text-xs text-text-muted">
-              Frame the printed batch and expiry. The photo is read once and is not stored.
+              Frame the printed batch, expiry and MRP. The photo is read once and is not stored.
             </p>
           </div>
 
@@ -426,7 +466,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                     ) : (
                       <p className="text-xs text-text-muted" id={`${id}-batch-hint`}>
                         {proposal.batch.value
-                          ? 'Read from the photo. Correct it if the pack differs.'
+                          ? `Read from the photo (${sureness(proposal.batch.confidence)}). Correct it if the pack differs.`
                           : 'Not readable on the photo. Type it from the pack.'}
                       </p>
                     )}
@@ -456,7 +496,11 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                     ) : (
                       <p className="text-xs text-text-muted" id={`${id}-expiry-hint`}>
                         {proposal.expiry.printed
-                          ? `Printed: “${proposal.expiry.printed}”.`
+                          ? `Printed: “${proposal.expiry.printed}”${
+                              proposal.expiry.kind === 'read'
+                                ? ` (${sureness(proposal.expiry.confidence)})`
+                                : ''
+                            }.`
                           : 'No expiry was readable. Type it from the pack.'}{' '}
                         Month-only prints use the last day of that month.
                       </p>
@@ -485,6 +529,72 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                             type="radio"
                           />
                           {candidate.date}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                ) : null}
+
+                <div className="min-w-0 space-y-1">
+                  <label className="block text-sm font-medium text-text-body" htmlFor={`${id}-mrp`}>
+                    Printed MRP per pack (PKR)
+                  </label>
+                  <input
+                    form={formId}
+                    aria-describedby={describe('price') ?? `${id}-mrp-hint`}
+                    aria-invalid={Boolean(errors.price)}
+                    autoComplete="off"
+                    className={cn(CONTROL, 'font-mono tabular-nums')}
+                    id={`${id}-mrp`}
+                    inputMode="decimal"
+                    onChange={(event) => update({ mrp: event.currentTarget.value })}
+                    value={draft.mrp}
+                  />
+                  {errors.price ? (
+                    <p className="text-sm text-destructive" id={`${id}-price-error`}>
+                      {errors.price}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-text-muted" id={`${id}-mrp-hint`}>
+                      {proposal.price?.kind === 'read'
+                        ? `Printed: “${proposal.price.printed}” (${sureness(proposal.price.confidence)}). Correct it if the pack differs.`
+                        : proposal.price?.kind === 'ambiguous'
+                          ? `More than one price on the label (“${proposal.price.printed}”). Type the MRP printed on the pack.`
+                          : 'No price was readable. Type the MRP from the pack, or leave it blank to fill it on the line.'}
+                    </p>
+                  )}
+                </div>
+
+                {priceConflict(proposal) && proposal?.price?.kind === 'read' ? (
+                  <fieldset className="space-y-2">
+                    <legend className="text-sm font-medium text-text-body">
+                      The printed price differs from the current price. Which one applies?
+                    </legend>
+                    <div className="flex flex-wrap gap-3">
+                      {[
+                        {
+                          key: 'printed',
+                          label: `Printed on the pack: Rs ${minorToRupees(proposal.price.amountMinor)}`,
+                          value: minorToRupees(proposal.price.amountMinor),
+                        },
+                        {
+                          key: 'current',
+                          label: `Current price: Rs ${minorToRupees(proposal.currentMrpMinor!)}`,
+                          value: minorToRupees(proposal.currentMrpMinor!),
+                        },
+                      ].map((option) => (
+                        <label
+                          className="flex min-h-11 items-center gap-2 font-mono text-sm tabular-nums text-text-body"
+                          key={option.key}
+                        >
+                          <input
+                            form={formId}
+                            checked={draft.mrp === option.value}
+                            name={`${id}-price-choice`}
+                            onChange={() => update({ mrp: option.value })}
+                            type="radio"
+                          />
+                          {option.label}
                         </label>
                       ))}
                     </div>
@@ -601,8 +711,8 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       onChange={(event) => update({ confirmed: event.currentTarget.checked })}
                       type="checkbox"
                     />
-                    I checked this batch and expiry against the pack, and every pack I counted
-                    carries this same batch and expiry.
+                    I checked this batch and expiry against the pack, and the MRP shown, and every
+                    pack I counted carries this same batch and expiry.
                   </label>
                   {errors.confirm ? (
                     <p className="text-sm text-destructive" id={`${id}-confirm-error`}>

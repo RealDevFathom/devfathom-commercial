@@ -62,6 +62,7 @@ function harness(options: HarnessOptions = {}) {
         <option value="DAY">Day</option>
       </select>
       <input name="receivedPacks:pol-1" defaultValue={line.receivedPacks ?? ''} />
+      <input name="printedMrp:pol-1" defaultValue={line.printedMrp ?? ''} />
       <input name="serialNumber:pol-1" defaultValue={line.serialNumber ?? ''} />
       {options.gs1Payload !== undefined ? (
         <input name="gs1Payload:pol-1" type="hidden" defaultValue={options.gs1Payload} />
@@ -613,5 +614,122 @@ describe('PackPhotoReader counts', () => {
     expect(status).toHaveTextContent('7 STRIP (70 units)');
     expect(status).not.toHaveTextContent(/outstanding/);
     expect(status).not.toHaveTextContent(/over-receipt/);
+  });
+});
+
+// ── DEV-770: printed retail price (MRP) ─────────────────────────────────────
+
+const PRICED = {
+  ...PROPOSAL,
+  price: { kind: 'read', printed: 'MRP Rs. 450.00', amountMinor: 45_000, confidence: 0.9 },
+  currentMrpMinor: 45_000,
+};
+const mrpField = () => screen.getByLabelText('Printed MRP per pack (PKR)') as HTMLInputElement;
+const mrpHint = () => document.getElementById(mrpField().getAttribute('aria-describedby')!);
+
+describe('PackPhotoReader printed price', () => {
+  it('suggests the MRP from a clear label with how sure the read was, and fills it on the line', async () => {
+    h.mutateAsync.mockResolvedValue(PRICED);
+    const { lineValue } = harness();
+    await openAndRead();
+    expect(mrpField().value).toBe('450.00');
+    expect(mrpHint()).toHaveTextContent('Printed: “MRP Rs. 450.00” (90% sure)');
+    expect(screen.getByText(/Read from the photo \(93% sure\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Printed: “EXP 06\/2028” \(90% sure\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/differs from the current price/)).not.toBeInTheDocument();
+    // Nothing reaches the line before the receiver confirms.
+    expect(lineValue('printedMrp')).toBe('');
+    countConfirmApply('3');
+    expect(lineValue('printedMrp')).toBe('450.00');
+    expect(screen.getByRole('status')).toHaveTextContent('MRP Rs 450.00');
+  });
+
+  it('receives ten packs of one batch from one scan and a typed count', async () => {
+    h.mutateAsync.mockResolvedValue(PRICED);
+    const { lineValue, onSubmit } = harness();
+    await openAndRead();
+    countConfirmApply('10');
+    expect(h.mutateAsync).toHaveBeenCalledTimes(1);
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('expiryPrecision'),
+      lineValue('printedMrp'),
+      lineValue('receivedPacks'),
+    ]).toEqual(['SYN-B2741', '2028-06-30', 'MONTH', '450.00', '10']);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('10 STRIP (100 units)');
+    expect(status).not.toHaveTextContent(/over-receipt/);
+    // The values sit on the line for the receipt; the reader filed nothing.
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('shows both prices when they differ and makes the receiver choose', async () => {
+    h.mutateAsync.mockResolvedValue({
+      ...PRICED,
+      price: { kind: 'read', printed: 'MRP Rs. 495.00', amountMinor: 49_500, confidence: 0.9 },
+      warnings: [
+        {
+          code: 'PRICE_DIFFERS_FROM_CURRENT',
+          message: "The printed price differs from this pack's current price.",
+        },
+      ],
+    });
+    const { lineValue } = harness({ line: { printedMrp: '440.00' } });
+    await openAndRead();
+    const printed = screen.getByLabelText('Printed on the pack: Rs 495.00') as HTMLInputElement;
+    const current = screen.getByLabelText('Current price: Rs 450.00') as HTMLInputElement;
+    expect(mrpField().value).toBe('');
+    expect(printed.checked).toBe(false);
+    expect(current.checked).toBe(false);
+
+    countConfirmApply('2');
+    expect(screen.getByText(/Choose the printed price or the current price/)).toBeInTheDocument();
+    expect(lineValue('printedMrp')).toBe('440.00');
+    expect(lineValue('batchNumber')).toBe('');
+
+    fireEvent.click(current);
+    expect(mrpField().value).toBe('450.00');
+    fireEvent.click(printed);
+    expect(mrpField().value).toBe('495.00');
+    countConfirmApply('2');
+    expect(lineValue('printedMrp')).toBe('495.00');
+    expect(lineValue('receivedPacks')).toBe('2');
+  });
+
+  it('leaves an unreadable price empty, says so, and keeps the line’s own MRP', async () => {
+    h.mutateAsync.mockResolvedValue({
+      ...PRICED,
+      price: { kind: 'unreadable', printed: null, confidence: 0 },
+      currentMrpMinor: null,
+    });
+    const { lineValue } = harness({ line: { printedMrp: '440.00' } });
+    await openAndRead();
+    expect(mrpField().value).toBe('');
+    expect(mrpHint()).toHaveTextContent('No price was readable');
+    countConfirmApply('4');
+    expect(lineValue('receivedPacks')).toBe('4');
+    expect(lineValue('printedMrp')).toBe('440.00');
+  });
+
+  it('fills nothing from a label with two prices and uses the price the receiver types', async () => {
+    h.mutateAsync.mockResolvedValue({
+      ...PRICED,
+      price: { kind: 'ambiguous', printed: 'MRP Rs 450 | MRP Rs 495', confidence: 0 },
+    });
+    const { lineValue } = harness();
+    await openAndRead();
+    expect(mrpField().value).toBe('');
+    expect(mrpHint()).toHaveTextContent('More than one price on the label');
+    expect(screen.queryByLabelText(/Printed on the pack/)).not.toBeInTheDocument();
+
+    fireEvent.change(mrpField(), { target: { value: '45O' } });
+    countConfirmApply('1');
+    expect(screen.getByText(/Enter the printed MRP per pack/)).toBeInTheDocument();
+    expect(lineValue('printedMrp')).toBe('');
+
+    fireEvent.change(mrpField(), { target: { value: '495' } });
+    countConfirmApply('1');
+    expect(lineValue('printedMrp')).toBe('495.00');
   });
 });

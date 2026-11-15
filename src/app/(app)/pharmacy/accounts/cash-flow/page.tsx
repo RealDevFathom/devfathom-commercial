@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
+import { financeEntryDescription } from '@/lib/finance/source-labels';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { formatUtcInstant } from '@/lib/utc-instant';
@@ -226,7 +227,7 @@ export default async function CashFlowPage({
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
                   {formatUtcInstant(entry.occurredAt)} · {entry.classification} · {entry.currency}{' '}
-                  {money(entry.netMinor)} · {entry.description}
+                  {money(entry.netMinor)} · {financeEntryDescription(entry.description)}
                 </summary>
                 <p className="break-all text-xs text-text-muted">
                   Entry {entry.id} · source {entry.sourceKind}/{entry.sourceId}

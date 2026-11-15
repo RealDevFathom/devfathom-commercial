@@ -29,6 +29,9 @@ export function MarketingActionForm({
   return (
     <form
       className="space-y-4"
+      // Growth periods are validated on the server so empty dates show an inline message
+      // instead of a silent native-validation block.
+      noValidate={operation === 'growth-generate'}
       aria-busy={pending}
       aria-describedby={result ? feedbackId : undefined}
       onSubmit={(event) => {

@@ -56,7 +56,8 @@ beforeEach(() => {
         visibilityAnchor: { name: 'Main branch' },
         receiptNumber: 12,
         businessDate: new Date('2026-09-29'),
-        receiptDeviceId: 'd',
+        receiptDeviceId: 'counter-bbd93263-ccd1',
+        counterLabel: 'Counter CCD1',
       },
     ],
   };
@@ -143,6 +144,7 @@ describe('counter returns', () => {
     mocks.history = {};
     render(<ReturnForm {...props} />);
     const match = screen.getByRole('button', { name: /Receipt 12.*Second branch/ });
+    expect(match).not.toHaveTextContent('d2');
     expect(match).toBeVisible();
     expect(match).toBeDisabled();
     expect(match).toHaveTextContent('Switch to this branch to record a return.');

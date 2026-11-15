@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import {
@@ -25,6 +26,8 @@ import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
+import { StaffingSuggestions } from './staffing-suggestions';
+import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -41,7 +44,9 @@ type SearchParams = Promise<
       | 'digest'
       | 'anomaly'
       | 'advisor'
-      | 'authentication',
+      | 'authentication'
+      | 'staffCapacity'
+      | 'staffMinimum',
       string | string[] | undefined
     >
   >
@@ -85,6 +90,31 @@ export default async function PharmacyReportsPage({
 }) {
   const query = await searchParams;
   const ctx = await createTRPCContext();
+  // DEV-35: settle the access lock before any report read, so a member without
+  // the operational reports permission sees it at once rather than after the
+  // branch and catalog loads. The procedures below stay the authority.
+  const user = ctx.session?.user;
+  const lockedDetail = !user?.id
+    ? 'Sign in again to access pharmacy reports.'
+    : !(await can(subjectFromSession(user), 'reports:operational', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      ? 'You need the operational reports permission to view pharmacy reports. Ask your workspace administrator to grant it.'
+      : null;
+  if (lockedDetail) {
+    return (
+      <main className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy operations"
+          heading="Reports"
+          description="Bounded, permission-scoped command centre and report catalog."
+        />
+        <ReportNotice title="Reports unavailable" detail={lockedDetail} />
+      </main>
+    );
+  }
   const caller = pharmacyReportsRouter.createCaller(ctx);
   let branchResult: Awaited<ReturnType<typeof caller.branches>>;
   let catalog: Awaited<ReturnType<typeof caller.catalog>>;
@@ -222,6 +252,32 @@ export default async function PharmacyReportsPage({
       });
     } catch {
       demandError = true;
+    }
+  }
+  // DEV-14: owner-adjustable assumptions; the server validates the bounds again.
+  const staffingNumber = (input: string | undefined, fallback: number) =>
+    input !== undefined && /^\d{1,3}$/.test(input) ? Number(input) : fallback;
+  const receiptsPerStaffHour = staffingNumber(
+    value(query.staffCapacity),
+    DEFAULT_STAFFING_CONFIG.receiptsPerStaffHour
+  );
+  const minimumStaff = staffingNumber(
+    value(query.staffMinimum),
+    DEFAULT_STAFFING_CONFIG.minimumStaff
+  );
+  let staffing: Awaited<ReturnType<typeof caller.staffingSuggestions>> | null = null;
+  let staffingError = false;
+  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+    try {
+      staffing = await caller.staffingSuggestions({
+        branchId: branch,
+        from,
+        to,
+        receiptsPerStaffHour,
+        minimumStaff,
+      });
+    } catch {
+      staffingError = true;
     }
   }
   const digestMessage = value(query.digest);
@@ -480,6 +536,19 @@ export default async function PharmacyReportsPage({
         failed={demandError}
         selected={!!branch}
         financial={catalog.permissions.financial}
+      />
+      <StaffingSuggestions
+        timeZone={timeZone}
+        report={staffing}
+        failed={staffingError}
+        selected={!!branch}
+        carry={Object.fromEntries(
+          Object.entries({ branch, from, to }).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string'
+          )
+        )}
+        receiptsPerStaffHour={receiptsPerStaffHour}
+        minimumStaff={minimumStaff}
       />
       {workPackScopeValid ? (
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
