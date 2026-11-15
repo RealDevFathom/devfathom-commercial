@@ -15,7 +15,8 @@ const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 export type MemberInviteProfile = {
   name: string;
   role: 'ADMIN' | 'HR' | 'EMPLOYEE';
-  organizationRoleId: string | null;
+  /** Omitted leaves a pending invite's template as it is (new users get none). */
+  organizationRoleId?: string;
   department: string;
   title: string;
   phone: string | null;
@@ -49,6 +50,10 @@ async function serializeInvite<T>(tx: Prisma.TransactionClient, run: () => Promi
  * replace any prior invitation with a fresh token. Only a still-pending invite
  * may be re-sent; an existing real account is a CONFLICT. A new member must fit
  * the organization's seat limit, counted under the organization row lock.
+ *
+ * Refreshing rewrites that person's details and hands the caller their new
+ * link, so a caller that may not take over someone else's pending invitation
+ * passes `refreshPendingInvite: false` and gets a CONFLICT instead.
  */
 export async function createMemberInvitation(
   tx: Prisma.TransactionClient,
@@ -58,6 +63,7 @@ export async function createMemberInvitation(
     seatLimit: number;
     invitedById: string;
     profile: MemberInviteProfile;
+    refreshPendingInvite?: boolean;
   }
 ) {
   const { token, tokenHash } = generateInviteToken();
@@ -77,6 +83,13 @@ export async function createMemberInvitation(
       throw new TRPCError({
         code: 'CONFLICT',
         message: 'A user with this email already exists',
+      });
+    }
+    if (existing && input.refreshPendingInvite === false) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message:
+          'This person already has a pending invitation. An organization administrator can re-send it from Team.',
       });
     }
     if (!existing) {

@@ -62,26 +62,50 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
 import { restaurantStaffRouter } from './restaurant-staff';
 import type { TRPCContext } from '../trpc';
 
-const db = {
-  $queryRaw: mocks.raw,
-  $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
-  restaurantStaffProfile: {
-    findMany: mocks.staffFindMany,
-    findFirst: mocks.staffFindFirst,
-    create: mocks.staffCreate,
-    count: mocks.staffCount,
-  },
-  restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
-  user: {
-    findFirst: mocks.userFindFirst,
-    create: mocks.userCreate,
-    update: mocks.userUpdate,
-    count: mocks.userCount,
-  },
-  invitation: { upsert: mocks.invitationUpsert },
-  organizationRole: { findMany: mocks.roleFindMany },
-  organization: { findUnique: mocks.organizationFindUnique },
-  organizationDepartment: { findMany: mocks.departmentFindMany },
+// Delegates share the mocks, but each client gets its own delegate objects so a
+// test can tell a write made through the request client from one made through
+// the transaction handle the invite opened (`mock.contexts`).
+function makeClient() {
+  return {
+    $queryRaw: mocks.raw,
+    restaurantStaffProfile: {
+      findMany: mocks.staffFindMany,
+      findFirst: mocks.staffFindFirst,
+      create: mocks.staffCreate,
+      count: mocks.staffCount,
+    },
+    restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
+    user: {
+      findFirst: mocks.userFindFirst,
+      create: mocks.userCreate,
+      update: mocks.userUpdate,
+      count: mocks.userCount,
+    },
+    invitation: { upsert: mocks.invitationUpsert },
+    organizationRole: { findMany: mocks.roleFindMany },
+    organization: { findUnique: mocks.organizationFindUnique },
+    organizationDepartment: { findMany: mocks.departmentFindMany },
+  };
+}
+
+type Client = ReturnType<typeof makeClient> & {
+  $transaction: (run: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
+};
+
+/** Every transaction this request client opened, in order. */
+const transactions: Client[] = [];
+
+// A nested `$transaction` on a transaction handle reuses it, as the scoped
+// request client does; the outer client opens a new transaction per call.
+function makeTransaction(): Client {
+  const tx: Client = { ...makeClient(), $transaction: async (run) => run(tx) };
+  transactions.push(tx);
+  return tx;
+}
+
+const db: Client = {
+  ...makeClient(),
+  $transaction: async (run) => run(makeTransaction()),
 };
 
 const ROLES = [
@@ -151,6 +175,7 @@ function asBranchManager() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  transactions.length = 0;
   mocks.can.mockResolvedValue(true);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
   mocks.raw.mockResolvedValue([{ id: 'org_workspace' }]);
@@ -244,6 +269,67 @@ describe('restaurantStaff.invite', () => {
         metadata: expect.objectContaining({ invitedUserId: 'user_invited' }),
       })
     );
+  });
+
+  it('creates the account and the profile through the same transaction handle', async () => {
+    await caller().invite({
+      displayName: 'Sara Waiter',
+      email: 'sara@example.com',
+      organizationRoleId: 'role_server',
+    });
+    expect(transactions).toHaveLength(1);
+    const [tx] = transactions;
+    expect(mocks.userCreate.mock.contexts).toEqual([tx!.user]);
+    expect(mocks.invitationUpsert.mock.contexts).toEqual([tx!.invitation]);
+    expect(mocks.staffCreate.mock.contexts).toEqual([tx!.restaurantStaffProfile]);
+  });
+
+  it("does not let a branch manager take over someone else's pending invitation", async () => {
+    mocks.userFindFirst.mockImplementation(async ({ where }: { where: { email?: string } }) =>
+      where.email === 'pending@example.com' && !('restaurantStaffProfiles' in where)
+        ? { id: 'user_pending', status: 'INVITED' }
+        : null
+    );
+    await expect(
+      asBranchManager().invite({
+        displayName: 'Pending Person',
+        email: 'pending@example.com',
+        organizationRoleId: 'role_server',
+        primaryBranchId: 'branch_1',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+    expect(mocks.staffCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets an administrator re-send a pending invitation as a staff invite', async () => {
+    mocks.userFindFirst.mockImplementation(
+      async ({ where }: { where: { id?: string; email?: string } }) => {
+        if (where.id === 'user_pending') return { id: 'user_pending' };
+        return where.email === 'pending@example.com' && !('restaurantStaffProfiles' in where)
+          ? { id: 'user_pending', status: 'INVITED' }
+          : null;
+      }
+    );
+    mocks.userUpdate.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
+        id: where.id,
+        ...data,
+      })
+    );
+    await expect(
+      caller().invite({
+        displayName: 'Pending Person',
+        email: 'pending@example.com',
+        organizationRoleId: 'role_server',
+      })
+    ).resolves.toMatchObject({ userId: 'user_pending' });
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: 'user_pending' },
+      data: expect.objectContaining({ organizationRoleId: 'role_server', status: 'INVITED' }),
+    });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 
   it('lets a branch manager invite a waiter at their own branch', async () => {

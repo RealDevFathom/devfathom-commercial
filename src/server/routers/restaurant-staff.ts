@@ -550,6 +550,9 @@ export const restaurantStaffRouter = router({
             email: input.email,
             seatLimit: ctx.entitlements.seatLimit,
             invitedById: ctx.session!.user.id,
+            // Only an administrator may refresh someone's pending invitation;
+            // a manager must not rewrite it or receive its new link.
+            refreshPendingInvite: ctx.session!.user.role === 'ADMIN',
             profile: {
               name: input.displayName,
               role: 'EMPLOYEE',
@@ -561,8 +564,10 @@ export const restaurantStaffRouter = router({
               skills: [],
             },
           });
+          // Same transaction handle, so the profile sees the new account and
+          // both writes commit or roll back together.
           const profile = await createStaffProfileWithinCommercialLimit(
-            ctx.db,
+            tx as unknown as ScopedDb,
             ctx.entitlements.limits,
             {
               displayName: input.displayName,
