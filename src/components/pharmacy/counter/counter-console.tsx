@@ -1471,6 +1471,7 @@ function ScopedPharmacyCounterConsole({
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
+        approvalCode?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1512,7 +1513,7 @@ function ScopedPharmacyCounterConsole({
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined
+            input.familyAccountId || input.payerName !== undefined || input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
@@ -1523,6 +1524,7 @@ function ScopedPharmacyCounterConsole({
           ...(input.referenceSkipped !== undefined
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
+          ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -2886,6 +2888,7 @@ function ScopedPharmacyCounterConsole({
                   payerName: restoredAttempt.input.payerName,
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
+                  approvalCode: restoredAttempt.input.approvalCode,
                 }
               : undefined
           }
