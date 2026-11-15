@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 import { PackPhotoReader } from '../_components/pack-photo-reader';
+import { ScanSearch } from '../_components/scan-search';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -544,18 +545,15 @@ export default async function PharmacyReceivingPage({
         <input name="branch" type="hidden" value={branchId} />
         {selectedOrder ? <input name="order" type="hidden" value={selectedOrder.id} /> : null}
         {selectedReceipt ? <input name="receipt" type="hidden" value={selectedReceipt.id} /> : null}
-        <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
-          Scan or search
-          <input
-            autoComplete="off"
-            autoFocus
-            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
-            defaultValue={scanTerm ?? ''}
-            id="scan"
-            name="scan"
-            placeholder="Scan a 2D or linear code, or type a product name"
-          />
-        </label>
+        <ScanSearch
+          key={scanTerm ?? ''}
+          defaultValue={scanTerm ?? ''}
+          medicines={workspace.medicines.map(({ id, productName, brandName }) => ({
+            id,
+            productName,
+            brandName,
+          }))}
+        />
         <SubmitButton variant="secondary">Find line</SubmitButton>
       </form>
       {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
