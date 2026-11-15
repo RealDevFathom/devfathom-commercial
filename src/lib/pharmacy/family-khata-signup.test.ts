@@ -33,6 +33,7 @@ function fakeDb(
       create: vi.fn().mockResolvedValue({ id: 'family_new' }),
     },
     pharmacyFamilyMember: { create: vi.fn().mockResolvedValue({ id: 'member_new' }) },
+    pharmacyLoyaltyPointsEntry: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 }
 
@@ -66,7 +67,7 @@ describe('DEV-716 inline Khata signup', () => {
       })
     );
     expect(db.pharmacyPatient.create).toHaveBeenCalledWith({
-      data: { organizationId: 'org_a', displayName: 'Ayesha', phone: '03001234567' },
+      data: { organizationId: 'org_a', displayName: 'Ayesha', phone: '+923001234567' },
       select: { id: true, displayName: true, phone: true },
     });
     expect(writePatientConsent).toHaveBeenCalledExactlyOnceWith(db, 'org_a', 'cashier_1', {
@@ -173,7 +174,7 @@ describe('DEV-716 inline Khata signup', () => {
       consentGranted: true,
     });
     const [lock] = db.$queryRaw.mock.calls[0]!;
-    expect((lock as { values: unknown[] }).values).toEqual(['khata-signup:org_a:03001234567']);
+    expect((lock as { values: unknown[] }).values).toEqual(['khata-signup:org_a:+923001234567']);
     expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyPatient.findMany.mock.invocationCallOrder[0]!
     );
@@ -217,6 +218,53 @@ describe('DEV-716 inline Khata signup', () => {
     expect(db.$queryRaw.mock.invocationCallOrder[lockCall]).toBeLessThan(
       db.pharmacyFamilyAccount.findFirst.mock.invocationCallOrder[0]!
     );
+  });
+
+  it('matches a stored international number entered in local form', async () => {
+    const db = fakeDb({
+      sameName: [{ id: 'patient_wa', displayName: 'Ayesha', phone: '+92 300 1234567' }],
+      consent: { granted: true, revokedAt: null },
+    });
+    await signUpSaleKhata(db as never, scope, {
+      saleId: 'sale_1',
+      displayName: 'Ayesha',
+      phone: '0300-1234567',
+      consentGranted: true,
+    });
+    expect(db.pharmacyPatient.create).not.toHaveBeenCalled();
+    expect(linkCustomerToSale).toHaveBeenCalledWith(
+      db,
+      scope,
+      expect.objectContaining({ patientId: 'patient_wa' })
+    );
+  });
+
+  it('refuses to relink a bill where another customer redeemed points', async () => {
+    const db = fakeDb({
+      patient: { id: 'patient_b', displayName: 'Bilal', phone: null },
+      consent: { granted: true, revokedAt: null },
+    });
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({ id: 'redeem_a' });
+    await expect(
+      signUpSaleKhata(db as never, scope, {
+        saleId: 'sale_1',
+        patientId: 'patient_b',
+        displayName: 'Bilal',
+        consentGranted: true,
+      })
+    ).rejects.toMatchObject({ reason: 'SALE_REDEEMED_BY_OTHER_CUSTOMER' });
+    expect(db.pharmacyLoyaltyPointsEntry.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        saleId: 'sale_1',
+        kind: 'REDEEM',
+        customer: { patientId: { not: 'patient_b' } },
+      },
+      select: { id: true },
+    });
+    expect(linkCustomerToSale).not.toHaveBeenCalled();
+    expect(db.pharmacyFamilyAccount.create).not.toHaveBeenCalled();
   });
 
   it('re-records consent when the latest loyalty consent was revoked', async () => {
@@ -284,7 +332,15 @@ describe('DEV-716 inline Khata signup', () => {
   });
 
   it('normalizes phone numbers to digits with an optional leading plus', () => {
-    expect(normalizeKhataPhone(' +92 300-123 4567 ')).toBe('+923001234567');
-    expect(normalizeKhataPhone('0300 1234567')).toBe('03001234567');
+    for (const phone of [
+      ' +92 300-123 4567 ',
+      '0300 1234567',
+      '3001234567',
+      '923001234567',
+      '0092 300 1234567',
+    ])
+      expect(normalizeKhataPhone(phone)).toBe('+923001234567');
+    expect(normalizeKhataPhone('042-3576 1234')).toBe('04235761234');
+    expect(normalizeKhataPhone('+44 20 7946 0958')).toBe('+442079460958');
   });
 });

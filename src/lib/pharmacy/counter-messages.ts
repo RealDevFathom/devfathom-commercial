@@ -58,6 +58,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  SALE_REDEEMED_BY_OTHER_CUSTOMER:
+    'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
   PATIENT_AMBIGUOUS:
     'More than one patient has this name and phone. Select the patient on the counter, then open Khata.',
   PHONE_REQUIRED: 'Enter the customer’s phone number to open a Khata account.',

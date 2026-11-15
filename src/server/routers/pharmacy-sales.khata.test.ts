@@ -873,6 +873,7 @@ describe('DEV-716 khataSignup', () => {
     db.pharmacyFamilyAccount.findFirst = vi.fn().mockResolvedValue(null);
     db.pharmacyFamilyAccount.create = vi.fn().mockResolvedValue({ id: 'family-new' });
     db.pharmacyFamilyMember = { create: vi.fn().mockResolvedValue({ id: 'member-new' }) };
+    db.pharmacyLoyaltyPointsEntry = { findFirst: vi.fn().mockResolvedValue(null) };
     f.db.$queryRaw.mockResolvedValue([{ id: 'patient-a' }]);
     return db;
   }
