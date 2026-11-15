@@ -412,6 +412,23 @@ export function AddMemberModal({
   const [copied, setCopied] = useState(false);
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
+  // DEV-673: a vertical with role-template base roles shows one role picker, and the
+  // chosen template also sets the base role sent to the server.
+  const templateBaseRoles = copy.roleTemplateBaseRoles;
+  const selectedRoleTemplate = roleOptions.find((item) => item.id === organizationRoleId);
+  const submittedRole =
+    templateBaseRoles === undefined
+      ? role
+      : selectedRoleTemplate &&
+          Object.prototype.hasOwnProperty.call(templateBaseRoles, selectedRoleTemplate.key)
+        ? templateBaseRoles[selectedRoleTemplate.key]
+        : 'EMPLOYEE';
+  const selectedRoleDescription =
+    selectedRoleTemplate &&
+    copy.roleTemplateDescriptions &&
+    Object.prototype.hasOwnProperty.call(copy.roleTemplateDescriptions, selectedRoleTemplate.key)
+      ? copy.roleTemplateDescriptions[selectedRoleTemplate.key]
+      : undefined;
   const departmentReady =
     !departmentQuery.isFetching && !departmentQuery.isError && Boolean(selectedDepartment);
 
@@ -430,7 +447,7 @@ export function AddMemberModal({
       {
         name: name.trim(),
         email: submittedEmail,
-        role,
+        role: submittedRole,
         organizationRoleId: organizationRoleId || null,
         department,
         title: title.trim(),
@@ -628,25 +645,29 @@ export function AddMemberModal({
                       ) : null}
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
-                    <div className="flex rounded-xl border border-border overflow-hidden">
-                      {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
-                        <button
-                          key={r}
-                          onClick={() => setRole(r)}
-                          className={cn(
-                            'flex-1 py-2.5 text-xs font-medium transition-colors',
-                            role === r
-                              ? 'bg-foreground text-background'
-                              : 'bg-card text-muted-foreground hover:text-foreground'
-                          )}
-                        >
-                          {copy.baseRoleLabels[r]}
-                        </button>
-                      ))}
+                  {templateBaseRoles === undefined && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">
+                        Role
+                      </label>
+                      <div className="flex rounded-xl border border-border overflow-hidden">
+                        {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => setRole(r)}
+                            className={cn(
+                              'flex-1 py-2.5 text-xs font-medium transition-colors',
+                              role === r
+                                ? 'bg-foreground text-background'
+                                : 'bg-card text-muted-foreground hover:text-foreground'
+                            )}
+                          >
+                            {copy.baseRoleLabels[r]}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 <div>
@@ -654,10 +675,11 @@ export function AddMemberModal({
                     htmlFor="invite-role-template"
                     className="block text-sm font-medium text-foreground mb-1.5"
                   >
-                    {copy.staffRoleLabel}
+                    {templateBaseRoles === undefined ? copy.staffRoleLabel : 'Role'}
                   </label>
                   <select
                     id="invite-role-template"
+                    aria-describedby="invite-role-template-help"
                     value={organizationRoleId}
                     disabled={roleQuery.isFetching || roleQuery.isError || inviteMember.isPending}
                     onChange={(event) => setOrganizationRoleId(event.target.value)}
@@ -670,12 +692,14 @@ export function AddMemberModal({
                       </option>
                     ))}
                   </select>
-                  <p className="mt-2 text-sm text-text-muted">
+                  <p id="invite-role-template-help" className="mt-2 text-sm text-text-muted">
                     {roleQuery.isFetching
                       ? 'Loading staff roles…'
                       : roleQuery.isError
                         ? 'Staff roles could not be loaded.'
-                        : copy.staffRoleHelp}
+                        : (selectedRoleDescription ?? copy.staffRoleHelp)}
+                    {templateBaseRoles !== undefined &&
+                      ` Access level: ${copy.baseRoleLabels[submittedRole]}.`}
                   </p>
                 </div>
 
