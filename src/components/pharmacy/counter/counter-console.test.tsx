@@ -1686,6 +1686,15 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     );
   });
 
+  it('DEV-714: re-reads the drawer status each time payment opens', () => {
+    const drawerStatus = query({ openDrawer: null });
+    mocks.queries.drawerStatus = drawerStatus;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(drawerStatus.refetch).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
+  });
+
   it('DEV-714: an unknown drawer status does not flag Cash', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

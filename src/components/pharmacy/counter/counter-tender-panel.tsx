@@ -200,7 +200,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (entry) =>
         entry.value === type ||
         entry.offer === 'always' ||
-        (entry.offer === 'configured' && Boolean(manualSettings?.[entry.value]))
+        (entry.offer === 'configured' &&
+          !manualSettingsError &&
+          Boolean(manualSettings?.[entry.value]))
     );
     const cashDrawerClosed = drawerOpen === false;
     const isKhata = type === 'KHATA' || type === 'CREDIT';

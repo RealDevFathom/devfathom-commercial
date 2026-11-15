@@ -150,6 +150,20 @@ describe('DEV-714 tender buttons', () => {
     expect(onReloadManualSettings).toHaveBeenCalledTimes(1);
   });
 
+  it('hides cached wallet buttons once a merchant-details reload fails', () => {
+    const manualSettings = {
+      JAZZCASH: { destination: 'Till 1', allowReferenceSkip: false },
+    };
+    const { props, rerender } = setup({ manualSettings });
+    expect(tenderButton('JAZZCASH')).toBeVisible();
+    rerender(<CounterTenderPanel {...props} manualSettingsError />);
+    expect(screen.queryByRole('button', { name: 'JazzCash' })).not.toBeInTheDocument();
+    expect(tenderButtons()).toHaveLength(4);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Wallet merchant details could not be loaded'
+    );
+  });
+
   it('still renders a restored Wallet attempt so it can be resolved', () => {
     setup({ initialDraft: { type: 'WALLET', amount: '', cashReceived: '' } });
     expect(tenderButton('WALLET')).toHaveAttribute('aria-pressed', 'true');

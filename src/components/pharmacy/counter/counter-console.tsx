@@ -566,9 +566,10 @@ function ScopedPharmacyCounterConsole({
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
+  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
-    { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
+    { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
@@ -1034,6 +1035,14 @@ function ScopedPharmacyCounterConsole({
     if (!paymentOpen) return;
     tenderRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [paymentOpen]);
+
+  // DEV-714: the tender panel holds cash while the drawer reads closed, so a
+  // cached "closed" (e.g. the drawer was opened in another tab on this device)
+  // is re-read from the server each time payment opens.
+  const refetchDrawer = drawerQuery.refetch;
+  useEffect(() => {
+    if (paymentOpen && drawerQueryEnabled) void refetchDrawer();
+  }, [paymentOpen, drawerQueryEnabled, refetchDrawer]);
 
   const runSearch = useCallback(
     async (submittedQuery?: string) => {
