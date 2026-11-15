@@ -454,118 +454,133 @@ describe('DEV-290: isSoleActiveApprover', () => {
 
 describe('DEV-806: one shared approver check for the PIN and password routes', () => {
   const tenantAdmin = { id: 'admin', organizationId: 'org', status: 'ACTIVE', role: 'ADMIN' };
-  /** A tenant ADMIN holds only `admin:access`; `manager` holds `pharmacy:manage`. */
-  function grants(extra: Record<string, string[]> = {}) {
+  /**
+   * `can` decides per action. A tenant ADMIN always holds `admin:access`; `pharmacy:manage`
+   * goes to `manager` unless a test says otherwise (an explicit DENY is modelled as false).
+   */
+  function grants(manage: string[] = ['manager']) {
     const table: Record<string, string[]> = {
       'admin:access': ['admin'],
-      'pharmacy:manage': ['manager'],
-      ...extra,
+      'pharmacy:manage': manage,
     };
     vi.mocked(can).mockImplementation(async (subject, action) =>
       (table[action] ?? []).includes(subject.id)
     );
   }
 
-  it('lets a tenant ADMIN or a pharmacy:manage holder approve an over-limit charge', async () => {
+  it('accepts only a live grant of the capability, never the ADMIN role alone', async () => {
     grants();
-    await expect(mayApproveCounterLine({} as never, tenantAdmin, 'KHATA_OVER_LIMIT')).resolves.toBe(
-      true
-    );
     await expect(mayApproveCounterLine({} as never, manager, 'KHATA_OVER_LIMIT')).resolves.toBe(
       true
     );
-    await expect(mayApproveCounterLine({} as never, actor, 'KHATA_OVER_LIMIT')).resolves.toBe(
-      false
-    );
-  });
-
-  it('keeps the tenant ADMIN fallback off for discounts and FEFO overrides', async () => {
-    grants();
-    for (const kind of ['DISCOUNT', 'FEFO_OVERRIDE'] as const)
+    for (const kind of ['DISCOUNT', 'FEFO_OVERRIDE', 'KHATA_OVER_LIMIT'] as const)
       await expect(mayApproveCounterLine({} as never, tenantAdmin, kind)).resolves.toBe(false);
-  });
-
-  it('needs a live admin:access decision, not just the ADMIN role', async () => {
-    grants({ 'admin:access': [] });
-    await expect(mayApproveCounterLine({} as never, tenantAdmin, 'KHATA_OVER_LIMIT')).resolves.toBe(
-      false
-    );
-    // A non-ADMIN is never checked for admin:access.
-    grants({ 'admin:access': ['cashier'] });
-    await expect(mayApproveCounterLine({} as never, actor, 'KHATA_OVER_LIMIT')).resolves.toBe(
-      false
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'admin:access',
+      undefined,
+      expect.anything()
     );
   });
 
-  it('passes the request source to every decision', async () => {
+  it('passes the clock and request source to the decision', async () => {
     grants();
-    await mayApproveCounterLine({} as never, tenantAdmin, 'KHATA_OVER_LIMIT', { source: 'TRPC' });
-    for (const action of ['pharmacy:manage', 'admin:access'])
-      expect(can).toHaveBeenCalledWith(
-        tenantAdmin,
-        action,
-        undefined,
-        expect.objectContaining({ source: 'TRPC' })
-      );
+    const now = new Date('2026-11-15T09:00:00Z');
+    await mayApproveCounterLine({} as never, manager, 'KHATA_OVER_LIMIT', { now, source: 'TRPC' });
+    expect(can).toHaveBeenCalledWith(
+      manager,
+      'pharmacy:manage',
+      undefined,
+      expect.objectContaining({ now, source: 'TRPC' })
+    );
   });
 
-  it("accepts a tenant ADMIN's PIN at the till, as the password route accepts them", async () => {
+  it("refuses a tenant ADMIN's PIN without pharmacy:manage, as the password route does", async () => {
     const db = fixture(tenantAdmin);
     grants();
-    await expect(
-      authorizeCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', pin)
-    ).resolves.toEqual({
-      approvedByUserId: 'admin',
-      approvalPolicy: 'MANAGER_PIN',
-      selfApproved: false,
-      credentialId: 'cred',
-    });
-  });
-
-  it('re-checks a tenant ADMIN approver with the same rule inside the sale', async () => {
-    grants();
-    const db = {
-      user: { findFirst: vi.fn().mockResolvedValue(tenantAdmin) },
-      restaurantOperatorCredential: { findFirst: vi.fn().mockResolvedValue({ id: 'cred' }) },
-    };
-    await expect(
-      confirmCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', {
-        approvedByUserId: 'admin',
-        approvalPolicy: 'MANAGER_PIN',
-        selfApproved: false,
-        credentialId: 'cred',
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it('refuses PIN self-approval while a tenant ADMIN with a live PIN could approve', async () => {
-    const db = fixture({ ...actor }, [], [tenantAdmin]);
-    grants({ 'pharmacy:manage': ['cashier'] });
     await expect(
       authorizeCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
     expectDummyCompareOnly(db);
   });
 
-  it('is not the sole approver on the password route while a tenant ADMIN is active', async () => {
-    grants();
-    const db = { user: { findMany: vi.fn().mockResolvedValue([tenantAdmin]) } };
-    await expect(isSoleActiveApprover(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toBe(false);
+  it("refuses a tenant ADMIN's PIN when pharmacy:manage is explicitly denied", async () => {
+    const db = fixture(tenantAdmin);
+    // The ADMIN's role grants pharmacy:manage, but an explicit DENY makes the decision false.
+    vi.mocked(can).mockImplementation(async (subject, action) =>
+      action === 'admin:access' ? subject.id === 'admin' : subject.id === 'manager'
+    );
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
   });
 
-  it('offers a tenant ADMIN with a live PIN as an approver at the till', async () => {
+  it('accepts a manager PIN and re-checks it with the same rule inside the sale', async () => {
+    const db = fixture(manager);
+    grants();
+    const approval = await authorizeCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', pin);
+    expect(approval).toEqual({
+      approvedByUserId: 'manager',
+      approvalPolicy: 'MANAGER_PIN',
+      selfApproved: false,
+      credentialId: 'cred',
+    });
+    const saleDb = {
+      user: { findFirst: vi.fn().mockResolvedValue(manager) },
+      restaurantOperatorCredential: { findFirst: vi.fn().mockResolvedValue({ id: 'cred' }) },
+    };
+    await expect(
+      confirmCounterApproval(saleDb as never, scope, 'KHATA_OVER_LIMIT', approval)
+    ).resolves.toBeUndefined();
+    saleDb.user.findFirst.mockResolvedValue(tenantAdmin);
+    await expect(
+      confirmCounterApproval(saleDb as never, scope, 'KHATA_OVER_LIMIT', {
+        ...approval,
+        approvedByUserId: 'admin',
+      })
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+  });
+
+  it('lets a solo owner self-approve with a fresh PIN, recorded as self-approved', async () => {
+    // A tenant ADMIN with no pharmacy:manage grant is not another approver.
+    const db = fixture({ ...actor }, [], [tenantAdmin]);
+    grants(['cashier']);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'KHATA_OVER_LIMIT', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'cashier',
+      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      selfApproved: true,
+      credentialId: 'cred',
+    });
+  });
+
+  it('applies the same rule to the password route sole-approver check', async () => {
+    grants(['cashier']);
+    const adminOnly = { user: { findMany: vi.fn().mockResolvedValue([tenantAdmin]) } };
+    await expect(isSoleActiveApprover(adminOnly as never, scope, 'KHATA_OVER_LIMIT')).resolves.toBe(
+      true
+    );
+    grants(['cashier', 'manager']);
+    const withManager = { user: { findMany: vi.fn().mockResolvedValue([tenantAdmin, manager]) } };
+    await expect(
+      isSoleActiveApprover(withManager as never, scope, 'KHATA_OVER_LIMIT')
+    ).resolves.toBe(false);
+  });
+
+  it('never offers a tenant ADMIN without pharmacy:manage as an approver at the till', async () => {
     grants();
     const db = {
       restaurantStaffProfile: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([
-            { id: 'staff-admin', displayName: 'Owner Ayesha', user: tenantAdmin },
-          ]),
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'staff-admin', displayName: 'Owner Ayesha', user: tenantAdmin },
+          { id: 'staff-manager', displayName: 'Manager Sana', user: manager },
+        ]),
       },
     };
     await expect(listCounterApprovers(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toEqual([
-      { id: 'staff-admin', name: 'Owner Ayesha', self: false },
+      { id: 'staff-manager', name: 'Manager Sana', self: false },
     ]);
   });
 });

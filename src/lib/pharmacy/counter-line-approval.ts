@@ -36,8 +36,8 @@ export type CounterApproval = {
  * - FEFO_OVERRIDE is a pharmacist's decision: an actor holding `pharmacy:dispense` approves it
  *   as the pharmacist on duty; anyone else needs an active pharmacist's PIN.
  * - KHATA_OVER_LIMIT (DEV-290): charging a family Khata past its credit limit is approved at
- *   the cashier's till by a manager or owner (`pharmacy:manage`, or a tenant ADMIN) with their
- *   own PIN, under the same different-person and solo rules as a discount.
+ *   the cashier's till by a manager or owner (`pharmacy:manage`) with their own PIN, under the
+ *   same different-person and solo rules as a discount.
  */
 export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = {
   DISCOUNT: 'pharmacy:manage',
@@ -46,19 +46,11 @@ export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = 
 };
 
 /**
- * DEV-806: whether a tenant ADMIN (the workspace owner, `admin:access`) approves `kind` as well
- * as members holding its capability. Over-limit Khata charges are an owner's decision.
- */
-const TENANT_ADMIN_APPROVES: Record<CounterApprovalKind, boolean> = {
-  DISCOUNT: false,
-  FEFO_OVERRIDE: false,
-  KHATA_OVER_LIMIT: true,
-};
-
-/**
  * DEV-806: the one approver check every approval route shares: the till PIN route, the
  * signed-in password re-authentication route, the in-transaction re-check, the approver list
- * and both sole-approver (second-person) rules. Whether `subject` may approve `kind`.
+ * and both sole-approver (second-person) rules. Whether `subject` may approve `kind`: only a
+ * live grant of the kind's capability counts, so an explicit DENY always wins and the tenant
+ * ADMIN role on its own (`admin:access`) is not an approver.
  */
 export async function mayApproveCounterLine(
   db: ScopedDb,
@@ -66,13 +58,11 @@ export async function mayApproveCounterLine(
   kind: CounterApprovalKind,
   options: { now?: Date; source?: Environment['source'] } = {}
 ): Promise<boolean> {
-  const canOptions = { db, now: options.now, source: options.source };
-  if (await can(subject, COUNTER_APPROVAL_CAPABILITY[kind], undefined, canOptions)) return true;
-  return (
-    TENANT_ADMIN_APPROVES[kind] &&
-    subject.role === 'ADMIN' &&
-    (await can(subject, 'admin:access', undefined, canOptions))
-  );
+  return can(subject, COUNTER_APPROVAL_CAPABILITY[kind], undefined, {
+    db,
+    now: options.now,
+    source: options.source,
+  });
 }
 
 const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {

@@ -938,8 +938,9 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
 /**
  * DEV-290: the password route is the signed-in operator approving their own over-limit
  * charge, so the second-person rule applies: it is allowed only for an owner or manager
- * (or tenant ADMIN) who is genuinely the sole active owner/manager. Everyone else needs a
- * different manager's or owner's PIN at the till.
+ * (`pharmacy:manage`) who is genuinely the sole active owner/manager. Everyone else needs a
+ * different manager's or owner's PIN at the till. DEV-806: the tenant ADMIN role alone does
+ * not approve, on this route or the PIN route.
  */
 async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
   const db = ctx.db as unknown as ScopedDb;
