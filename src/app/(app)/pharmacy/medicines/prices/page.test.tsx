@@ -29,6 +29,7 @@ const row = {
   packLevelId: 'box',
   units: 30,
   status: 'PROPOSED',
+  proposalStatus: 'PROPOSED',
   eligible: true,
   effectiveDate: new Date('2027-01-01'),
   notifiedMrpMinor: 30000,
@@ -105,17 +106,37 @@ describe('price intelligence page states', () => {
           ...data,
           rows: [
             { ...row, id: 'pending', reference: 'SRO-PENDING', status: 'PROPOSED' },
-            { ...row, id: 'ended', reference: 'SRO-ENDED', status: 'NOT_APPLIED' },
-            { ...row, id: 'done', reference: 'SRO-DONE', status: 'CONFIRMED' },
+            {
+              ...row,
+              id: 'unmapped',
+              reference: 'SRO-UNMAPPED',
+              status: 'NEEDS_MAPPING',
+              proposalStatus: 'NOT_APPLIED',
+            },
+            {
+              ...row,
+              id: 'ended',
+              reference: 'SRO-ENDED',
+              status: 'NOT_APPLIED',
+              proposalStatus: 'NOT_APPLIED',
+            },
+            {
+              ...row,
+              id: 'done',
+              reference: 'SRO-DONE',
+              status: 'CONFIRMED',
+              proposalStatus: 'CONFIRMED',
+            },
           ],
         }}
       />
     );
     const list = screen.getByRole('list', { name: 'Price proposals never applied' });
-    expect(screen.getByText('Never applied (2)')).toBeVisible();
-    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByText('Never applied (3)')).toBeVisible();
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3);
     expect(within(list).getByText(/SRO-PENDING/)).toBeVisible();
     expect(within(list).getByText(/SRO-ENDED/)).toBeVisible();
+    expect(within(list).getByText(/SRO-UNMAPPED.*Needs mapping/)).toBeVisible();
     expect(within(list).queryByText(/SRO-DONE/)).toBeNull();
     expect(screen.getByText(/no price changed/)).toBeVisible();
   });

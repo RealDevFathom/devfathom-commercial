@@ -32,7 +32,8 @@ const POLICY_SOURCE_LABELS: Readonly<Record<string, string>> = {
 export const policySourceLabel = (source: string) => POLICY_SOURCE_LABELS[source] ?? 'Other source';
 
 /** DEV-803: a proposal that was pending and can no longer be confirmed was never applied. */
-const isNeverApplied = (status: string) => status === 'PROPOSED' || status === 'NOT_APPLIED';
+const isNeverApplied = (status: string | null | undefined) =>
+  status === 'PROPOSED' || status === 'NOT_APPLIED';
 
 export function pricesCsv(data: PriceData) {
   const header = [
@@ -111,7 +112,7 @@ export function PriceNoticesView({
       </SectionCard>
     );
   const mapping = data.rows.filter((r) => r.status === 'NEEDS_MAPPING');
-  const neverApplied = data.rows.filter((r) => isNeverApplied(r.status));
+  const neverApplied = data.rows.filter((r) => isNeverApplied(r.proposalStatus));
   const mapped = data.rows.filter((r) => r.status !== 'NEEDS_MAPPING');
   const exportCsv = () => {
     const url = URL.createObjectURL(
@@ -133,13 +134,17 @@ export function PriceNoticesView({
               were never applied: no price changed. Set the pack price yourself from the MRP printed
               on the pack if you need it.
             </p>
-            <ul className="divide-y divide-border-subtle" aria-label="Price proposals never applied">
+            <ul
+              className="divide-y divide-border-subtle"
+              aria-label="Price proposals never applied"
+            >
               {neverApplied.map((r) => (
                 <li key={r.id} className="py-2">
                   <span className="font-medium">{r.medicine}</span>
                   <span className="text-text-muted">
                     {' '}
                     · {r.reference} · {r.presentation} / {r.packLevel}
+                    {r.status === 'NEEDS_MAPPING' && ' · Needs mapping'}
                   </span>
                 </li>
               ))}
@@ -294,14 +299,14 @@ export function PriceNoticesView({
                         status={
                           r.status === 'CONFIRMED'
                             ? 'confirmed'
-                            : isNeverApplied(r.status)
+                            : isNeverApplied(r.proposalStatus)
                               ? 'review'
                               : 'info'
                         }
                         label={
                           r.status === 'CONFIRMED'
                             ? 'Applied earlier'
-                            : isNeverApplied(r.status)
+                            : isNeverApplied(r.proposalStatus)
                               ? 'Never applied'
                               : 'Information only'
                         }
