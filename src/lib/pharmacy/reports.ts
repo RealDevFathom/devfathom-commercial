@@ -104,7 +104,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 30 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
-    '/pharmacy/inventory',
+    '/pharmacy/inventory/expiry?within=30',
     'reports:operational',
   ],
   [
@@ -113,7 +113,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 60 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
-    '/pharmacy/inventory',
+    '/pharmacy/inventory/expiry?within=60',
     'reports:operational',
   ],
   [
@@ -122,7 +122,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 90 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
-    '/pharmacy/inventory',
+    '/pharmacy/inventory/expiry?within=90',
     'reports:operational',
   ],
   [
@@ -131,7 +131,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 180 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
-    '/pharmacy/inventory',
+    '/pharmacy/inventory/expiry?within=180',
     'reports:operational',
   ],
   [

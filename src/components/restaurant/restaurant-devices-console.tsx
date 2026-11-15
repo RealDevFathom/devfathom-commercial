@@ -353,17 +353,19 @@ export function RestaurantDevicesConsole() {
                           >
                             Rotate secret
                           </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => {
-                              setDeviceAction('revoke');
-                              setCoAuthError('');
-                              setSelectedDevice(device);
-                            }}
-                          >
-                            Revoke {device.name}
-                          </Button>
+                          {device.canRevoke ? (
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => {
+                                setDeviceAction('revoke');
+                                setCoAuthError('');
+                                setSelectedDevice(device);
+                              }}
+                            >
+                              Revoke {device.name}
+                            </Button>
+                          ) : null}
                         </div>
                       ) : (
                         <span className="text-xs text-text-faint">No actions</span>

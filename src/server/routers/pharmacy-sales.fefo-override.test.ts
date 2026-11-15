@@ -63,12 +63,17 @@ function fixture() {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     },
-    pharmacyInventoryLot: { findMany: lotRead },
-    // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
-    medicine: { findFirst: vi.fn(async () => null) },
+    // DEV-607: addLine admits only an active counter member assigned to the branch.
     // #520: the override approver is the session actor, resolved from the database.
     user: {
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      })),
       findFirst: vi.fn(async () => ({
         id: 'actor-1',
         organizationId: 'org-1',
@@ -76,6 +81,10 @@ function fixture() {
         role: 'EMPLOYEE',
       })),
     },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyInventoryLot: { findMany: lotRead },
+    // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
+    medicine: { findFirst: vi.fn(async () => null) },
   };
   const context = {
     db,
@@ -166,6 +175,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     vi.mocked(can).mockResolvedValue(false);
     await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
       code: 'FORBIDDEN',
+      message: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
     });
     // Approval is settled before the sale transaction takes a connection.
     expect(f.transaction).not.toHaveBeenCalled();
@@ -182,6 +192,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     vi.mocked(can).mockResolvedValueOnce(true).mockResolvedValue(false);
     await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
       code: 'FORBIDDEN',
+      message: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
     });
     expect(f.transaction).toHaveBeenCalledOnce();
     expect(addSaleLine).not.toHaveBeenCalled();
@@ -206,7 +217,10 @@ describe('pharmacySales.addLine discount approval (#520)', () => {
     const f = fixture();
     await expect(
       f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A discount needs a manager to approve it with their PIN.',
+    });
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
