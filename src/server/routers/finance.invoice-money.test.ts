@@ -109,6 +109,7 @@ describe('finance.createInvoice money calculation', () => {
           ],
           subtotal: 2.02,
           tax: 0.01,
+          discount: 0,
           total: 2.03,
         }),
       })
@@ -175,6 +176,7 @@ describe('finance.updateInvoice money calculation and settlement serialization',
           ],
           subtotal: 2.02,
           tax: 0.01,
+          discount: 0,
           total: 2.03,
         },
       })
@@ -337,4 +339,115 @@ describe('invoice payment settlement serialization', () => {
 
     expect(mocks.paymentCreate).not.toHaveBeenCalled();
   });
+});
+
+describe('agency invoice discounts', () => {
+  const items = [
+    { description: 'First', quantity: 1, rate: 1.005, amount: 0 },
+    { description: 'Second', quantity: 3, rate: 0.335, amount: 0 },
+  ];
+  const input = {
+    clientId: 'client-1',
+    items,
+    subtotal: 0,
+    total: 0,
+    dueDate: new Date('2026-12-01T00:00:00Z'),
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.queryRaw.mockImplementation((query) =>
+      Array.isArray(query) ? [] : invoiceNumberingQuery(query)
+    );
+    mocks.create.mockResolvedValue({
+      id: 'invoice-1',
+      invoiceNumber: 'INV-1',
+      total: 1.02,
+      client: { name: 'Acme' },
+    });
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', tax: '0.01', discount: '1.01' });
+    mocks.update.mockResolvedValue({ id: 'invoice-1', total: 1.02, payments: [] });
+  });
+
+  it('creates from rounded lines and adjustments, ignoring caller totals', async () => {
+    await caller().createInvoice({ ...input, tax: 0.005, discount: 1.005 });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          subtotal: 2.02,
+          discount: 1.01,
+          tax: 0.01,
+          total: 1.02,
+          items: [
+            { ...items[0], amount: 1.01 },
+            { ...items[1], amount: 1.01 },
+          ],
+        }),
+      })
+    );
+  });
+
+  it.each([-1, -0.001, 2.03, Infinity, NaN, 10_000_000_000])(
+    'rejects invalid create discount %s',
+    async (discount) => {
+      await expect(caller().createInvoice({ ...input, tax: 100, discount })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows a full subtotal discount without making tax negative', async () => {
+    await caller().createInvoice({ ...input, tax: 0.01, discount: 2.02 });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ total: 0.01, discount: 2.02 }) })
+    );
+  });
+
+  it('retains omitted tax and discount while editing line items', async () => {
+    await caller().updateInvoice({ id: 'invoice-1', items });
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtotal: 2.02, tax: 0.01, discount: 1.01, total: 1.02 }),
+      })
+    );
+  });
+
+  it('lets an explicit zero clear both adjustments', async () => {
+    await caller().updateInvoice({ id: 'invoice-1', items, tax: 0, discount: 0 });
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tax: 0, discount: 0, total: 2.02 }),
+      })
+    );
+  });
+
+  it('recomputes edits with half-up rounded tax and discount', async () => {
+    await caller().updateInvoice({ id: 'invoice-1', items, tax: 0.005, discount: 0.005 });
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtotal: 2.02, tax: 0.01, discount: 0.01, total: 2.02 }),
+      })
+    );
+  });
+
+  it('rejects a retained discount exceeding the reduced subtotal', async () => {
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Reduced', quantity: 1, rate: 1 }],
+      })
+    ).rejects.toThrow('Discount cannot exceed the subtotal');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it.each([-1, 2.03, Infinity, NaN, 10_000_000_000])(
+    'rejects invalid edit discount %s',
+    async (discount) => {
+      await expect(
+        caller().updateInvoice({ id: 'invoice-1', items, discount })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.update).not.toHaveBeenCalled();
+    }
+  );
 });

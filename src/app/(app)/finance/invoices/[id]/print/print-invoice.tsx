@@ -54,6 +54,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const currency = invoice.currency;
   const subtotal = Number(invoice.subtotal);
   const tax = Number(invoice.tax);
+  const discount = Number(invoice.discount ?? 0);
   const total = Number(invoice.total);
   const amountPaid = Number(invoice.amountPaid);
   const balance = Number(invoice.balance);
@@ -218,6 +219,12 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 <span>Subtotal</span>
                 <span className="tabular-nums">{moneyLabel(subtotal, currency)}</span>
               </div>
+              {discount > 0 && (
+                <div className="flex justify-between text-text-muted">
+                  <span>Discount</span>
+                  <span className="tabular-nums">{moneyLabel(-discount, currency)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-slate-600">
                 <span>Tax</span>
                 <span className="tabular-nums">{moneyLabel(tax, currency)}</span>
