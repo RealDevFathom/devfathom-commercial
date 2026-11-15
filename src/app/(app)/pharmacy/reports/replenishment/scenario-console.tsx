@@ -22,6 +22,7 @@ import type {
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import { SeasonalCalendarPanel } from './seasonal-calendar-panel';
 
 type Props = {
   organizationId: string;
@@ -666,6 +667,7 @@ function ScenarioWorkspace({
           }
         />
       )}
+      {branchId && <SeasonalCalendarPanel key={branchId} branchId={branchId} today={today} />}
     </div>
   );
 }

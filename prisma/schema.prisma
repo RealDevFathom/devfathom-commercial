@@ -16484,3 +16484,25 @@ model OutboundEffect {
   @@index([status, availableAt])
   @@map("outbound_effects")
 }
+
+/// DEV-74: owner-editable branch seasonal calendar. Each row is one dated occurrence
+/// (Ramadan and monsoon move year to year); uplift is learned from branch history, never stored.
+model PharmacySeasonalWindow {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  /// DENGUE | FLU | RAMADAN | MONSOON | CUSTOM (database CHECK).
+  kind            String
+  label           String
+  startDate       DateTime @db.Date
+  /// Exclusive end date.
+  endDate         DateTime @db.Date
+  createdByUserId String
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, id], map: "pharmacy_seasonal_windows_org_id_key")
+  @@index([organizationId, branchId, startDate], map: "pharmacy_seasonal_windows_org_branch_start_idx")
+  @@map("pharmacy_seasonal_windows")
+}
