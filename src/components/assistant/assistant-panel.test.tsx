@@ -366,6 +366,12 @@ describe('Ask Fathom request and result states', () => {
     expect(screen.getByText(`Read ${label}`)).toBeVisible();
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
   });
+  it('lets mixed Urdu/English user text follow the paragraph direction', () => {
+    const text = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
+    fixtures.messages = [{ id: 'u1', role: 'user', parts: [{ type: 'text', text }] }];
+    render(panel());
+    expect(screen.getByText(text)).toHaveAttribute('dir', 'auto');
+  });
   it('shows a declined tool as cancelled', () => {
     tool({ state: 'output-denied' });
     render(panel());
