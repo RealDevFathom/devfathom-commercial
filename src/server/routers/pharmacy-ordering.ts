@@ -97,6 +97,7 @@ export const pharmacyOrderingRouter = router({
                   organizationId: scope.organizationId,
                   actorId: scope.actorId,
                   pin: input.managerPin,
+                  action: 'pharmacyOrdering.deliveryCommand',
                 })
               : { blocked: REFUND_PIN_BLOCKED };
             annotateAudit(ctx, {

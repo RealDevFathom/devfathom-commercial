@@ -1072,6 +1072,7 @@ export const pharmacySalesRouter = router({
           organizationId: scope.organizationId,
           actorId: scope.actorId,
           pin: managerPin,
+          action: 'pharmacySales.refundTender',
         });
         annotateAudit(ctx, {
           metadata: {

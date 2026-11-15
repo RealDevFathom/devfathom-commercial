@@ -77,14 +77,37 @@ export async function verifyRefundPin(
 /**
  * verifyRefundPin in its own tenant transaction. The request transaction rolls
  * back when any procedure in a tRPC batch fails, which would also discard a
- * lockout strike; this one commits before any refund work starts.
+ * lockout strike; this one commits before any refund work starts. A refused PIN
+ * also commits a FAILURE audit row here: the request audit would otherwise
+ * record the blocked refund as a successful mutation.
  */
 export function authenticateRefundPin(input: {
   organizationId: string;
   actorId: string;
   pin: string;
+  /** The refunding procedure, for the audit row. */
+  action: string;
 }): Promise<{ verified: true } | { blocked: string }> {
-  return withTenantDb(input.organizationId, (db) => verifyRefundPin(db, input), {
-    skipDrain: true,
-  });
+  return withTenantDb(
+    input.organizationId,
+    async (db) => {
+      const result = await verifyRefundPin(db, input);
+      if ('blocked' in result)
+        await db.auditLog.create({
+          data: {
+            organizationId: input.organizationId,
+            actorId: input.actorId,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'EXECUTE',
+            action: input.action,
+            outcome: 'FAILURE',
+            errorCode: 'REFUND_PIN_REFUSED',
+            metadata: { policy: REFUND_PIN_POLICY, pinVerified: false },
+          },
+        });
+      return result;
+    },
+    { skipDrain: true }
+  );
 }

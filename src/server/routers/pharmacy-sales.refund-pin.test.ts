@@ -103,6 +103,7 @@ function fixture(
       ),
       update: vi.fn().mockResolvedValue({}),
     },
+    auditLog: { create: vi.fn().mockResolvedValue({}) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
@@ -197,6 +198,7 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
         approverId: 'user-a',
         pinVerified: true,
       });
+      expect(f.db.auditLog.create).not.toHaveBeenCalled();
     }
   );
 
@@ -214,6 +216,15 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
     expect(f.audit.detail.metadata).toMatchObject({
       policy: REFUND_PIN_POLICY,
       pinVerified: false,
+    });
+    // The request audit sees a blocked (successful) call, so the refusal has its own row.
+    expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        actorId: 'user-a',
+        action: 'pharmacySales.refundTender',
+        outcome: 'FAILURE',
+        errorCode: 'REFUND_PIN_REFUSED',
+      }),
     });
   });
 

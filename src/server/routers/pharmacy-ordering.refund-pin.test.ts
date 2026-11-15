@@ -125,6 +125,7 @@ describe('DEV-647 delivery physical-return refunds', () => {
       organizationId: 'org-a',
       actorId: 'user-a',
       pin: '7391',
+      action: 'pharmacyOrdering.deliveryCommand',
     });
     expect(f.audit.detail.metadata).toMatchObject({
       policy: 'PHARMACY_REFUND_MANAGER_PIN',
