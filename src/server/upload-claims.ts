@@ -14,7 +14,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * the same transaction as the owner row so a refusal rolls that row back.
  */
 export async function claimUploadOrThrow(
-  db: Pick<ScopedDb, 'uploadedFile'>,
+  db: Pick<ScopedDb, 'uploadedFile' | 'uploadedFileLegacyBinding'>,
   ref: string | null | undefined,
   userId: string,
   owner: UploadOwner

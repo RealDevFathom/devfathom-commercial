@@ -15,7 +15,11 @@ const uploadedFile = {
   findFirst: vi.fn(),
   updateMany: vi.fn(),
 };
-const db = { uploadedFile } as unknown as Pick<ScopedDb, 'uploadedFile'>;
+const uploadedFileLegacyBinding = { findFirst: vi.fn() };
+const db = { uploadedFile, uploadedFileLegacyBinding } as unknown as Pick<
+  ScopedDb,
+  'uploadedFile' | 'uploadedFileLegacyBinding'
+>;
 const OWNER = { type: 'PROJECT_FILE' as const, id: 'pf_new' };
 
 beforeEach(() => {
@@ -90,6 +94,22 @@ describe('claimUploadReference', () => {
       ownerId: 'contract_9',
     });
     await expect(claim('/api/files/contract.pdf')).rejects.toBeInstanceOf(UploadReferenceError);
+    expect(uploadedFile.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('accepts a re-save through a binding grandfathered to this record', async () => {
+    uploadedFile.findFirst.mockResolvedValue({
+      id: 'upl_1',
+      uploadedById: null,
+      ownerType: 'TASK_ATTACHMENT',
+      ownerId: 'ta_earlier',
+    });
+    uploadedFileLegacyBinding.findFirst.mockResolvedValue({ id: 'uflb_1' });
+    await expect(claim('/api/files/shared.pdf')).resolves.toBeUndefined();
+    expect(uploadedFileLegacyBinding.findFirst).toHaveBeenCalledWith({
+      where: { name: 'shared.pdf', ownerType: 'PROJECT_FILE', ownerId: 'pf_new' },
+      select: { id: true },
+    });
     expect(uploadedFile.updateMany).not.toHaveBeenCalled();
   });
 

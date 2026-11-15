@@ -31,6 +31,7 @@ const db = {
   restaurantStaffJobRole: { findMany: vi.fn() },
   restaurantSopTemplateVersion: { findFirst: vi.fn() },
   uploadedFile: { findFirst: vi.fn() },
+  uploadedFileLegacyBinding: { findMany: vi.fn() },
   projectFile: { findUnique: vi.fn() },
   taskAttachment: { findUnique: vi.fn() },
   contract: { findUnique: vi.fn() },
@@ -55,6 +56,7 @@ beforeEach(() => {
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
   // A registered upload no record has bound yet (DEV-837).
   db.uploadedFile.findFirst.mockResolvedValue({ ownerType: null, ownerId: null });
+  db.uploadedFileLegacyBinding.findMany.mockResolvedValue([]);
   db.projectFile.findUnique.mockResolvedValue(null);
   db.taskAttachment.findUnique.mockResolvedValue(null);
   db.contract.findUnique.mockResolvedValue(null);
@@ -368,6 +370,51 @@ describe('private attachment delivery', () => {
         expect(mocks.getUpload).not.toHaveBeenCalled();
       }
     );
+
+    describe('a file several records shared before the registry (grandfathered)', () => {
+      beforeEach(() => {
+        bound('PROJECT_FILE', 'pf_1');
+        db.projectFile.findUnique.mockResolvedValue({ projectId: 'project_1' });
+        db.uploadedFileLegacyBinding.findMany.mockResolvedValue([
+          { ownerType: 'PROJECT_FILE', ownerId: 'pf_1' },
+          { ownerType: 'TASK_ATTACHMENT', ownerId: 'ta_1' },
+        ]);
+        db.taskAttachment.findUnique.mockResolvedValue({ taskId: 'task_1' });
+        db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_2' } } });
+      });
+      const memberOf = (projects: string[]) =>
+        db.projectMember.findUnique.mockImplementation(
+          async ({ where }: { where: { projectId_userId: { projectId: string } } }) =>
+            projects.includes(where.projectId_userId.projectId) ? { role: 'MEMBER' } : null
+        );
+
+      it("keeps it readable for the other record's members", async () => {
+        memberOf(['project_2']);
+        expect((await read('shared.pdf')).status).toBe(200);
+        expect(db.uploadedFileLegacyBinding.findMany).toHaveBeenCalledWith({
+          where: { name: 'shared.pdf' },
+          select: { ownerType: true, ownerId: true },
+        });
+      });
+
+      it("keeps it readable for the primary record's members", async () => {
+        memberOf(['project_1']);
+        expect((await read('shared.pdf')).status).toBe(200);
+      });
+
+      it('denies someone who can read none of its records', async () => {
+        memberOf(['project_9']);
+        expect((await read('shared.pdf')).status).toBe(404);
+        expect(mocks.getUpload).not.toHaveBeenCalled();
+      });
+
+      it('denies once every record it was shared by is deleted', async () => {
+        memberOf(['project_1', 'project_2']);
+        db.projectFile.findUnique.mockResolvedValue(null);
+        db.taskAttachment.findUnique.mockResolvedValue(null);
+        expect((await read('shared.pdf')).status).toBe(404);
+      });
+    });
 
     it('denies an object bound to an owner kind it does not know', async () => {
       mocks.actor.mockResolvedValue(actor('ADMIN'));

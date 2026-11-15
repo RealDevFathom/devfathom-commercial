@@ -17,7 +17,7 @@ import {
   pharmacySopEvidenceReadDecision,
 } from '@/lib/pharmacy/sop-evidence';
 import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
-import { canReadBoundUpload } from '@/lib/uploads/registry';
+import { canReadUpload } from '@/lib/uploads/registry';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -156,8 +156,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
 
   // DEV-837 (F15): every object other than SOP proof must be one that
   // /api/upload registered. An object bound to a project file, task attachment
-  // or contract follows that record's CURRENT read policy, and a deleted owner
-  // leaves a tombstone binding that denies. Client-supplied references never
+  // or contract follows that record's CURRENT read policy (or, for a file
+  // several records shared before the registry, any one of those records'), and
+  // a deleted owner leaves a tombstone binding that denies. Client-supplied references never
   // bind or re-bind an object. An object the registry does not know (a legacy
   // file nothing references any more) is unresolved and is never served.
   if (!sopEvidence) {
@@ -171,7 +172,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     const ownerType = upload.ownerType;
     if (ownerType !== null) {
       const allowed = await withTenantDb(organization.id, (db) =>
-        canReadBoundUpload(db, session.user, { ownerType, ownerId: upload.ownerId })
+        canReadUpload(db, session.user, { name, ownerType, ownerId: upload.ownerId })
       );
       if (!allowed) return new Response('Not found', { status: 404 });
     }

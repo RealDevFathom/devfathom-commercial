@@ -7,14 +7,26 @@
 -- tombstone and /api/files denies the object. A file reference supplied later
 -- by any client can neither bind nor re-bind an object.
 --
--- Backfill: every existing /api/files reference is registered once per
--- (organization, file). A file referenced by a project file, task attachment or
--- contract document becomes bound to the earliest such row (ties ranked in that
--- order), whatever else references it. Licence evidence, coverage rosters,
--- client logos and chat attachments are registered unbound, so their existing
--- read rules keep applying. A legacy object that no table references stays unregistered and
--- is denied from now on.
+-- Backfill (existing access is preserved exactly for protected records):
+--   * every existing /api/files reference is registered once per
+--     (organization, file);
+--   * a file referenced by project files, task attachments or contract
+--     documents gets a primary binding to the earliest such row, and EVERY such
+--     pre-existing reference is also kept as a grandfathered binding in
+--     uploaded_file_legacy_bindings. Reading is allowed when any binding
+--     allows it, so a file shared by several records today stays readable by
+--     each record's readers, and each record can re-save it unchanged. New
+--     binds stay single-owner;
+--   * licence evidence, coverage rosters, client logos and chat attachments
+--     are registered unbound, so their existing read rules keep applying;
+--   * a legacy object that no table references stays unregistered and is
+--     denied from now on. Nothing is deleted from storage.
 BEGIN;
+
+-- The backfill reads tables under FORCE ROW LEVEL SECURITY. The platform-admin
+-- flag is its own, transaction-local statement (a set_config inside the
+-- INSERT's own query is not visible to row level security on that query).
+SELECT set_config('app.is_platform_admin', 'true', true);
 
 CREATE TABLE IF NOT EXISTS "uploaded_files" (
   "id" TEXT NOT NULL,
@@ -83,6 +95,53 @@ WHERE ref."name" <> ''
 ORDER BY ref."organizationId", ref."name", ref."ownerType" IS NULL, ref."createdAt", ref."rank"
 ON CONFLICT ("organizationId", "name") DO NOTHING;
 
+-- Grandfathered bindings: every protected record that referenced a file
+-- before this migration. Written only here; the application can only read it.
+CREATE TABLE IF NOT EXISTS "uploaded_file_legacy_bindings" (
+  "id" TEXT NOT NULL,
+  "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
+  "name" TEXT NOT NULL,
+  "ownerType" TEXT NOT NULL,
+  "ownerId" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "uploaded_file_legacy_bindings_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "uploaded_file_legacy_bindings_owner_type_ck"
+    CHECK ("ownerType" IN ('PROJECT_FILE', 'TASK_ATTACHMENT', 'CONTRACT'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uploaded_file_legacy_bindings_owner_key"
+  ON "uploaded_file_legacy_bindings" ("organizationId", "name", "ownerType", "ownerId");
+CREATE INDEX IF NOT EXISTS "uploaded_file_legacy_bindings_name_idx"
+  ON "uploaded_file_legacy_bindings" ("organizationId", "name");
+
+INSERT INTO "uploaded_file_legacy_bindings"
+  ("id", "organizationId", "name", "ownerType", "ownerId", "createdAt")
+SELECT
+  'uflb_' || md5(ref."organizationId" || '/' || ref."name" || '/' || ref."ownerType" || '/' || ref."ownerId"),
+  ref."organizationId",
+  ref."name",
+  ref."ownerType",
+  ref."ownerId",
+  ref."createdAt"
+FROM (
+  SELECT "organizationId", substr("url", 12) AS "name", 'PROJECT_FILE' AS "ownerType",
+         "id" AS "ownerId", "createdAt"
+    FROM "project_files" WHERE "url" LIKE '/api/files/%'
+  UNION ALL
+  SELECT "organizationId", substr("url", 12), 'TASK_ATTACHMENT', "id", "createdAt"
+    FROM "task_attachments" WHERE "url" LIKE '/api/files/%'
+  UNION ALL
+  SELECT "organizationId", substr("fileUrl", 12), 'CONTRACT', "id", "createdAt"
+    FROM "contracts" WHERE "fileUrl" LIKE '/api/files/%'
+) ref
+WHERE ref."name" <> ''
+  AND position('/' in ref."name") = 0
+  AND position(E'\\' in ref."name") = 0
+  AND position('..' in ref."name") = 0
+  -- First run only: once the table is read-only (below), a re-run writes nothing.
+  AND NOT EXISTS (SELECT 1 FROM "uploaded_file_legacy_bindings")
+ON CONFLICT ("organizationId", "name", "ownerType", "ownerId") DO NOTHING;
+
 -- Identity is fixed at upload; a binding, once made, never changes.
 CREATE OR REPLACE FUNCTION "uploaded_files_write_once"() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -130,6 +189,17 @@ CREATE POLICY tenant_isolation_update ON "uploaded_files" FOR UPDATE
     "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   )
   WITH CHECK (
+    current_setting('app.is_platform_admin', true) = 'true' OR
+    "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+  );
+
+
+-- Read-only to the application: no INSERT, UPDATE or DELETE policy.
+ALTER TABLE "uploaded_file_legacy_bindings" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "uploaded_file_legacy_bindings" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_select ON "uploaded_file_legacy_bindings";
+CREATE POLICY tenant_isolation_select ON "uploaded_file_legacy_bindings" FOR SELECT
+  USING (
     current_setting('app.is_platform_admin', true) = 'true' OR
     "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   );

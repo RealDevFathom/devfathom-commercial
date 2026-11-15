@@ -59,7 +59,7 @@ function decodeURIComponentSafe(value: string): string {
   }
 }
 
-type RegistryDb = Pick<ScopedDb, 'uploadedFile'>;
+type RegistryDb = Pick<ScopedDb, 'uploadedFile' | 'uploadedFileLegacyBinding'>;
 
 /** Record a freshly written upload and the user who uploaded it. */
 export async function registerUpload(
@@ -82,7 +82,8 @@ export class UploadReferenceError extends Error {
 /**
  * Accept `ref` as the file of `owner`, binding the upload to it when this is
  * the first attach. Allowed only for the caller's own unattached upload, or for
- * an upload already bound to this same record (re-saving an unchanged form).
+ * an upload already bound to this same record (re-saving an unchanged form),
+ * including a binding grandfathered from before the registry existed.
  * Anything else — someone else's upload, an upload bound elsewhere, an unknown
  * or malformed file reference — is refused and nothing is written.
  */
@@ -101,6 +102,11 @@ export async function claimUploadReference(
   if (!upload) throw new UploadReferenceError();
   if (upload.ownerType !== null) {
     if (upload.ownerType === input.owner.type && upload.ownerId === input.owner.id) return;
+    const grandfathered = await db.uploadedFileLegacyBinding.findFirst({
+      where: { name, ownerType: input.owner.type, ownerId: input.owner.id },
+      select: { id: true },
+    });
+    if (grandfathered) return;
     throw new UploadReferenceError();
   }
   if (!upload.uploadedById || upload.uploadedById !== input.userId) {
@@ -152,4 +158,26 @@ export async function canReadBoundUpload(
     default:
       return false;
   }
+}
+
+/**
+ * Read decision for a bound upload: its primary binding, or — for a file that
+ * several records shared before the registry existed — any of its grandfathered
+ * bindings. New uploads only ever have the primary binding.
+ */
+export async function canReadUpload(
+  db: ScopedDb,
+  user: { id: string; role?: string | null },
+  upload: { name: string; ownerType: string; ownerId: string | null }
+): Promise<boolean> {
+  if (await canReadBoundUpload(db, user, upload)) return true;
+  const grandfathered = await db.uploadedFileLegacyBinding.findMany({
+    where: { name: upload.name },
+    select: { ownerType: true, ownerId: true },
+  });
+  for (const binding of grandfathered) {
+    if (binding.ownerType === upload.ownerType && binding.ownerId === upload.ownerId) continue;
+    if (await canReadBoundUpload(db, user, binding)) return true;
+  }
+  return false;
 }

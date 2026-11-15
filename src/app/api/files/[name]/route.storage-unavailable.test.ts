@@ -37,6 +37,7 @@ beforeEach(() => {
       channelMember: { findUnique: m.member },
       // DEV-837: a registered upload that no record has bound.
       uploadedFile: { findFirst: async () => ({ ownerType: null, ownerId: null }) },
+      uploadedFileLegacyBinding: { findMany: async () => [] },
     })
   );
   m.get.mockRejectedValue(new StorageUnavailableError('disabled'));

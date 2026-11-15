@@ -11,6 +11,9 @@ const proof = readFileSync(
   'utf8'
 );
 
+/** The executable SQL only: structural checks must not match words in comments. */
+const registryCode = registry.replace(/--.*$/gm, '');
+
 describe('DEV-837 upload registry and SOP proof provenance migrations', () => {
   it.each([
     ['registry', registry],
@@ -21,6 +24,30 @@ describe('DEV-837 upload registry and SOP proof provenance migrations', () => {
     expect(sql).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS)/);
     expect(sql).not.toMatch(/CREATE (?:UNIQUE )?INDEX (?!IF NOT EXISTS)/);
     expect(sql).not.toMatch(/ADD COLUMN (?!IF NOT EXISTS)/);
+  });
+
+  it('reads the forced-RLS source tables under the platform-admin flag', () => {
+    const flag = "SELECT set_config('app.is_platform_admin', 'true', true);";
+    expect(registryCode).toContain(flag);
+    // Its own statement, right after BEGIN and before the first read.
+    const begin = registryCode.indexOf('BEGIN;');
+    const at = registryCode.indexOf(flag);
+    expect(at).toBeGreaterThan(begin);
+    expect(at).toBeLessThan(registryCode.indexOf('FROM "project_files"'));
+    expect(at).toBeLessThan(registryCode.indexOf('INSERT INTO'));
+    expect(registryCode.slice(begin + 'BEGIN;'.length, at).trim()).toBe('');
+  });
+
+  it('grandfathers every pre-existing protected binding, read-only to the app', () => {
+    expect(registry).toContain('CREATE TABLE IF NOT EXISTS "uploaded_file_legacy_bindings"');
+    expect(registry).toContain('INSERT INTO "uploaded_file_legacy_bindings"');
+    expect(registry).toContain('AND NOT EXISTS (SELECT 1 FROM "uploaded_file_legacy_bindings")');
+    const legacyPolicies = registry.slice(
+      registry.indexOf('ALTER TABLE "uploaded_file_legacy_bindings" ENABLE ROW LEVEL SECURITY')
+    );
+    expect(legacyPolicies).toContain('FORCE ROW LEVEL SECURITY');
+    expect(legacyPolicies).toMatch(/FOR SELECT/);
+    expect(legacyPolicies).not.toMatch(/FOR (?:INSERT|UPDATE|DELETE|ALL)/);
   });
 
   it('puts the registry under forced tenant RLS with no DELETE policy', () => {
@@ -60,8 +87,8 @@ describe('DEV-837 upload registry and SOP proof provenance migrations', () => {
     );
     expect(registry).toContain('ON CONFLICT ("organizationId", "name") DO NOTHING');
     // The backfill runs before RLS is forced on the new table.
-    expect(registry.indexOf('INSERT INTO "uploaded_files"')).toBeLessThan(
-      registry.indexOf('FORCE ROW LEVEL SECURITY')
+    expect(registryCode.indexOf('INSERT INTO "uploaded_files"')).toBeLessThan(
+      registryCode.indexOf('ALTER TABLE "uploaded_files" FORCE ROW LEVEL SECURITY')
     );
   });
 

@@ -39,6 +39,7 @@ const BOUND_ELSEWHERE = {
 function makeDb() {
   const db = {
     uploadedFile: { findFirst: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })) },
+    uploadedFileLegacyBinding: { findFirst: vi.fn(async () => null) },
     projectMember: { findUnique: vi.fn(async () => ({ role: 'MEMBER' })) },
     task: { findUnique: vi.fn(async () => ({ column: { board: { projectId: 'project_1' } } })) },
     projectFile: { create: vi.fn(async ({ data }) => ({ id: 'pf_new', ...data })) },
@@ -145,6 +146,35 @@ it('updateContract re-saves the document already bound to the same contract', as
   });
   await expect(attach.updateContract('/api/files/signed.pdf')).resolves.toMatchObject({
     id: 'contract_1',
+  });
+  expect(db.uploadedFile.updateMany).not.toHaveBeenCalled();
+});
+
+it('updateContract re-saves a document it shared with a project before the registry', async () => {
+  // Grandfathered: the primary binding went to the earlier project file, and the
+  // contract's own reference was kept as a legacy binding.
+  db.uploadedFile.findFirst.mockResolvedValue({
+    id: 'upl_doc',
+    uploadedById: null,
+    ownerType: 'PROJECT_FILE',
+    ownerId: 'pf_original',
+  });
+  db.uploadedFileLegacyBinding.findFirst.mockResolvedValue({ id: 'uflb_1' });
+  await expect(attach.updateContract('/api/files/msa.pdf')).resolves.toMatchObject({
+    id: 'contract_1',
+  });
+  expect(db.uploadedFileLegacyBinding.findFirst).toHaveBeenCalledWith({
+    where: { name: 'msa.pdf', ownerType: 'CONTRACT', ownerId: 'contract_1' },
+    select: { id: true },
+  });
+  expect(db.uploadedFile.updateMany).not.toHaveBeenCalled();
+});
+
+it('a grandfathered binding to another record does not let a new record attach the file', async () => {
+  db.uploadedFile.findFirst.mockResolvedValue(BOUND_ELSEWHERE);
+  db.uploadedFileLegacyBinding.findFirst.mockResolvedValue(null);
+  await expect(attach.addFile('/api/files/shared.pdf')).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
   });
   expect(db.uploadedFile.updateMany).not.toHaveBeenCalled();
 });
