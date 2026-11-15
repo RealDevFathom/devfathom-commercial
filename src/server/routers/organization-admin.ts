@@ -543,6 +543,8 @@ export const organizationAdminRouter = router({
         department: departmentKey,
       })
     )
+    // DEV-828: never hand back the whole User row (password verifier, TOTP seed).
+    .output(z.object({ id: z.string(), email: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const before = await ctx.db.user.findFirst({
@@ -602,6 +604,7 @@ export const organizationAdminRouter = router({
                 ? { increment: 1 }
                 : undefined,
           },
+          select: { id: true, email: true },
         });
       });
       annotateAudit(ctx, {
