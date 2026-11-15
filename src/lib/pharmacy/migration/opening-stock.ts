@@ -29,6 +29,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { expiryInstant, normalizeExpiryBoundary } from '../stock-ledger';
 import type { LedgerScope } from '../stock-ledger';
+import { postOpeningLedgerEntry } from '../finance-postings';
 
 export class PharmacyOpeningError extends Error {
   constructor(
@@ -474,18 +475,28 @@ export async function postOpeningLedger(
   }
 
   const postedAt = new Date();
-  await db.pharmacyOpeningLedgerEntry.createMany({
-    data: input.balances.map((balance) => ({
-      organizationId: scope.organizationId,
-      branchId: session.branchId,
-      sessionId: session.id,
-      account: balance.account,
-      balanceMinor: balance.balanceMinor,
-      sourceRef: balance.sourceRef.trim(),
-      actorId: scope.actorId,
-      postedAt,
-    })),
-  });
+  for (const balance of input.balances) {
+    const entry = await db.pharmacyOpeningLedgerEntry.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: session.branchId,
+        sessionId: session.id,
+        account: balance.account,
+        balanceMinor: balance.balanceMinor,
+        sourceRef: balance.sourceRef.trim(),
+        actorId: scope.actorId,
+        postedAt,
+      },
+    });
+    // FIN-01: the opening balance reaches the GL in the same transaction. A
+    // zero balance is recorded for the cutover trail but has nothing to post.
+    if (balance.balanceMinor !== BigInt(0)) {
+      await postOpeningLedgerEntry(db, scope, {
+        openingLedgerEntryId: entry.id,
+        at: session.openingAt,
+      });
+    }
+  }
 
   return openingLedger(db, scope, session.id);
 }

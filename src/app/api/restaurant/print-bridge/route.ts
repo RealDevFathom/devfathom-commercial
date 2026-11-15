@@ -4,10 +4,10 @@ import { z } from 'zod';
 
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
-  PrintJobRequestSchema,
+  PrinterTestRequestSchema,
   RawPrintValidationError,
   PrintRoutingRequestSchema,
-  type PrintDocumentType,
+  receiptPrinterTestJob,
 } from '@/lib/restaurant/printing/contract';
 import {
   acknowledgePrintJob,
@@ -21,12 +21,6 @@ import {
 import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
-
-const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
-  KITCHEN_TICKET: 'orders:read',
-  BAR_TICKET: 'orders:read',
-  RECEIPT: 'money:read',
-};
 
 const bridgeAckBody = z
   .object({
@@ -126,7 +120,8 @@ async function branchAccessError(
 }
 
 /**
- * Web sessions manage routes and enqueue manual jobs. A branch-bound registered
+ * Web sessions manage routes and request server-authored receipt printer tests;
+ * they never supply printable receipt or ticket content. A branch-bound registered
  * device token long-polls and acknowledges the durable bridge queue.
  */
 export async function GET(request: Request) {
@@ -209,18 +204,20 @@ export async function POST(request: Request) {
   if (!sameOrigin(request)) return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
   const ctx = await context(request);
   if (!ctx) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  const parsed = PrintJobRequestSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: 'Invalid print job.' }, { status: 400 });
-  if (!(await permitted(ctx, ACTION_FOR_DOCUMENT[parsed.data.document.type]))) {
+  // A printer test is a configuration operation, not a read of orders or money.
+  if (!(await permitted(ctx, 'restaurant:configure'))) {
     return NextResponse.json(
-      { error: 'You do not have permission to print this document.' },
+      { error: 'You do not have permission to test printers.' },
       { status: 403 }
     );
   }
+  const parsed = PrinterTestRequestSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'Invalid print job.' }, { status: 400 });
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  const { expectedDestination, ...job } = parsed.data;
+  const { expectedDestination } = parsed.data;
+  const job = receiptPrinterTestJob(parsed.data);
   let result;
   try {
     result = await ctx.db.$transaction(

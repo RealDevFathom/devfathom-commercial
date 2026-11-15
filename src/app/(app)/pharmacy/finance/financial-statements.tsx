@@ -5,7 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
-import { financeSourceLabel } from '@/lib/pharmacy/finance-labels';
+import { financeSourceLabel } from '@/lib/finance/source-labels';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
@@ -80,7 +80,7 @@ export async function FinancialStatements({
       </form>
       <p className="text-sm text-text-muted">
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
-        {result.freshness.retrievedAt.toISOString()}.
+        {formatKarachiDateTime(result.freshness.retrievedAt)}.
       </p>
       <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
@@ -163,7 +163,7 @@ export async function FinancialStatements({
           <tbody>
             {result.cashflow.map((a) => (
               <tr key={`${a.currency}-${a.sourceKind}`} className="border-t border-border-subtle">
-                <td className="p-3">
+                <td className="p-3" title={a.sourceKind}>
                   {financeSourceLabel(a.sourceKind)} / {a.currency}
                 </td>
                 {[a.inflowMinor, a.outflowMinor, a.netMinor].map((v, i) => (
@@ -196,13 +196,40 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {e.title}
-            {e.reversesEntryId ? ' · reversal' : ''} · {formatKarachiDateTime(e.occurredAt)}
+            {formatKarachiDateTime(e.occurredAt)} · {financeSourceLabel(e.sourceKind)}
+            {result.journalLabels?.paymentMethods[e.id]
+              ? ` · ${result.journalLabels.paymentMethods[e.id]}`
+              : ''}{' '}
+            · {e.billNumber == null ? 'Bill unavailable' : `Bill ${e.billNumber}`} · User:{' '}
+            {e.userName ?? 'Unavailable'}
+            {e.reversesEntryId ? ' · reversal' : ''}
+            <span className="mt-1 block font-mono text-sm tabular-nums">
+              Debits {e.currency}{' '}
+              {money(
+                e.lines
+                  .reduce(
+                    (total, line) =>
+                      total + (line.side === 'DEBIT' ? BigInt(line.amountMinor) : BigInt(0)),
+                    BigInt(0)
+                  )
+                  .toString()
+              )}
+              {' · '}Credits {e.currency}{' '}
+              {money(
+                e.lines
+                  .reduce(
+                    (total, line) =>
+                      total + (line.side === 'CREDIT' ? BigInt(line.amountMinor) : BigInt(0)),
+                    BigInt(0)
+                  )
+                  .toString()
+              )}
+            </span>
           </summary>
           <p className="my-2 break-all text-xs text-text-muted">
-            {financeSourceLabel(e.sourceKind)}
-            {e.title === e.description ? '' : ` · recorded as “${e.description}”`} · Audit
-            reference: entry {e.id}, source record {e.sourceId}
+            Entry {e.id} · source {e.sourceId} · {e.sourceKind} · user {e.actorId}
+            {' · '}
+            {e.description}
           </p>
           <ul>
             {e.lines.map((l) => (
@@ -210,9 +237,9 @@ export async function FinancialStatements({
                 key={l.id}
                 className="flex flex-wrap justify-between gap-3 border-t border-border-subtle py-2 text-sm"
               >
-                <span>
+                <span title={l.accountCode}>
                   {financeAccountLabel(l.accountCode)} · {l.side === 'DEBIT' ? 'Debit' : 'Credit'}
-                  {l.lotId ? ` · ${l.lotLabel ?? `lot ${l.lotId}`}` : ''}
+                  {l.lotId ? ` · ${result.journalLabels?.lots[l.lotId] ?? `lot ${l.lotId}`}` : ''}
                 </span>
                 <span className="font-mono">
                   {e.currency} {money(l.amountMinor)}
@@ -222,6 +249,9 @@ export async function FinancialStatements({
           </ul>
         </details>
       ))}
+      {!result.journal.length && (
+        <p className="mt-3 text-sm text-text-muted">No journal entries on this page.</p>
+      )}
       <nav aria-label="Journal pages" className="mt-3 flex gap-4">
         {result.page > 1 && (
           <Link className="min-h-11 underline" href={href(result.page - 1)}>

@@ -2,8 +2,9 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { projectProfitAndLoss } from './accounts/profit-loss';
+import { journalDisplayContext } from './accounts/journal-display-context';
 import { loadLedgerLabels } from './finance-label-lookup';
-import { journalEntryTitle } from './finance-labels';
+import { tenderTypeLabel } from './finance-labels';
 
 export { projectProfitAndLoss } from './accounts/profit-loss';
 
@@ -60,6 +61,7 @@ export async function financialStatements(
         sourceKind: true,
         sourceId: true,
         description: true,
+        actorId: true,
         currency: true,
         occurredAt: true,
         reversesEntryId: true,
@@ -72,7 +74,10 @@ export async function financialStatements(
     db.financeJournalEntry.count({ where }),
   ]);
   const tenderTypes = await journalTenderTypes(db, scope.organizationId, journal);
-  const lotIds = journal.flatMap((entry) => entry.lines.map((line) => line.lotId));
+  const paymentMethods = Object.fromEntries(
+    [...tenderTypes].map(([entryId, type]) => [entryId, tenderTypeLabel(type)])
+  );
+  const lotIds = journal.flatMap((entry) => (entry.lines ?? []).map((line) => line.lotId));
   const { lots } = lotIds.some(Boolean)
     ? await loadLedgerLabels(db, scope.organizationId, { lots: lotIds })
     : { lots: {} as Record<string, string> };
@@ -80,14 +85,9 @@ export async function financialStatements(
     from: input.from,
     to: input.to,
     page: input.page,
-    journal: journal.map((entry) => ({
-      ...entry,
-      title: journalEntryTitle({ ...entry, tenderType: tenderTypes.get(entry.id) }),
-      lines: entry.lines.map((line) => ({
-        ...line,
-        lotLabel: line.lotId ? (lots[line.lotId] ?? null) : null,
-      })),
-    })),
+    journal: await journalDisplayContext(db, scope, journal),
+    // Kept beside the journal so each entry stays the exact posted evidence.
+    journalLabels: { paymentMethods, lots },
     journalCount,
     profitAndLoss: projectProfitAndLoss(totals),
     accounts: totals.map((t) => ({
@@ -132,14 +132,14 @@ async function journalTenderTypes(
         })
       : [],
   ]);
-  const bySource = new Map<string, string>([
+  const bySource = new Map<string, string | undefined>([
     // Match postTenderRefundEntry: a refund paid from a cash drawer (including
     // a card/wallet refund settled by manual cash fallback) left as cash.
     ...refunds.map(
       (row) =>
         [
           `PHARMACY_REFUND:${row.id}`,
-          row.drawerSessionId ? 'CASH' : row.originalTender.type,
+          row.drawerSessionId ? 'CASH' : row.originalTender?.type,
         ] as const
     ),
     ...tenders.map((row) => [`PHARMACY_TENDER:${row.id}`, row.type] as const),

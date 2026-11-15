@@ -130,7 +130,7 @@ describe('restaurant financial comparison from the existing payment reader', () 
       absoluteChange: '0.20',
       percentageChange: '200.00',
     });
-    expect(report.drivers.netSales.definition).toContain('minus refundTotal');
+    expect(report.drivers.netSales.definition).toContain('minus the sales part of refunds');
     expect(report.drivers.refundTotal.current).toBe('5.50');
     expect(report.drivers.deliveryFeeRefunds.current).toBe('0.50');
     expect(report.drivers.grossSales.current).toBe('9.10');
@@ -502,7 +502,7 @@ describe('legacy close net-sales normalization', () => {
       expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe(payments.netSales);
       const report = await read(period);
       expect(report.drivers.netSales.current).toBe(stored.length === 2 ? '8.00' : '4.00');
-      expect(report.drivers.netSales.definition).toContain('minus refundTotal');
+      expect(report.drivers.netSales.definition).toContain('minus the sales part of refunds');
       expect(report.drivers.refundTotal.definition).toContain('Already deducted');
       expect(rows.map((row) => row.netSales.toString())).toEqual(before);
     }

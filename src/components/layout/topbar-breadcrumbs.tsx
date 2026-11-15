@@ -31,6 +31,18 @@ export const routeLabels: Record<string, string> = {
   '/hotel/settings/spaces': 'Function spaces',
   '/hotel/settings/extras': 'Extras',
   '/hotel/settings/journey': 'Guest messages',
+  // Pharmacy accounts pages use their page headings in the breadcrumb.
+  '/pharmacy/accounts/account-activity-bridge': 'Account activity bridge',
+  '/pharmacy/accounts/account-code-reference': 'Account code reference',
+  '/pharmacy/accounts/balance-sheet': 'Balance sheet',
+  '/pharmacy/accounts/cash-flow': 'Classified cash-flow projection',
+  '/pharmacy/accounts/cheque-maturity': 'Recorded cheque maturity',
+  '/pharmacy/accounts/fiscal-exceptions': 'Fiscal exception evidence',
+  '/pharmacy/accounts/journal-entry-lookup': 'Journal entry lookup',
+  '/pharmacy/accounts/journal-evidence-export': 'Journal evidence export',
+  '/pharmacy/accounts/profit-loss': 'Profit and loss',
+  '/pharmacy/accounts/tax-profile-review': 'Tax profile review',
+  '/pharmacy/accounts/trial-balance-control': 'Trial-balance control',
   // DEV-751: the pharmacy SOP workspace is named "Procedures" in the UI.
   '/pharmacy/sop': 'Procedures',
 };
