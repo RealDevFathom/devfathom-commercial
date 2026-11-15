@@ -21,6 +21,7 @@ import {
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { assertStoredPharmacyMayOperate } from './regulatory';
+import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -1216,7 +1217,9 @@ export async function optOutRestockInterest(db: ScopedDb, scope: LedgerScope, in
     where: { id: interestId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!interest || interest.status === 'RECOVERED') throw new PharmacySaleError('NOT_FOUND');
-  if (interest.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  // Order and refill-subscription holds are settled only by their own lifecycle.
+  if (interest.orderLineId || isRefillCycleCampaignKey(interest.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const at = new Date();
   await db.pharmacyRestockNotification.updateMany({
     where: {
@@ -1256,7 +1259,8 @@ export async function recoverRestockInterest(
     },
     include: { demandEvent: true },
   });
-  if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+  if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
+    throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { sale: true },
