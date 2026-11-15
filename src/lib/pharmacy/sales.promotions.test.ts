@@ -42,8 +42,25 @@ const promotion = {
   createdByUserId: 'manager-a',
 };
 
-function counterDb(medicine: Record<string, unknown> = {}, promotions = [promotion]) {
+function counterDb(
+  medicine: Record<string, unknown> = {},
+  promotions = [promotion],
+  creator: Record<string, unknown> | null = {
+    id: 'manager-a',
+    organizationId: 'org-a',
+    status: 'ACTIVE',
+    role: 'ADMIN',
+  }
+) {
   return {
+    user: {
+      findFirst: vi.fn(async () => creator),
+      // The creating manager's `pharmacy:manage` grant is re-checked on every application.
+      findUnique: vi.fn(async () => ({
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+      })),
+    },
     pharmacySale: {
       findFirst: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN', lines: [] })),
       updateMany: vi.fn(async () => ({ count: 1 })),
@@ -141,6 +158,39 @@ describe('addSaleLine counter promotion hook (#727)', () => {
         approvedByUserId: 'manager-a',
         evaluatedAt: NOW.toISOString(),
       },
+    });
+  });
+
+  it.each([
+    [
+      'is deactivated',
+      { id: 'manager-a', organizationId: 'org-a', status: 'SUSPENDED', role: 'ADMIN' },
+    ],
+    ['is gone', null],
+  ])('does not apply a promotion whose creator %s (QA-8)', async (_label, change) => {
+    const db = counterDb({}, [promotion], change);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      discountKind: undefined,
+      promotionId: undefined,
+    });
+  });
+
+  it('does not apply a promotion whose creator lost the manage capability (QA-8)', async () => {
+    const db = counterDb();
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: null,
+      permissionOverrides: [],
+    } as never);
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      discountMinor: 0,
+      promotionId: undefined,
     });
   });
 

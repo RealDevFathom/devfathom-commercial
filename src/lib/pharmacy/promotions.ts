@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PharmacyPromotion } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { receiptTextSchema } from '@/lib/receipts/configuration';
 import { Decimal } from '@/lib/restaurant/money-arithmetic';
 import type { PromotionRule } from '@/lib/restaurant/promotion-contracts';
@@ -198,12 +199,35 @@ export async function priceCounterPromotion(
       OR: [{ medicineId: null }, { medicineId: input.medicineId }],
     },
   });
+  // The creating manager authorizes every discount, so their rights are re-checked now:
+  // a promotion whose creator is no longer an active `pharmacy:manage` holder is not applied.
+  const creatorMay = new Map<string, boolean>();
+  const standing: typeof promotions = [];
+  for (const promotion of promotions) {
+    let may = creatorMay.get(promotion.createdByUserId);
+    if (may === undefined) {
+      may = await promotionCreatorMayManage(db, scope.organizationId, promotion.createdByUserId);
+      creatorMay.set(promotion.createdByUserId, may);
+    }
+    if (may) standing.push(promotion);
+  }
   return evaluatePharmacyPromotion({
     ...input,
     organizationId: scope.organizationId,
     branchId: scope.branchId,
-    promotions,
+    promotions: standing,
   });
+}
+
+/** QA-8: the creator must still be an active member holding `pharmacy:manage`. */
+export async function promotionCreatorMayManage(
+  db: ScopedDb,
+  organizationId: string,
+  userId: string
+): Promise<boolean> {
+  const user = await db.user.findFirst({ where: { id: userId, organizationId, status: 'ACTIVE' } });
+  if (!user || user.organizationId !== organizationId || user.status !== 'ACTIVE') return false;
+  return can(subjectFromSession(user), 'pharmacy:manage', undefined, { db });
 }
 
 /** The approval policy stamped on a line priced by a promotion. */
