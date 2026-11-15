@@ -626,6 +626,9 @@ model Medicine {
   lasa                         Boolean                              @default(false)
   coldChain                    Boolean                              @default(false)
   saleable                     Boolean                              @default(false)
+  /// #718: shop-set retail price and category; NON_DRUG_RETAIL (FRONT_SHOP) items only.
+  retailPriceMinor             Int?
+  retailCategory               String?
   createdAt                    DateTime                             @default(now())
   updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
@@ -1956,6 +1959,8 @@ model PharmacyCustomerOrder {
   city                  String?
   deliveryInstructions  String?
   runnerUserId          String?
+  /// DEV-63: route distance recorded at dispatch, for radius profitability.
+  deliveryDistanceMeters Int?
   reservationExpiresAt  DateTime
   counterSaleId         String?
   acceptedAt            DateTime?
@@ -5218,6 +5223,7 @@ model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyMessageLogs      PharmacyMessageLog[]
   pharmacyHostedReceipts   PharmacyHostedReceipt[]
+  pharmacyWhatsAppAccountEvents PharmacyWhatsAppAccountEvent[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
   legalName                String
@@ -14326,15 +14332,17 @@ model PharmacyVoucher {
 }
 
 model PharmacyMarketingTemplate {
-  id               String                   @id @default(cuid())
-  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId         String
-  name             String
-  channel          PharmacyMarketingChannel
-  body             String
-  approvedByUserId String
-  approvedAt       DateTime
-  createdAt        DateTime                 @default(now())
+  id                  String                   @id @default(cuid())
+  organizationId      String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  name                String
+  channel             PharmacyMarketingChannel
+  body                String
+  approvedByUserId    String
+  approvedAt          DateTime
+  createdAt           DateTime                 @default(now())
+  /// #718: catalogue items this template promotes; NON_DRUG_RETAIL only (trigger-guarded).
+  featuredMedicineIds String[]                 @default([])
 
   @@unique([organizationId, id])
   @@map("pharmacy_marketing_templates")
@@ -15054,6 +15062,29 @@ model PharmacyHostedReceipt {
   @@unique([organizationId, id], map: "pharmacy_hosted_receipts_org_id_key")
   @@index([organizationId, branchId, saleId], map: "pharmacy_hosted_receipts_sale_idx")
   @@map("pharmacy_hosted_receipts")
+}
+
+/// DEV-22: append-only evidence of Meta `account_update` and
+/// `phone_number_quality_update` webhooks for the tenant's WhatsApp sender.
+/// The latest row decides whether marketing sends are auto-paused.
+model PharmacyWhatsAppAccountEvent {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessAccountId String
+  field             String
+  event             String
+  severity          String
+  detail            String?
+  restrictedUntil   DateTime?
+  eventKey          String
+  occurredAt        DateTime
+  createdAt         DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, eventKey], map: "pharmacy_whatsapp_account_events_event_key")
+  @@index([organizationId, occurredAt(sort: Desc)], map: "pharmacy_whatsapp_account_events_recent_idx")
+  @@map("pharmacy_whatsapp_account_events")
 }
 
 /// Minimized consent evidence surviving tenant erasure for a bounded period.
