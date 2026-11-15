@@ -616,11 +616,9 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
   if (await can(subject, 'pharmacy:close', undefined, options)) return;
-  // DEV-31: a manager may close the day too, but only on a branch they are
-  // actively assigned to. An explicit `pharmacy:close` DENY, from the role or a
-  // user override, still wins over the manager grant.
-  const organizationId = ctx.entitlements?.organizationId;
-  if (organizationId && (await can(subject, 'pharmacy:manage', undefined, options))) {
+  // DEV-31: a manager may close the day too. An explicit `pharmacy:close` DENY,
+  // from the role or a user override, still wins over the manager grant.
+  if (await can(subject, 'pharmacy:manage', undefined, options)) {
     const member = await ctx.db.user.findUnique({
       where: { id: user.id },
       select: {
@@ -641,19 +639,21 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
       (rule) =>
         rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
     );
-    const assignment = closeDenied
-      ? null
-      : await ctx.db.pharmacyBranchAssignment.findFirst({
-          where: {
-            organizationId,
-            userId: user.id,
-            branchId: branch,
-            active: true,
-            branch: { organizationId, active: true },
-          },
-          select: { branchId: true },
-        });
-    if (member && assignment) return;
+    if (member && !closeDenied) {
+      // The manager grant is branch-scoped: only an active assignment to this
+      // active branch in the session organization admits the close.
+      const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          userId: user.id,
+          branchId: branch,
+          active: true,
+          branch: { organizationId: user.organizationId, active: true },
+        },
+        select: { id: true },
+      });
+      if (assignment) return;
+    }
   }
   throw new TRPCError({
     code: 'FORBIDDEN',
