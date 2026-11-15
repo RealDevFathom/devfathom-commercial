@@ -121,7 +121,7 @@ export function MedicinePackSetup() {
           onSubmit={(event) => {
             event.preventDefault();
             const quantity = Number(units);
-            const effectiveFrom = new Date(`${effectiveDate}T00:00:00Z`);
+            const effectiveFrom = new Date(`${effectiveDate}T00:00:00+05:00`);
             if (
               !Number.isSafeInteger(quantity) ||
               quantity <= 0 ||

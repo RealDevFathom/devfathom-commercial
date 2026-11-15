@@ -2,9 +2,10 @@ BEGIN;
 
 -- Close earlier duplicate open conversions (keep the referenced / oldest one)
 -- so the unique index below can be built. Closing sets effectiveTo only,
--- which the referenced-pack immutability trigger permits.
+-- which the referenced-pack immutability trigger permits. The 1 ms offset
+-- satisfies CHECK ("effectiveTo" > "effectiveFrom").
 UPDATE "pharmacy_pack_levels" p
-SET "effectiveTo" = p."effectiveFrom"
+SET "effectiveTo" = p."effectiveFrom" + INTERVAL '1 millisecond'
 FROM (
   SELECT id, ROW_NUMBER() OVER (
     PARTITION BY "organizationId", "presentationId", COALESCE("parentPackLevelId", ''), "level", "unitsPerParent"
