@@ -100,12 +100,12 @@ export async function readPharmacyCategoryGrowthReport(
         AND s.status='COMPLETED' AND s."receiptNumber" IS NOT NULL
         AND s."completedAt">=${from} AND s."completedAt"<${cutoff}
     ), branch_totals AS (
-      SELECT "branchId", SUM(quantity::bigint * "unitPriceMinor" - "discountMinor") AS "branchSalesMinor"
+      SELECT "branchId", SUM("grossMinor"::bigint - "discountMinor") AS "branchSalesMinor"
       FROM scoped GROUP BY "branchId"
     ), category_totals AS (
       SELECT l."branchId", CASE WHEN l."productFamily"='FRONT_SHOP' THEN 'COSMETICS' ELSE 'OTC' END AS category,
         COALESCE(SUM(l."canonicalUnits"),0) AS units,
-        COALESCE(SUM(l.quantity::bigint * l."unitPriceMinor" - l."discountMinor"),0) AS "salesMinor"
+        COALESCE(SUM(l."grossMinor"::bigint - l."discountMinor"),0) AS "salesMinor"
       FROM scoped l
       WHERE l."productFamily"='FRONT_SHOP' OR l.otc=true
       GROUP BY l."branchId",category
