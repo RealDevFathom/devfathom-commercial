@@ -178,8 +178,8 @@ function PharmacyMemberHome() {
         actions={<StatusPill status="Restricted" tone="neutral" />}
       >
         <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
-          reports:operational is required for the command centre. No report figures are requested or
-          shown, and every pharmacy tool in your menu works as usual.
+          Operational reports access is required for the command centre. No report figures are
+          requested or shown, and every pharmacy tool in your menu works as usual.
         </p>
       </SectionCard>
     </div>

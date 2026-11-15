@@ -216,6 +216,11 @@ describe('PharmacyDashboardContent states', () => {
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
     expect(screen.queryByText('Branches could not be loaded.')).not.toBeInTheDocument();
+    // Plain language, never the raw permission key.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Operational reports access is required for the command centre.'
+    );
+    expect(screen.queryByText(/reports:operational/)).not.toBeInTheDocument();
   });
 
   it('keeps the command centre and its editor for a member with report access', () => {
