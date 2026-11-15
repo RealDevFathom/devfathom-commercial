@@ -988,7 +988,6 @@ export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly stri
   manager: ['sop:manage', 'sop:complete', 'sop:verify'],
   pharmacist: ['sop:complete', 'sop:verify'],
   cashier: ['sop:complete'],
-  'pharmacist-cashier': ['sop:complete', 'sop:verify'],
   procurement: ['sop:complete'],
   inventory: ['sop:complete'],
 };

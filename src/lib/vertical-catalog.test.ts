@@ -572,11 +572,8 @@ describe('optional pharmacy Owner / Operator', () => {
       expect(new Set(base('pharmacist-cashier'))).toEqual(
         new Set([...base('pharmacist'), ...base('cashier')])
       );
-      expect(combined.capabilities).toEqual([
-        ...base('pharmacist-cashier'),
-        'sop:complete',
-        'sop:verify',
-      ]);
+      // DEV-751's approved SOP grant list is unchanged; the owner can add SOP actions.
+      expect(combined.capabilities).toEqual(base('pharmacist-cashier'));
     });
 
     it('grants no management, refund, safety or purchasing power', () => {

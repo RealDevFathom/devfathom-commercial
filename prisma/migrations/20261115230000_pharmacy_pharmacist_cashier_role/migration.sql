@@ -42,9 +42,7 @@ CROSS JOIN (
     ('pharmacy:catalogue-review'),
     ('pharmacy:close'),
     ('pharmacy:counter'),
-    ('pharmacy:orders'),
-    ('sop:complete'),
-    ('sop:verify')
+    ('pharmacy:orders')
 ) AS c(capability)
 ON CONFLICT ("organizationRoleId", capability) DO NOTHING;
 
