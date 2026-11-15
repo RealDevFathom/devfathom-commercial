@@ -127,7 +127,23 @@ async function readableSourceFile(
     where: { organizationId, patientId: file.patientId, sourceFileRef },
     select: { id: true },
   });
-  if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
+  // DEV-15: a photo a customer sent from the PWA, attached to that same patient's request.
+  const portalRequest =
+    patient && !prescription
+      ? await ctx.db.pharmacyCustomerPortalRequest.findFirst({
+          where: {
+            organizationId,
+            kind: 'RX_ORDER',
+            prescriptionFileRef: sourceFileRef,
+            customer: { patientId: file.patientId },
+          },
+          select: { id: true },
+        })
+      : null;
+  if (
+    !patient ||
+    (!prescription && !portalRequest && file.uploadedByUserId !== ctx.session.user.id)
+  ) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
   }
   return file;

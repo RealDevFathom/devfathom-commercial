@@ -29,6 +29,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
+import { PendingLegalReviewNotice } from './pending-legal-review-notice';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -161,6 +162,14 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const pendingProvince =
+    data.selectedBranchId === branchId && current
+      ? current.pendingLegalReview
+        ? current.provinceName
+        : null
+      : jurisdiction?.provisional
+        ? jurisdiction.provinceName
+        : null;
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -272,6 +281,11 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             ))}
           </select>
         </Field>
+        {pendingProvince ? (
+          <div className="mt-4">
+            <PendingLegalReviewNotice provinceName={pendingProvince} />
+          </div>
+        ) : null}
         {inForce?.premisesCompletionDue ? (
           <p
             className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"

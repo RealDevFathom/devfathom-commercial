@@ -4,6 +4,8 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import type { LedgerScope } from './stock-ledger';
 import { prescriptionIsCurrent } from './prescription-calendar';
+import { assertPharmacistApproved } from './dispensing';
+import { needsRxSaleGrant } from './rx-sale-gate';
 
 const REASONS = {
   PRESCRIPTION_NOT_FOUND:
@@ -11,6 +13,8 @@ const REASONS = {
   PRESCRIPTION_PATIENT_MISMATCH: 'That prescription belongs to a different patient.',
   PRESCRIPTION_NOT_IN_DATE: 'That prescription is outside its validity period.',
   PRESCRIPTION_EXHAUSTED: 'That prescription has no remaining quantity or repeats for this line.',
+  PRESCRIPTION_REQUIRED:
+    'A prescription-only or restricted medicine needs a prescription a pharmacist attached to the line before it can be sold.',
   PRESCRIPTION_NEEDS_PHARMACIST:
     'Only a pharmacist with the dispensing permission can record a prescription against a line.',
   CONTROLLED_AUTHORIZATION_NOT_APPLICABLE:
@@ -31,6 +35,30 @@ export class PharmacyRxReferenceError extends Error {
     super(REASONS[reason]);
     this.name = 'PharmacyRxReferenceError';
   }
+}
+
+/**
+ * DEV-629: the server, not the counter's browser alert, refuses to sell an Rx or restricted,
+ * non-controlled line unless a pharmacist attached a prescription reference to it AND a
+ * pharmacist signed the RX-03 review of that sale line. A reference is only ever attached by a
+ * pharmacist through `resolvePrescriptionReference`, which checks it is real, current and not
+ * exhausted; attaching queues the review, and SIGN is the sole sale-release event. A sole
+ * pharmacist may sign their own review through the audited pharmacist queue. Controlled lines
+ * keep their own register gate (prescription or witnessed emergency supply), so they are not
+ * judged here.
+ */
+export async function assertRxLinesPrescribed(
+  db: ScopedDb,
+  lines: ReadonlyArray<{
+    id: string;
+    prescriptionLineId: string | null;
+    medicine: { rx: boolean; restricted: boolean; controlled: boolean } | null | undefined;
+  }>
+): Promise<void> {
+  const regulated = lines.filter((line) => needsRxSaleGrant(line.medicine));
+  if (regulated.some((line) => !line.prescriptionLineId))
+    throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+  for (const line of regulated) await assertPharmacistApproved(db, line.id);
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

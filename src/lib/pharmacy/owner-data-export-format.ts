@@ -307,16 +307,37 @@ function exportCell(value: ExportCell): string {
   return PLAIN_NUMBER.test(text) ? `"${text}"` : csvCell(text);
 }
 
-/** One CSV document: BOM, header row, then every row in the spec's column order. */
-export function exportCsv(spec: ExportFileSpec, rows: readonly ExportRow[]): string {
-  const lines = [spec.columns.map((column) => csvCell(column.header)).join(',')];
-  for (const row of rows) {
-    lines.push(spec.columns.map((column) => exportCell(row[column.header])).join(','));
-  }
-  return `﻿${lines.join('\r\n')}\r\n`;
+/** The first chunk of a CSV document: BOM and header row. */
+export function exportCsvHeader(spec: ExportFileSpec): string {
+  return `\uFEFF${spec.columns.map((column) => csvCell(column.header)).join(',')}\r\n`;
 }
 
-export function exportReadme(meta: OwnerDataExportMeta, rows: OwnerDataExportRows): string {
+/** A chunk of CSV body rows in the spec's column order, each ending in CRLF. */
+export function exportCsvRows(spec: ExportFileSpec, rows: readonly ExportRow[]): string {
+  let text = '';
+  for (const row of rows) {
+    text += `${spec.columns.map((column) => exportCell(row[column.header])).join(',')}\r\n`;
+  }
+  return text;
+}
+
+/** One CSV document: BOM, header row, then every row in the spec's column order. */
+export function exportCsv(spec: ExportFileSpec, rows: readonly ExportRow[]): string {
+  return exportCsvHeader(spec) + exportCsvRows(spec, rows);
+}
+
+export type OwnerDataExportCounts = Record<OwnerDataExportFileKey, number>;
+
+export function countExportRows(rows: OwnerDataExportRows): OwnerDataExportCounts {
+  return Object.fromEntries(
+    (Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]).map((key) => [
+      key,
+      rows[key].length,
+    ])
+  ) as OwnerDataExportCounts;
+}
+
+export function exportReadme(meta: OwnerDataExportMeta, counts: OwnerDataExportCounts): string {
   const range =
     meta.salesFrom || meta.salesTo
       ? `${formatDateOnly(meta.salesFrom) || 'the beginning'} to ${formatDateOnly(meta.salesTo) || 'today'}`
@@ -324,7 +345,7 @@ export function exportReadme(meta: OwnerDataExportMeta, rows: OwnerDataExportRow
   const sections = (Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]).map((key) => {
     const spec: ExportFileSpec = OWNER_DATA_EXPORT_FILES[key];
     return [
-      `## ${spec.name} (${rows[key].length} rows)`,
+      `## ${spec.name} (${counts[key]} rows)`,
       '',
       spec.description,
       '',
@@ -347,25 +368,30 @@ export function exportReadme(meta: OwnerDataExportMeta, rows: OwnerDataExportRow
   ].join('\n');
 }
 
-/** The whole archive: README.md plus one CSV per file spec. */
+/**
+ * The whole archive in memory: one CSV per file spec, then README.md. The
+ * export job streams the same entries in the same order to disk instead
+ * (`runPharmacyOwnerDataExportJob`); this is the reference for small archives.
+ */
 export function buildOwnerDataExportZip(
   meta: OwnerDataExportMeta,
   rows: OwnerDataExportRows
 ): Buffer {
   return buildZip([
-    { name: 'README.md', data: exportReadme(meta, rows) },
     ...(Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]).map((key) => ({
       name: OWNER_DATA_EXPORT_FILES[key].name,
       data: exportCsv(OWNER_DATA_EXPORT_FILES[key], rows[key]),
     })),
+    { name: 'README.md', data: exportReadme(meta, countExportRows(rows)) },
   ]);
 }
 
-export function exportRowCounts(rows: OwnerDataExportRows): Record<string, number> {
+/** Row counts keyed by file name, as stored on the job and shown to the owner. */
+export function exportRowCounts(counts: OwnerDataExportCounts): Record<string, number> {
   return Object.fromEntries(
     (Object.keys(OWNER_DATA_EXPORT_FILES) as OwnerDataExportFileKey[]).map((key) => [
       OWNER_DATA_EXPORT_FILES[key].name,
-      rows[key].length,
+      counts[key],
     ])
   );
 }

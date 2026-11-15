@@ -82,6 +82,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
+  VOUCHER_PIN_REQUIRED: 'Enter your own PIN to redeem this voucher.',
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
@@ -94,6 +95,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-623: money taken on a bill comes back through a refund, never a void.
   BILL_HAS_PAYMENTS:
     'Payment has already been taken on this bill. A manager or owner must refund it before the bill can be voided.',
+  // DEV-821: a void releases stock, so it stays with the bill's cashier.
+  NOT_BILL_OWNER:
+    'Another cashier opened this bill. Only that cashier or a manager or owner can void it.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',

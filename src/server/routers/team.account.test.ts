@@ -79,7 +79,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.findUnique.mockResolvedValue({ id: 'user_self', name: 'Hotel General Manager' });
   mocks.findMany.mockResolvedValue([]);
-  mocks.update.mockResolvedValue({ id: 'user_self', name: 'Hotel GM' });
+  mocks.update.mockResolvedValue({
+    id: 'user_self',
+    name: 'Hotel GM',
+    phone: null,
+    bio: null,
+    skills: [],
+  });
   mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
 });
 
@@ -383,6 +389,82 @@ describe('team.updateProfile', () => {
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'user_self' },
       data: { name: 'Hotel GM', skills: [] },
+      select: { id: true, name: true, phone: true, bio: true, skills: true },
+    });
+  });
+
+  /** DEV-828 F01: a profile save must not hand back stored authentication secrets. */
+  describe('authentication secrets (DEV-828 F01)', () => {
+    const SECRET_FIELDS = [
+      'password',
+      'twoFactorSecret',
+      'twoFactorEnabledAt',
+      'tokenVersion',
+      'mustChangePassword',
+    ];
+    const mfaRow = {
+      id: 'user_self',
+      name: 'Hotel GM',
+      email: 'gm@example.test',
+      phone: '+92 300 0000002',
+      bio: 'Night shift lead',
+      skills: ['Rostering'],
+      password: '$2a$12$abcdefghijklmnopqrstuuJ0Ow0bS1TzE3s1Ga3H9F6K1Y0a1b2c3',
+      twoFactorSecret: 'JBSWY3DPEHPK3PXP',
+      twoFactorEnabledAt: new Date('2026-11-01T00:00:00Z'),
+      tokenVersion: 3,
+      mustChangePassword: false,
+      status: 'ACTIVE',
+      role: 'EMPLOYEE',
+    };
+
+    it('selects only profile fields from the database', async () => {
+      await caller([]).updateProfile({});
+      const args = mocks.update.mock.calls[0]![0] as { select?: Record<string, unknown> };
+      expect(args.select).toEqual({
+        id: true,
+        name: true,
+        phone: true,
+        bio: true,
+        skills: true,
+      });
+      for (const field of SECRET_FIELDS) expect(args.select).not.toHaveProperty(field);
+    });
+
+    it('omits the password verifier and MFA seed from an empty update of an MFA account', async () => {
+      // Even if the database handed back the whole row, the response schema strips it.
+      mocks.update.mockResolvedValue(mfaRow);
+
+      const result = await caller([]).updateProfile({});
+
+      expect(result).toEqual({
+        id: 'user_self',
+        name: 'Hotel GM',
+        phone: '+92 300 0000002',
+        bio: 'Night shift lead',
+        skills: ['Rostering'],
+      });
+      const serialized = JSON.stringify(result);
+      for (const field of SECRET_FIELDS) expect(serialized).not.toContain(`"${field}"`);
+      expect(serialized).not.toContain(mfaRow.twoFactorSecret);
+      expect(serialized).not.toContain(mfaRow.password);
+    });
+
+    it('refuses an unauthenticated caller without touching the account', async () => {
+      const anonymous = app.createCaller({
+        db: { user: { update: mocks.update, findUnique: mocks.findUnique } },
+        entitlements: null,
+        session: null,
+        organization: null,
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as unknown as TRPCContext).team;
+
+      await expect(anonymous.updateProfile({ name: 'Intruder' })).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
+      });
+      expect(mocks.update).not.toHaveBeenCalled();
     });
   });
 });

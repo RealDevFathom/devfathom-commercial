@@ -1846,7 +1846,14 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     // 10 units go to a draft that is voided, and 10 sit on a draft never completed.
     await inOrg(ORG_A, async (db) => {
       const voided = await draft(db, 1, 'recall-sold-voided');
-      await sales.changeSaleStatus(db, scopeOf(fixture), voided.id, 'void', 'Customer left');
+      await sales.changeSaleStatus(
+        db,
+        scopeOf(fixture),
+        voided.id,
+        'void',
+        { kind: 'COUNTER', actorIsManager: true },
+        'Customer left'
+      );
       await draft(db, 1, 'recall-sold-open');
     });
     const trace = await inOrg(ORG_A, async (db) => {

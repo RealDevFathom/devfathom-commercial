@@ -97,7 +97,7 @@ export function PurchasingOutcomeScope({ children }: { children: ReactNode }) {
   const [store] = useState(createOutcomes);
   return (
     <OutcomeContext.Provider value={store}>
-      <main className="min-w-0 space-y-6">{children}</main>
+      <div className="min-w-0 space-y-6">{children}</div>
     </OutcomeContext.Provider>
   );
 }

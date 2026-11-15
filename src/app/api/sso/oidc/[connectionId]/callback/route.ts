@@ -6,7 +6,10 @@ import {
   issueSsoTicket,
   oidcClientSecret,
   provisionIdentityUser,
+  readSsoBrowserBinding,
   requireIdentityConnection,
+  SSO_BROWSER_BINDING_COOKIE,
+  ssoBrowserBindingCookieOptions,
   SSO_TICKET_COOKIE,
   ssoTicketCookieOptions,
 } from '@/lib/sso';
@@ -22,7 +25,7 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
       throw new Error('OIDC callback is missing required state.');
     }
     const state = await withTenantDb(connection.organizationId, (db) =>
-      consumeAuthorizationState(db, connection.id, stateKey, 'OIDC')
+      consumeAuthorizationState(db, connection.id, stateKey, 'OIDC', readSsoBrowserBinding(request))
     );
     const verifier = String(state.verifier ?? '');
     const nonce = String(state.nonce ?? '');
@@ -51,6 +54,10 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     );
     const response = NextResponse.redirect(new URL('/sso/complete', publicRequestOrigin(request)));
     response.cookies.set(SSO_TICKET_COOKIE, ticket.token, ssoTicketCookieOptions(ticket.expiresAt));
+    response.cookies.set(SSO_BROWSER_BINDING_COOKIE, '', {
+      ...ssoBrowserBindingCookieOptions(),
+      maxAge: 0,
+    });
     return response;
   } catch (error) {
     console.error('[sso:oidc:callback]', error);

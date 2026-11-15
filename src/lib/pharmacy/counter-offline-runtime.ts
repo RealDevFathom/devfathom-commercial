@@ -131,6 +131,14 @@ type ReplayResult = {
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
   private activeReplay: Promise<ReplayResult> | null = null;
+  /**
+   * #554: the tail of the single-flight transition chain. Every read-compute-
+   * write of the persisted document runs behind it, so two overlapping calls
+   * (two quick sales, a sale during replay) never derive from the same snapshot
+   * — which would hand out the same receipt/sequence and let the later
+   * whole-document write erase the earlier command.
+   */
+  private transitions: Promise<unknown> = Promise.resolve();
 
   constructor(
     readonly scope: TerminalScope,
@@ -155,7 +163,11 @@ export class PharmacyCounterRuntime {
    * `unrecoverable` rather than adopted — queued money and stock work is never
    * rebound to a replacement counter.
    */
-  async hydrate(): Promise<'ready' | 'unrecoverable'> {
+  hydrate(): Promise<'ready' | 'unrecoverable'> {
+    return this.exclusive(() => this.hydrateNow());
+  }
+
+  private async hydrateNow(): Promise<'ready' | 'unrecoverable'> {
     const result = await readTerminalState<CounterQueueSnapshot, CounterCache>(
       this.driver,
       this.scope,
@@ -181,7 +193,17 @@ export class PharmacyCounterRuntime {
    * fails any of them is NOT stored, which is what lets the OFF-02 matrix treat
    * "present in the cache" as "verified and in window".
    */
-  async installSnapshot(input: {
+  installSnapshot(input: {
+    envelope: OfflineSnapshotEnvelope;
+    signature: string;
+    payload: unknown;
+    payloadHash: string;
+    nowMs: number;
+  }): Promise<InstallSnapshotResult> {
+    return this.exclusive(() => this.installSnapshotNow(input));
+  }
+
+  private async installSnapshotNow(input: {
     envelope: OfflineSnapshotEnvelope;
     signature: string;
     payload: unknown;
@@ -283,7 +305,11 @@ export class PharmacyCounterRuntime {
   }
 
   /** Apply the reconnect bulletin before allowing another sale. */
-  async applyRecallBulletin(bulletin: OfflineRecallBulletin): Promise<boolean> {
+  applyRecallBulletin(bulletin: OfflineRecallBulletin): Promise<boolean> {
+    return this.exclusive(() => this.applyRecallBulletinNow(bulletin));
+  }
+
+  private async applyRecallBulletinNow(bulletin: OfflineRecallBulletin): Promise<boolean> {
     const current = this.safetyLeaseState();
     const applied = applyRecallBulletin(current, bulletin);
     if (!applied || !applied.lease) return false;
@@ -318,21 +344,36 @@ export class PharmacyCounterRuntime {
   }
 
   /** Record the receipt-number blocks this counter reserved before going offline. */
-  async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } });
+  adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
+    return this.exclusive(() =>
+      this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } })
+    );
   }
 
   /** Record the OFF-03 quotas this counter was granted before going offline. */
-  async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } });
+  adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
+    return this.exclusive(() =>
+      this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } })
+    );
   }
 
   /**
    * Compose one command. The OFF-02 decision is evaluated against the CACHED
    * snapshot states rather than anything the caller supplies, so a surface
    * cannot talk the matrix into accepting a snapshot the runtime never verified.
+   *
+   * #554: serialized behind every other transition, so a second sale composed
+   * while the first is still being written draws the NEXT receipt number and
+   * sequence from the first one's committed queue instead of reusing them.
    */
-  async enqueue(
+  enqueue(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    return this.exclusive(() => this.enqueueNow(input, matrix));
+  }
+
+  private async enqueueNow(
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
@@ -388,8 +429,10 @@ export class PharmacyCounterRuntime {
     return result;
   }
 
-  async resume(): Promise<void> {
-    await this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) });
+  resume(): Promise<void> {
+    return this.exclusive(() =>
+      this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) })
+    );
   }
 
   replay(
@@ -418,27 +461,33 @@ export class PharmacyCounterRuntime {
       try {
         request = await buildCounterReplayRequest(this.queue(), next.command, sign);
       } catch {
-        const current = nextCounterReplay(this.queue(), this.scope.deviceId);
-        if (current.status !== 'READY') return { state: current.status, discarded: null };
-        const applied = applyCounterReplayOutcome(this.queue(), {
-          commandId: next.command.commandId,
-          outcome: {
-            action: 'PAUSE',
-            reason: 'REAUTH',
-            message: 'Replay signing requires the enrolled device credential.',
-          },
+        return this.exclusive(async (): Promise<ReplayResult> => {
+          const current = nextCounterReplay(this.queue(), this.scope.deviceId);
+          if (current.status !== 'READY') return { state: current.status, discarded: null };
+          const applied = applyCounterReplayOutcome(this.queue(), {
+            commandId: next.command.commandId,
+            outcome: {
+              action: 'PAUSE',
+              reason: 'REAUTH',
+              message: 'Replay signing requires the enrolled device credential.',
+            },
+          });
+          await this.commit({ ...this.state, queue: applied.snapshot });
+          return { state: 'PAUSED', discarded: null };
         });
-        await this.commit({ ...this.state, queue: applied.snapshot });
-        return { state: 'PAUSED', discarded: null };
       }
       // Signing may yield to a heartbeat that revokes this counter and purges
       // its storage. Never send or persist the stale command after that purge.
-      const current = nextCounterReplay(this.queue(), this.scope.deviceId);
-      if (current.status !== 'READY') return { state: current.status, discarded: null };
-      await this.commit({
-        ...this.state,
-        queue: beginCounterReplay(this.queue(), next.command.commandId),
+      const stopped = await this.exclusive(async (): Promise<ReplayResult | null> => {
+        const current = nextCounterReplay(this.queue(), this.scope.deviceId);
+        if (current.status !== 'READY') return { state: current.status, discarded: null };
+        await this.commit({
+          ...this.state,
+          queue: beginCounterReplay(this.queue(), next.command.commandId),
+        });
+        return null;
       });
+      if (stopped) return stopped;
 
       let response: CounterReplayResponse;
       try {
@@ -447,29 +496,37 @@ export class PharmacyCounterRuntime {
         response = { status: 0 };
       }
       const outcome = classifyReplayOutcome(response);
-      const applied = applyCounterReplayOutcome(this.queue(), {
-        commandId: next.command.commandId,
-        outcome,
-        serverRef: response.serverRef,
-      });
-      const nextState = { ...this.state, queue: applied.snapshot };
+      // Apply the outcome to the queue as it is NOW — a sale enqueued while the
+      // request was in flight must survive this whole-document write.
+      const settled = await this.exclusive(async (): Promise<ReplayResult | null> => {
+        const applied = applyCounterReplayOutcome(this.queue(), {
+          commandId: next.command.commandId,
+          outcome,
+          serverRef: response.serverRef,
+        });
+        const nextState = { ...this.state, queue: applied.snapshot };
 
-      if (applied.snapshot.replay === 'STOPPED_REVOKED') {
-        this.state = nextState;
-        await purgeTerminalScope(this.driver, this.scope);
-        return { state: 'STOPPED', discarded: applied.discarded };
-      }
-      await this.commit(nextState);
-      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
+        if (applied.snapshot.replay === 'STOPPED_REVOKED') {
+          this.state = nextState;
+          await purgeTerminalScope(this.driver, this.scope);
+          return { state: 'STOPPED', discarded: applied.discarded };
+        }
+        await this.commit(nextState);
+        if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
+        return null;
+      });
+      if (settled) return settled;
     }
   }
 
   /** Confirmed revocation outside a replay (a heartbeat said so). */
-  async revoke(): Promise<{ commands: number } | null> {
-    const purged = purgeCounterQueue(this.queue());
-    this.state = { ...this.state, queue: purged.snapshot };
-    await purgeTerminalScope(this.driver, this.scope);
-    return purged.discarded;
+  revoke(): Promise<{ commands: number } | null> {
+    return this.exclusive(async () => {
+      const purged = purgeCounterQueue(this.queue());
+      this.state = { ...this.state, queue: purged.snapshot };
+      await purgeTerminalScope(this.driver, this.scope);
+      return purged.discarded;
+    });
   }
 
   close(): void {
@@ -484,7 +541,19 @@ export class PharmacyCounterRuntime {
     return this.state.catalog ?? { snapshotPublicKey: '', snapshots: [] };
   }
 
-  /** Publish a state transition only after its whole-document write succeeds. */
+  /**
+   * #554: run one read-compute-write transition after every earlier one has
+   * settled. A failed transition does not wedge the chain; its error is still
+   * returned to its own caller. Transitions must not call `exclusive` again.
+   */
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.transitions.then(task);
+    this.transitions = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Publish a state transition only after its whole-document write succeeds. Callers
+   * hold the transition chain (`exclusive`), so the write never races another one. */
   private async commit(nextState: CounterRuntimeState): Promise<void> {
     await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
     this.state = nextState;

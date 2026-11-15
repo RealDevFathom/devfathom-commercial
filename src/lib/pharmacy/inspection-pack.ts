@@ -59,24 +59,66 @@ export function buildInspectionManifest(input: {
   return { ...manifest, manifestSha256: sha256(canonical(manifest)) };
 }
 
+/**
+ * DEV-829: the inspection pack's audit section. A branch-scoped safety grant
+ * must not read the organization's administrative audit log, so this exports
+ * only pharmacy regulatory events tied to the authorized branch — either aimed
+ * at the branch itself or carrying it as `metadata.branchId`. Events without a
+ * branch (organization-wide or administrative) are excluded; the full log stays
+ * behind the admin-only audit listing. The projection names the actor and the
+ * event, never request payloads, diffs, results, metadata, contact details,
+ * network context, tokens or error text.
+ */
+export const INSPECTION_PACK_AUDIT_QUERY = `SELECT jsonb_build_object(
+  'id', a."id",
+  'createdAt', a."createdAt",
+  'category', a."category",
+  'operation', a."operation",
+  'action', a."action",
+  'targetType', a."targetType",
+  'targetId', a."targetId",
+  'outcome', a."outcome",
+  'actorType', a."actorType",
+  'actorName', a."actorName",
+  'actorRole', a."actorRole"
+) AS record
+FROM "audit_logs" a
+WHERE a."createdAt" >= $1 AND a."createdAt" <= $2
+  AND a."category" LIKE 'PHARMACY%'
+  AND (
+    (a."targetType" = 'PharmacyBranch' AND a."targetId" = $3)
+    OR a."metadata"->>'branchId' = $3
+  )
+ORDER BY a."createdAt", a."id"`;
+
 export async function createInspectionPack(
   db: ScopedDb,
   input: { branchId: string; from: Date; to: Date }
 ) {
   const sections: InspectionSectionInput[] = [];
   for (const [name, table, timestamp] of INSPECTION_PACK_SECTIONS) {
-    const branchPredicate =
-      table === 'audit_logs'
-        ? ''
-        : "AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3)";
+    if (table === 'audit_logs') {
+      // DEV-829: never the raw organization audit log — only this branch's
+      // pharmacy regulatory events, as a minimal projection.
+      const rows = await db.$queryRawUnsafe<{ record: JsonRecord }[]>(
+        INSPECTION_PACK_AUDIT_QUERY,
+        input.from,
+        input.to,
+        input.branchId
+      );
+      sections.push({ name, records: rows.map((row) => row.record) });
+      continue;
+    }
     const query =
       name === 'controlled-register'
         ? `SELECT (to_jsonb(t) - 'organizationId' - 'witnessedByUserId') || jsonb_build_object('witnessName', w."name") AS record FROM "${table}" t LEFT JOIN "users" w ON w."id" = t."witnessedByUserId" AND w."organizationId" = t."organizationId" WHERE t."${timestamp}" >= $1 AND t."${timestamp}" <= $2 AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3) ORDER BY t."${timestamp}", t."id"`
-        : `SELECT to_jsonb(t) - 'organizationId' AS record FROM "${table}" t WHERE "${timestamp}" >= $1 AND "${timestamp}" <= $2 ${branchPredicate} ORDER BY "${timestamp}", "id"`;
-    const records =
-      table === 'audit_logs'
-        ? await db.$queryRawUnsafe<JsonRecord[]>(query, input.from, input.to)
-        : await db.$queryRawUnsafe<JsonRecord[]>(query, input.from, input.to, input.branchId);
+        : `SELECT to_jsonb(t) - 'organizationId' AS record FROM "${table}" t WHERE "${timestamp}" >= $1 AND "${timestamp}" <= $2 AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3) ORDER BY "${timestamp}", "id"`;
+    const records = await db.$queryRawUnsafe<JsonRecord[]>(
+      query,
+      input.from,
+      input.to,
+      input.branchId
+    );
     sections.push({ name, records: records.map((row) => row.record as JsonRecord) });
   }
   sections.push({

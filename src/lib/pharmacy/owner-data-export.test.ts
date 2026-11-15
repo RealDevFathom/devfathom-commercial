@@ -1,23 +1,39 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ putUpload: vi.fn(), getUpload: vi.fn(), deleteUpload: vi.fn() }));
+const m = vi.hoisted(() => ({
+  putUploadFile: vi.fn(),
+  getUploadStream: vi.fn(),
+  deleteUpload: vi.fn(),
+  uploaded: [] as { path: string; data: Buffer }[],
+}));
 vi.mock('@/lib/storage', () => ({
-  putUpload: m.putUpload,
-  getUpload: m.getUpload,
+  putUploadFile: m.putUploadFile,
+  getUploadStream: m.getUploadStream,
   deleteUpload: m.deleteUpload,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn() }));
 
+import { readdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+
 import { parseDelimitedText } from './migration/source-values';
 import {
+  OWNER_DATA_EXPORT_PAGE_SIZE,
+  OWNER_DATA_EXPORT_REQUEST_LIMIT,
+  OwnerDataExportTooLargeError,
   basePackUnits,
   loadOwnerDataExportRows,
   parseSalesRange,
   purgeExpiredOwnerDataExports,
+  queueOwnerDataExport,
   runPharmacyOwnerDataExportJob,
 } from './owner-data-export';
-import { OWNER_DATA_EXPORT_FILES, exportCsv } from './owner-data-export-format';
+import {
+  OWNER_DATA_EXPORT_FILES,
+  buildOwnerDataExportZip,
+  exportCsv,
+} from './owner-data-export-format';
 
 const many = (rows: unknown[] = []) => vi.fn().mockResolvedValue(rows);
 
@@ -268,7 +284,14 @@ function fakeDb() {
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.uploaded = [];
+  // The job deletes its temporary file afterwards, so capture the bytes on upload.
+  m.putUploadFile.mockImplementation(async (_org: string, _name: string, path: string) => {
+    m.uploaded.push({ path, data: await readFile(path) });
+  });
+});
 
 describe('parseSalesRange', () => {
   it('accepts empty and valid ranges and rejects malformed or inverted ones', () => {
@@ -412,15 +435,15 @@ describe('runPharmacyOwnerDataExportJob', () => {
     expect(db.$queryRawUnsafe.mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyCustomer.findMany.mock.invocationCallOrder[0]!
     );
-    const [organizationId, filename, archive, contentType] = m.putUpload.mock.calls[0]!;
-    expect([organizationId, filename, contentType]).toEqual([
-      'org-a',
-      'owner-data-export-job-7.zip',
-      'application/zip',
-    ]);
-    expect((archive as Buffer).readUInt32LE(0)).toBe(0x04034b50);
+    const [organizationId, filename, , contentType] = m.putUploadFile.mock.calls[0]!;
+    expect([organizationId, contentType]).toEqual(['org-a', 'application/zip']);
+    // Unguessable: the job id alone does not name the stored archive.
+    expect(filename).toMatch(/^owner-data-export-job-7-[0-9a-f]{32}\.zip$/);
+    const archive = m.uploaded[0]!.data;
+    expect(archive.readUInt32LE(0)).toBe(0x04034b50);
+    expect(result.bytes).toBe(archive.length);
     expect(result).toMatchObject({
-      filename: 'owner-data-export-job-7.zip',
+      filename,
       expiresAt: '2026-11-16T10:00:00.000Z',
       rowCounts: expect.objectContaining({ 'controlled_register.csv': 2, 'customers.csv': 2 }),
     });
@@ -437,22 +460,183 @@ describe('runPharmacyOwnerDataExportJob', () => {
         { from: 'x' }
       )
     ).rejects.toThrow();
-    expect(m.putUpload).not.toHaveBeenCalled();
+    expect(m.putUploadFile).not.toHaveBeenCalled();
+  });
+
+  it('streams the same archive the in-memory builder would make, then deletes its temp file', async () => {
+    const now = new Date('2026-11-15T10:00:00.000Z');
+    await runPharmacyOwnerDataExportJob(
+      fakeDb() as never,
+      { id: 'job-8', organizationId: 'org-a' },
+      { from: null, to: null },
+      () => now
+    );
+    const rows = await loadOwnerDataExportRows(fakeDb() as never, 'org-a', {
+      from: null,
+      to: null,
+    });
+    const expected = buildOwnerDataExportZip(
+      { organizationName: 'Shifa Pharmacy', generatedAt: now, salesFrom: null, salesTo: null },
+      rows
+    );
+    expect(m.uploaded[0]!.data.equals(expected)).toBe(true);
+    await expect(readFile(m.uploaded[0]!.path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails permanently over the size cap, uploads nothing and leaves no temp file', async () => {
+    const leftovers = async () =>
+      (await readdir(tmpdir())).filter((name) => name.startsWith('owner-data-export-'));
+    const before = await leftovers();
+    const error = await runPharmacyOwnerDataExportJob(
+      fakeDb() as never,
+      { id: 'job-9', organizationId: 'org-a' },
+      {},
+      () => new Date(),
+      { maxBytes: 600 }
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OwnerDataExportTooLargeError);
+    expect((error as Error).message).toMatch(/larger than/);
+    expect(m.putUploadFile).not.toHaveBeenCalled();
+    expect(await leftovers()).toEqual(before);
+  });
+});
+
+describe('owner data export paging', () => {
+  it('reads a large table in keyset pages and exports every row once', async () => {
+    const total = OWNER_DATA_EXPORT_PAGE_SIZE * 2 + 3;
+    const all = Array.from({ length: total }, (_, index) => ({
+      id: `c-${String(index).padStart(5, '0')}`,
+      displayName: `Customer ${index}`,
+      phoneLast4: null,
+      creditLimitMinor: 0,
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    }));
+    const db = fakeDb();
+    db.pharmacyCustomer.findMany = vi.fn(
+      async (args: { take: number; skip?: number; cursor?: { id: string } }) => {
+        const start = args.cursor
+          ? all.findIndex((row) => row.id === args.cursor!.id) + (args.skip ?? 0)
+          : 0;
+        return all.slice(start, start + args.take);
+      }
+    );
+    const rows = await loadOwnerDataExportRows(db as never, 'org-a', { from: null, to: null });
+    expect(rows.customers.map((row) => row.code)).toEqual(all.map((row) => row.id));
+    const calls = db.pharmacyCustomer.findMany.mock.calls.map(([args]) => args);
+    expect(calls).toHaveLength(3);
+    expect(calls.every((args) => args.take === OWNER_DATA_EXPORT_PAGE_SIZE)).toBe(true);
+    expect(calls[0]!.cursor).toBeUndefined();
+    expect(calls[1]).toMatchObject({
+      cursor: { id: all[OWNER_DATA_EXPORT_PAGE_SIZE - 1]!.id },
+      skip: 1,
+    });
+  });
+
+  it('pages every exported table, ordered so the cursor resumes after the last row', async () => {
+    const db = fakeDb();
+    await loadOwnerDataExportRows(db as never, 'org-a', { from: null, to: null });
+    for (const model of [
+      'pharmacyBranch',
+      'pharmacyStockLocation',
+      'packLevel',
+      'pharmacyInventoryLot',
+      'pharmacyCustomer',
+      'pharmacyFamilyAccount',
+      'pharmacyKhataEvent',
+      'pharmacySupplier',
+      'pharmacySupplierCredit',
+      'pharmacySale',
+      'pharmacyPurchaseOrder',
+      'pharmacyGoodsReceipt',
+      'pharmacyControlledRegisterEntry',
+    ] as const) {
+      for (const [args] of db[model].findMany.mock.calls) {
+        expect(args.take).toBe(OWNER_DATA_EXPORT_PAGE_SIZE);
+        expect(args.where.organizationId).toBe('org-a');
+        const order = [args.orderBy].flat();
+        expect(order[order.length - 1]).toEqual({ id: 'asc' });
+      }
+    }
+  });
+});
+
+describe('queueOwnerDataExport', () => {
+  const now = new Date('2026-11-15T10:00:00.000Z');
+  const input = {
+    organizationId: 'org-a',
+    userId: 'u-owner',
+    range: { from: null, to: null },
+    now,
+  };
+  function platformDb(recent: Date[] = [], pending: unknown = null) {
+    return {
+      $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+      platformJob: {
+        findFirst: vi.fn().mockResolvedValue(pending),
+        findMany: vi.fn().mockResolvedValue(recent.map((createdAt) => ({ createdAt }))),
+        create: vi.fn().mockResolvedValue({ id: 'job-new' }),
+      },
+    };
+  }
+
+  it('takes the workspace lock before checking and queues under the limit', async () => {
+    const db = platformDb([new Date(now.getTime() - 60_000)]);
+    const result = await queueOwnerDataExport(db as never, input);
+    expect(result).toEqual({ kind: 'created', job: { id: 'job-new' } });
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+      'owner-data-export:org-a'
+    );
+    expect(db.$queryRawUnsafe.mock.invocationCallOrder[0]).toBeLessThan(
+      db.platformJob.findMany.mock.invocationCallOrder[0]!
+    );
+    expect(db.platformJob.findMany.mock.calls[0]![0].where).toMatchObject({
+      organizationId: 'org-a',
+      type: 'PHARMACY_OWNER_DATA_EXPORT_V1',
+      requestedById: 'u-owner',
+      createdAt: { gte: new Date('2026-11-14T10:00:00.000Z') },
+    });
+    expect(db.platformJob.create.mock.calls[0]![0].data).toMatchObject({
+      organizationId: 'org-a',
+      requestedById: 'u-owner',
+    });
+  });
+
+  it('refuses the owner once the daily limit is used and says when a slot frees', async () => {
+    const recent = Array.from(
+      { length: OWNER_DATA_EXPORT_REQUEST_LIMIT },
+      (_, index) => new Date(now.getTime() - (20 - index) * 60 * 60_000)
+    );
+    const db = platformDb(recent);
+    expect(await queueOwnerDataExport(db as never, input)).toEqual({
+      kind: 'rate_limited',
+      retryAfterSeconds: 4 * 60 * 60,
+    });
+    expect(db.platformJob.create).not.toHaveBeenCalled();
+  });
+
+  it('returns the export already in flight without counting or creating one', async () => {
+    const pending = { id: 'job-1', status: 'RUNNING' };
+    const db = platformDb([], pending);
+    expect(await queueOwnerDataExport(db as never, input)).toEqual({
+      kind: 'pending',
+      job: pending,
+    });
+    expect(db.platformJob.create).not.toHaveBeenCalled();
   });
 });
 
 describe('purgeExpiredOwnerDataExports', () => {
   it('deletes only archives past their 24-hour link and marks each job purged', async () => {
     const now = new Date('2026-11-15T10:00:00.000Z');
-    const findMany = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          id: 'job-old',
-          organizationId: 'org-a',
-          result: { filename: 'owner-data-export-job-old.zip', rowCounts: { 'customers.csv': 2 } },
-        },
-      ]);
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'job-old',
+        organizationId: 'org-a',
+        result: { filename: 'owner-data-export-job-old.zip', rowCounts: { 'customers.csv': 2 } },
+      },
+    ]);
     const update = vi.fn().mockResolvedValue({});
     const purged = await purgeExpiredOwnerDataExports(
       { platformJob: { findMany, update } } as never,
@@ -476,5 +660,15 @@ describe('purgeExpiredOwnerDataExports', () => {
     expect(m.deleteUpload.mock.invocationCallOrder[0]).toBeLessThan(
       update.mock.invocationCallOrder[0]!
     );
+  });
+
+  it('deletes the tokenized archive name recorded on the job', async () => {
+    const filename = 'owner-data-export-job-new-0123456789abcdef0123456789abcdef.zip';
+    const findMany = vi
+      .fn()
+      .mockResolvedValue([{ id: 'job-new', organizationId: 'org-a', result: { filename } }]);
+    const update = vi.fn().mockResolvedValue({});
+    await purgeExpiredOwnerDataExports({ platformJob: { findMany, update } } as never);
+    expect(m.deleteUpload).toHaveBeenCalledExactlyOnceWith('org-a', filename);
   });
 });
