@@ -168,6 +168,7 @@ export class PharmacySaleError extends Error {
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'BILL_HAS_PAYMENTS'
   ) {
     super(reason);
   }
@@ -574,14 +575,17 @@ export async function changeSaleStatus(
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
+  // DEV-623: a HELD bill can be voided directly. Resuming needs a licence valid
+  // now, so a held bill must not need resuming to release the stock it holds.
   const transitions = {
-    hold: ['OPEN', 'HELD', 'HELD'],
-    resume: ['HELD', 'OPEN', 'RESUMED'],
-    convertQuotation: ['QUOTATION', 'OPEN', 'QUOTATION_CONVERTED'],
-    void: ['OPEN', 'VOID', 'VOIDED'],
+    hold: [['OPEN'], 'HELD', 'HELD'],
+    resume: [['HELD'], 'OPEN', 'RESUMED'],
+    convertQuotation: [['QUOTATION'], 'OPEN', 'QUOTATION_CONVERTED'],
+    void: [['OPEN', 'HELD'], 'VOID', 'VOIDED'],
   } as const;
-  const [from, to, kind] = transitions[action];
-  if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  const [allowed, to, kind] = transitions[action];
+  const from = sale.status;
+  if (!allowed.some((status) => status === from)) throw new PharmacySaleError('INVALID_STATE');
   // #414: re-opening a held sale or a quotation for selling is a sale-time act, so it
   // needs a licence valid now. Hold and void stay available to wind a sale down.
   if (to === 'OPEN')
@@ -604,6 +608,23 @@ export async function changeSaleStatus(
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    // DEV-623: a split payment leaves a bill OPEN (and it can then be held), so a
+    // void must not strand money taken on it. Every tender is refunded first, on
+    // the refund path's own manager/owner gate. Read after the claim: the sale
+    // row is locked, so a tender that committed earlier is seen here and a later
+    // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    const tenders = await db.pharmacyTender.findMany({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+    });
+    const unrefundedMinor = tenders.reduce(
+      (total, tender) =>
+        total +
+        tender.amountMinor -
+        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
+      0
+    );
+    if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -685,6 +706,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       lines: {
         include: {
           medicine: { select: { productName: true, controlled: true } },
+          // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
+          packLevel: { select: { level: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -736,6 +759,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
+      levelLabel: line.packLevel?.level ?? null,
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,

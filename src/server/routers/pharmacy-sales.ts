@@ -54,6 +54,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
@@ -1709,7 +1710,14 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      annotateAudit(ctx, { skipInput: true });
+      // The input stays out of the audit row (it can carry a controlled PIN), but
+      // the bill it targeted is named so a refused add can be traced (DEV-712).
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId },
+      });
       // PH-A4 (F10): a batch taken out of FEFO order is a safety decision, so its
       // audit row is labelled as one — refused attempts included, since the
       // label is set before the domain runs. The override row itself is written
@@ -2830,6 +2838,22 @@ export const pharmacySalesRouter = router({
           },
         ];
       });
+    }),
+
+  /**
+   * DEV-623: the branch's unpaid OPEN and HELD bills. A bill lost to a reload or
+   * another browser keeps its stock allocated, so the counter lists them here to
+   * resume or void. The same gate as `counterCart` and `transition`.
+   */
+  openBills: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await listOpenBills(ctx.db, scope);
+      } catch (error) {
+        fail(error);
+      }
     }),
 
   /** The open bill with the FEFO allocation each line actually drew (POS-03). */

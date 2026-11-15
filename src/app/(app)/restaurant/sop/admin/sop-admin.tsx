@@ -524,7 +524,7 @@ export function SopAdminView({
                       ? 'text-text-muted'
                       : capacity.kind === 'exhausted'
                         ? 'text-warning'
-                        : 'text-text-faint'
+                        : 'text-text-muted'
                 }`}
               >
                 {capacity.kind === 'unconfigured'
@@ -718,7 +718,7 @@ export function SopAdminView({
                         VERSION {version.versionNumber}
                       </span>
                       <StatusPill status={version.status} tone={statusTone(version.status)} />
-                      <span className="text-xs text-text-faint">
+                      <span className="text-xs text-text-muted">
                         {version.steps.length} step{version.steps.length === 1 ? '' : 's'}
                       </span>
                     </div>
@@ -730,7 +730,7 @@ export function SopAdminView({
                             key={step.id}
                             className="grid gap-3 p-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-start"
                           >
-                            <span className="font-mono text-xs text-text-faint">
+                            <span className="font-mono text-xs text-text-muted">
                               {String(step.stepOrder).padStart(2, '0')}
                             </span>
                             <div className="min-w-0">
@@ -757,7 +757,7 @@ export function SopAdminView({
                               {!step.requiresPhoto &&
                               !step.requiresSignature &&
                               !step.requiresNote ? (
-                                <span className="text-xs text-text-faint">
+                                <span className="text-xs text-text-muted">
                                   No evidence required
                                 </span>
                               ) : null}
@@ -1005,7 +1005,7 @@ export function SopAdminView({
                     </label>
                     <p
                       id="assignee-mode-help"
-                      className="text-xs leading-relaxed text-text-faint sm:col-span-2 xl:col-span-1 2xl:col-span-2"
+                      className="text-xs leading-relaxed text-text-muted sm:col-span-2 xl:col-span-1 2xl:col-span-2"
                     >
                       {assigneeMode === 'role'
                         ? 'Every occurrence becomes an unclaimed item in that role’s branch pool. Any holder of the role at the branch can claim it; the first claim wins.'
@@ -1236,14 +1236,14 @@ export function SopAdminView({
                             <span className="block font-medium text-text-strong">
                               {assignment.branch.name}
                             </span>
-                            <span className="block font-mono text-[0.6875rem] text-text-faint">
+                            <span className="block font-mono text-[0.6875rem] text-text-muted">
                               {assignment.branch.timezone}
                             </span>
                           </TableCell>
                           <TableCell>{assignment.template.name}</TableCell>
                           <TableCell className="whitespace-normal">
                             <span className="block">{recurrenceLabel(assignment)}</span>
-                            <span className="block text-xs text-text-faint">
+                            <span className="block text-xs text-text-muted">
                               {dateOnly(assignment.startDate)} – {dateOnly(assignment.endDate)}
                             </span>
                           </TableCell>
@@ -1253,7 +1253,7 @@ export function SopAdminView({
                                 ? `${minutesLabel(assignment.dueTimeMinutes)}–${minutesLabel(assignment.intervalEndTimeMinutes!)}`
                                 : `Due ${minutesLabel(assignment.dueTimeMinutes)}`}
                             </span>
-                            <span className="block text-xs text-text-faint">
+                            <span className="block text-xs text-text-muted">
                               {assignment.windowMinutes}m window · {assignment.graceMinutes}m grace
                             </span>
                           </TableCell>

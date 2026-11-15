@@ -116,6 +116,13 @@ describe('pharmacy loyalty and inventory-cost growth evidence', () => {
     expect(input.actions).toEqual([{ ref: 'a1', kind: 'RETAIL_REVIEW' }]);
   });
 
+  it('counts customers who earned on a khata repayment in the loyalty cohort (DEV-746)', async () => {
+    const { db, queries } = fakeDb({ loyalty: 10 });
+    await buildPharmacyGrowthInput(db, scope, from, cutoff, now);
+    const loyalty = queries.find((q) => q.sql.includes("purpose='LOYALTY'"))!;
+    expect(loyalty.sql).toContain("l.kind IN ('EARN','KHATA_EARN')");
+  });
+
   it('offers inventory review from valuation alone', async () => {
     const { db } = fakeDb({ valuation: { lots: 10, value: '5000' } });
     const input = await buildPharmacyGrowthInput(db, scope, from, cutoff, now);
