@@ -16,6 +16,7 @@ import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
 import { changeSaleStatus } from './sales';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
+const cashier = { kind: 'COUNTER', actorIsManager: false } as const;
 
 type Row = Record<string, unknown>;
 function ledger(
@@ -192,7 +193,7 @@ describe('DEV-764 releasing a redemption when its sale is voided', () => {
     const voidDb = {
       ...db,
       pharmacySale: {
-        findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
+        findFirst: async () => ({ id: 'sale-a', status, lines: [], createdByUserId: 'cashier-a' }),
         updateMany: async ({ data }: { data: { status: string } }) => {
           status = data.status;
           return { count: 1 };
@@ -204,7 +205,8 @@ describe('DEV-764 releasing a redemption when its sale is voided', () => {
       pharmacySaleEvent: { create: vi.fn(async ({ data }) => data) },
     };
 
-    await changeSaleStatus(voidDb as never, scope, 'sale-a', 'void', 'Customer left');
+    // The cashier who rang the bill, not a manager (DEV-821 void authority).
+    await changeSaleStatus(voidDb as never, scope, 'sale-a', 'void', cashier, 'Customer left');
 
     expect(status).toBe('VOID');
     expect(created).toEqual([
@@ -225,16 +227,16 @@ describe('DEV-764 releasing a redemption when its sale is voided', () => {
     const voidDb = {
       ...db,
       pharmacySale: {
-        findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
+        findFirst: async () => ({ id: 'sale-a', status, lines: [], createdByUserId: 'cashier-a' }),
         updateMany: async ({ data }: { data: { status: string } }) => {
           status = data.status;
           return { count: 1 };
         },
       },
     };
-    await expect(changeSaleStatus(voidDb as never, scope, 'sale-a', 'void')).rejects.toThrow(
-      'BILL_HAS_PAYMENTS'
-    );
+    await expect(
+      changeSaleStatus(voidDb as never, scope, 'sale-a', 'void', cashier)
+    ).rejects.toThrow('BILL_HAS_PAYMENTS');
     expect(created).toEqual([]);
   });
 });
