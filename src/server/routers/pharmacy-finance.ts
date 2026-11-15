@@ -10,7 +10,9 @@ import {
   leakageReport,
   marginComparisonPeriods,
   perpetualValuation,
+  unallocatedInventoryValue,
 } from '@/lib/pharmacy/finance-reports';
+import { loadLedgerLabels } from '@/lib/pharmacy/finance-label-lookup';
 import {
   closeAccountingPeriod,
   createSettlementBatch,
@@ -117,16 +119,25 @@ const ledgerReportProcedure = adminProcedure
     return next({ ctx: { ...ctx, reportScope: { organizationId, branchId: branch.id } } });
   });
 
+/** The tenant's configured currency (e.g. PKR), only for the organization in scope. */
+function organizationCurrency(ctx: TRPCContext, organizationId: string): string | null {
+  const currency = ctx.organization?.id === organizationId ? ctx.organization.currency : null;
+  return currency && /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
 function ledgerMetadata(
   reportScope: { organizationId: string; branchId: string },
-  definition: string
+  definition: string,
+  currency: string | null = null
 ) {
   return {
     scope: reportScope,
     timezone: 'UTC' as const,
     moneyUnit: 'integer_minor' as const,
-    currency: null,
-    currencyStatus: 'not_recorded_by_ledger_reader' as const,
+    currency,
+    currencyStatus: currency
+      ? ('organization_setting' as const)
+      : ('not_recorded_by_ledger_reader' as const),
     definition,
     source: 'finance_journal_lines' as const,
     coverage: {
@@ -204,14 +215,27 @@ export const pharmacyFinanceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const at = new Date(input.at);
-      const rows = await perpetualValuation(ctx.db, ctx.reportScope, at);
+      const [rows, unallocatedValueMinor] = await Promise.all([
+        perpetualValuation(ctx.db, ctx.reportScope, at),
+        unallocatedInventoryValue(ctx.db, ctx.reportScope, at),
+      ]);
+      const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
+        branches: rows.map((row) => row.branchId),
+        lots: rows.map((row) => row.lotId),
+        batches: rows.map((row) => row.manufacturingBatchId),
+        medicines: rows.map((row) => row.medicineId),
+        locations: rows.map((row) => row.locationId),
+      });
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Missing unit cost remains unknown.'
+          'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Stock posted without a lot (such as opening stock entered as one branch total) is reported separately. Missing unit cost remains unknown.',
+          organizationCurrency(ctx, ctx.reportScope.organizationId)
         ),
         period: { at, bounds: 'through_inclusive' as const },
         rows,
+        unallocatedValueMinor,
+        labels,
       };
     }),
 
@@ -220,27 +244,41 @@ export const pharmacyFinanceRouter = router({
     .query(async ({ ctx, input }) => {
       const period = { from: new Date(input.from), to: new Date(input.to) };
       const rows = await grossMargin(ctx.db, ctx.reportScope, { ...period, by: input.by });
+      const keys = rows.map((row) => row.key);
+      const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
+        branches: input.by === 'branch' ? keys : [],
+        batches: input.by === 'batch' ? keys : [],
+        medicines: input.by === 'product' ? keys : [],
+      });
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.'
+          'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.',
+          organizationCurrency(ctx, ctx.reportScope.organizationId)
         ),
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
         rows,
+        labels,
       };
     }),
 
   leakageReport: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
     const period = { from: new Date(input.from), to: new Date(input.to) };
     const rows = await leakageReport(ctx.db, ctx.reportScope, period);
+    const labels = await loadLedgerLabels(ctx.db, ctx.reportScope.organizationId, {
+      branches: rows.map((row) => row.branchId),
+      medicines: rows.map((row) => row.medicineId),
+    });
     return {
       ...ledgerMetadata(
         ctx.reportScope,
-        'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.'
+        'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.',
+        organizationCurrency(ctx, ctx.reportScope.organizationId)
       ),
       period: { ...period, bounds: '[from,to)' as const },
       rows,
+      labels,
     };
   }),
 
@@ -465,17 +503,31 @@ export const pharmacyFinanceRouter = router({
 
   reconcile: bookkeepingProcedure
     .input(
-      z.object({ branchId: id, statementLineId: id, transactionId: id.optional(),
-        settlementBatchId: id.optional(), amountMinor: moneyMinor }).strict()
-        .refine((value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
-          'Choose exactly one posted transaction or POS settlement batch.')
+      z
+        .object({
+          branchId: id,
+          statementLineId: id,
+          transactionId: id.optional(),
+          settlementBatchId: id.optional(),
+          amountMinor: moneyMinor,
+        })
+        .strict()
+        .refine(
+          (value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
+          'Choose exactly one posted transaction or POS settlement batch.'
+        )
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => input.settlementBatchId
-          ? reconcileSettlementBankLine(txDb(tx), scoped, { ...input, settlementBatchId: input.settlementBatchId })
-          : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! }));
+        return await ctx.db.$transaction((tx) =>
+          input.settlementBatchId
+            ? reconcileSettlementBankLine(txDb(tx), scoped, {
+                ...input,
+                settlementBatchId: input.settlementBatchId,
+              })
+            : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! })
+        );
       } catch (error) {
         fail(error);
       }

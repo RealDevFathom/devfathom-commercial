@@ -4,6 +4,7 @@ import {
   explainGrossMargin,
   grossMarginComparison,
   marginComparisonPeriods,
+  unallocatedInventoryValue,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
   key: 'branch_1',
@@ -114,5 +115,33 @@ describe('gross-margin accounting comparison', () => {
         { from: new Date('2026-09-01Z'), to: new Date('2026-09-02Z') }
       )
     ).rejects.toThrow('branch group');
+  });
+});
+
+describe('inventory posted without a lot', () => {
+  it('sums only lot-less inventory postings for the organization, branch and instant', async () => {
+    const $queryRaw = vi.fn(async () => [{ valueMinor: BigInt(10_000) }]);
+    const at = new Date('2026-11-01T00:00:00Z');
+    const value = await unallocatedInventoryValue(
+      { $queryRaw } as unknown as ScopedDb,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      at
+    );
+    expect(value).toBe(BigInt(10_000));
+    const query = ($queryRaw.mock.calls[0] as unknown as [{ sql: string; values: unknown[] }])[0];
+    expect(query.sql).toContain('line."lotId" IS NULL');
+    expect(query.sql).toContain("line.\"accountCode\" IN ('INVENTORY', 'INVENTORY_IN_TRANSIT')");
+    expect(query.values).toEqual(['org_1', at, 'branch_1']);
+  });
+
+  it('reads an empty ledger as zero', async () => {
+    const $queryRaw = vi.fn(async () => []);
+    await expect(
+      unallocatedInventoryValue(
+        { $queryRaw } as unknown as ScopedDb,
+        { organizationId: 'o' },
+        new Date()
+      )
+    ).resolves.toBe(BigInt(0));
   });
 });

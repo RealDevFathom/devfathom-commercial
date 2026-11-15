@@ -2,6 +2,8 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { projectProfitAndLoss } from './accounts/profit-loss';
+import { loadLedgerLabels } from './finance-label-lookup';
+import { journalEntryTitle } from './finance-labels';
 
 export { projectProfitAndLoss } from './accounts/profit-loss';
 
@@ -69,11 +71,23 @@ export async function financialStatements(
     }),
     db.financeJournalEntry.count({ where }),
   ]);
+  const tenderTypes = await journalTenderTypes(db, scope.organizationId, journal);
+  const lotIds = journal.flatMap((entry) => entry.lines.map((line) => line.lotId));
+  const { lots } = lotIds.some(Boolean)
+    ? await loadLedgerLabels(db, scope.organizationId, { lots: lotIds })
+    : { lots: {} as Record<string, string> };
   return {
     from: input.from,
     to: input.to,
     page: input.page,
-    journal,
+    journal: journal.map((entry) => ({
+      ...entry,
+      title: journalEntryTitle({ ...entry, tenderType: tenderTypes.get(entry.id) }),
+      lines: entry.lines.map((line) => ({
+        ...line,
+        lotLabel: line.lotId ? (lots[line.lotId] ?? null) : null,
+      })),
+    })),
     journalCount,
     profitAndLoss: projectProfitAndLoss(totals),
     accounts: totals.map((t) => ({
@@ -92,4 +106,40 @@ export async function financialStatements(
       netMinor: (t.inflow - t.outflow).toString(),
     })),
   };
+}
+
+/** Payment method behind each payment or refund entry, so titles can say "Refund · Cash". */
+async function journalTenderTypes(
+  db: ScopedDb,
+  organizationId: string,
+  journal: { id: string; sourceKind: string; sourceId: string }[]
+) {
+  const ids = (kind: string) =>
+    journal.filter((entry) => entry.sourceKind === kind).map((entry) => entry.sourceId);
+  const refundIds = ids('PHARMACY_REFUND');
+  const tenderIds = ids('PHARMACY_TENDER');
+  const [refunds, tenders] = await Promise.all([
+    refundIds.length
+      ? db.pharmacyRefund.findMany({
+          where: { organizationId, id: { in: refundIds } },
+          select: { id: true, originalTender: { select: { type: true } } },
+        })
+      : [],
+    tenderIds.length
+      ? db.pharmacyTender.findMany({
+          where: { organizationId, id: { in: tenderIds } },
+          select: { id: true, type: true },
+        })
+      : [],
+  ]);
+  const bySource = new Map<string, string>([
+    ...refunds.map((row) => [`PHARMACY_REFUND:${row.id}`, row.originalTender.type] as const),
+    ...tenders.map((row) => [`PHARMACY_TENDER:${row.id}`, row.type] as const),
+  ]);
+  return new Map(
+    journal.flatMap((entry) => {
+      const type = bySource.get(`${entry.sourceKind}:${entry.sourceId}`);
+      return type ? [[entry.id, type] as const] : [];
+    })
+  );
 }

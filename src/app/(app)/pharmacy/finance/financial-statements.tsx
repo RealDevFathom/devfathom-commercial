@@ -5,6 +5,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
+import { financeSourceLabel } from '@/lib/pharmacy/finance-labels';
+import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 const money = (value: string | number) => {
@@ -162,7 +164,7 @@ export async function FinancialStatements({
             {result.cashflow.map((a) => (
               <tr key={`${a.currency}-${a.sourceKind}`} className="border-t border-border-subtle">
                 <td className="p-3">
-                  {a.sourceKind} / {a.currency}
+                  {financeSourceLabel(a.sourceKind)} / {a.currency}
                 </td>
                 {[a.inflowMinor, a.outflowMinor, a.netMinor].map((v, i) => (
                   <td key={i} className="p-3 text-right font-mono">
@@ -194,11 +196,13 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {e.occurredAt.toISOString()} · {e.description} · {e.sourceKind}
-            {e.reversesEntryId ? ' · reversal' : ''}
+            {e.title}
+            {e.reversesEntryId ? ' · reversal' : ''} · {formatKarachiDateTime(e.occurredAt)}
           </summary>
           <p className="my-2 break-all text-xs text-text-muted">
-            Entry {e.id} · source {e.sourceId}
+            {financeSourceLabel(e.sourceKind)}
+            {e.title === e.description ? '' : ` · recorded as “${e.description}”`} · Audit
+            reference: entry {e.id}, source record {e.sourceId}
           </p>
           <ul>
             {e.lines.map((l) => (
@@ -207,8 +211,8 @@ export async function FinancialStatements({
                 className="flex flex-wrap justify-between gap-3 border-t border-border-subtle py-2 text-sm"
               >
                 <span>
-                  {l.accountCode} · {l.side}
-                  {l.lotId ? ` · lot ${l.lotId}` : ''}
+                  {financeAccountLabel(l.accountCode)} · {l.side === 'DEBIT' ? 'Debit' : 'Credit'}
+                  {l.lotId ? ` · ${l.lotLabel ?? `lot ${l.lotId}`}` : ''}
                 </span>
                 <span className="font-mono">
                   {e.currency} {money(l.amountMinor)}
