@@ -205,21 +205,36 @@ describe('addSaleLine counter promotion hook (#727)', () => {
   it('does not stack a promotion on a redeemed voucher', async () => {
     const db = {
       ...counterDb(),
+      user: {
+        findFirst: vi.fn(async () => ({
+          id: 'manager-v',
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          role: 'ADMIN',
+        })),
+        findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+      },
       pharmacyVoucher: {
         findFirst: vi.fn(async () => ({
           id: 'voucher-a',
           discountMinor: 40,
           eligibleCategories: null,
           issuedByUserId: 'manager-v',
-          validUntil: null,
+          approvedByUserId: 'manager-v',
+          approvalPolicy: 'VOUCHER_WITHIN_CAP',
+          validUntil: new Date(Date.now() + 86_400_000),
+          maxUses: 1,
+          usedCount: 0,
+          revokedAt: null,
         })),
+        updateMany: vi.fn(async () => ({ count: 1 })),
       },
     };
 
     await addSaleLine(
       db as never,
       scope,
-      { ...lineInput, voucherId: 'voucher-a' },
+      { ...lineInput, voucherId: 'voucher-a', voucherCashierPinVerified: true },
       { applyCounterPromotions: true }
     );
 
@@ -228,7 +243,13 @@ describe('addSaleLine counter promotion hook (#727)', () => {
       discountKind: 'VOUCHER',
       discountMinor: 40,
       voucherId: 'voucher-a',
+      approvedByUserId: 'manager-v',
+      approvalPolicy: 'voucher:voucher-a',
       promotionId: undefined,
+    });
+    expect(db.pharmacyVoucher.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: 'voucher-a', usedCount: 0 }),
+      data: { usedCount: { increment: 1 } },
     });
   });
 

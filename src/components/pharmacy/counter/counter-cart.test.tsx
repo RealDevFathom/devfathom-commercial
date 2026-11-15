@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CounterCart } from '@/lib/pharmacy/counter';
@@ -307,6 +307,20 @@ describe('CounterLotOverride', () => {
     const props = picker({ value: { inventoryLotId: 'lot-later', reason: 'x' } });
     fireEvent.click(screen.getByRole('button', { name: 'Use earliest-expiry batch' }));
     expect(props.onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('applies the chosen batch and confirms which batch is on the line', () => {
+    picker({ value: { inventoryLotId: 'lot-later', reason: '' } });
+    expect(screen.getByRole('button', { name: /^Use batch/ })).toBeDisabled();
+    cleanup();
+    picker({ value: { inventoryLotId: 'lot-later', reason: 'Longer dating' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Use batch/ }));
+    expect(screen.getByTestId('counter-lot-override-applied')).toHaveTextContent(
+      'will be sold on this line'
+    );
+    expect(screen.getByTestId('counter-lot-override-applied')).toHaveTextContent('Longer dating');
+    fireEvent.click(screen.getByRole('button', { name: 'Change batch' }));
+    expect(screen.getAllByRole('radio')).toHaveLength(3);
   });
 
   it('surfaces a load failure with a retry', () => {

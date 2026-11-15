@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE "organizations" ADD COLUMN IF NOT EXISTS "invoiceAddress" TEXT;
+ALTER TABLE "organizations" ADD COLUMN IF NOT EXISTS "taxId" TEXT;
+
+COMMIT;

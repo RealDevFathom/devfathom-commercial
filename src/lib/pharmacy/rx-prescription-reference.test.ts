@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  assertRxLinesPrescribed,
+  PharmacyRxReferenceError,
   recordCompletedPrescriptionReference,
   resolvePrescriptionReference,
 } from './rx-prescription-reference';
@@ -99,5 +101,65 @@ describe('prescription reference validity in the organization timezone', () => {
       select: { timezone: true },
     });
     expect(db.prescriptionFill.create).toHaveBeenCalledTimes(current ? 1 : 0);
+  });
+});
+
+describe('assertRxLinesPrescribed (DEV-629)', () => {
+  const otc = { rx: false, restricted: false, controlled: false };
+  const reviewDb = (signed: boolean) => {
+    const findFirst = vi.fn().mockResolvedValue(signed ? { id: 'decision-1' } : null);
+    return {
+      db: { pharmacyPharmacistReviewDecision: { findFirst } } as unknown as ScopedDb,
+      findFirst,
+    };
+  };
+
+  it.each([
+    ['prescription-only', { ...otc, rx: true }],
+    ['restricted', { ...otc, restricted: true }],
+  ])('refuses a %s line with no prescription reference', async (_label, medicine) => {
+    const { db, findFirst } = reviewDb(true);
+    await expect(
+      assertRxLinesPrescribed(db, [
+        { id: 'otc-line', prescriptionLineId: null, medicine: otc },
+        { id: 'rx-line', prescriptionLineId: null, medicine },
+      ])
+    ).rejects.toMatchObject({
+      name: 'PharmacyRxReferenceError',
+      reason: 'PRESCRIPTION_REQUIRED',
+    } satisfies Partial<PharmacyRxReferenceError>);
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('refuses an attached prescription that no pharmacist has signed for this sale line', async () => {
+    const { db, findFirst } = reviewDb(false);
+    await expect(
+      assertRxLinesPrescribed(db, [
+        { id: 'rx-line', prescriptionLineId: 'rx_line', medicine: { ...otc, rx: true } },
+      ])
+    ).rejects.toMatchObject({
+      name: 'PharmacyDispensingError',
+      code: 'PHARMACIST_APPROVAL_REQUIRED',
+    });
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { reviewItem: { saleLineId: 'rx-line' }, kind: 'SIGN', signedAt: { not: null } },
+      select: { id: true },
+    });
+  });
+
+  it('admits signed Rx lines, OTC lines and controlled lines (which keep their register gate)', async () => {
+    const { db, findFirst } = reviewDb(true);
+    await expect(
+      assertRxLinesPrescribed(db, [
+        { id: 'rx-line', prescriptionLineId: 'rx_line', medicine: { ...otc, rx: true } },
+        { id: 'otc-line', prescriptionLineId: null, medicine: otc },
+        {
+          id: 'controlled-line',
+          prescriptionLineId: null,
+          medicine: { ...otc, rx: true, controlled: true },
+        },
+      ])
+    ).resolves.toBeUndefined();
+    expect(findFirst).toHaveBeenCalledOnce();
   });
 });

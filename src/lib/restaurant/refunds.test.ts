@@ -1366,3 +1366,57 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
     expect(evidence.idempotencyKeys).toBe(1);
   });
 });
+
+describeIfDatabase('DEV-402 refunds require a settled bill (real DB)', () => {
+  it('refuses a partial-tender refund on an OPEN bill before any write; settlement stays whole', async () => {
+    const device = await newDevice('POS-open-bill-refund');
+    await openDrawer(device);
+    const billId = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
+      actor: actor(device),
+      now: AT,
+    });
+    expect(partial.settled).toBe(false);
+
+    const before = await sideEffectTotals(orgId);
+    await expect(
+      deps.refunds.refundTender(db, {
+        originalTenderId: partial.tenderId,
+        amount: '5.00',
+        reason: 'refund before settlement',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(device),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ name: 'RefundError', reason: 'BILL_NOT_SETTLED' });
+    expect(await sideEffectTotals(orgId)).toEqual(before);
+
+    // The 5.00 is still retained, so exactly the remaining 7.50 settles the bill.
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CASH', amount: '7.50', cashReceived: '7.50' },
+      actor: actor(device),
+      now: AT,
+    });
+    expect(final.settled).toBe(true);
+    expect(
+      await read((tx) =>
+        tx.restaurantBill.findUniqueOrThrow({ where: { id: billId }, select: { status: true } })
+      )
+    ).toEqual({ status: 'SETTLED' });
+
+    // Once SETTLED, the same tender is refundable as before.
+    const refund = await deps.refunds.refundTender(db, {
+      originalTenderId: partial.tenderId,
+      amount: '5.00',
+      reason: 'refund after settlement',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(device),
+      now: AT,
+    });
+    expect(refund.amount.toString()).toBe('5');
+  });
+});

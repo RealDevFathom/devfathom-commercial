@@ -304,7 +304,9 @@ describe('CounterSearchResults safety flags', () => {
     );
 
     const medicine = screen.getByRole('button', { name: /Paracetamol/ });
-    expect(medicine).toHaveTextContent('Batch — · Exp — · 0 tabs');
+    expect(medicine).toHaveTextContent('0 tabs');
+    expect(medicine).not.toHaveTextContent('Batch');
+    expect(medicine).not.toHaveTextContent('Exp —');
     expect(medicine).toHaveTextContent('Location unavailable');
     expect(medicine).toHaveTextContent('Not sellable');
     expect(medicine).toHaveTextContent('Blocked stock present: expired.');
@@ -406,4 +408,29 @@ describe('CounterSearchResults safety flags', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Capture as unfulfilled demand' }));
     expect(onCaptureDemand).toHaveBeenCalledTimes(2);
   });
+});
+
+it.each(['batch', 'expiry'])('keeps known metadata when only %s is missing', (missing) => {
+  render(
+    <CounterSearchResults
+      rows={[
+        { ...row, ...(missing === 'batch' ? { batchNumber: null } : { nearestSafeExpiry: null }) },
+      ]}
+      state="ready"
+      query="para"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />
+  );
+  const medicine = screen.getByRole('button', { name: /Paracetamol/ });
+  expect(medicine).not.toHaveTextContent(/Batch —|Exp —/);
+  if (missing === 'batch') {
+    expect(medicine).not.toHaveTextContent('Batch');
+    expect(medicine).toHaveTextContent('Exp 2028-06-30');
+  } else {
+    expect(medicine).toHaveTextContent('Batch B-1044');
+    expect(medicine).not.toHaveTextContent('Exp');
+  }
 });
