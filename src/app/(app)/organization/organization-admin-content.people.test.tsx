@@ -136,6 +136,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it('keeps the page heading when organization data is unavailable', () => {
+    overviewData.current = undefined;
+    render(<OrganizationAdminContent />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Organization administration'
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('grant you organization access');
+  });
+
   it('uses singular seat copy when the license limit is one', () => {
     const data = overviewData.current as { entitlements: { seatLimit: number } };
     data.entitlements.seatLimit = 1;

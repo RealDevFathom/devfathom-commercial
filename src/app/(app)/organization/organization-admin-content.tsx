@@ -288,11 +288,19 @@ export function OrganizationAdminContent() {
   }
   if (overview.error || !overview.data) {
     return (
-      <Card title="Organization administration">
-        <p className="text-sm text-destructive">
-          {overview.error?.message ?? 'Organization information is unavailable.'}
-        </p>
-      </Card>
+      <div className="mx-auto max-w-[1320px] space-y-6">
+        <PageHeader
+          eyebrow="ORGANIZATION CONTROL"
+          heading="Organization administration"
+          description="Manage your workspace identity, people, access, and licensed capabilities."
+        />
+        <Card title="Access unavailable">
+          <p className="text-sm text-destructive" role="alert">
+            {overview.error?.message ?? 'Organization information is unavailable.'} Ask a
+            workspace administrator to grant you organization access.
+          </p>
+        </Card>
+      </div>
     );
   }
 
