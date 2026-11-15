@@ -1763,9 +1763,30 @@ export const projectsRouter = router({
   addLabelToTask: protectedProcedure
     .input(z.object({ taskId: z.string(), labelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await assertTaskAccess(ctx, input.taskId);
-      return ctx.db.taskLabel.create({
-        data: { taskId: input.taskId, labelId: input.labelId },
+      return ctx.db.$transaction(async (tx) => {
+        // Keep the task on the authorized board through validation and attachment.
+        await tx.$queryRaw`SELECT id FROM tasks WHERE id = ${input.taskId} FOR UPDATE`;
+        await assertTaskAccess({ ...ctx, db: tx }, input.taskId);
+        const task = await tx.task.findUnique({
+          where: { id: input.taskId },
+          select: { column: { select: { boardId: true } } },
+        });
+        if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
+        // Exact board equality also authorizes the label through the task's
+        // project. Do not disclose whether a label exists on another board.
+        const label = await tx.label.findFirst({
+          where: { id: input.labelId, boardId: task.column.boardId },
+          select: { id: true },
+        });
+        if (!label) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Label must belong to the task board.',
+          });
+        }
+        return tx.taskLabel.create({
+          data: { taskId: input.taskId, labelId: label.id },
+        });
       });
     }),
 
