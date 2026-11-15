@@ -13,6 +13,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
 import {
   formatWorkspaceDateTime,
   workspaceDateRange,
@@ -397,18 +398,33 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
-  const cards = metrics
+  // DEV-733: abnormal refund ratio / cash variance get an amber review flag (label + text, not
+  // colour alone); a variance with no final close is shown as unavailable, never as 0.00.
+  const kpiFlags = metrics ? pharmacyReportKpiFlags(metrics) : {};
+  const varianceNotComputed =
+    metrics != null && metrics.salesMinor != null && metrics.cashVarianceMinor == null;
+  const cards: Array<{
+    label: string;
+    figure: string | number;
+    flag?: { detail: string };
+    note?: string;
+  }> = metrics
     ? [
-        ['Sales', money(metrics.salesMinor)],
-        ['Gross margin', money(metrics.marginMinor)],
-        ['Cash', money(metrics.cashMinor)],
-        ['Cash variance', money(metrics.cashVarianceMinor)],
-        ['Refunds', money(metrics.refundsMinor)],
+        { label: 'Sales', figure: money(metrics.salesMinor) },
+        { label: 'Gross margin', figure: money(metrics.marginMinor) },
+        { label: 'Cash', figure: money(metrics.cashMinor) },
+        {
+          label: 'Cash variance',
+          figure: money(metrics.cashVarianceMinor),
+          flag: kpiFlags.cashVarianceMinor,
+          note: varianceNotComputed ? 'Not computed · no final day close in period' : undefined,
+        },
+        { label: 'Refunds', figure: money(metrics.refundsMinor), flag: kpiFlags.refundsMinor },
         // DEV-729: null means stock signals were never worked out for this scope, not zero.
-        ['Open stock signals', metrics.openStockSignals ?? 'Not calculated yet'],
-        ['Recommended orders', metrics.recommendedOrders ?? 'Not calculated yet'],
-        ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
-        ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
+        { label: 'Open stock signals', figure: metrics.openStockSignals ?? 'Not calculated yet' },
+        { label: 'Recommended orders', figure: metrics.recommendedOrders ?? 'Not calculated yet' },
+        { label: 'Expiry ≤30d', figure: money(metrics.expiryValueMinor30) },
+        { label: 'Expiry ≤90d', figure: money(metrics.expiryValueMinor90) },
       ]
     : [];
   return (
@@ -654,17 +670,29 @@ export default async function PharmacyReportsPage({
               only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(([label, figure]) => (
+              {cards.map(({ label, figure, flag, note }) => (
                 <Stat
                   key={label}
                   label={label}
                   value={figure}
                   className="min-w-0"
-                  valueClassName="break-words"
+                  valueClassName={flag ? 'break-words text-warning' : 'break-words'}
+                  data-flagged={flag ? 'true' : undefined}
                   sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
+                    <span className="flex flex-col gap-1">
+                      {flag ? (
+                        <>
+                          <StatusPill status="Review" tone="warning" />
+                          <span className="text-warning">{flag.detail}</span>
+                        </>
+                      ) : null}
+                      <span>
+                        {note ??
+                          (branch
+                            ? 'Selected branch · ledger source'
+                            : 'All available branches · ledger source')}
+                      </span>
+                    </span>
                   }
                 />
               ))}

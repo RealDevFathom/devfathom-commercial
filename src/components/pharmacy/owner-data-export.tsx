@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { OwnerDataExportView } from '@/lib/pharmacy/owner-data-export-format';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 
 const ENDPOINT = '/api/pharmacy/data-export';
 const POLL_MS = 10_000;
@@ -23,9 +24,9 @@ const STATUS_LABEL: Record<
   CANCELLED: { label: 'Cancelled', tone: 'neutral' },
 };
 
-function when(value: string | null): string {
+function when(value: string | null, timeZone: string | null | undefined): string {
   if (!value) return '—';
-  return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return formatWorkspaceDateTime(value, timeZone);
 }
 
 function totalRows(counts: Record<string, number> | null): string {
@@ -45,7 +46,14 @@ function attachmentName(response: Response): string {
  * Both the request and every download send the owner's PIN in a POST body; the
  * field is cleared after each attempt so it is typed again every time.
  */
-export function OwnerDataExportConsole({ initial }: { initial: OwnerDataExportView[] }) {
+export function OwnerDataExportConsole({
+  initial,
+  timeZone,
+}: {
+  initial: OwnerDataExportView[];
+  /** The organization's zone: times and the picked dates are read on its clock. */
+  timeZone?: string | null;
+}) {
   const [exports, setExports] = useState(initial);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -142,7 +150,7 @@ export function OwnerDataExportConsole({ initial }: { initial: OwnerDataExportVi
       <form onSubmit={requestExport} className="space-y-4" noValidate>
         <fieldset className="grid gap-4 sm:grid-cols-2">
           <legend className="mb-2 text-sm text-text-muted">
-            Sales date range. Leave both empty to include every sale.
+            Sales date range, read in your workspace timezone ({workspaceZoneLabel(timeZone)}). Leave both empty to include every sale.
           </legend>
           <div className="space-y-1.5">
             <Label htmlFor="data-export-from">Sales from</Label>
@@ -247,7 +255,7 @@ export function OwnerDataExportConsole({ initial }: { initial: OwnerDataExportVi
                     key={item.id}
                     className="border-b border-border last:border-0 hover:bg-muted/50"
                   >
-                    <td className="px-4 py-3">{when(item.requestedAt)}</td>
+                    <td className="px-4 py-3">{when(item.requestedAt, timeZone)}</td>
                     <td className="px-4 py-3">
                       <StatusPill
                         status={expired ? 'expired' : item.status}
@@ -258,7 +266,7 @@ export function OwnerDataExportConsole({ initial }: { initial: OwnerDataExportVi
                     <td className="px-4 py-3 text-right tabular-nums">
                       {totalRows(item.rowCounts)}
                     </td>
-                    <td className="px-4 py-3">{when(item.expiresAt)}</td>
+                    <td className="px-4 py-3">{when(item.expiresAt, timeZone)}</td>
                     <td className="px-4 py-3 text-right">
                       {item.downloadable ? (
                         <Button
