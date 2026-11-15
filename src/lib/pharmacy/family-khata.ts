@@ -18,6 +18,7 @@ export class FamilyKhataError extends Error {
       | 'INVALID_AMOUNT'
       | 'PAYMENT_EXCEEDS_BALANCE'
       | 'OWNER_ACTION_REQUIRED'
+      | 'OVERRIDE_REASON_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
       | 'PATIENT_NOT_FOUND'
@@ -55,6 +56,18 @@ export type KhataHealthSuggestion = {
 };
 
 const DAY_MS = 86_400_000;
+
+/**
+ * DEV-290: a manager's or owner's PIN approval at the cashier's till, already verified by
+ * the server's counter-approval path (`authorizeCounterApproval` / `confirmCounterApproval`).
+ * Never built from client input.
+ */
+export type KhataPinApproval = {
+  approvedByUserId: string;
+  approvalPolicy: string;
+  selfApproved: boolean;
+  credentialId: string | null;
+};
 
 /** CRM-L04 estimate only. Calling this function cannot change a credit limit. */
 export function calculateKhataHealthSuggestion(
@@ -233,19 +246,39 @@ export async function applyKhataLimitDecision(
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
+    /**
+     * DEV-290: the approver's reason for charging past the credit limit. When given
+     * (the counter charge override always gives it), it must not be blank.
+     */
+    overrideReason?: string;
+    /**
+     * DEV-290: a server-verified PIN approval by a manager or owner at the till. It replaces
+     * the signed-in owner's password re-authentication as the approval evidence.
+     */
+    pinApproval?: KhataPinApproval;
   }
 ) {
   const authorizedAt = new Date();
   const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
-  if (
-    !input.ownerAuthorized ||
-    input.ownerAuthorizedByUserId !== scope.actorId ||
-    reauthenticatedAt === undefined ||
-    !Number.isFinite(reauthenticatedAt) ||
-    reauthenticatedAt > authorizedAt.getTime() ||
-    authorizedAt.getTime() - reauthenticatedAt > 5 * 60_000
-  )
+  const pin = input.pinApproval;
+  const pinAuthorized =
+    pin !== undefined &&
+    input.ownerAuthorizedByUserId === pin.approvedByUserId &&
+    pin.approvedByUserId.length > 0 &&
+    // Self-approval by PIN is only the solo rule's fresh re-entry, never a free pass.
+    (pin.approvedByUserId !== scope.actorId || pin.selfApproved);
+  const passwordAuthorized =
+    pin === undefined &&
+    input.ownerAuthorizedByUserId === scope.actorId &&
+    reauthenticatedAt !== undefined &&
+    Number.isFinite(reauthenticatedAt) &&
+    reauthenticatedAt <= authorizedAt.getTime() &&
+    authorizedAt.getTime() - reauthenticatedAt <= 5 * 60_000;
+  if (!input.ownerAuthorized || !(pinAuthorized || passwordAuthorized))
     throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const overrideReason = input.overrideReason?.trim();
+  if (input.overrideReason !== undefined && !overrideReason)
+    throw new FamilyKhataError('OVERRIDE_REASON_REQUIRED');
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -274,10 +307,26 @@ export async function applyKhataLimitDecision(
       reasons: {
         reasons: input.suggestion.reasons,
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
-        ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
+        ...(pin
+          ? {
+              approvalPolicy: pin.approvalPolicy,
+              approvalCredentialId: pin.credentialId,
+              selfApproved: pin.selfApproved,
+              operatorUserId: scope.actorId,
+            }
+          : {
+              ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
+              // DEV-290: a charge override by password is the sole approver's own
+              // fresh re-authentication; the router refuses it when anyone else could approve.
+              ...(input.overrideReason !== undefined
+                ? { approvalPolicy: 'SOLE_APPROVER_PASSWORD_REAUTH', selfApproved: true }
+                : {}),
+            }),
         ownerAuthorizedAt: authorizedAt.toISOString(),
+        ...(overrideReason ? { overrideReason } : {}),
       },
-      ownerActorId: scope.actorId,
+      // The person who authorized the limit: the PIN approver, or the re-authenticated actor.
+      ownerActorId: pin ? pin.approvedByUserId : scope.actorId,
     },
   });
   return { account, decision };
@@ -371,8 +420,14 @@ export async function readSaleKhataStatement(
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  owner: { authorized: boolean; passwordAuthenticatedAt?: number }
+  input: {
+    saleId: string;
+    familyAccountId: string;
+    amountMinor: number;
+    ownerOverride?: boolean;
+    overrideReason?: string;
+  },
+  owner: { authorized: boolean; passwordAuthenticatedAt?: number; pinApproval?: KhataPinApproval }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -421,12 +476,16 @@ export async function authorizeKhataCharge(
         now
       ),
       ownerAuthorized: owner.authorized,
-      ownerAuthorizedByUserId: scope.actorId,
+      ownerAuthorizedByUserId: owner.pinApproval?.approvedByUserId ?? scope.actorId,
+      pinApproval: owner.pinApproval,
       ownerReauthenticatedAt:
         owner.passwordAuthenticatedAt === undefined
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
+      // Always present for a charge override, so a blank reason is refused after the
+      // approver's authorization is checked.
+      overrideReason: input.overrideReason?.trim() ?? '',
     });
   }
   return account;
