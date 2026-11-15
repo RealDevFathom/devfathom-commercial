@@ -380,6 +380,14 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-core',
   },
   {
+    label: 'Khata',
+    href: '/pharmacy/khata',
+    icon: Landmark,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-counter',
+  },
+  {
     label: 'Loyalty points',
     href: '/pharmacy/loyalty',
     icon: Users,

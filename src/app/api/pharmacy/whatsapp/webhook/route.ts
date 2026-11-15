@@ -5,6 +5,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { parseAccountChanges, recordAccountChanges } from '@/lib/pharmacy/whatsapp/account-quality';
 import { handleInboundWhatsAppMessage } from '@/lib/pharmacy/whatsapp/inbound';
 import { createWhatsAppProvider, readWhatsAppConfig } from '@/lib/pharmacy/whatsapp/provider';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -150,6 +151,12 @@ export async function POST(request: Request) {
           );
         }
       }
+  // DEV-22: account strikes, restrictions and quality flags for the bound account only.
+  const accountChanges = parseAccountChanges(payload, config.businessAccountId);
+  if (accountChanges.length)
+    await withTenantDb(organization.id, (db) =>
+      recordAccountChanges(db, organization.id, accountChanges)
+    );
   const messages = provider
     .parseInbound(payload)
     .filter(

@@ -123,6 +123,15 @@ and it sets the platform-admin tenant setting inside its transaction:
 bun run db:seed
 ```
 
+The seed is safe to re-run against a database it has already seeded. A second run finds the
+existing demo data, refreshes the seeded users' passwords from `SEED_PASSWORD`, and leaves the
+rest in place; `bun run db:reset` is not required first. The platform operator is committed in its
+own transaction before the tenant demo data, so a later seed failure cannot roll it back. The seed
+prints `Created platform operator` or `Updated platform operator`, or warns when
+`PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD` are unset. If a run still stops on a unique
+constraint, the database holds conflicting rows; reset it as shown in
+[Resetting local data](#resetting-local-data).
+
 `bun prisma/prepare-extensions.ts` must run **before** `prisma migrate deploy`. The trusted
 `btree_gist` and `pg_trgm` extensions install functions owned by PostgreSQL's extension bootstrap
 role, and that role grants `PUBLIC EXECUTE` on them. The hardening step revokes that grant as the
@@ -375,10 +384,14 @@ are in [AI providers](./ai-providers.md).
 
 ## Resetting local data
 
-This deletes the local database contents and rebuilds them:
+This deletes the local database contents, reapplies every migration, and seeds again:
 
 ```bash
-bun run db:reset
+bun run db:reset && bun run db:seed
 ```
+
+Prisma 7 `migrate reset` no longer runs the configured seed, so `bun run db:reset` alone leaves an
+empty schema with no organization, users, or platform operator. Always follow it with
+`bun run db:seed`.
 
 Use it only when you are certain the configured database is disposable.

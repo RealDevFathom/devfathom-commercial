@@ -5,6 +5,8 @@ import {
   confirmCounterApproval,
   CounterApprovalDenied,
   fefoOverrideApprovalPolicy,
+  isSoleActiveApprover,
+  listCounterApprovers,
   type CounterApproval,
   type CounterApprovalKind,
   type CounterApprovalPin,
@@ -177,6 +179,9 @@ import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
+const counterApprovalPin = z
+  .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
+  .strict();
 const tenderInput = z
   .object({
     branchId,
@@ -199,6 +204,13 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    // DEV-290: why an owner or manager approved charging past the family credit limit.
+    overrideReason: z.string().trim().min(1).max(500).optional(),
+    /**
+     * DEV-290: a manager's or owner's staff PIN entered at the cashier's till to approve the
+     * over-limit charge. Verified by the server; never stored, hashed or replayed.
+     */
+    overLimitApproval: counterApprovalPin.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
     // reference, never a full card number. Each tender's shape is enforced in settlement.
     providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
@@ -209,9 +221,6 @@ const tenderInput = z
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
-const counterApprovalPin = z
-  .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
-  .strict();
 const demandReason = z.enum([
   'STOCKOUT',
   'NOT_CARRIED',
@@ -385,8 +394,13 @@ async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   );
 }
 
+const SOLE_APPROVER_PASSWORD_REAUTH = 'SOLE_APPROVER_PASSWORD_REAUTH';
+
 function ledgerTender(input: z.infer<typeof tenderInput>) {
-  return { ...input, type: input.type === 'KHATA' ? ('CREDIT' as const) : input.type };
+  // DEV-290: the approver's PIN is one-time evidence, never part of the idempotent payload.
+  const { overLimitApproval, ...tender } = input;
+  void overLimitApproval;
+  return { ...tender, type: tender.type === 'KHATA' ? ('CREDIT' as const) : tender.type };
 }
 
 function fail(error: unknown): never {
@@ -833,6 +847,25 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+}
+
+/**
+ * DEV-290: the password route is the signed-in operator approving their own over-limit
+ * charge, so the second-person rule applies: it is allowed only for an owner or manager
+ * (or tenant ADMIN) who is genuinely the sole active owner/manager. Everyone else needs a
+ * different manager's or owner's PIN at the till.
+ */
+async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): Promise<boolean> {
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  const approver =
+    (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options))) ||
+    (await can(subject, 'pharmacy:manage', undefined, options));
+  return (
+    approver &&
+    (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'))
+  );
 }
 
 export const pharmacySalesRouter = router({
@@ -1366,7 +1399,12 @@ export const pharmacySalesRouter = router({
       annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (
+          input.familyAccountId !== undefined ||
+          input.ownerOverride !== undefined ||
+          input.overrideReason !== undefined ||
+          input.overLimitApproval !== undefined
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -1383,15 +1421,48 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
+      // DEV-290: an owner or manager (`pharmacy:manage`: Owner, Owner / Operator, Manager)
+      // approves an over-limit charge, with a required reason, in one of two ways:
+      // - at the cashier's till with their own staff PIN (the counter-approval path: a
+      //   different approver, or a sole owner/manager re-entering their own PIN), or
+      // - as the signed-in user (or a tenant ADMIN) with a fresh password re-authentication.
+      // The approver and reason are written to the append-only limit-decision record.
+      // PINs are verified before the transaction so a refusal still commits its lockout strike.
+      const pinApproval =
+        input.ownerOverride === true && input.overLimitApproval
+          ? await authorizeCounterApproval(
+              ctx.db as unknown as ScopedDb,
+              scope,
+              'KHATA_OVER_LIMIT',
+              input.overLimitApproval
+            )
+          : undefined;
+      if (pinApproval)
+        annotateAudit(ctx, {
+          metadata: {
+            khataOverLimitApproval: {
+              approvedByUserId: pinApproval.approvedByUserId,
+              approvalPolicy: pinApproval.approvalPolicy,
+              selfApproved: pinApproval.selfApproved,
+            },
+          },
+        });
       const ownerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }));
+        (pinApproval !== undefined || (await mayApproveKhataOverLimit(ctx, scope)));
+      if (input.ownerOverride === true && !pinApproval && ownerAuthorized)
+        annotateAudit(ctx, {
+          metadata: {
+            khataOverLimitApproval: {
+              approvedByUserId: scope.actorId,
+              approvalPolicy: SOLE_APPROVER_PASSWORD_REAUTH,
+              selfApproved: true,
+            },
+          },
+        });
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
+        if (pinApproval) await confirmCounterApproval(db, scope, 'KHATA_OVER_LIMIT', pinApproval);
         // Fail before any Khata limit work; applyPharmacyTender re-checks under the same locks.
         await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
           name: 'pharmacy.sale.tender',
@@ -1409,6 +1480,7 @@ export const pharmacySalesRouter = router({
           {
             authorized: ownerAuthorized,
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
+            pinApproval,
           }
         );
         const result = await applyPharmacyTender(db, scope, normalized, undefined, {
@@ -1436,6 +1508,17 @@ export const pharmacySalesRouter = router({
       fail(error);
     }
   }),
+  /**
+   * DEV-290: who can approve an over-limit Khata charge at this till with their PIN: other
+   * active managers or owners with a live counter PIN, or, when there is nobody else (solo
+   * rule), the signed-in user's own profile. Names and staff profile ids only.
+   */
+  khataOverLimitApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await khataScope(ctx, input.branchId, 'write');
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT');
+    }),
   refundTender: protectedProcedure
     .input(
       z

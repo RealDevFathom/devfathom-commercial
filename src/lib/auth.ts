@@ -20,6 +20,7 @@ import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
 import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
+import { SESSION_UPDATE_AGE_SECONDS } from '@/lib/auth/session-cookie-throttle';
 import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/auth/login-intent';
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
@@ -830,7 +831,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // Shorter lifetime bounds how long a stolen token is useful; combined with
     // the per-request revalidation above, effective revocation is ~1 minute.
     maxAge: 60 * 60 * 8, // 8 hours
-    updateAge: 60 * 60, // Database sessions only; Auth.js refreshes JWT cookies on every read.
+    // Auth.js ignores this for JWT sessions; the session route enforces it via
+    // withoutRedundantSessionCookie so unchanged cookies are not re-issued.
+    updateAge: SESSION_UPDATE_AGE_SECONDS,
   },
   secret: process.env.AUTH_SECRET,
 });
