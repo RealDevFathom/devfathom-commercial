@@ -116,9 +116,7 @@ export function moduleDefinitionForKey(key: string): ModuleDefinition | undefine
  * missing tenant vertical must fail closed. Role and procedure checks remain
  * separate requirements at their existing enforcement points.
  */
-export function supportsRestaurantPrintSettings(
-  vertical: string | null | undefined
-): boolean {
+export function supportsRestaurantPrintSettings(vertical: string | null | undefined): boolean {
   return vertical != null && vertical === verticalForModuleKey('restaurant-core');
 }
 
@@ -240,6 +238,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyPurchasing: 'pharmacy-procurement',
   // DEV-752: pack-photo batch/expiry suggestions on the receiving bench.
   pharmacyPackLabel: 'pharmacy-procurement',
+  // DEV-679: distributor invoice (photo/PDF) read into a draft-receipt proposal.
+  pharmacyInvoiceCapture: 'pharmacy-procurement',
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
