@@ -32,11 +32,11 @@ export function LoginHero({
             ? pharmacyStyles.introduction
             : registration
               ? 'mt-16'
-              : 'my-20 xl:my-24'
+              : 'my-[clamp(1.5rem,6dvh,5rem)] xl:my-[clamp(1.5rem,7dvh,6rem)]'
         }
       >
         <p
-          className={`text-text-on-accent font-semibold leading-[0.94] tracking-[-0.065em] ${registration ? 'text-[clamp(2.4rem,3.3vw,3.5rem)]' : 'text-[clamp(3rem,4.8vw,5.5rem)]'}`}
+          className={`text-text-on-accent font-semibold leading-[0.94] tracking-[-0.065em] ${registration ? 'text-[clamp(2.4rem,3.3vw,3.5rem)]' : 'text-[clamp(2.5rem,min(4.8vw,8dvh),5.5rem)]'}`}
         >
           {lines.map((line, index) => (
             <span
@@ -48,7 +48,9 @@ export function LoginHero({
           ))}
         </p>
         {!registration && (
-          <p className="mt-7 max-w-sm text-sm leading-7 text-text-on-accent">{copy.description}</p>
+          <p data-hero-description className="mt-7 max-w-sm text-sm leading-7 text-text-on-accent">
+            {copy.description}
+          </p>
         )}
       </div>
       {registration ? <SetupGuide vertical={vertical} /> : <Sample vertical={vertical} />}
@@ -206,9 +208,10 @@ function Sample({ vertical }: { vertical: LoginVertical }) {
             <span className="font-mono text-[10px] text-text-muted">6 min</span>
           )}
         </div>
-        {rows.map(([name, detail, status]) => (
+        {rows.map(([name, detail, status], index) => (
           <div
             key={name}
+            data-sample-extra={index === rows.length - 1 || undefined}
             className={`mt-4 flex items-center justify-between gap-3 border-t border-border-subtle pt-4 text-xs ${pharmacy ? pharmacyStyles.sampleRow : ''}`}
           >
             <div>
@@ -219,7 +222,7 @@ function Sample({ vertical }: { vertical: LoginVertical }) {
           </div>
         ))}
         {pharmacy && (
-          <p className="mt-4 text-xs leading-5 text-text-muted">
+          <p data-sample-extra className="mt-4 text-xs leading-5 text-text-muted">
             Each line was allocated from the earliest expiry on the shelf.
           </p>
         )}

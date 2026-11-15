@@ -92,6 +92,8 @@ describe('POS sale voiding', () => {
       },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+      // DEV-623: no money was taken on this bill.
+      pharmacyTender: { findMany: async () => [] },
     };
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
@@ -129,6 +131,138 @@ describe('POS sale voiding', () => {
     expect(reversals).toHaveLength(2);
   });
 
+  it('voids a HELD bill directly and puts its stock back (DEV-623)', async () => {
+    let status = 'HELD';
+    const original = {
+      id: 'held-movement',
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf-a',
+      disposition: 'AVAILABLE',
+      quantityUnits: -20,
+      sealedPackDelta: -2,
+      looseUnitDelta: 0,
+      idempotencyKey: 'sale:held-line:0',
+    };
+    const reversals: Array<Record<string, unknown>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    const claims: Array<Record<string, unknown>> = [];
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          claims.push(where);
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: {
+        findMany: async () => [{ stockMovementId: original.id }],
+      },
+      pharmacyStockMovement: {
+        findFirst: async ({ where }: { where: { id: string } }) =>
+          where.id === original.id ? original : null,
+        findMany: async () => [original],
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          reversals.push(data);
+          return { id: `reversal-${reversals.length}`, ...data };
+        },
+      },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          events.push(data);
+          return data;
+        },
+      },
+      // A part payment that was refunded in full no longer blocks the void.
+      pharmacyTender: {
+        findMany: async () => [{ amountMinor: 500, refunds: [{ amountMinor: 500 }] }],
+      },
+    };
+
+    await changeSaleStatus(db as never, scope, 'sale-held', 'void', 'Lost to a reload');
+
+    expect(status).toBe('VOID');
+    // The claim is conditional on the status read, so a concurrent resume loses.
+    expect(claims).toEqual([expect.objectContaining({ id: 'sale-held', status: 'HELD' })]);
+    expect(reversals).toEqual([
+      expect.objectContaining({ reversesMovementId: 'held-movement', quantityUnits: 20 }),
+    ]);
+    expect(events).toEqual([expect.objectContaining({ kind: 'VOIDED' })]);
+  });
+
+  it.each(['OPEN', 'HELD'])(
+    'refuses to void a %s bill that still holds unrefunded payment (DEV-623)',
+    async (current) => {
+      let status = current;
+      const tenderQueries: unknown[] = [];
+      const allocationReads = vi.fn();
+      const stockWrites = vi.fn();
+      const events = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
+          updateMany: async ({ data }: { data: { status: string } }) => {
+            status = data.status;
+            return { count: 1 };
+          },
+        },
+        pharmacyTender: {
+          findMany: async (query: unknown) => {
+            tenderQueries.push(query);
+            // A split payment: one tender part-refunded, one untouched.
+            return [
+              { amountMinor: 1000, refunds: [{ amountMinor: 400 }] },
+              { amountMinor: 300, refunds: [] },
+            ];
+          },
+        },
+        pharmacySaleLineAllocation: { findMany: allocationReads },
+        pharmacyStockMovement: { create: stockWrites },
+        pharmacySaleEvent: { create: events },
+      };
+
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+        'BILL_HAS_PAYMENTS'
+      );
+      expect(tenderQueries).toEqual([
+        {
+          where: { organizationId: 'org-a', branchId: 'branch-a', saleId: 'sale-a' },
+          select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+        },
+      ]);
+      // Refused before any stock is reversed or event recorded; the transaction
+      // rolls the status claim back.
+      expect(allocationReads).not.toHaveBeenCalled();
+      expect(stockWrites).not.toHaveBeenCalled();
+      expect(events).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['QUOTATION', 'COMPLETED', 'VOID'])(
+    'still refuses to void a %s sale',
+    async (current) => {
+      const updateMany = vi.fn();
+      const db = {
+        pharmacySale: {
+          findFirst: async () => ({ id: 'sale-a', status: current, lines: [] }),
+          updateMany,
+        },
+      };
+      await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+        'INVALID_STATE'
+      );
+      expect(updateMany).not.toHaveBeenCalled();
+    }
+  );
+
   it('stops a losing add-line race before stock allocation', async () => {
     let medicineReads = 0;
     const db = {
@@ -157,6 +291,99 @@ describe('POS sale voiding', () => {
       })
     ).rejects.toThrow('INVALID_STATE');
     expect(medicineReads).toBe(0);
+  });
+});
+
+describe('DEV-27 voucher scoping at the POS', () => {
+  const storedVoucher = {
+    id: 'voucher-a',
+    discountMinor: 100,
+    eligibleCategories: ['NON_DRUG'],
+    issuedByUserId: 'owner-a',
+    validUntil: null as Date | null,
+  };
+  function voucherDb(
+    medicine: Record<string, unknown>,
+    voucher: typeof storedVoucher | null = storedVoucher
+  ) {
+    const state = { allocations: 0, voucherWhere: undefined as unknown };
+    return {
+      state,
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      pharmacyVoucher: {
+        findFirst: async (args: { where: unknown }) => {
+          state.voucherWhere = args.where;
+          return voucher;
+        },
+      },
+      pharmacyInventoryLot: {
+        findMany: async () => {
+          state.allocations += 1;
+          return [];
+        },
+      },
+    };
+  }
+  const line = {
+    saleId: 'sale-a',
+    medicineId: 'medicine-a',
+    presentationId: 'presentation-a',
+    packLevelId: 'pack-level-a',
+    saleUnit: 'UNIT' as const,
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+    voucherId: 'voucher-a',
+    idempotencyKey: 'line-a',
+  };
+  const flags = { rx: false, otc: false, restricted: false, controlled: false };
+
+  it.each([
+    ['Rx', { ...flags, rx: true, productFamily: 'PHARMACEUTICAL' }],
+    ['OTC drug', { ...flags, otc: true, productFamily: 'PHARMACEUTICAL' }],
+    ['supplement', { ...flags, productFamily: 'ALTERNATIVE' }],
+    ['medical device', { ...flags, productFamily: 'DEVICE' }],
+  ])('refuses a stored voucher on a %s line before allocating stock', async (_label, medicine) => {
+    const db = voucherDb(medicine);
+    await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_CATEGORY_REFUSED')
+    );
+    expect(db.state.allocations).toBe(0);
+    expect(db.state.voucherWhere).toEqual({
+      id: 'voucher-a',
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      active: true,
+    });
+  });
+
+  it('enforces the allowlist stored on the voucher, not one sent by the caller', async () => {
+    const db = voucherDb(
+      { ...flags, otc: true, productFamily: 'PHARMACEUTICAL' },
+      { ...storedVoucher, eligibleCategories: ['OTC_DRUG'] }
+    );
+    await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_CATEGORY_REFUSED')
+    );
+  });
+
+  it('refuses a missing, expired or caller-priced voucher', async () => {
+    const frontShop = { ...flags, productFamily: 'FRONT_SHOP' };
+    for (const [db, input] of [
+      [voucherDb(frontShop, null), line],
+      [voucherDb(frontShop, { ...storedVoucher, validUntil: new Date(Date.now() - 1000) }), line],
+      [voucherDb(frontShop), { ...line, discountMinor: 5000 }],
+      [voucherDb(frontShop), { ...line, discountKind: 'DISCOUNT' as const }],
+      [voucherDb(frontShop), { ...line, approvedByUserId: 'cashier-a' }],
+    ] as const) {
+      await expect(addSaleLine(db as never, scope, input)).rejects.toThrow(
+        new PharmacySaleError('VOUCHER_INVALID')
+      );
+      expect(db.state.allocations).toBe(0);
+    }
   });
 });
 

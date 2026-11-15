@@ -34,7 +34,7 @@ export default async function MedicineReferencePage({
   }
   return (
     <div className="min-w-0 space-y-6">
-      {await StagedMedicineCatalogue({ searchParams })}
+      {await StagedMedicineCatalogue({ searchParams, ctx })}
       <details className="rounded-md border border-border bg-surface-card p-6">
         <summary className="min-h-11 cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-ring">
           Medicine reference connectors

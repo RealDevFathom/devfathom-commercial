@@ -31,9 +31,18 @@ export const intendedPharmacyGrants = {
     'pharmacy:procurement-approve',
   ],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
+  // DEV-622: opt-in role for one person who dispenses and takes payment.
+  'pharmacist-cashier': [
+    'pharmacy:dispense',
+    'pharmacy:catalogue-review',
+    'pharmacy:close',
+    'pharmacy:counter',
+    'pharmacy:orders',
+  ],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
-  finance: ['reports:financial'],
+  // DEV-519: financial reports live behind the operational Reports surface.
+  finance: ['reports:operational', 'reports:financial'],
   auditor: ['reports:operational'],
 };
 
@@ -109,7 +118,17 @@ describe('canonical capability contract (#130)', () => {
   it.each([
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
-    ['finance', ['reports:financial']],
+    [
+      'pharmacist-cashier',
+      [
+        'pharmacy:dispense',
+        'pharmacy:catalogue-review',
+        'pharmacy:close',
+        'pharmacy:counter',
+        'pharmacy:orders',
+      ],
+    ],
+    ['finance', ['reports:operational', 'reports:financial']],
     ['auditor', ['reports:operational']],
   ])('limits %s to its intended checked actions', (key, actions) => {
     const role = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;

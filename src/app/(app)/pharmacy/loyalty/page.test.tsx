@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   customers: vi.fn(),
   history: vi.fn(),
   setReminderLanguage: vi.fn(),
+  earnRate: vi.fn(),
   replace: vi.fn(),
 }));
 vi.mock('next/navigation', async () => ({
@@ -19,6 +20,7 @@ import LoyaltyLoading from './loading';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main' }]);
+  mocks.earnRate.mockResolvedValue({ current: null, versions: [] });
   mocks.customers.mockResolvedValue({
     customers: [
       { id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234', pointsBalance: 14 },
@@ -55,6 +57,57 @@ afterEach(() => {
 async function show(params: Record<string, string> = {}) {
   render(await LoyaltyPage({ searchParams: Promise.resolve(params) }));
 }
+describe('DEV-746 earning rate card', () => {
+  it('says nobody earns new points until the owner sets a rate', async () => {
+    await show();
+    expect(screen.getByRole('heading', { name: 'Earning rate' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Points are not being earned: set an earn rate below/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '1% of spend' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Save earning rate' })).toHaveAttribute(
+      'type',
+      'submit'
+    );
+  });
+  it('shows the current version and the dated history of earlier rates', async () => {
+    const version = (n: number, rule: object, at: string) => ({
+      id: `program-${n}`,
+      version: n,
+      effectiveFrom: new Date(at),
+      ...rule,
+    });
+    const v2 = version(
+      2,
+      { earnMode: 'POINTS_PER_SPEND_STEP', earnPoints: 1, perSpendMinor: 100_000 },
+      '2026-11-10T09:30:00Z'
+    );
+    const v1 = version(
+      1,
+      { earnMode: 'PERCENT_OF_SPEND', earnPoints: 150, perSpendMinor: 1_000_000 },
+      '2026-11-01T08:00:00Z'
+    );
+    mocks.earnRate.mockResolvedValue({ current: v2, versions: [v2, v1] });
+    await show();
+    expect(screen.queryByText(/Points are not being earned/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('1 point for every PKR 1,000 spent').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Version 2, in effect since 2026-11-10/)).toBeInTheDocument();
+    const history = screen.getByRole('region', { name: 'Earning rate history' });
+    expect(history).toHaveTextContent('1.5% of spend');
+    expect(history).toHaveTextContent('1 Nov 2026, 8:00 AM UTC');
+    expect(history).not.toHaveTextContent('2026-11-01 08:00');
+  });
+  it('asks for the custom amount only when a custom option is chosen', async () => {
+    await show();
+    expect(screen.queryByLabelText('Percentage of spend')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'A percentage of spend I choose' }));
+    expect(screen.getByLabelText('Percentage of spend')).toBeRequired();
+    fireEvent.click(screen.getByRole('radio', { name: 'Points for every spend step I choose' }));
+    expect(screen.getByLabelText('Points')).toBeRequired();
+    expect(screen.getByLabelText('For every PKR')).toBeRequired();
+  });
+});
+
 describe('ordinary loyalty history page', () => {
   it('opens on the customer list with balances instead of an empty selection box', async () => {
     await show();

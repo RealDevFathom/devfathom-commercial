@@ -61,7 +61,7 @@ export function OwnerImportWizard() {
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader eyebrow="Pharmacy inventory · Owner setup" heading="Import opening stock"
-        description="Upload your handover, map its columns, and review the physical opening position before posting."
+        description="Upload your stock file from the previous system, map its columns, and review the physical opening position before posting."
         actions={<Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>Back to Inventory</Link>} />
       {options.isPending ? <SectionCard title="Loading import access" titleLevel={2}><p role="status">Loading your branches and stock locations…</p></SectionCard> :
         options.error ? <SectionCard title={denied ? 'Owner access required' : 'Could not load import setup'} titleLevel={2}>
@@ -70,7 +70,7 @@ export function OwnerImportWizard() {
         </SectionCard> : receipt ? <SectionCard title="Opening stock committed" titleLevel={2}>
           <div role="status" className="space-y-3 text-sm text-text-body">
             <StatusPill status="success" label={receipt.replayed ? 'Already committed · receipt recovered' : 'Committed'} />
-            <p>{receipt.totalUnits} base units posted · Opening valuation {money(receipt.totalValueMinor)}.</p>
+            <p>{receipt.totalUnits} single units posted · Opening valuation {money(receipt.totalValueMinor)}.</p>
             <p className="break-all font-mono text-xs">Session: {receipt.sessionId}</p>
             <p>The counted quantities are now in inventory. Variance explanations were recorded with each row; independent sign-off of this opening session is not yet available in this screen.</p>
           </div>
@@ -85,7 +85,7 @@ export function OwnerImportWizard() {
           </ol></nav>
           {error && <div role="alert" id="import-error" className="rounded-sm border border-destructive p-4 text-sm text-destructive">{error}</div>}
           <SectionCard title="1. Upload the opening count" titleLevel={2}>
-            <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use individual tablets/base units; printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large handovers may use several files with distinct medicine/batch/pack rows.</p>
+            <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use single units (tablets, capsules, ml); printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large stock files may use several files with distinct medicine/batch/pack rows.</p>
             <div className="mb-5 flex flex-wrap gap-3">
               <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(OPENING_TEMPLATE)}`} download="pharmacy-opening-stock.csv" className={buttonVariants({ variant: 'secondary' })}>Download CSV template</a>
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'ghost' })}>Medicine catalogue and packs</Link>
@@ -132,7 +132,7 @@ export function OwnerImportWizard() {
           {preview && source && <SectionCard title="3. Review the opening-stock diff" titleLevel={2}>
             <div role="status" className="mb-4 space-y-2 text-sm text-text-body">
               <StatusPill status={preview.canCommit ? hasCostWarnings ? 'warning' : 'success' : 'blocked'} tone={preview.canCommit && hasCostWarnings ? 'warning' : undefined} label={preview.canCommit ? hasCostWarnings ? 'Review cost warnings' : 'Ready for review' : 'Commit blocked'} />
-              <p>{preview.lines.filter((line) => line.errors.length === 0).length} of {preview.lines.length} valid rows · {preview.totalUnits} counted base units · {money(preview.totalValueMinor)} opening valuation.</p>
+              <p>{preview.lines.filter((line) => line.errors.length === 0).length} of {preview.lines.length} valid rows · {preview.totalUnits} counted single units · {money(preview.totalValueMinor)} opening valuation.</p>
               <p>No inventory has changed during this dry run. Rejected rows are excluded from these totals. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.</p>
             </div>
             {preview.blockers.length > 0 && <ul className="mb-4 list-disc space-y-2 pl-5 text-sm text-destructive">{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
@@ -142,7 +142,7 @@ export function OwnerImportWizard() {
               </TableRow></TableHeader>
               <TableBody>{preview.lines.map((line) => <TableRow key={line.rowNumber}>
                 <TableCell className="max-w-48 whitespace-normal break-words">{line.rowNumber} · {line.sourceRef || 'Missing reference'}</TableCell>
-                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} base units per pack`}</TableCell>
+                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} single units per pack`}</TableCell>
                 <TableCell>{line.expiryDate ? new Date(line.expiryDate).toISOString().slice(0, line.expiryPrecision === 'MONTH' ? 7 : 10) : 'Missing'}</TableCell>
                 <TableCell numeric>{line.currentUnits}</TableCell><TableCell numeric>{line.expectedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.countedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.proposedUnits ?? 'Unknown'}</TableCell><TableCell numeric>{line.varianceUnits ?? 'Unknown'}</TableCell>
                 <TableCell className="min-w-64 max-w-96 whitespace-normal">

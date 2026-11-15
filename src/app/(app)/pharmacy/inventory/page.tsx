@@ -169,6 +169,7 @@ export default async function PharmacyInventoryPage({
   // #979: `createLocation` is an inventory-control write; a counter-only role
   // is not offered a form the server would refuse.
   const canControlInventory = await inventoryControlAllowed(ctx);
+  const viewerId = ctx.session.user.id;
   // DEV-594: offer the expiry advisor where the owner reviews expiring stock.
   const advice = await readPharmacyAdviceAccess(ctx);
   const branches = await ctx.db.pharmacyBranch.findMany({
@@ -311,6 +312,11 @@ export default async function PharmacyInventoryPage({
   }
   const outOfRangeLogs = [...latestTemperatureByZone.values()].filter((log) => log.outOfRange);
   const zoneStatuses = await caller.temperatureZoneStatuses({ branchId: branch.id });
+  // DEV-682: today's cycle-count list is ranked in SQL; only an inventory
+  // controller, who can submit and confirm a count, is shown it.
+  const cycleCount = canControlInventory
+    ? await caller.dailyCycleCountList({ branchId: branch.id })
+    : [];
   const available = lots.flatMap((lot) =>
     lot.balances
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
@@ -382,11 +388,26 @@ export default async function PharmacyInventoryPage({
             },
           ],
         });
-      else if (action === 'approve-count')
+      else if (action === 'create-cycle-count') {
+        const sealed = data.getAll('cycleSealed');
+        const loose = data.getAll('cycleLoose');
+        await actionCaller.createCount({
+          branchId,
+          varianceThreshold: number(data, 'threshold'),
+          readings: data.getAll('cyclePosition').map((position, index) => ({
+            inventoryLotId: String(position).split(':')[0]!,
+            stockLocationId: String(position).split(':')[1]!,
+            countedSealedPacks: Number.parseInt(String(sealed[index] ?? ''), 10),
+            countedLooseUnits: Number.parseInt(String(loose[index] ?? ''), 10),
+          })),
+        });
+      } else if (action === 'approve-count')
         await actionCaller.approveCount({
           branchId,
           countId: field(data, 'countId'),
           idempotencyKeyPrefix: `ui-count:${field(data, 'countId')}`,
+          varianceReason: field(data, 'varianceReason') || undefined,
+          soloPin: field(data, 'soloPin') || undefined,
         });
       else if (action === 'write-off')
         await actionCaller.writeOff({
@@ -507,9 +528,9 @@ export default async function PharmacyInventoryPage({
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy operations · INV-01—09 / PUR-07"
+        eyebrow="Pharmacy operations"
         heading="Inventory"
-        description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
+        description="Lots sold earliest-expiry first, controlled stock movements, chain operations, and the ranked work queue."
         actions={
           <>
             <Link
@@ -567,7 +588,7 @@ export default async function PharmacyInventoryPage({
         <Stat label="Open stock actions" value={signals.length} sub="Ranked by due time" />
       </section>
 
-      <SectionCard title="Lots and FEFO board" eyebrow="INV-01—04">
+      <SectionCard title="Lots by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
             No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
@@ -596,7 +617,7 @@ export default async function PharmacyInventoryPage({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>FEFO</TableHead>
+                  <TableHead>Sell order</TableHead>
                   <TableHead>Medicine / batch</TableHead>
                   <TableHead>Expiry</TableHead>
                   <TableHead>Location</TableHead>
@@ -674,7 +695,7 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Locations" eyebrow="INV-05">
+        <SectionCard title="Locations" eyebrow="Storage">
           {outOfRangeLogs.length > 0 ? (
             <div
               className="mb-4 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-3 text-sm text-destructive-foreground"
@@ -817,7 +838,7 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
+        <SectionCard title="Physical count" eyebrow="Stock count · frozen snapshot">
           {available.length && locations.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
@@ -887,12 +908,41 @@ export default async function PharmacyInventoryPage({
                     {count.lines.reduce((sum, line) => sum + Math.abs(line.varianceUnits ?? 0), 0)}{' '}
                     units
                   </p>
+                  {count.varianceReason ? (
+                    <p className="mt-1 text-xs text-text-body">Reason: {count.varianceReason}</p>
+                  ) : null}
                 </div>
                 {count.status !== 'APPROVED' ? (
-                  <form action={perform}>
+                  <form action={perform} className="flex flex-wrap items-end gap-2">
                     <input name="action" type="hidden" value="approve-count" />
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="countId" type="hidden" value={count.id} />
+                    {count.lines.some((line) => (line.varianceUnits ?? 0) !== 0) ? (
+                      <label className="text-sm">
+                        Variance reason
+                        <Input
+                          className="mt-1"
+                          maxLength={500}
+                          name="varianceReason"
+                          placeholder="Recount confirmed; breakage not logged"
+                          required
+                        />
+                      </label>
+                    ) : null}
+                    {count.status === 'AWAITING_COAUTH' && count.createdById === viewerId ? (
+                      <label className="text-sm">
+                        Your PIN, if you work alone
+                        <Input
+                          autoComplete="off"
+                          className="mt-1 w-32"
+                          inputMode="numeric"
+                          maxLength={8}
+                          name="soloPin"
+                          pattern="[0-9]{4,8}"
+                          type="password"
+                        />
+                      </label>
+                    ) : null}
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
                         ? 'Co-authorize variance'
@@ -906,7 +956,104 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       </div>
 
-      <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
+      {canControlInventory ? (
+        <SectionCard title="Daily cycle count" eyebrow="Daily count · fast movers and high value">
+          {cycleCount.length ? (
+            <form action={perform} className="space-y-4">
+              <input name="action" type="hidden" value="create-cycle-count" />
+              <input name="branchId" type="hidden" value={branch.id} />
+              <p className="text-sm text-text-muted">
+                Count each shelf position below without looking up the book quantity. Submitting
+                saves a draft count; the variance is posted only after a person approves it with a
+                reason.
+              </p>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Medicine</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead>Why today</TableHead>
+                      <TableHead className="text-right">Sealed packs</TableHead>
+                      <TableHead className="text-right">Loose units</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cycleCount.map((item) => (
+                      <TableRow key={`${item.inventoryLotId}:${item.stockLocationId}`}>
+                        <TableCell>
+                          <input
+                            name="cyclePosition"
+                            type="hidden"
+                            value={`${item.inventoryLotId}:${item.stockLocationId}`}
+                          />
+                          {item.medicineName}
+                          <span className="block text-xs text-text-muted">
+                            batch {item.batchNumber} · {item.unitsPerPack} per pack
+                          </span>
+                        </TableCell>
+                        <TableCell>{item.locationName}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {item.basis.map((basis) => (
+                              <StatusPill
+                                key={basis}
+                                status={basis === 'FAST_MOVER' ? 'Fast mover' : 'High value'}
+                                tone="neutral"
+                              />
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Input
+                            aria-label={`Counted sealed packs, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            className="ml-auto w-24"
+                            min="0"
+                            name="cycleSealed"
+                            required
+                            type="number"
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Input
+                            aria-label={`Counted loose units, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            className="ml-auto w-24"
+                            min="0"
+                            name="cycleLoose"
+                            required
+                            type="number"
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm">
+                  Variance threshold
+                  <Input
+                    className="mt-1"
+                    defaultValue="0"
+                    min="0"
+                    name="threshold"
+                    required
+                    type="number"
+                  />
+                </label>
+                <Button type="submit">Submit counted stock</Button>
+              </div>
+            </form>
+          ) : (
+            <Empty>
+              Nothing to cycle count today. Every sellable position here was counted in the last 7
+              days, or the branch holds no available stock.
+            </Empty>
+          )}
+        </SectionCard>
+      ) : null}
+
+      <SectionCard title="Adjustments and write-off custody" eyebrow="Stock corrections">
         {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
@@ -1000,7 +1147,7 @@ export default async function PharmacyInventoryPage({
 
       <SectionCard
         title="Inter-branch transfers"
-        eyebrow="INV-07 · allocate → approve → dispatch → receive"
+        eyebrow="Branch transfers · allocate → approve → dispatch → receive"
       >
         {available.length && destinationLocations.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
@@ -1103,7 +1250,7 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Recalls and quarantine" eyebrow="INV-08">
+        <SectionCard title="Recalls and quarantine" eyebrow="Safety">
           {lots.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
@@ -1178,7 +1325,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
         <SectionCard
           title="Near-expiry and return windows"
-          eyebrow="INV-09"
+          eyebrow="Expiry"
           actions={
             <div className="flex flex-wrap justify-end gap-2">
               {advice.expiry ? (
@@ -1222,7 +1369,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       </div>
 
-      <SectionCard title="Stock action centre" eyebrow="PUR-07 · ranked by due time">
+      <SectionCard title="Stock action centre" eyebrow="Ranked by due time">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-text-muted">
             Signals explain their evidence window and never create an order or movement.

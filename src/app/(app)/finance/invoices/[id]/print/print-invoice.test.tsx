@@ -148,3 +148,20 @@ describe('InvoicePrintView', () => {
     expect(issuer.querySelector('img')).toBeNull();
   });
 });
+
+it('prints the persisted discount as a deduction with authoritative tax and total', () => {
+  mocks.useQuery.mockReturnValue({
+    isLoading: false,
+    data: invoice({ discount: '125.50', tax: '10.25', total: '884.75' }),
+  });
+  render(<InvoicePrintView invoiceId="invoice-497" />);
+  expect(screen.getByText('Discount').nextElementSibling).toHaveTextContent('-$125.5');
+  expect(screen.getByText('Tax').nextElementSibling).toHaveTextContent('$10.25');
+  expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('$884.75');
+});
+
+it('omits a zero discount for older invoices', () => {
+  mocks.useQuery.mockReturnValue({ isLoading: false, data: invoice({ discount: 0 }) });
+  render(<InvoicePrintView invoiceId="invoice-497" />);
+  expect(screen.queryByText('Discount')).not.toBeInTheDocument();
+});

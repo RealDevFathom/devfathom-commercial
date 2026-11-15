@@ -1,16 +1,38 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 type Line = { selector: ReactNode; fields: ReactNode; selected?: boolean };
+
+/**
+ * DEV-679: dispatched on the `[data-progressive-lines]` element by a reader that
+ * fills several lines at once (`detail.count` = how many lines it needs). The
+ * lines are mounted before `dispatchEvent` returns, so their fields can be filled.
+ */
+export const REVEAL_LINES_EVENT = 'progressive-lines:reveal';
 
 /** Keep field values mounted when a selection is cleared so they can be restored. */
 export function ProgressiveLines({ lines }: { lines: Line[] }) {
   const [count, setCount] = useState(1);
   const [selected, setSelected] = useState(() => lines.map((line) => !!line.selected));
+  const root = useRef<HTMLDivElement>(null);
+  const total = lines.length;
+
+  useEffect(() => {
+    const node = root.current;
+    if (!node) return;
+    const reveal = (event: Event) => {
+      const wanted = (event as CustomEvent<{ count?: unknown }>).detail?.count;
+      if (typeof wanted !== 'number' || !Number.isInteger(wanted) || wanted < 1) return;
+      flushSync(() => setCount((current) => Math.min(total, Math.max(current, wanted))));
+    };
+    node.addEventListener(REVEAL_LINES_EVENT, reveal);
+    return () => node.removeEventListener(REVEAL_LINES_EVENT, reveal);
+  }, [total]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-progressive-lines="" ref={root}>
       {lines.slice(0, count).map((line, index) => (
         <div className="space-y-3" key={index}>
           <div

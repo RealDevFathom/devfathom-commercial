@@ -49,11 +49,32 @@ describe('repeat purchasing page', () => {
       asOf: query.asOf,
       branchId: 'b1',
     });
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toHaveAttribute(
       'type',
       'submit'
     );
+  });
+  it('takes the cutoff from a date-time picker and shows it in words, never raw ISO', async () => {
+    render(
+      await Page({
+        searchParams: Promise.resolve({
+          asOf: '2026-05-01T09:30',
+          from: '2026-01-01',
+          to: '2026-01-31',
+        }),
+      })
+    );
+    expect(mocks.repeatPurchasing).toHaveBeenCalledWith({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      asOf: '2026-05-01T09:30:00Z',
+    });
+    const cutoff = screen.getByLabelText('As-of cutoff (UTC)');
+    expect(cutoff).toHaveAttribute('type', 'datetime-local');
+    expect(cutoff).toHaveValue('2026-05-01T09:30');
+    expect(screen.getByText(/Frozen cutoff: 1 May 2026, 12:00 AM UTC\./)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   });
   it('shows loaded eligible, repeated and immature counts', async () => {
     mocks.repeatPurchasing.mockResolvedValue({
@@ -96,7 +117,7 @@ describe('repeat purchasing page', () => {
     expect(html).not.toContain(message);
     expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue(query.from);
     expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
     expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
     expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();

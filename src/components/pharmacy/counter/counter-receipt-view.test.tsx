@@ -58,7 +58,10 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(input.onFormatChange).toHaveBeenCalledWith('THERMAL_58');
   fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
   expect(input.onPrint).toHaveBeenCalledOnce();
-  expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
+  expect(
+    screen.getByText(/saved printer settings; a change here applies to this session only/i)
+  ).toBeTruthy();
+  expect(screen.getByText(/Printing cannot be confirmed here/i)).toBeTruthy();
 });
 
 it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {
@@ -513,3 +516,15 @@ it.each([true, false])(
     )).toBeInTheDocument();
   }
 );
+
+it('#727: shows the issued promotion name and saving under its line', () => {
+  const input = props();
+  Object.assign(input.receipt!.lines[0]!, {
+    discountMinor: 10,
+    lineTotalMinor: 90,
+    promotionName: 'Winter week',
+  });
+  Object.assign(input.receipt!.totals, { discountMinor: 10, netMinor: 90 });
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText('Promotion: Winter week (-0.10)')).toBeTruthy();
+});

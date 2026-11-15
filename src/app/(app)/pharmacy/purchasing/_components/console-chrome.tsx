@@ -58,7 +58,6 @@ export function PurchasingTabs({ active }: { active: string }) {
                 href={tab.href}
               >
                 {tab.label}
-                <span className="font-mono text-[0.625rem]">{tab.requirement}</span>
               </Link>
             </li>
           );

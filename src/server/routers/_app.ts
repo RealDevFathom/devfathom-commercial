@@ -59,6 +59,7 @@ import { restaurantGrowthRouter } from './restaurant-growth';
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { pharmacyPackLabelRouter } from './pharmacy-pack-label';
+import { pharmacyInvoiceCaptureRouter } from './pharmacy-invoice-capture';
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import { pharmacyOwnerImportRouter } from './pharmacy-owner-import';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
@@ -71,6 +72,7 @@ import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyGeneralJournalRouter } from './pharmacy-general-journal';
+import { pharmacyApInvoicesRouter } from './pharmacy-ap-invoices';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
@@ -137,6 +139,7 @@ export const appRouter = router({
   pharmacyMedicine: pharmacyMedicineRouter,
   pharmacyPurchasing: pharmacyPurchasingRouter,
   pharmacyPackLabel: pharmacyPackLabelRouter,
+  pharmacyInvoiceCapture: pharmacyInvoiceCaptureRouter,
   pharmacyInventory: pharmacyInventoryRouter,
   pharmacyOwnerImport: pharmacyOwnerImportRouter,
   pharmacyPrescriptions: pharmacyPrescriptionsRouter,
@@ -151,6 +154,7 @@ export const appRouter = router({
   pharmacyMarketing: pharmacyMarketingRouter,
   pharmacyFinance: pharmacyFinanceRouter,
   pharmacyGeneralJournal: pharmacyGeneralJournalRouter,
+  pharmacyApInvoices: pharmacyApInvoicesRouter,
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
