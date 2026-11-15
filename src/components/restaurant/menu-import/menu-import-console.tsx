@@ -93,7 +93,53 @@ type LineEditor = {
   note: string;
   mergeProductId: string;
   mergeVariantId: string;
+  /** Every size the reviewer is confirming. Sent with an accept; commit imports only these. */
+  variants: VariantDraft[];
 };
+
+/** `printed` is the extracted name and price text, kept as the hint for this row. */
+type VariantDraft = { name: string; priceAmount: string; printed: string | null };
+
+/** One size as read from a line's `extractedVariants` / `reviewedVariants` JSON. */
+type SizeRow = { name: string; amount: string | null; currency: string | null; raw: string | null };
+
+/** Tolerant read of the stored variant JSON. Anything malformed is simply not a size. */
+function sizesFrom(value: unknown): SizeRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const record = (entry ?? {}) as { name?: unknown; price?: unknown };
+    if (typeof record.name !== 'string' || record.name.trim() === '') return [];
+    const price = (record.price ?? {}) as { amount?: unknown; currency?: unknown; raw?: unknown };
+    const text = (field: unknown) => (typeof field === 'string' ? field : null);
+    return [
+      {
+        name: record.name,
+        amount: text(price.amount),
+        currency: text(price.currency),
+        raw: text(price.raw),
+      },
+    ];
+  });
+}
+
+/** Same names and amounts in the same order; currency and printed text are not compared. */
+function sameSizes(left: SizeRow[], right: SizeRow[]): boolean {
+  const amount = (value: string | null) => (value === null ? null : Number(value));
+  return (
+    left.length === right.length &&
+    left.every(
+      (size, index) =>
+        size.name === right[index]!.name && amount(size.amount) === amount(right[index]!.amount)
+    )
+  );
+}
+
+function sizeLabel(size: SizeRow, fallbackCurrency: string | null): string {
+  const price = size.amount
+    ? `${size.amount} ${size.currency ?? fallbackCurrency ?? ''}`.trim()
+    : (size.raw ?? 'no price');
+  return `${size.name}: ${price}`;
+}
 
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
@@ -231,7 +277,30 @@ function editorFor(line: ImportLine): LineEditor {
     note: line.reviewNote ?? '',
     mergeProductId: line.mergeProductId ?? '',
     mergeVariantId: line.mergeVariantId ?? '',
+    // Start from what the reviewer already confirmed, else from what was extracted,
+    // so the sizes shown are exactly the sizes an accept will confirm.
+    variants: variantDraftsFor(line),
   };
+}
+
+function variantDraftsFor(line: ImportLine): VariantDraft[] {
+  const extracted = sizesFrom(line.extractedVariants);
+  // Mirrors the server: a confirmed size is linked to its printed size by name,
+  // or by an unchanged figure after the reviewer corrected the name.
+  const sameAmount = (left: string | null, right: string | null) =>
+    left !== null && right !== null && Number(left) === Number(right);
+  const printedFor = (size: SizeRow) => {
+    const match =
+      extracted.find((printed) => printed.name === size.name) ??
+      extracted.find((printed) => sameAmount(printed.amount, size.amount));
+    return match ? `Printed: ${match.name} ${match.raw ?? match.amount ?? ''}`.trim() : null;
+  };
+  const source = line.reviewedVariants !== null ? sizesFrom(line.reviewedVariants) : extracted;
+  return source.map((size) => ({
+    name: size.name,
+    priceAmount: size.amount ?? '',
+    printed: printedFor(size),
+  }));
 }
 
 /** Blank means "no override" — send `null` so the server clears any earlier edit. */
@@ -412,6 +481,14 @@ export function RestaurantMenuImportConsole({
       note: override(draft.note),
       mergeProductId: decision === 'MERGED' ? draft.mergeProductId : null,
       mergeVariantId: decision === 'MERGED' ? override(draft.mergeVariantId) : null,
+      ...(decision === 'ACCEPTED'
+        ? {
+            variants: draft.variants.map((variant) => ({
+              name: variant.name.trim(),
+              priceAmount: override(variant.priceAmount),
+            })),
+          }
+        : {}),
     });
   }
 
@@ -760,11 +837,21 @@ export function RestaurantMenuImportConsole({
                           </TableHeader>
                           <TableBody>
                             {page.lines.map((line, index) => {
+                              const extractedSizes = sizesFrom(line.extractedVariants);
+                              const confirmedSizes =
+                                line.reviewedVariants !== null
+                                  ? sizesFrom(line.reviewedVariants)
+                                  : null;
+                              // Confirming the sizes exactly as extracted is not a correction.
+                              const sizesChanged =
+                                confirmedSizes !== null &&
+                                !sameSizes(confirmedSizes, extractedSizes);
                               const corrected =
                                 line.reviewedProductName ??
                                 line.reviewedCategoryName ??
                                 line.reviewedPriceAmount ??
-                                line.reviewNote;
+                                line.reviewNote ??
+                                (sizesChanged || null);
                               // Three identically-labelled buttons per row are
                               // ambiguous to a screen reader, so each decision
                               // names its line. The name is extracted text and
@@ -797,6 +884,20 @@ export function RestaurantMenuImportConsole({
                                         fallback="(no price)"
                                       />
                                     </span>
+                                    {extractedSizes.length > 0 ? (
+                                      <ul
+                                        aria-label="Extracted sizes"
+                                        className="mt-1 space-y-0.5 text-xs tabular-nums text-text-muted"
+                                      >
+                                        {extractedSizes.map((size, sizeIndex) => (
+                                          <li key={sizeIndex}>
+                                            <Extracted
+                                              value={sizeLabel(size, line.extractedCurrency)}
+                                            />
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : null}
                                   </TableCell>
                                   <TableCell className="max-w-[18rem] align-top">
                                     {corrected ? (
@@ -816,6 +917,28 @@ export function RestaurantMenuImportConsole({
                                           <span className="mt-0.5 block text-xs text-text-muted italic">
                                             {line.reviewNote}
                                           </span>
+                                        ) : null}
+                                        {sizesChanged && confirmedSizes?.length === 0 ? (
+                                          <span className="mt-0.5 block text-xs text-text-muted">
+                                            All sizes removed
+                                          </span>
+                                        ) : null}
+                                        {sizesChanged &&
+                                        confirmedSizes &&
+                                        confirmedSizes.length > 0 ? (
+                                          <ul
+                                            aria-label="Confirmed sizes"
+                                            className="mt-1 space-y-0.5 text-xs tabular-nums text-text-muted"
+                                          >
+                                            {confirmedSizes.map((size, sizeIndex) => (
+                                              <li key={sizeIndex}>
+                                                {sizeLabel(
+                                                  size,
+                                                  line.reviewedCurrency ?? line.extractedCurrency
+                                                )}
+                                              </li>
+                                            ))}
+                                          </ul>
                                         ) : null}
                                       </>
                                     ) : (
@@ -920,7 +1043,9 @@ export function RestaurantMenuImportConsole({
                 {readyToCommit
                   ? 'Every line has a decision. This import is ready.'
                   : summary
-                    ? `${summary.PENDING} line(s) still need a decision, and at least one line must be accepted or merged, before this menu can be imported.`
+                    ? summary.PENDING === 0 && summary.sizesUnconfirmed > 0
+                      ? `${summary.sizesUnconfirmed} accepted line(s) have sizes nobody confirmed. Accept them again after checking each size price.`
+                      : `${summary.PENDING} line(s) still need a decision, and at least one line must be accepted or merged, before this menu can be imported.`
                     : 'Reading review progress…'}
               </div>
 
@@ -1007,6 +1132,15 @@ function LineEditorPanel({
     onChange({ ...editor, [key]: value });
   }
 
+  const extractedSizes = sizesFrom(line.extractedVariants);
+
+  function setVariant(index: number, patch: Partial<VariantDraft>) {
+    set(
+      'variants',
+      editor.variants.map((variant, at) => (at === index ? { ...variant, ...patch } : variant))
+    );
+  }
+
   return (
     <div className="mt-4 rounded-md border border-border-default bg-surface-sunken p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1076,6 +1210,59 @@ function LineEditorPanel({
             />
           </Field>
         </div>
+        {editor.variants.length > 0 || extractedSizes.length > 0 ? (
+          <fieldset className="space-y-3 md:col-span-2">
+            <legend className={labelClass}>Sizes</legend>
+            <p className="text-xs text-text-muted">
+              Each size becomes its own draft price. Accepting confirms these names and prices
+              exactly as shown; remove a size to leave it out.
+            </p>
+            {editor.variants.length === 0 ? (
+              <p className="text-xs text-text-faint">No sizes will be imported.</p>
+            ) : (
+              editor.variants.map((variant, index) => (
+                <div key={index} className="space-y-1.5">
+                  <p className="text-xs text-text-muted">
+                    <Extracted value={variant.printed} fallback="Added by the reviewer." />
+                  </p>
+                  <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)_auto]">
+                    <Field label={`Size ${index + 1} name`}>
+                      <Input
+                        value={variant.name}
+                        onChange={(event) => setVariant(index, { name: event.target.value })}
+                        disabled={busy}
+                        maxLength={120}
+                      />
+                    </Field>
+                    <Field label={`Size ${index + 1} price`}>
+                      <Input
+                        value={variant.priceAmount}
+                        onChange={(event) => setVariant(index, { priceAmount: event.target.value })}
+                        inputMode="decimal"
+                        disabled={busy}
+                      />
+                    </Field>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove size ${index + 1}`}
+                      disabled={busy}
+                      onClick={() =>
+                        set(
+                          'variants',
+                          editor.variants.filter((_, at) => at !== index)
+                        )
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </fieldset>
+        ) : null}
         <Field
           label="Merge into existing product"
           hint="Required for a merge; ignored when accepting as new."

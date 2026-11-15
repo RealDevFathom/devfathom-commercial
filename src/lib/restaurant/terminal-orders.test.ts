@@ -207,6 +207,9 @@ describe('orderErrorResponse — domain error → HTTP status (no internals leak
     expect(orderErrorResponse(new OrderCommandError('x', 'ORDER_TERMINAL'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderCommandError('x', 'ITEM_STATE'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderCommandError('x', 'NOTHING_TO_SEND'))!.status).toBe(409);
+    expect(orderErrorResponse(new OrderCommandError('x', 'IDEMPOTENCY_CONFLICT'))!.status).toBe(
+      409
+    );
     expect(orderErrorResponse(new OrderCommandError('x', 'CO_AUTH_REQUIRED'))!.status).toBe(400);
     expect(orderErrorResponse(new OrderCommandError('x', 'REASON_REQUIRED'))!.status).toBe(400);
   });
@@ -363,6 +366,43 @@ describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
         options: [{ id: 'option-1', name: 'Spicy', priceDelta: '1.50' }],
       },
     ]);
+  });
+});
+
+describe('resolveTerminalEffectiveMenu — implicit live-publication lookup', () => {
+  it('resolves a publication published with an empty (every-channel) channel set', async () => {
+    const findPublication = vi.fn().mockResolvedValue({
+      id: 'pub-all',
+      channels: [],
+      priceListId: null,
+      branch: { id: 'branch-1', timezone: 'Asia/Karachi' },
+      windows: [],
+      exceptions: [],
+      itemOverrides: [],
+      menu: { id: 'menu-1', name: 'All day', nameLocalized: null, sections: [] },
+    });
+    const db = {
+      restaurantBranchMenuPublication: { findFirst: findPublication },
+      restaurantPriceList: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as unknown as ScopedDb;
+
+    const menu = await resolveTerminalEffectiveMenu(db, {
+      branchId: 'branch-1',
+      channel: 'DINE_IN',
+      at: new Date('2026-09-01T12:00:00.000Z'),
+    });
+
+    expect(findPublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          branchId: 'branch-1',
+          status: 'PUBLISHED',
+          OR: [{ channels: { has: 'DINE_IN' } }, { channels: { isEmpty: true } }],
+        },
+      })
+    );
+    expect(menu?.publicationId).toBe('pub-all');
+    expect(menu?.channelOpen).toBe(true);
   });
 });
 

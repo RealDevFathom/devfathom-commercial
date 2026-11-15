@@ -409,6 +409,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                   data.branches.find((branch) => branch.id === branchId)?.addressLine ?? ''
                 }
                 id="premisesAddressLine"
+                // Uncontrolled: remount on a branch switch so the new branch's premises
+                // replace the previous branch's instead of being saved against it.
+                key={`premisesAddressLine-${branchId}`}
                 name="premisesAddressLine"
                 required
               />
@@ -420,6 +423,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 className="mt-1 min-h-11"
                 defaultValue={data.branches.find((branch) => branch.id === branchId)?.city ?? ''}
                 id="premisesCity"
+                key={`premisesCity-${branchId}`}
                 name="premisesCity"
                 required
               />

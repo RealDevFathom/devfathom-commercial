@@ -49,7 +49,7 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(enabledModules = ['pharmacy-core']) {
+function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
@@ -60,7 +60,7 @@ function caller(enabledModules = ['pharmacy-core']) {
       modules: [],
       limits: {},
     },
-    session: { expires: 'later', user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    session: { expires: 'later', user: { id: 'user_a', role, status: 'ACTIVE' } },
     organization: null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -334,6 +334,31 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.packLevel.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-admin printed MRP rounding rule, since it lowers posted prices', async () => {
+    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    await expect(
+      caller(['pharmacy-core'], 'EMPLOYEE').recordPrintedMrp({
+        packLevelId: 'pack_a',
+        batchReference: 'B-1',
+        printedMrpMinor: 1000,
+        roundingIncrementMinor: 60,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicinePackMrp.create).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin record a printed MRP rounding rule', async () => {
+    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    await expect(
+      caller().recordPrintedMrp({
+        packLevelId: 'pack_a',
+        batchReference: 'B-1',
+        printedMrpMinor: 1000,
+        roundingIncrementMinor: 5,
+      })
+    ).resolves.toMatchObject({ packLevelId: 'pack_a', roundingIncrementMinor: 5 });
   });
 
   it('maps the public router prefix to the pharmacy-core entitlement', () => {
