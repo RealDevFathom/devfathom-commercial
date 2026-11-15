@@ -2,8 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   bookkeepingJournalLines,
+  closeAccountingPeriod,
   createSettlementBatch,
+  pharmacyLedgerLockKey,
+  postBookkeepingTransaction,
   reconcileSettlementBankLine,
+  reopenAccountingPeriod,
   reverseBookkeepingTransaction,
 } from './bookkeeping';
 
@@ -117,6 +121,7 @@ describe('#710 POS settlement statement matching', () => {
 describe('counter khata repayment receipts (DEV-731)', () => {
   it('refuses a journal-only reversal that would desync the khata ledger and drawer', async () => {
     const db = {
+      $queryRaw: vi.fn(),
       pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacyBookkeepingTransaction: {
         findFirst: vi.fn().mockResolvedValue({
@@ -139,5 +144,83 @@ describe('counter khata repayment receipts (DEV-731)', () => {
     ).rejects.toMatchObject({ reason: 'COUNTER_KHATA_RECEIPT' });
     expect(db.pharmacyBookkeepingTransaction.update).not.toHaveBeenCalled();
     expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('common org+branch ledger lock (CEO-JVCORE-20261025)', () => {
+  const scope = { organizationId: 'org', branchId: 'branch', actorId: 'owner' };
+
+  function lockingDb() {
+    const calls: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (sql: { strings: string[]; values: unknown[] }) => {
+        calls.push(sql.strings.join('?').includes('pg_advisory_xact_lock') ? 'lock' : 'raw');
+        return [];
+      }),
+      pharmacyAccountingPeriod: {
+        findFirst: vi.fn(async () => {
+          calls.push('period.findFirst');
+          return null;
+        }),
+        create: vi.fn(async () => {
+          calls.push('period.create');
+          return { id: 'period' };
+        }),
+        update: vi.fn(),
+      },
+      pharmacyBookkeepingTransaction: {
+        findFirst: vi.fn(async () => {
+          calls.push('transaction.findFirst');
+          return null;
+        }),
+      },
+    };
+    return { db, calls };
+  }
+
+  it('keys the lock on organization and branch', () => {
+    expect(pharmacyLedgerLockKey(scope)).toBe('pharmacy-ledger:org:branch');
+    expect(pharmacyLedgerLockKey({ ...scope, branchId: 'other' })).not.toBe(
+      pharmacyLedgerLockKey(scope)
+    );
+  });
+
+  it('locks the branch ledger before reading for post, reverse, close and reopen', async () => {
+    const runs: Array<[string, (db: ScopedDb) => Promise<unknown>]> = [
+      [
+        'post',
+        (db) =>
+          postBookkeepingTransaction(db, scope, { ...base, kind: 'EXPENSE' }).catch(() => null),
+      ],
+      [
+        'reverse',
+        (db) =>
+          reverseBookkeepingTransaction(db, scope, {
+            transactionId: 't',
+            at: new Date(),
+            reason: 'r',
+            idempotencyKey: 'k',
+          }).catch(() => null),
+      ],
+      [
+        'close',
+        (db) =>
+          closeAccountingPeriod(db, scope, {
+            startsAt: new Date('2026-10-01T00:00:00Z'),
+            endsAt: new Date('2026-11-01T00:00:00Z'),
+          }),
+      ],
+      [
+        'reopen',
+        (db) => reopenAccountingPeriod(db, scope, { periodId: 'p', reason: 'r' }).catch(() => null),
+      ],
+    ];
+    for (const [name, run] of runs) {
+      const { db, calls } = lockingDb();
+      await run(db as unknown as ScopedDb);
+      expect(calls[0], name).toBe('lock');
+      const values = db.$queryRaw.mock.calls[0]![0].values;
+      expect(values, name).toEqual(['pharmacy-ledger:org:branch']);
+    }
   });
 });

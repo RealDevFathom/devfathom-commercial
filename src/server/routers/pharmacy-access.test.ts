@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   counterAccess: vi.fn(),
-  dayCloseAccess: vi.fn(),
+  closeAccess: vi.fn(),
   managerReportBranches: vi.fn(),
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('./pharmacy-sales', () => ({
   canAccessPharmacyCounter: mocks.counterAccess,
-  canAccessDayClose: mocks.dayCloseAccess,
+  canClosePharmacyDay: mocks.closeAccess,
 }));
 // The reports decision: the ABAC grant reaches every branch, otherwise a
 // Manager's assigned branches (DEV-505).
@@ -63,7 +63,7 @@ function caller(user: { id: string; role: string } = { id: 'cashier', role: 'EMP
 beforeEach(() => {
   mocks.can.mockReset().mockResolvedValue(false);
   mocks.counterAccess.mockReset().mockResolvedValue(false);
-  mocks.dayCloseAccess.mockReset().mockResolvedValue(false);
+  mocks.closeAccess.mockReset().mockResolvedValue(false);
   mocks.managerReportBranches.mockReset().mockResolvedValue([]);
 });
 
@@ -77,6 +77,7 @@ describe('#979 pharmacy rail capability read', () => {
 
     expect(result).toEqual({ userId: 'cashier', organizationId: 'org_a', capabilities: [] });
     expect(mocks.counterAccess).toHaveBeenCalledWith(expect.objectContaining({ db }));
+    expect(mocks.closeAccess).toHaveBeenCalledWith(expect.objectContaining({ db }));
     for (const capability of PHARMACY_NAVIGATION_CAPABILITIES) {
       if (capability === 'pharmacy:counter' || capability === 'pharmacy:close') continue;
       expect(mocks.can).toHaveBeenCalledWith(
@@ -111,7 +112,7 @@ describe('#979 pharmacy rail capability read', () => {
     expect(asked).not.toContain('pharmacy:counter');
     expect(asked).not.toContain('pharmacy:close');
     expect(mocks.counterAccess).toHaveBeenCalledTimes(1);
-    expect(mocks.dayCloseAccess).toHaveBeenCalledTimes(1);
+    expect(mocks.closeAccess).toHaveBeenCalledTimes(1);
   });
 
   it('advertises Counter only when the counter server guard authorizes access', async () => {
@@ -122,12 +123,18 @@ describe('#979 pharmacy rail capability read', () => {
     expect((await caller().navigation()).capabilities).toContain('pharmacy:counter');
   });
 
-  // DEV-505: Day close follows the day-close server decision, never a coarse grant.
-  it('advertises Day close only when the day-close server guard authorizes access', async () => {
+  it('advertises Day close exactly when the day-close server guard authorizes it (DEV-127)', async () => {
+    // A Pharmacist holding `pharmacy:close` must be offered the close; nobody else.
     mocks.can.mockResolvedValue(true);
     expect((await caller().navigation()).capabilities).not.toContain('pharmacy:close');
-    mocks.dayCloseAccess.mockResolvedValue(true);
-    expect((await caller().navigation()).capabilities).toContain('pharmacy:close');
+    mocks.closeAccess.mockResolvedValue(true);
+    const result = await caller({ id: 'pharmacist', role: 'EMPLOYEE' }).navigation();
+    expect(result.capabilities).toContain('pharmacy:close');
+    expect(mocks.closeAccess).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ user: expect.objectContaining({ id: 'pharmacist' }) }),
+      })
+    );
   });
 
   // DEV-505: a Manager without `reports:operational` is offered Reports only when
@@ -136,7 +143,7 @@ describe('#979 pharmacy rail capability read', () => {
     const manager = caller({ id: 'manager', role: 'EMPLOYEE' });
     expect((await manager.navigation()).capabilities).not.toContain('reports:operational');
     mocks.managerReportBranches.mockResolvedValue(['branch-a']);
-    mocks.dayCloseAccess.mockResolvedValue(true);
+    mocks.closeAccess.mockResolvedValue(true);
     mocks.can.mockImplementation(
       async (_subject: unknown, action: string) => action === 'pharmacy:procurement'
     );

@@ -133,6 +133,7 @@ const safety = z
     recallVersion: z.number().int().nonnegative(),
     licenceVersion: z.number().int().nonnegative(),
     ruleVersion: z.number().int().nonnegative(),
+    recalledBatchIds: z.array(id),
   })
   .strict();
 const kind = z.enum([
@@ -214,6 +215,30 @@ export type PharmacyCounterContext = {
   deviceSecret: string;
 };
 
+/** #519: true when any lot on the command was recalled per a signed lease the
+ * counter carried, or is recalled (or not visible in this branch) on the server. */
+export async function replayLotsRecalled(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  command: Pick<CounterReplay, 'lines' | 'snapshots' | 'leasedReceipt'>
+): Promise<boolean> {
+  const leaseRecalled = new Set(
+    [...command.snapshots.map((snapshot) => snapshot.envelope), command.leasedReceipt.envelope]
+      .flatMap((envelope) => envelope.safetyLease.recalledBatchIds)
+  );
+  const lotIds = [...new Set(command.lines.map((line) => line.inventoryLotId))];
+  if (lotIds.some((lotId) => leaseRecalled.has(lotId))) return true;
+  const lots = await db.pharmacyInventoryLot.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, id: { in: lotIds } },
+    select: { id: true, batch: { select: { state: true } } },
+  });
+  const state = new Map(lots.map((lot) => [lot.id, lot.batch.state]));
+  return lotIds.some((lotId) => {
+    const batchState = state.get(lotId);
+    return batchState === undefined || batchState === 'RECALLED';
+  });
+}
+
 /** Called only inside the transport-owned tenant transaction; never catches a
  * business failure here, because a returned response would commit partial work. */
 export async function replayCounterCommand(
@@ -261,25 +286,6 @@ export async function replayCounterCommand(
       expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
     };
   });
-  const requestedUnits = command.lines.reduce(
-    (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
-    0
-  );
-  authorizeReplayedCommand(command.action, {
-    nowMs: originalMs,
-    snapshots,
-    receiptNumbersRemaining: 1,
-    quotaUnitsAvailable: requestedUnits,
-    requestedUnits,
-    requestedCreditMinor: 0,
-    cachedCreditRemainingMinor: 0,
-    controlledMedicinesPermittedOffline: false,
-    originalSaleAvailable: false,
-    deviceUsable: true,
-    medicineSale: true,
-    safetyLeaseOk: true,
-    batchRecalled: false,
-  });
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
     sequence: command.sequence,
@@ -297,6 +303,30 @@ export async function replayCounterCommand(
     };
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  // #519: recall state is derived, never assumed. A lot the signed lease told
+  // the counter was recalled, or one the server holds as recalled (or cannot
+  // see) now, refuses the sale. Checked after the ACCEPTED short-circuit so a
+  // retry of a sale already accepted still returns its result.
+  const requestedUnits = command.lines.reduce(
+    (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
+    0
+  );
+  authorizeReplayedCommand(command.action, {
+    nowMs: originalMs,
+    snapshots,
+    receiptNumbersRemaining: 1,
+    quotaUnitsAvailable: requestedUnits,
+    requestedUnits,
+    requestedCreditMinor: 0,
+    cachedCreditRemainingMinor: 0,
+    controlledMedicinesPermittedOffline: false,
+    originalSaleAvailable: false,
+    deviceUsable: true,
+    medicineSale: true,
+    // Every carried lease passed checkSafetyLease above; none carried is not ok.
+    safetyLeaseOk: snapshots.length > 0,
+    batchRecalled: await replayLotsRecalled(db, scope, command),
+  });
   if (command.action === 'MANUAL_OTC_SALE') {
     const rules = command.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')?.payload;
     const settings = rules && typeof rules === 'object' && !Array.isArray(rules)
@@ -560,6 +590,17 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             take: 1000,
             orderBy: { id: 'asc' },
           });
+          // #519: every recalled lot in this branch, uncapped by the catalogue
+          // limit, so the counter blocks it offline under the signed lease.
+          const recalledLots = await db.pharmacyInventoryLot.findMany({
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              batch: { state: 'RECALLED' },
+            },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+          });
           const catalog = await db.medicine.findMany({
             where: {
               organizationId: ctx.scope.organizationId,
@@ -601,6 +642,14 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           });
           const now = new Date();
           const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+          const safetyLease = {
+            issuedAt: now.toISOString(),
+            expiresAt: expiry.toISOString(),
+            recallVersion: 0,
+            licenceVersion: 0,
+            ruleVersion: 0,
+            recalledBatchIds: recalledLots.map((lot) => lot.id),
+          };
           const merchant = await readManualPaymentSettings(db, ctx.scope);
           const payloads = {
             CATALOG: catalog,
@@ -619,6 +668,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
                 payload: JSON.parse(JSON.stringify(payloads[snapshotKind])),
                 issuedAt: now,
                 expiresAt: expiry,
+                safetyLease,
               })
             );
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { AuthShell } from '@/components/auth/auth-shell';
 import { LoginForm } from './login-form';
@@ -65,6 +65,7 @@ export default async function LoginPage(props: LoginPageProps) {
   // and no slug in the URL. Credentials are proven first; workspaces come after.
   const shared = isSharedHost(host);
   const organization = shared ? null : await resolveOrganizationByHost(host);
+  if (!shared && !organization) notFound();
   const vertical = loginVertical(searchParams.vertical, host, organization?.vertical);
   const copy = verticalCopy[vertical];
   const identity = organization

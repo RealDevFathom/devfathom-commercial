@@ -6,6 +6,10 @@ export type OfflineSafetyLease = {
   recallVersion: number;
   licenceVersion: number;
   ruleVersion: number;
+  /** #519: inventory lot ids in this branch whose batch the server had recalled
+   * when it issued the lease. Signed with the envelope, so a counter blocks them
+   * offline and replay can prove what the counter knew. */
+  recalledBatchIds: readonly string[];
 };
 
 export type OfflineRecallBulletin = {
@@ -41,7 +45,11 @@ export function validSafetyLeaseShape(lease: OfflineSafetyLease): boolean {
     expiresAt > issuedAt &&
     [lease.recallVersion, lease.licenceVersion, lease.ruleVersion].every(
       (version) => Number.isSafeInteger(version) && version >= 0
-    )
+    ) &&
+    // Fail closed: a lease without its recall set is not a safety lease.
+    Array.isArray(lease.recalledBatchIds) &&
+    lease.recalledBatchIds.every((id) => typeof id === 'string' && id.length > 0) &&
+    new Set(lease.recalledBatchIds).size === lease.recalledBatchIds.length
   );
 }
 

@@ -31,4 +31,33 @@ describe('controlled witness tenant scope', () => {
       })
     );
   });
+
+  it('offers a named qualified person only while their PIN is not locked out', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    await listControlledPinWitnesses(
+      { restaurantStaffProfile: { findMany } } as never,
+      'org',
+      'actor',
+      'qualified-user'
+    );
+    const where = findMany.mock.calls[0]![0].where;
+    expect(where.userId).toBe('qualified-user');
+    expect(where.credentials.some).toMatchObject({ type: 'PIN', revokedAt: null, deviceId: null });
+    expect(where.credentials.some.OR).toEqual([
+      { lockedUntil: null },
+      { lockedUntil: { lte: expect.any(Date) } },
+    ]);
+  });
+
+  it('does not filter on lockout when listing any other pharmacist', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    await listControlledPinWitnesses(
+      { restaurantStaffProfile: { findMany } } as never,
+      'org',
+      'actor'
+    );
+    expect(findMany.mock.calls[0]![0].where.credentials).toEqual({
+      some: { type: 'PIN', revokedAt: null, deviceId: null },
+    });
+  });
 });

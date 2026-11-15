@@ -50,17 +50,41 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 export type DayCloseInitial = { branch?: string; date?: string };
 
 const DAY_CLOSE_PERMISSION_DETAIL =
-  'This day-close screen requires day-close permission for a branch. Ask your workspace administrator to review your day-close permission or branch assignment.';
+  'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
 
 export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
   const sessionVerdict = evaluateSessionUser(user);
+  const isAdmin = user?.role === 'ADMIN';
+  const memberSession =
+    status === 'authenticated' &&
+    sessionVerdict.ok &&
+    !isAdmin &&
+    Boolean(user?.id) &&
+    user?.organizationId === entitlements.organizationId &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules);
+  // DEV-127: a non-administrator opens the console only when the server's own
+  // day-close guard (`pharmacy:close` through the ABAC engine) admits them. The
+  // procedures re-check it on every call; this only avoids a dead-end screen.
+  const access = trpc.pharmacyAccess.navigation.useQuery(undefined, {
+    enabled: memberSession,
+    // As the rail does: a transient failure is retried; only a refusal is final.
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+    staleTime: 30_000,
+  });
+  // A cached answer for another signed-in identity cannot open the console.
+  const closeGranted = Boolean(
+    memberSession &&
+    access.data?.userId === user?.id &&
+    access.data?.capabilities.includes('pharmacy:close')
+  );
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
     !user ||
+    !(isAdmin || closeGranted) ||
     user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
@@ -76,6 +100,11 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
     } else if (!isModuleGranted('pharmacy-counter', entitlements.enabledModules)) {
       detail =
         'The Pharmacy Counter module is not enabled for this workspace. Ask your workspace administrator to enable it for day close.';
+    } else if (memberSession && access.isLoading) {
+      detail = 'Checking day-close access…';
+    } else if (memberSession && access.isError && access.error?.data?.code !== 'FORBIDDEN') {
+      // A network or server failure is not a missing permission.
+      detail = 'Could not check day-close access. Reload the page to try again.';
     }
     return (
       <SectionCard title="Day close unavailable">
@@ -83,12 +112,26 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} initial={initial} />;
+  return (
+    <DayCloseBranches
+      key={`${user.organizationId}:${user.id}`}
+      initial={initial}
+      ownerView={isAdmin}
+    />
+  );
 }
 
-function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
-  // DEV-505: the server decides who may close which branch (an administrator or
-  // day-close holder: every branch; a Manager: their assigned branches only).
+function DayCloseBranches({
+  initial,
+  ownerView,
+}: {
+  initial?: DayCloseInitial;
+  /** The owner-only cash-close anomaly check is offered to administrators only. */
+  ownerView: boolean;
+}) {
+  // DEV-505: the server decides which branches this member may close (an
+  // administrator or day-close holder: every branch; a Manager: only their
+  // assigned branches), so the picker never offers a branch the close refuses.
   const branches = trpc.pharmacySales.dayCloseBranches.useQuery(undefined, {
     retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
   });
@@ -164,6 +207,7 @@ function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
           branchId={branchId}
           date={date}
           currency={currency}
+          ownerView={ownerView}
         />
       )}
     </div>
@@ -174,10 +218,12 @@ function DayCloseForm({
   branchId,
   date,
   currency,
+  ownerView,
 }: {
   branchId: string;
   date: string;
   currency: string;
+  ownerView: boolean;
 }) {
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
@@ -485,7 +531,7 @@ function DayCloseForm({
         )}
       </SectionCard>
       {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
-      {report && <CashCloseCheckPanel branchId={branchId} date={date} />}
+      {report && ownerView && <CashCloseCheckPanel branchId={branchId} date={date} />}
     </div>
   );
 }

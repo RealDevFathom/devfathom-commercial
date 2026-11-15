@@ -248,8 +248,6 @@ describe('pharmacy navigation', () => {
       ['/pharmacy/prescriptions', 'pharmacy:prescriptions'],
       ['/pharmacy/pharmacist-queue', 'pharmacy:dispense'],
       ['/pharmacy/substitution', 'pharmacy:dispense'],
-      // DEV-505: day close follows the server's day-close decision.
-      ['/pharmacy/counter/close', 'pharmacy:close'],
     ] as const;
 
     it('offers a cashier the counter but none of the surfaces their role cannot open', () => {
@@ -277,10 +275,29 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
-    // DEV-505: an administrator always passes the day-close server decision, which
-    // is what the rail now asks instead of the literal ADMIN role.
-    it('shows day close to an administrator the day-close decision admits', () => {
-      expect(hrefs('ADMIN', ['pharmacy:close'])).toContain('/pharmacy/counter/close');
+    it('keeps the administrator-only day close for administrators', () => {
+      expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    });
+
+    it('offers day close to a member granted pharmacy:close, such as a Pharmacist (DEV-127)', () => {
+      expect(hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review'])).not.toContain(
+        '/pharmacy/counter/close'
+      );
+      expect(
+        hrefs('EMPLOYEE', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'])
+      ).toContain('/pharmacy/counter/close');
+    });
+
+    it('keeps day close behind its module even for a pharmacy:close holder (DEV-127)', () => {
+      const withoutCounter = {
+        ...everyPharmacyModule,
+        enabledModules: everyPharmacyModule.enabledModules.filter(
+          (module) => module !== 'pharmacy-counter'
+        ),
+      };
+      expect(hrefs('EMPLOYEE', ['pharmacy:close'], withoutCounter)).not.toContain(
+        '/pharmacy/counter/close'
+      );
     });
 
     it('shows Team to administrators, and to members only with the HR directory', () => {

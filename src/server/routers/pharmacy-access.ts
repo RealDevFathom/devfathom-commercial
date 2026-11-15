@@ -2,7 +2,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
 import { protectedProcedure, router } from '../trpc';
 import { pharmacyReportAccess } from './pharmacy-reports';
-import { canAccessDayClose, canAccessPharmacyCounter } from './pharmacy-sales';
+import { canAccessPharmacyCounter, canClosePharmacyDay } from './pharmacy-sales';
 
 /**
  * The capabilities the pharmacy rail asks about, each exactly as the page
@@ -14,8 +14,9 @@ import { canAccessDayClose, canAccessPharmacyCounter } from './pharmacy-sales';
  * - `reports:operational` — the pharmacy reports command centre: the grant
  *   itself, or a Manager's reports for their assigned branches (DEV-505).
  * - `pharmacy:counter` — the counter's capability family and active branch scope.
- * - `pharmacy:close` — day close: an administrator, a `pharmacy:close` holder, or
- *   a Manager with an active branch assignment (DEV-505).
+ * - `pharmacy:close` — the day-close console, answered by the procedures' own
+ *   close gate for some branch (an administrator, a member granted
+ *   `pharmacy:close`, or a manager actively assigned to a branch).
  */
 export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
@@ -43,7 +44,7 @@ export const pharmacyAccessRouter = router({
       PHARMACY_NAVIGATION_CAPABILITIES.map(async (capability) => {
         let allowed: boolean;
         if (capability === 'pharmacy:counter') allowed = await canAccessPharmacyCounter(ctx);
-        else if (capability === 'pharmacy:close') allowed = await canAccessDayClose(ctx);
+        else if (capability === 'pharmacy:close') allowed = await canClosePharmacyDay(ctx);
         else if (capability === 'reports:operational') {
           const reportBranches = await pharmacyReportAccess(ctx);
           allowed = reportBranches === 'ALL' || reportBranches.length > 0;

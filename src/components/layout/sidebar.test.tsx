@@ -365,11 +365,15 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   });
 
-  it('hides Day close from an administrator the server does not let close a day', () => {
-    renderNavigation({ capabilities: ['pharmacy:procurement', 'reports:operational'] });
-    expect(
-      screen.queryByRole('link', { name: (name) => name.endsWith('Day close') })
-    ).not.toBeInTheDocument();
+  it('offers a Pharmacist granted pharmacy:close the Day close destination (DEV-127)', () => {
+    renderNavigation({
+      role: 'MEMBER',
+      capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    });
+    expect(screen.getByRole('link', { name: /Day close$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/counter/close'
+    );
   });
 
   // #979, PR J: the rail answer is the ABAC-resolved capability list. No role

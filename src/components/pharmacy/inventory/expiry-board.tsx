@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { csvCell } from '@/lib/csv';
+import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 import {
   Table,
   TableBody,
@@ -94,6 +95,66 @@ const expiryText = (row: Pick<ExpiryBoardRow, 'expired' | 'daysLeft'>) =>
   row.expired
     ? `Expired ${Math.abs(row.daysLeft)} day${Math.abs(row.daysLeft) === 1 ? '' : 's'} ago`
     : `${row.daysLeft} day${row.daysLeft === 1 ? '' : 's'} left`;
+
+export type ExpiryRiskBand = 'expired' | '30' | '60' | '90' | 'later';
+
+/** DEV-728: amber steps at 90/60/30 days; red is reserved for stock already expired. */
+export function expiryRiskBand(row: Pick<ExpiryBoardRow, 'expired' | 'daysLeft'>): ExpiryRiskBand {
+  if (row.expired) return 'expired';
+  if (row.daysLeft <= 30) return '30';
+  if (row.daysLeft <= 60) return '60';
+  if (row.daysLeft <= 90) return '90';
+  return 'later';
+}
+
+const RISK_STEP: Record<
+  ExpiryRiskBand,
+  { label: string; tone: 'danger' | 'warning' | 'neutral'; className?: string }
+> = {
+  expired: { label: 'Expired', tone: 'danger' },
+  // The amber tint deepens as expiry nears; the text and dot stay `--warning`,
+  // whose contrast the design contract checks up to a 20% tint.
+  '30': { label: 'Within 30 days', tone: 'warning', className: 'bg-warning/20' },
+  '60': { label: 'Within 60 days', tone: 'warning', className: 'bg-warning/15' },
+  '90': { label: 'Within 90 days', tone: 'warning', className: 'bg-warning/10' },
+  later: { label: 'Beyond 90 days', tone: 'neutral' },
+};
+
+/** Units of a position that a new return could still take. */
+const returnableUnits = (row: Pick<ExpiryBoardRow, 'onHandUnits' | 'reservedUnits'>) =>
+  Math.max(0, Math.min(row.onHandUnits, row.onHandUnits - row.reservedUnits));
+
+export type DistributorGroup = {
+  key: string;
+  supplierId: string | null;
+  supplierName: string;
+  rows: ExpiryBoardRow[];
+};
+
+/**
+ * DEV-728: the board's lots grouped by the distributor they came from — the
+ * matched supplier record when there is one, otherwise the name on the lot.
+ */
+export function groupExpiryRows(rows: readonly ExpiryBoardRow[]): DistributorGroup[] {
+  const groups = new Map<string, DistributorGroup>();
+  for (const row of rows) {
+    const key = row.suggestedSupplierId
+      ? `supplier:${row.suggestedSupplierId}`
+      : `name:${row.supplierName.trim().toLowerCase()}`;
+    const group = groups.get(key) ?? {
+      key,
+      supplierId: row.suggestedSupplierId,
+      supplierName: row.supplierName,
+      rows: [],
+    };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort(
+    (left, right) =>
+      left.supplierName.localeCompare(right.supplierName) || left.key.localeCompare(right.key)
+  );
+}
 
 export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
   const header = [
@@ -257,7 +318,8 @@ function Hidden({
 }
 
 function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps }) {
-  const returnable = Math.max(0, Math.min(row.onHandUnits, row.onHandUnits - row.reservedUnits));
+  const returnable = returnableUnits(row);
+  const risk = RISK_STEP[expiryRiskBand(row)];
   const canMarkDown = row.markdownEligible && !row.expired && row.batchState === 'ACTIVE';
   const heading = `${row.medicineName} · batch ${row.batchNumber} · ${row.locationName}`;
   return (
@@ -289,8 +351,10 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
           )}
         </div>
         <StatusPill
-          status={expiryText(row)}
-          tone={row.expired ? 'danger' : row.daysLeft <= 30 ? 'warning' : 'neutral'}
+          className={risk.className}
+          label={`${risk.label} · ${expiryText(row)}`}
+          status={risk.label}
+          tone={risk.tone}
         />
       </div>
 
@@ -459,6 +523,101 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
   );
 }
 
+function DistributorSection({
+  group,
+  headingId,
+  props,
+}: {
+  group: DistributorGroup;
+  headingId: string;
+  props: ExpiryBoardProps;
+}) {
+  // Expired lots stay off the claim: their return window has closed, and one
+  // closed line would stop the whole claim from being submitted.
+  const claimable = group.rows.filter(
+    (row) => !row.expired && !row.returnDraft && returnableUnits(row) > 0
+  );
+  // Rows arrive soonest-expiry first, so a capped claim takes the most urgent lots.
+  const batch = claimable.slice(0, EXPIRY_CLAIM_MAX_POSITIONS);
+  const value = group.rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
+  const open = group.rows.find((row) => row.returnDraft)?.returnDraft ?? null;
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="space-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-raised p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-text-strong" id={headingId}>
+            {group.supplierName}
+          </h3>
+          <p className="mt-1 text-xs text-text-muted">
+            {group.rows.length} stock position{group.rows.length === 1 ? '' : 's'} · value at risk{' '}
+            {money(value)}
+          </p>
+        </div>
+        {group.supplierId && claimable.length > 0 ? (
+          <form action={props.action}>
+            <input name="action" type="hidden" value="claim" />
+            <input name="branchId" type="hidden" value={props.branchId} />
+            <input name="within" type="hidden" value={props.withinDays} />
+            <input name="supplierId" type="hidden" value={group.supplierId} />
+            <input name="reason" type="hidden" value="Near-expiry return claim" />
+            {batch.map((row) => (
+              <input
+                key={row.key}
+                name="position"
+                type="hidden"
+                value={`${row.inventoryLotId}|${row.stockLocationId}`}
+              />
+            ))}
+            <Button size="sm" type="submit" variant="secondary">
+              Draft return claim
+            </Button>
+          </form>
+        ) : null}
+      </div>
+      {!group.supplierId ? (
+        <p className="text-xs text-warning" role="note">
+          This distributor is not matched to a supplier record, so a claim cannot be drafted for the
+          group. Add the supplier in Purchasing, or draft each lot&apos;s return below.
+        </p>
+      ) : claimable.length === 0 ? (
+        <p className="text-xs text-text-muted" role="note">
+          No lot here can go on a claim: expired lots are past the supplier return window, and the
+          rest are already on a return or reserved.
+          {open ? (
+            <>
+              {' '}
+              <Link
+                className="underline"
+                href={`${props.returnsHref}&return=${encodeURIComponent(open.id)}`}
+              >
+                Open {open.reference} in Purchasing → Returns
+              </Link>
+            </>
+          ) : null}
+        </p>
+      ) : (
+        <p className="text-xs text-text-muted">
+          Draft return claim puts {batch.length} lot{batch.length === 1 ? '' : 's'} on one expiry
+          claim draft
+          {claimable.length > batch.length
+            ? ` (the ${batch.length} expiring soonest; draft again for the other ${claimable.length - batch.length})`
+            : ''}
+          . Expired lots are left off because their return window has closed. A draft reserves
+          nothing until it is submitted.
+        </p>
+      )}
+      <div className="space-y-3">
+        {group.rows.map((row) => (
+          <LotCard key={row.key} props={props} row={row} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function ExpiryBoard(props: ExpiryBoardProps) {
   if (props.view === 'print') return <PrintableList {...props} />;
   return (
@@ -487,9 +646,14 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
             Nothing saleable expires within {props.withinDays} days at this branch.
           </p>
         ) : (
-          <div className="space-y-3">
-            {props.rows.map((row) => (
-              <LotCard key={row.key} props={props} row={row} />
+          <div className="space-y-5">
+            {groupExpiryRows(props.rows).map((group, index) => (
+              <DistributorSection
+                group={group}
+                headingId={`expiry-distributor-${index}`}
+                key={group.key}
+                props={props}
+              />
             ))}
           </div>
         )}

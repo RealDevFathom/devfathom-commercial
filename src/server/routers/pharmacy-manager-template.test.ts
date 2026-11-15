@@ -39,7 +39,7 @@ import { managerBranchIds } from '../pharmacy-manager-branches';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyAccessRouter } from './pharmacy-access';
 import { pharmacyReportsRouter } from './pharmacy-reports';
-import { canAccessDayClose, pharmacySalesRouter } from './pharmacy-sales';
+import { canClosePharmacyDay, pharmacySalesRouter } from './pharmacy-sales';
 
 const app = router({
   pharmacySales: pharmacySalesRouter,
@@ -92,11 +92,13 @@ function fixture({
     },
     pharmacySupplier: { findMany: vi.fn(async () => []) },
     pharmacyBranchAssignment: {
+      // Without a branchId this answers "assigned to some branch" (the rail's check).
       findFirst: vi.fn(
-        async ({ where }: { where: { branchId: string; userId: string; active: boolean } }) =>
-          where.userId === 'manager-1' && where.active && assigned.includes(where.branchId)
-            ? { branchId: where.branchId }
-            : null
+        async ({ where }: { where: { branchId?: string; userId: string; active: boolean } }) => {
+          if (where.userId !== 'manager-1' || !where.active) return null;
+          const branchId = where.branchId ?? assigned[0];
+          return branchId && assigned.includes(branchId) ? { branchId } : null;
+        }
       ),
       findMany: vi.fn(async ({ where }: { where: { userId: string; active: boolean } }) =>
         where.userId === 'manager-1' && where.active
@@ -143,7 +145,7 @@ beforeEach(() => {
 describe('DEV-505 Manager template: day close', () => {
   it('offers day close for the assigned branch only', async () => {
     const { ctx, caller } = fixture();
-    expect(await canAccessDayClose(ctx)).toBe(true);
+    expect(await canClosePharmacyDay(ctx)).toBe(true);
     const result = await caller.pharmacySales.dayCloseBranches();
     expect(result.branches.map((branch) => branch.id)).toEqual([ASSIGNED]);
     expect(result).toMatchObject({ currency: 'PKR', timezone: 'Asia/Karachi' });
@@ -161,19 +163,19 @@ describe('DEV-505 Manager template: day close', () => {
 
   it('refuses a Manager with no branch assignment', async () => {
     const { ctx, caller } = fixture({ assigned: [] });
-    expect(await canAccessDayClose(ctx)).toBe(false);
+    expect(await canClosePharmacyDay(ctx)).toBe(false);
     await expect(caller.pharmacySales.dayCloseBranches()).rejects.toMatchObject(FORBIDDEN);
   });
 
   it('lets an explicit pharmacy:close DENY beat the Manager template', async () => {
     const { ctx, caller } = fixture({ overrides: [deny('pharmacy:close')] });
-    expect(await canAccessDayClose(ctx)).toBe(false);
+    expect(await canClosePharmacyDay(ctx)).toBe(false);
     await expect(caller.pharmacySales.dayCloseBranches()).rejects.toMatchObject(FORBIDDEN);
   });
 
   it('refuses a Cashier', async () => {
     const { ctx, caller } = fixture({ roleRules: template('cashier') });
-    expect(await canAccessDayClose(ctx)).toBe(false);
+    expect(await canClosePharmacyDay(ctx)).toBe(false);
     await expect(caller.pharmacySales.dayCloseBranches()).rejects.toMatchObject(FORBIDDEN);
   });
 

@@ -23,6 +23,12 @@ const mocks = vi.hoisted(() => ({
   checkError: null as { message: string; data?: { code: string } } | null,
   /** Drawers beyond the one every fixture has, e.g. a second open counter. */
   extraDrawers: [] as Array<Record<string, unknown>>,
+  /** The rail capability read (DEV-127): who it answered for and what it granted. */
+  accessUserId: 'owner',
+  accessCapabilities: [] as string[],
+  accessLoading: false,
+  accessError: null as { message: string; data?: { code: string } } | null,
+  accessOptions: vi.fn(),
 }));
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
@@ -49,6 +55,26 @@ vi.mock('@/components/entitlements-provider', () => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    pharmacyAccess: {
+      navigation: {
+        useQuery: (_input: unknown, options: { enabled: boolean }) => {
+          mocks.accessOptions(options);
+          if (!options.enabled) return { isLoading: false, data: undefined };
+          if (mocks.accessError)
+            return { isLoading: false, isError: true, error: mocks.accessError, data: undefined };
+          return mocks.accessLoading
+            ? { isLoading: true, data: undefined }
+            : {
+                isLoading: false,
+                data: {
+                  userId: mocks.accessUserId,
+                  organizationId: 'org',
+                  capabilities: mocks.accessCapabilities,
+                },
+              };
+        },
+      },
+    },
     pharmacySales: {
       dayCloseBranches: {
         useQuery: () =>
@@ -132,6 +158,11 @@ beforeEach(() => {
   mocks.checkFindings = [];
   mocks.checkError = null;
   mocks.extraDrawers = [];
+  mocks.accessUserId = 'owner';
+  mocks.accessCapabilities = [];
+  mocks.accessLoading = false;
+  mocks.accessError = null;
+  mocks.accessOptions.mockReset();
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
@@ -156,14 +187,28 @@ describe('day-close console', () => {
 
   it('DEV-713 lists who confirmed manual card and wallet tenders, by type', () => {
     mocks.close = {
-      id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, grossSalesMinor: 1300,
-      refundTotalMinor: 0, netSalesMinor: 1300, cashExpectedMinor: 0, cashCountedMinor: 0,
-      cashVarianceMinor: 0, isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 1300,
+      refundTotalMinor: 0,
+      netSalesMinor: 1300,
+      cashExpectedMinor: 0,
+      cashCountedMinor: 0,
+      cashVarianceMinor: 0,
+      isFinal: true,
       tenderTotals: [
-        { type: 'CARD', amountMinor: 1300, refundMinor: 0, netMinor: 1300, confirmers: [
-          { name: 'Ayesha Karim', count: 1, amountMinor: 250 },
-          { name: 'Bilal Shah', count: 2, amountMinor: 1050 },
-        ] },
+        {
+          type: 'CARD',
+          amountMinor: 1300,
+          refundMinor: 0,
+          netMinor: 1300,
+          confirmers: [
+            { name: 'Ayesha Karim', count: 1, amountMinor: 250 },
+            { name: 'Bilal Shah', count: 2, amountMinor: 1050 },
+          ],
+        },
         { type: 'CASH', amountMinor: 500, refundMinor: 0, netMinor: 500 },
       ],
     };
@@ -176,14 +221,28 @@ describe('day-close console', () => {
 
   it('DEV-713 lists two confirmers who share a name as separate rows', () => {
     mocks.close = {
-      id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, grossSalesMinor: 300,
-      refundTotalMinor: 0, netSalesMinor: 300, cashExpectedMinor: 0, cashCountedMinor: 0,
-      cashVarianceMinor: 0, isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 300,
+      refundTotalMinor: 0,
+      netSalesMinor: 300,
+      cashExpectedMinor: 0,
+      cashCountedMinor: 0,
+      cashVarianceMinor: 0,
+      isFinal: true,
       tenderTotals: [
-        { type: 'CARD', amountMinor: 300, refundMinor: 0, netMinor: 300, confirmers: [
-          { id: 'u1', name: 'Ali', count: 1, amountMinor: 100 },
-          { id: 'u2', name: 'Ali', count: 1, amountMinor: 200 },
-        ] },
+        {
+          type: 'CARD',
+          amountMinor: 300,
+          refundMinor: 0,
+          netMinor: 300,
+          confirmers: [
+            { id: 'u1', name: 'Ali', count: 1, amountMinor: 100 },
+            { id: 'u2', name: 'Ali', count: 1, amountMinor: 200 },
+          ],
+        },
       ],
     };
     render(<PharmacyDayCloseConsole />);
@@ -288,13 +347,10 @@ describe('day-close console', () => {
   );
   it('shows permission denial when the server refuses day close', () => {
     mocks.role = 'MEMBER';
-    mocks.branchesError = {
-      message: 'Day-close permission is required to reconcile and close a day.',
-      data: { code: 'FORBIDDEN' },
-    };
+    mocks.accessCapabilities = ['pharmacy:dispense', 'pharmacy:counter'];
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'This day-close screen requires day-close permission for a branch. Ask your workspace administrator to review your day-close permission or branch assignment.'
+      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.'
     );
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
@@ -305,6 +361,7 @@ describe('day-close console', () => {
   // scopes them to, and is offered no other branch.
   it('opens for a Manager on only the branches the server allows', () => {
     mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:procurement', 'pharmacy:close'];
     mocks.branches = [{ id: 'assigned', name: 'Assigned branch' }];
     render(<PharmacyDayCloseConsole />);
     const branch = screen.getByRole('combobox');
@@ -315,6 +372,92 @@ describe('day-close console', () => {
     expect(mocks.previewInput).toHaveBeenCalledWith(
       expect.objectContaining({ branchId: 'assigned' })
     );
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
+  it('shows permission denial when the server refuses the day-close branch list (DEV-505)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.branchesError = {
+      message: 'Day-close permission is required to reconcile and close a day.',
+      data: { code: 'FORBIDDEN' },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.'
+    );
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('opens the close for a Pharmacist the server grants pharmacy:close (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:dispense', 'pharmacy:close'];
+    render(<PharmacyDayCloseConsole />);
+    expect(mocks.accessOptions).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    expect(screen.queryByText('Day close unavailable')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(mocks.previewInput).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }));
+  });
+  it('keeps the owner-only cash-close check from a Pharmacist closer (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(mocks.previewInput).toHaveBeenCalled();
+    expect(screen.queryByText('Cash-close check')).not.toBeInTheDocument();
+  });
+  it('waits for the day-close grant before opening the close for a member (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessLoading = true;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent('Checking day-close access…');
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('ignores a day-close grant answered for another signed-in identity (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessUserId = 'someone-else';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Day close unavailable')).toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('does not blame permissions when the day-close grant could not be read (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessError = { message: 'Network unavailable', data: { code: 'INTERNAL_SERVER_ERROR' } };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Could not check day-close access. Reload the page to try again.'
+    );
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('treats a refused day-close grant read as a missing permission (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessError = { message: 'Forbidden', data: { code: 'FORBIDDEN' } };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This day-close screen requires day-close permission.'
+    );
+  });
+  it('retries a transient day-close grant failure but never a refusal (DEV-127)', () => {
+    mocks.role = 'EMPLOYEE';
+    render(<PharmacyDayCloseConsole />);
+    const { retry } = mocks.accessOptions.mock.calls[0][0] as {
+      retry: (failures: number, error: { data?: { code: string } }) => boolean;
+    };
+    expect(retry(0, { data: { code: 'INTERNAL_SERVER_ERROR' } })).toBe(true);
+    expect(retry(2, { data: { code: 'INTERNAL_SERVER_ERROR' } })).toBe(false);
+    expect(retry(0, { data: { code: 'FORBIDDEN' } })).toBe(false);
+  });
+  it('does not ask the rail read for an administrator', () => {
+    render(<PharmacyDayCloseConsole />);
+    expect(mocks.accessOptions).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
     expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('names the missing counter module for an administrator', () => {
@@ -438,7 +581,9 @@ describe('day-close console', () => {
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
       screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
-    ).toHaveTextContent(/re-record this close report with a reason, but that never reopens the day/);
+    ).toHaveTextContent(
+      /re-record this close report with a reason, but that never reopens the day/
+    );
   });
   it('totals counted cash live from the drawers entered so far', () => {
     mocks.extraDrawers = [
