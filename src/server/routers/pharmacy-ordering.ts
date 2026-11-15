@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import {
   cancelMyCustomerOrder,
   completeCustomerOrder,
@@ -62,6 +63,61 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   return { organizationId, branchId: branch, actorId };
 }
 
+const outsideScope = () =>
+  new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+
+/**
+ * DEV-845: `pharmacy:orders` says what a staff member may do; this says where.
+ * A staff procedure acts only at a branch the session user holds an active
+ * assignment to. A live tenant admin or owner keeps every active branch, and
+ * that exception is written to the audit entry. A solo owner assigned to the
+ * branch passes on the assignment alone.
+ */
+async function staffScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  if (ctx.session?.user?.organizationId !== scope.organizationId) throw outsideScope();
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: branch,
+      userId: scope.actorId,
+      active: true,
+    },
+    select: { id: true },
+  });
+  if (assignment) return scope;
+  const member = await ctx.db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
+    select: {
+      role: true,
+      status: true,
+      organizationRole: {
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (member && (member.role === 'ADMIN' || hasAllCapabilityAccess(member))) {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: {
+        branchId: branch,
+        reason: 'tenant-admin-orders-access-without-branch-assignment',
+      },
+    });
+    return scope;
+  }
+  throw outsideScope();
+}
+
 async function isStaff(ctx: TRPCContext) {
   if (!ctx.session?.user) return false;
   return can(subjectFromSession(ctx.session.user), 'pharmacy:orders', undefined, {
@@ -120,7 +176,7 @@ export const pharmacyOrderingRouter = router({
   deliveryCommand: staffProcedure.input(deliveryCommandInput).mutation(async ({ ctx, input }) => {
     try {
       return await ctx.db.$transaction(async (tx) => {
-        const scope = await scopeFor(ctx, input.branchId);
+        const scope = await staffScopeFor(ctx, input.branchId);
         return recordDeliveryCommand(txDb(tx), scope, input, {
           // DEV-647 / DEV-786: a physical return that refunds cash or returns a completed sale
           // needs a manager or owner PIN.
@@ -225,7 +281,7 @@ export const pharmacyOrderingRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) =>
-        listStaffCustomerOrders(txDb(tx), await scopeFor(ctx, input.branchId))
+        listStaffCustomerOrders(txDb(tx), await staffScopeFor(ctx, input.branchId))
       )
     ),
 
@@ -270,7 +326,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          transitionCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          transitionCustomerOrder(txDb(tx), await staffScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -282,7 +338,11 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          startCustomerOrderCheckout(txDb(tx), await scopeFor(ctx, input.branchId), input.orderId)
+          startCustomerOrderCheckout(
+            txDb(tx),
+            await staffScopeFor(ctx, input.branchId),
+            input.orderId
+          )
         );
       } catch (error) {
         fail(error);
@@ -294,7 +354,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          completeCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), input.orderId)
+          completeCustomerOrder(txDb(tx), await staffScopeFor(ctx, input.branchId), input.orderId)
         );
       } catch (error) {
         fail(error);
@@ -306,7 +366,7 @@ export const pharmacyOrderingRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) =>
-        listRefillSubscriptions(txDb(tx), await scopeFor(ctx, input.branchId))
+        listRefillSubscriptions(txDb(tx), await staffScopeFor(ctx, input.branchId))
       )
     ),
 
@@ -331,7 +391,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          createRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          createRefillSubscription(txDb(tx), await staffScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -345,7 +405,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) => {
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await staffScopeFor(ctx, input.branchId);
           return input.action === 'cancel'
             ? cancelRefillSubscription(txDb(tx), scope, input.subscriptionId)
             : setRefillSubscriptionPaused(
@@ -365,7 +425,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          openRefillCycle(txDb(tx), await scopeFor(ctx, input.branchId), input.subscriptionId)
+          openRefillCycle(txDb(tx), await staffScopeFor(ctx, input.branchId), input.subscriptionId)
         );
       } catch (error) {
         fail(error);
@@ -375,7 +435,7 @@ export const pharmacyOrderingRouter = router({
   openDueSubscriptionCycles: staffProcedure
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await staffScopeFor(ctx, input.branchId);
       const due = await ctx.db.$transaction(async (tx) =>
         listDueRefillSubscriptionIds(txDb(tx), scope)
       );
@@ -413,7 +473,7 @@ export const pharmacyOrderingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
+        const scope = await staffScopeFor(ctx, input.branchId);
         // The PIN check commits in its own transaction so a wrong PIN keeps its
         // lockout strike even though the approval is refused.
         const approval = await withTenantDb(
@@ -443,7 +503,7 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          releaseRefillCycle(txDb(tx), await scopeFor(ctx, input.branchId), input.cycleId)
+          releaseRefillCycle(txDb(tx), await staffScopeFor(ctx, input.branchId), input.cycleId)
         );
       } catch (error) {
         fail(error);
@@ -455,7 +515,11 @@ export const pharmacyOrderingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          startRefillCycleCheckout(txDb(tx), await scopeFor(ctx, input.branchId), input.cycleId)
+          startRefillCycleCheckout(
+            txDb(tx),
+            await staffScopeFor(ctx, input.branchId),
+            input.cycleId
+          )
         );
       } catch (error) {
         fail(error);

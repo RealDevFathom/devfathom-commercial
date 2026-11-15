@@ -278,6 +278,23 @@ function redactDemandContact<T extends { notifyPhone?: string | null }>(
 }
 
 /**
+ * DEV-845: a restock-arrival response names each queued notification by id and
+ * status only. The destination is the customer's phone; the sender reads it on
+ * the server, so no role ever receives it.
+ */
+function redactRestockArrival<
+  T extends { notification: { id: string; status: string; destination?: unknown } | null },
+>(entry: T) {
+  const { notification, ...rest } = entry;
+  return {
+    ...rest,
+    notification: notification
+      ? { id: notification.id, status: notification.status, hasContact: true }
+      : null,
+  };
+}
+
+/**
  * #745: margin and cost are never shown at the till. Only a pharmacist, a buyer
  * (for the purchasing view) or a manager/owner may read brand margins.
  */
@@ -2793,9 +2810,7 @@ export const pharmacySalesRouter = router({
       try {
         // DEV-817: restock interests hang off demand events; the counter's gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          addRestockInterest(txDb(tx), scope, input)
-        );
+        return await ctx.db.$transaction(async (tx) => addRestockInterest(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -2806,9 +2821,10 @@ export const pharmacySalesRouter = router({
       try {
         // DEV-817: restock interests hang off demand events; the counter's gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
+        const captured = await ctx.db.$transaction(async (tx) =>
           captureSafeRestockArrival(txDb(tx), scope, input)
         );
+        return captured.map(redactRestockArrival);
       } catch (error) {
         fail(error);
       }
