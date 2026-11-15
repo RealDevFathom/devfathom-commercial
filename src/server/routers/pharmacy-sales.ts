@@ -619,17 +619,19 @@ function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<L
   );
 }
 
-async function requireCloseAccess(ctx: TRPCContext, branch: string) {
+/**
+ * The day-close decision shared by the close procedures and the pharmacy rail.
+ * With `branch`, it is the procedures' gate for that branch. Without one, it
+ * answers whether the member may close at some branch, so the rail and the
+ * day-close console (DEV-127) never hide a close the procedures would allow.
+ */
+async function closeAccessDecision(ctx: TRPCContext, branch?: string): Promise<boolean> {
   const user = ctx.session?.user;
-  if (!user)
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Day-close permission is required to reconcile and close a day.',
-    });
-  if (user.role === 'ADMIN') return;
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
-  if (await can(subject, 'pharmacy:close', undefined, options)) return;
+  if (await can(subject, 'pharmacy:close', undefined, options)) return true;
   // DEV-31: a manager may close the day too, but only on a branch they are
   // actively assigned to. An explicit `pharmacy:close` DENY, from the role or a
   // user override, still wins over the manager grant.
@@ -670,18 +672,28 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string) {
             where: {
               organizationId,
               userId: user.id,
-              branchId: branch,
+              ...(branch === undefined ? {} : { branchId: branch }),
               active: true,
               branch: { organizationId, active: true },
             },
             select: { branchId: true },
           });
-    if (member && assignment) return;
+    if (member && assignment) return true;
   }
-  throw new TRPCError({
-    code: 'FORBIDDEN',
-    message: 'Day-close permission is required to reconcile and close a day.',
-  });
+  return false;
+}
+
+/** Whether the signed-in member may close the day at some branch (rail and console). */
+export function canClosePharmacyDay(ctx: TRPCContext): Promise<boolean> {
+  return closeAccessDecision(ctx);
+}
+
+async function requireCloseAccess(ctx: TRPCContext, branch: string) {
+  if (!(await closeAccessDecision(ctx, branch)))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    });
 }
 
 export const pharmacySalesRouter = router({
