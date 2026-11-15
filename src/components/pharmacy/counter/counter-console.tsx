@@ -802,14 +802,16 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
-  const busy =
+  // #1254: opening the drawer moves no money for this bill, so the re-read a
+  // refused payment demands must not lock "Open drawer", the usual fix for it.
+  const drawerBusy =
     pending !== null ||
-    tenderReadRequired ||
     unknownTender ||
     refreshingTenderBill ||
     !recoveryReady ||
     attempt !== null ||
     checkingOutcome;
+  const busy = drawerBusy || tenderReadRequired;
   const lineCount = cart?.lines.length ?? 0;
   const settledReceipt =
     billState === 'settled' &&
@@ -1531,6 +1533,10 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
         }
       }
+      // #1254: a refused cash payment may mean this counter's drawer is not open
+      // after all; re-read it so the counter offers "Open drawer" again.
+      if (outcome.status === 'rejected' && dispatched && input.type === 'CASH')
+        void utils.pharmacySales.drawerStatus.invalidate();
       // An acknowledged write stays accepted even if the follow-up read fails.
       // Unknown writes are never replayed or inferred from aggregate balances.
       if (outcome.status === 'accepted') await refreshTenderBill('accepted');
@@ -1549,6 +1555,7 @@ function ScopedPharmacyCounterConsole({
       saleId,
       tender,
       todayBusinessDate,
+      utils,
     ]
   );
 
@@ -2219,8 +2226,9 @@ function ScopedPharmacyCounterConsole({
                   type="button"
                   variant="outline"
                   className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                  disabled={busy || !drawerStatusKnown}
+                  disabled={drawerBusy || !drawerStatusKnown}
                   onClick={() => {
+                    const rereadBill = tenderReadRequired && tenderOutcome?.status === 'rejected';
                     setPending('drawer');
                     openDrawer
                       .mutateAsync({
@@ -2229,12 +2237,15 @@ function ScopedPharmacyCounterConsole({
                         businessDate: todayBusinessDate(),
                         openingFloatMinor: 0,
                       })
-                      .then(() =>
+                      .then(() => {
                         setNotice({
                           tone: 'success',
                           message: 'Cash drawer opened for this counter.',
-                        })
-                      )
+                        });
+                        // #1254: after a refusal, re-read the bill (as "Refresh bill"
+                        // does) so the counter is ready to take the payment again.
+                        if (rereadBill) void refreshTenderBill('rejected');
+                      })
                       .catch((error: unknown) =>
                         setNotice({ tone: 'warning', message: messageFrom(error) })
                       )

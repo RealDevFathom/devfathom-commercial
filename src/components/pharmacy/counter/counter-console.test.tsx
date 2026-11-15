@@ -1773,6 +1773,51 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     }
   );
 
+  it('#1254: a refused cash payment keeps "Open drawer" usable and re-reads the drawer', async () => {
+    // The drawer read failed, so Cash is offered; the server then refuses it.
+    mocks.queries.drawerStatus = { ...query(), isSuccess: false, isError: true };
+    mocks.mutations.tender!.mockRejectedValue(refused('BAD_REQUEST', 'DRAWER_NOT_OPEN'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment was not accepted/);
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    fireEvent.click(within(payment).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(payment).not.toBeVisible());
+    expect(screen.getByRole('button', { name: /^Hold/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeEnabled();
+    expect(mocks.drawerStatusInvalidate).toHaveBeenCalled();
+  });
+
+  it('#1254: opening the drawer after a refusal re-reads the bill so payment can resume', async () => {
+    mocks.queries.drawerStatus = { ...query(), isSuccess: false, isError: true };
+    mocks.mutations.tender!.mockRejectedValueOnce(refused('BAD_REQUEST', 'DRAWER_NOT_OPEN'));
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment was not accepted/);
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    fireEvent.click(within(payment).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(payment).not.toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Hold/ })).toBeEnabled());
+    expect(
+      screen.getByRole('button', { name: 'Take payment', hidden: true })
+    ).not.toHaveAttribute('disabled');
+    expect(screen.getByLabelText('Amount', { selector: 'input' })).toHaveValue('125.50');
+  });
+
+  it('#1254: a drawer open without a refusal does not re-read the bill', async () => {
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
   it('words a conflicting open for the operator instead of leaking the server failure', async () => {
     mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
