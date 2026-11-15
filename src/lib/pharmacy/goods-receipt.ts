@@ -346,7 +346,10 @@ export async function postGoodsReceipt(
       receivedExpiryPrecision: line.expiryPrecision,
       quantityUnits: line.acceptedCanonicalUnits,
       idempotencyKey: acceptedKey(line.id),
-      receivedAt: receipt.receivedAt,
+      // The receipt keeps the calendar date keyed on it (UTC midnight). Stock being posted is
+      // on hand now, so the lot is never received later than the posting instant: a GRN keyed
+      // at 01:30 PKT for today's Karachi date must be sellable at once, not from 05:00 PKT.
+      receivedAt: receipt.receivedAt > input.at ? input.at : receipt.receivedAt,
       quarantine:
         line.rejectedCanonicalUnits > 0 && line.quarantineLocationId
           ? {

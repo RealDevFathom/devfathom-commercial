@@ -2,6 +2,7 @@ import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { workspaceToday } from '@/lib/timezone';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -453,6 +454,7 @@ export function dateInputValue(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
-export function today(): string {
-  return dateInputValue(new Date());
+/** Today in the workspace's zone: a GRN keyed in 00:00–04:59 PKT is today's, not yesterday's. */
+export function today(timeZone: string | null | undefined): string {
+  return workspaceToday(timeZone);
 }

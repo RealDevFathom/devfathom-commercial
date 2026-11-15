@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { workspaceToday } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -16,10 +17,11 @@ export default async function BranchComparisonPage({
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
   const query = await searchParams;
-  const today = new Date().toISOString().slice(0, 10);
+  const ctx = await createTRPCContext();
+  // The owner's business day, not the UTC one (00:00–04:59 PKT is still "today").
+  const today = workspaceToday(ctx.organization?.timezone);
   const from = query.from ?? today;
   const to = query.to ?? today;
-  const ctx = await createTRPCContext();
   const caller = pharmacyReportsRouter.createCaller(ctx);
   let comparison: Awaited<ReturnType<typeof caller.branchComparison>> | null = null;
   let errorMessage: string | null = null;
@@ -111,8 +113,8 @@ export default async function BranchComparisonPage({
               : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
             Money uses minor-unit values shown to two decimal places; — means unavailable, not zero.
             Expiry at risk is available stock expiring in 30 days and is not realized loss. Lost
-            demand is an <strong>Estimate</strong>:{' '}
-            {comparison.estimateMethod} Excludes {comparison.estimateExclusions.join(' and ')}.
+            demand is an <strong>Estimate</strong>: {comparison.estimateMethod} Excludes{' '}
+            {comparison.estimateExclusions.join(' and ')}.
           </p>
           <div
             role="region"

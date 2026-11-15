@@ -12,6 +12,12 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateRange,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -126,7 +132,9 @@ export default async function PharmacyReportsPage({
     const amount = formatMinor(minor).replace(/\B(?=(\d{3})+\.)/g, ',');
     return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
   };
-  const today = new Date().toISOString().slice(0, 10);
+  // The owner's business day: the workspace zone, not UTC (00:00–04:59 PKT is still "today").
+  const timeZone = ctx.organization?.timezone;
+  const today = workspaceToday(timeZone);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
@@ -200,10 +208,10 @@ export default async function PharmacyReportsPage({
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
   if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
     try {
+      // Event timestamps: bound the selected business dates on the workspace clock.
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
         branchId: branch,
-        from: new Date(`${from}T00:00:00.000Z`),
-        to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
+        ...workspaceDateRange(from, to, timeZone),
       });
     } catch {
       demandError = true;
@@ -460,6 +468,7 @@ export default async function PharmacyReportsPage({
         financial={catalog.permissions.financial}
       />
       <ObservedDemand
+        timeZone={timeZone}
         report={demand}
         failed={demandError}
         selected={!!branch}
@@ -496,7 +505,7 @@ export default async function PharmacyReportsPage({
               status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
+            <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
             <span>Source: {result.freshness.source}</span>
           </div>
           <SectionCard
@@ -518,11 +527,14 @@ export default async function PharmacyReportsPage({
               selected period. Stock signals, recommended orders and expiry exposure are current
               snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
               margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+              on postings from the start of the first selected date to the start of the day after
+              the last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still
+              splits days at midnight UTC, so its totals can differ for the same dates. It may
+              differ from sales grouped by business date. Missing journal evidence is unavailable;
+              posted totals do not establish complete source or cost coverage. Supplier, ingredient
+              and batch filters do not apply to these KPI totals, the daily work pack or observed
+              demand. Those panels use branch/date scope only; current snapshots use branch scope
+              only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
