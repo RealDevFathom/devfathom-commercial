@@ -86,34 +86,77 @@ const UNIT_SCALE: Record<string, { family: string; factor: number }> = {
   iu: { family: 'iu', factor: 1 },
   '%': { family: 'percent', factor: 1 },
 };
+const UNIT = String.raw`(mcg|µg|ug|mg|g|ml|iu|%)`;
+const NUMBER = String.raw`(\d+(?:\.\d+)?)`;
+/** An optional per-volume denominator: "/ml", "/5 ml", "/ 5ml". */
+const PER_VOLUME = new RegExp(String.raw`\s*/\s*${NUMBER}?\s*ml\s*$`, 'i');
 
-/** Normalized "family:amount" key, so 0.5 g and 500 mg compare equal. */
-function strengthKey(value: number, unit: string): string | null {
-  const scale = UNIT_SCALE[unit.trim().toLowerCase().split('/')[0] ?? ''];
+/**
+ * Normalized "family:amount[/ml]" key, so 0.5 g equals 500 mg and 250 mg/5 ml
+ * equals 50 mg/ml. A concentration keeps its denominator; an unknown unit or
+ * denominator yields null, which never counts as a strength match.
+ */
+function strengthKey(value: number, unit: string, perMl: number | null): string | null {
+  const scale = UNIT_SCALE[unit.trim().toLowerCase()];
   if (!scale || !Number.isFinite(value) || value <= 0) return null;
-  return `${scale.family}:${Math.round(value * scale.factor * 1000) / 1000}`;
+  if (perMl !== null && !(Number.isFinite(perMl) && perMl > 0)) return null;
+  const amount = (value * scale.factor) / (perMl ?? 1);
+  return `${scale.family}:${Math.round(amount * 1000) / 1000}${perMl === null ? '' : '/ml'}`;
 }
 
-/** "500/125 mg", "250mg", "0.5 g" → sorted strength keys; [] when unreadable. */
+function splitDenominator(text: string): { rest: string; perMl: number | null } {
+  const match = PER_VOLUME.exec(text);
+  if (!match) return { rest: text, perMl: null };
+  return { rest: text.slice(0, match.index), perMl: match[1] ? Number(match[1]) : 1 };
+}
+
+/** A catalogue unit such as "mg", "mg/ml" or "mg/5 ml". */
+function catalogueStrengthKey(value: string | number, unit: string): string | null {
+  const { rest, perMl } = splitDenominator(unit);
+  if (rest.includes('/')) return null;
+  return strengthKey(Number(value), rest, perMl);
+}
+
+/**
+ * Read strengths IN WRITTEN ORDER: "500/125 mg", "500 mg + 125 mg", "250mg",
+ * "0.5 g", "250 mg/5 ml". [] when any part is unreadable.
+ */
 export function parseReadStrength(read: string | null): string[] {
   if (!read) return [];
-  const match = /^\s*(\d+(?:\.\d+)?(?:\s*[/+]\s*\d+(?:\.\d+)?)*)\s*(mcg|µg|ug|mg|g|ml|iu|%)/i.exec(
-    read
+  const { rest, perMl } = splitDenominator(read.trim());
+  const parts = rest.split(/\s*[/+]\s*/);
+  const parsed = parts.map((part) => new RegExp(`^${NUMBER}\\s*${UNIT}?$`, 'i').exec(part.trim()));
+  if (!parsed.length || parsed.some((match) => !match)) return [];
+  const fallbackUnit = parsed[parsed.length - 1]![2];
+  if (!fallbackUnit) return [];
+  const keys = parsed.map((match) =>
+    strengthKey(Number(match![1]), match![2] ?? fallbackUnit, perMl)
   );
-  if (!match) return [];
-  const keys = match[1]!.split(/[/+]/).map((amount) => strengthKey(Number(amount), match[2]!));
-  return keys.every((key): key is string => key !== null) ? keys.sort() : [];
+  return keys.every((key): key is string => key !== null) ? keys : [];
 }
 
 function saltSet(medicine: RxDraftCatalogueMedicine): string {
   return [...new Set(medicine.strengths.map((s) => s.ingredientId))].sort().join('|');
 }
 
-function strengthKeys(medicine: RxDraftCatalogueMedicine): string[] {
-  return medicine.strengths
-    .map((s) => strengthKey(Number(s.value), s.unit))
-    .filter((key): key is string => key !== null)
-    .sort();
+/** "ingredient=strength" per ingredient, so combinations keep which amount is whose. */
+function profileKey(pairs: readonly (readonly [string, string | null])[]): string | null {
+  if (pairs.some(([, key]) => key === null)) return null;
+  return pairs
+    .map(([ingredient, key]) => `${ingredient}=${key}`)
+    .sort()
+    .join('|');
+}
+
+function medicineProfile(medicine: RxDraftCatalogueMedicine): string | null {
+  return profileKey(
+    medicine.strengths.map((s) => [s.ingredientId, catalogueStrengthKey(s.value, s.unit)] as const)
+  );
+}
+
+function sortedKeys(medicine: RxDraftCatalogueMedicine): string | null {
+  const keys = medicine.strengths.map((s) => catalogueStrengthKey(s.value, s.unit));
+  return keys.every((key) => key !== null) ? keys.sort().join('|') : null;
 }
 
 function saltLabel(medicine: RxDraftCatalogueMedicine): string {
@@ -131,22 +174,77 @@ function nameMatches(read: string[], names: readonly (string | null)[]): boolean
   });
 }
 
+type ReadSalt = {
+  /** Sorted ingredient ids of every salt the read name can mean. */
+  salts: Set<string>;
+  /** Per-ingredient strength profiles that count as an exact match. */
+  exactProfiles: Set<string>;
+};
+
 /**
- * The salt read for a line: the ingredients of a catalogue medicine whose name
- * matches, or a single ingredient whose own name was written (a generic Rx).
+ * What a line names. A generic Rx lists ingredients ("Amoxicillin + Clavulanic
+ * acid"): every part must be a whole catalogue ingredient name, or nothing is
+ * matched, so a combination is never resolved to one of its parts. A brand Rx
+ * resolves through catalogue medicines of that name, whose own per-ingredient
+ * strengths say which written amount belongs to which ingredient.
  */
-function readSalts(read: string[], catalogue: readonly RxDraftCatalogueMedicine[]): Set<string> {
-  const salts = new Set<string>();
-  for (const medicine of catalogue) {
-    if (medicine.strengths.length && nameMatches(read, [medicine.productName, medicine.brandName]))
-      salts.add(saltSet(medicine));
-    if (
-      medicine.strengths.length === 1 &&
-      nameMatches(read, [medicine.strengths[0]!.ingredientName])
-    )
-      salts.add(saltSet(medicine));
+function readSalt(
+  drugName: string | null,
+  strengths: string[],
+  catalogue: readonly RxDraftCatalogueMedicine[]
+): ReadSalt {
+  const result: ReadSalt = { salts: new Set(), exactProfiles: new Set() };
+  if (!drugName) return result;
+  const ingredients = new Map<string, string>();
+  for (const medicine of catalogue)
+    for (const s of medicine.strengths)
+      ingredients.set(words(s.ingredientName).join(' '), s.ingredientId);
+  const parts = drugName
+    .split(/\s*(?:\+|\/|,|&|\band\b|\bwith\b)\s*/i)
+    .map((part) => words(part).join(' '))
+    .filter(Boolean);
+  const named = parts.map((part) => ingredients.get(part));
+
+  if (parts.length && named.every((id): id is string => id !== undefined)) {
+    const salt = [...new Set(named)].sort().join('|');
+    result.salts.add(salt);
+    if (new Set(named).size === named.length && strengths.length === named.length) {
+      const profile = profileKey(named.map((id, i) => [id, strengths[i]!] as const));
+      if (profile) result.exactProfiles.add(profile);
+    }
+    return result;
   }
-  return salts;
+  if (parts.length !== 1) return result;
+
+  const read = words(drugName);
+  const wanted = [...strengths].sort().join('|');
+  const brandProfiles = new Map<string, Set<string>>();
+  for (const medicine of catalogue) {
+    if (
+      !medicine.strengths.length ||
+      !nameMatches(read, [medicine.productName, medicine.brandName])
+    )
+      continue;
+    const salt = saltSet(medicine);
+    result.salts.add(salt);
+    const profile = medicineProfile(medicine);
+    if (wanted && profile && sortedKeys(medicine) === wanted) {
+      brandProfiles.set(salt, (brandProfiles.get(salt) ?? new Set()).add(profile));
+    }
+  }
+  for (const salt of result.salts) {
+    const ids = salt.split('|');
+    if (ids.length === 1 && strengths.length === 1) {
+      // One ingredient, one amount: the association cannot be ambiguous.
+      const profile = profileKey([[ids[0]!, strengths[0]!]]);
+      if (profile) result.exactProfiles.add(profile);
+    } else {
+      // Two same-name products whose amounts pair differently are ambiguous: no exact match.
+      const profiles = brandProfiles.get(salt);
+      if (profiles?.size === 1) result.exactProfiles.add([...profiles][0]!);
+    }
+  }
+  return result;
 }
 
 export function buildRxDraftCart(
@@ -159,8 +257,11 @@ export function buildRxDraftCart(
   const maxCandidates = options.maxCandidates ?? 5;
   const lines = extraction.lines.map((line, index): RxDraftCartLine => {
     const read = words(line.drugName.value ?? '');
-    const salts = readSalts(read, catalogue);
-    const wanted = parseReadStrength(line.strength.value).join('|');
+    const { salts, exactProfiles } = readSalt(
+      line.drugName.value,
+      parseReadStrength(line.strength.value),
+      catalogue
+    );
     const rank = { SALT_AND_STRENGTH: 0, SALT_ONLY: 1 } as const;
     const candidates = catalogue
       .filter((medicine) => medicine.strengths.length && salts.has(saltSet(medicine)))
@@ -168,8 +269,9 @@ export function buildRxDraftCart(
         medicineId: medicine.id,
         label: medicine.productName,
         salt: saltLabel(medicine),
-        matchKind:
-          wanted && strengthKeys(medicine).join('|') === wanted ? 'SALT_AND_STRENGTH' : 'SALT_ONLY',
+        matchKind: exactProfiles.has(medicineProfile(medicine) ?? '')
+          ? 'SALT_AND_STRENGTH'
+          : 'SALT_ONLY',
         nameMatch: nameMatches(read, [medicine.productName, medicine.brandName]),
         presentations: medicine.presentations.map((p) => ({ id: p.id, label: p.presentation })),
       }))

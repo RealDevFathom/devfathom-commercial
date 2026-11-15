@@ -96,6 +96,8 @@ describe('DEV-63 delivery radius profitability', () => {
               grossMinor: 2000,
               discountMinor: 100,
               unitCostMinor: 600,
+              canonicalUnits: 20,
+              returnLines: [],
             },
           ],
         },
@@ -121,5 +123,52 @@ describe('DEV-63 delivery radius profitability', () => {
         },
       })
     );
+  });
+
+  it('nets later returns out of revenue and COGS', async () => {
+    const line = {
+      quantity: 2,
+      unitPriceMinor: 1000,
+      grossMinor: 2000,
+      discountMinor: 0,
+      unitCostMinor: 600,
+      canonicalUnits: 20,
+    };
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'fully-returned',
+        deliveryDistanceMeters: 1000,
+        counterSale: {
+          lines: [
+            {
+              ...line,
+              returnLines: [{ canonicalUnits: 20, grossMinor: 2000, discountMinor: 0 }],
+            },
+          ],
+        },
+      },
+      {
+        id: 'half-returned-legacy',
+        deliveryDistanceMeters: 1000,
+        counterSale: {
+          lines: [
+            {
+              ...line,
+              returnLines: [{ canonicalUnits: 10, grossMinor: null, discountMinor: null }],
+            },
+          ],
+        },
+      },
+    ]);
+    const db = { pharmacyCustomerOrder: { findMany } } as never;
+    const orders = await loadDeliveryRadiusOrders(
+      db,
+      { organizationId: 'org-a', branchId: 'branch-a' },
+      { from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-15T00:00:00Z') }
+    );
+    expect(orders).toEqual([
+      { orderId: 'fully-returned', distanceMeters: 1000, revenueMinor: 0, cogsMinor: 0 },
+      { orderId: 'half-returned-legacy', distanceMeters: 1000, revenueMinor: 1000, cogsMinor: 600 },
+    ]);
   });
 });

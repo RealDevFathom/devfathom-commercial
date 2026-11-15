@@ -135,4 +135,80 @@ describe('DEV-63 Rx photo draft cart', () => {
     expect(parseReadStrength('as directed')).toEqual([]);
     expect(parseReadStrength(null)).toEqual([]);
   });
+
+  it('keeps a concentration denominator: 250 mg/5 ml is 50 mg/ml, not 250 mg/ml', () => {
+    const syrups: RxDraftCatalogueMedicine[] = [
+      {
+        id: 'syrup-250-per-ml',
+        productName: 'Fathomcillin Forte syrup',
+        brandName: 'Fathomcillin',
+        strengths: [{ ...amox, value: '250', unit: 'mg/ml' }],
+        presentations: [{ id: 'p1', presentation: 'Syrup' }],
+      },
+      {
+        id: 'syrup-250-per-5ml',
+        productName: 'Amoxil syrup',
+        brandName: 'Amoxil',
+        strengths: [{ ...amox, value: '250', unit: 'mg/5 ml' }],
+        presentations: [{ id: 'p2', presentation: 'Syrup' }],
+      },
+    ];
+    const cart = buildRxDraftCart(extraction(['Fathomcillin', '250 mg/5 ml']), syrups, {
+      minConfidence: 0.5,
+    });
+    expect(
+      Object.fromEntries(cart.lines[0]!.candidates.map((c) => [c.medicineId, c.matchKind]))
+    ).toEqual({ 'syrup-250-per-5ml': 'SALT_AND_STRENGTH', 'syrup-250-per-ml': 'SALT_ONLY' });
+    expect(cart.lines[0]!.suggestedMedicineId).toBe('syrup-250-per-5ml');
+    expect(parseReadStrength('50 mg/ml')).toEqual(parseReadStrength('250 mg/5 ml'));
+  });
+
+  it('keeps each amount with its own ingredient in a combination', () => {
+    const swapped: RxDraftCatalogueMedicine = {
+      id: 'med-swapped',
+      productName: 'Swapfathom',
+      brandName: null,
+      strengths: [
+        { ...amox, value: '125', unit: 'mg' },
+        { ...clav, value: '500', unit: 'mg' },
+      ],
+      presentations: [{ id: 'pres-swapped', presentation: 'Tablet' }],
+    };
+    const brand = buildRxDraftCart(
+      extraction(['Clavfathom', '500/125 mg']),
+      [...catalogue, swapped],
+      {
+        minConfidence: 0.5,
+      }
+    );
+    expect(
+      Object.fromEntries(brand.lines[0]!.candidates.map((c) => [c.medicineId, c.matchKind]))
+    ).toEqual({ 'med-combo': 'SALT_AND_STRENGTH', 'med-swapped': 'SALT_ONLY' });
+    const onlySwapped = buildRxDraftCart(
+      extraction(['Amoxicillin + Clavulanic acid', '500/125 mg']),
+      [swapped],
+      { minConfidence: 0.5 }
+    );
+    expect(onlySwapped.lines[0]!.candidates[0]!.matchKind).toBe('SALT_ONLY');
+    expect(onlySwapped.lines[0]!.suggestedMedicineId).toBeNull();
+  });
+
+  it('resolves every named ingredient of a generic combination, never monotherapy', () => {
+    const cart = buildRxDraftCart(
+      extraction(['Amoxicillin + Clavulanic acid', '500 mg + 125 mg']),
+      catalogue,
+      { minConfidence: 0.5 }
+    );
+    expect(cart.lines[0]!.candidates.map((c) => [c.medicineId, c.matchKind])).toEqual([
+      ['med-combo', 'SALT_AND_STRENGTH'],
+    ]);
+    expect(cart.lines[0]!.suggestedMedicineId).toBe('med-combo');
+    // An unknown second ingredient leaves the line unmatched rather than half-matched.
+    const partial = buildRxDraftCart(
+      extraction(['Amoxicillin + Unknownbactam', '500/125 mg']),
+      catalogue,
+      { minConfidence: 0.5 }
+    );
+    expect(partial.lines[0]!.candidates).toEqual([]);
+  });
 });

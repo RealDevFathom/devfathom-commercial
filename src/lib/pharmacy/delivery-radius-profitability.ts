@@ -6,9 +6,9 @@ import { saleTotalMinor } from './settlement';
  * DEV-63: delivery order profitability by radius band.
  *
  * Revenue and cost of goods come from the completed counter sale behind each
- * delivered order. The delivery cost is an ESTIMATE built only from the owner's
- * own assumptions (fixed cost per order, cost per km, band edges); nothing here
- * carries a built-in figure. An order dispatched without a recorded distance is
+ * delivered order, net of discounts and later returns. The delivery cost is an
+ * ESTIMATE built only from the owner's own assumptions (fixed cost per order,
+ * cost per km, band edges); nothing here carries a built-in figure. An order dispatched without a recorded distance is
  * reported apart, never placed in a band by guess.
  */
 
@@ -148,6 +148,10 @@ export async function loadDeliveryRadiusOrders(
               grossMinor: true,
               discountMinor: true,
               unitCostMinor: true,
+              canonicalUnits: true,
+              returnLines: {
+                select: { canonicalUnits: true, grossMinor: true, discountMinor: true },
+              },
             },
           },
         },
@@ -160,8 +164,49 @@ export async function loadDeliveryRadiusOrders(
     return {
       orderId: order.id,
       distanceMeters: order.deliveryDistanceMeters,
-      revenueMinor: saleTotalMinor(lines),
-      cogsMinor: lines.reduce((total, line) => total + line.unitCostMinor * line.quantity, 0),
+      revenueMinor: lines.reduce((total, line) => total + netLineRevenue(line), 0),
+      cogsMinor: lines.reduce((total, line) => total + netLineCost(line), 0),
     };
   });
+}
+
+type ReportedSaleLine = {
+  quantity: number;
+  unitPriceMinor: number;
+  grossMinor: number;
+  discountMinor: number;
+  unitCostMinor: number;
+  canonicalUnits: number;
+  returnLines: {
+    canonicalUnits: number;
+    grossMinor: number | null;
+    discountMinor: number | null;
+  }[];
+};
+
+function returnedShare(line: ReportedSaleLine, amount: number) {
+  const returned = line.returnLines.reduce((total, row) => total + row.canonicalUnits, 0);
+  if (!returned || line.canonicalUnits <= 0) return 0;
+  return Math.floor((amount * Math.min(returned, line.canonicalUnits)) / line.canonicalUnits);
+}
+
+/** Net of discounts and of later returns, using the return's own recorded money when present. */
+function netLineRevenue(line: ReportedSaleLine) {
+  const net = saleTotalMinor([line]);
+  const recorded = line.returnLines.every(
+    (row) => row.grossMinor !== null && row.discountMinor !== null
+  );
+  const returned = recorded
+    ? line.returnLines.reduce(
+        (total, row) => total + (row.grossMinor ?? 0) - (row.discountMinor ?? 0),
+        0
+      )
+    : returnedShare(line, net);
+  return net - returned;
+}
+
+/** Cost of the units kept by the customer; returned units go back to stock. */
+function netLineCost(line: ReportedSaleLine) {
+  const cost = line.unitCostMinor * line.quantity;
+  return cost - returnedShare(line, cost);
 }
