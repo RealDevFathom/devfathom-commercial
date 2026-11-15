@@ -398,6 +398,18 @@ describe('DEV-256 supplier, ingredient and batch report filters', () => {
     expect(report.metrics.cashMinor).toBeNull();
   });
 
+  it('counts batch-specific and medicine-wide recalls for the selected batch', async () => {
+    const { result, query } = run({ batchId: 'batch_1' });
+    const report = await result;
+
+    const recalls = query('FROM "pharmacy_recall_notices" r')!;
+    // A medicine-wide notice recalls every batch of that medicine (createRecall).
+    expect(recalls.sql).toContain('r."batchId"=');
+    expect(recalls.sql).toContain('recalled."medicineId"=r."medicineId"');
+    expect(recalls.values.filter((value) => value === 'batch_1')).toHaveLength(2);
+    expect(report.metrics.openRecalls).toBe(0);
+  });
+
   it('keeps the unfiltered branch and date reads when no dimension is selected', async () => {
     const { result, counts, query } = run({});
     const report = await result;
