@@ -1,5 +1,9 @@
+import { withTerminalScopeLock, type TerminalScopeLock } from '@/lib/retail-terminal/local-store';
 import {
   emptyPosState,
+  POS_STORE_DATABASE_NAME,
+  PosStorageError,
+  posScopeKey,
   purgePosScope,
   readPosState,
   sanitizeCatalogSnapshot,
@@ -34,17 +38,30 @@ export type PosReplayResponse = {
 
 export type PosOfflineRuntimeState = PosPersistedState<PosQueueSnapshot>;
 
-/** The sole impure adapter between the POS, IndexedDB, and the pure queue transitions. */
+/**
+ * The sole impure adapter between the POS, IndexedDB, and the pure queue transitions.
+ *
+ * Several tabs may open the same enrolled terminal, and they all share one scope
+ * document. Each mutation therefore holds a cross-tab lock on that scope, re-reads
+ * the persisted document and applies its transition to that fresh copy before the
+ * write: a draft another tab saved is never replaced by this tab's stale snapshot,
+ * and a catalog refresh cannot roll back newer queue state.
+ */
 export class PosOfflineRuntime {
   private state: PosOfflineRuntimeState;
   private activeReplay: Promise<ReplayResult> | null = null;
+  private readonly stateLock: string;
+  private readonly replayLock: string;
 
   constructor(
     readonly scope: PosScope,
-    private readonly driver: PosStorageDriver
+    private readonly driver: PosStorageDriver,
+    private readonly lock: TerminalScopeLock = withTerminalScopeLock
   ) {
     this.state = emptyPosState(scope);
     this.state.queue = createQueueSnapshot(scope.deviceId);
+    this.stateLock = `${POS_STORE_DATABASE_NAME}:${posScopeKey(scope)}`;
+    this.replayLock = `${this.stateLock}:replay`;
   }
 
   snapshot(): PosOfflineRuntimeState {
@@ -52,38 +69,19 @@ export class PosOfflineRuntime {
   }
 
   async hydrate(): Promise<'ready' | 'unrecoverable'> {
-    const result = await readPosState<PosQueueSnapshot>(this.driver, this.scope);
-    if (result.status === 'unrecoverable') return 'unrecoverable';
-    if (result.status === 'ok') {
-      if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
-        return 'unrecoverable';
-      }
-      this.state = {
-        ...result.state,
-        queue: result.state.queue ?? createQueueSnapshot(this.scope.deviceId),
-      };
-      // Schema v1 also contains pre-proof drafts. Preserve them for explicit
-      // discard, but never let unverifiable authorship block newer signed work.
-      this.state.queue = {
-        ...this.queue(),
-        drafts: this.queue().drafts.map((draft) =>
-          draft.status !== 'COMPLETED' && (!draft.composerStaffProfileId || !draft.composerProof)
-            ? {
-                ...draft,
-                status: 'QUARANTINED',
-                review: {
-                  reason: 'COMPOSER_UNVERIFIED',
-                  message:
-                    'This saved order has no verified composer. Recreate it and discard this copy.',
-                  atCommandId: null,
-                },
-              }
-            : draft
-        ),
-      };
-      await this.persist();
-    }
-    return 'ready';
+    return this.lock(this.stateLock, async () => {
+      const loaded = await this.load();
+      if (loaded === 'unrecoverable') return 'unrecoverable';
+      if (loaded === 'ok') await this.persist();
+      return 'ready';
+    });
+  }
+
+  /** Pick up work other tabs of this terminal saved since this runtime last wrote. */
+  async refresh(): Promise<void> {
+    await this.lock(this.stateLock, async () => {
+      await this.loadOrThrow();
+    });
   }
 
   async cacheCatalog(payload: unknown, fetchedAtClient: string): Promise<PosCatalogSnapshot> {
@@ -92,23 +90,28 @@ export class PosOfflineRuntime {
         ? String(payload.version)
         : '';
     const catalog = sanitizeCatalogSnapshot(payload, { version, fetchedAtClient });
-    const reviewed = markDraftsForCatalogReview(this.queue(), catalog);
-    this.state = { ...this.state, catalog, queue: reviewed.snapshot };
-    await this.persist();
+    await this.commit(() => {
+      const reviewed = markDraftsForCatalogReview(this.queue(), catalog);
+      this.state = { ...this.state, catalog, queue: reviewed.snapshot };
+      return { persist: true, result: undefined };
+    });
     return catalog;
   }
 
-  async enqueue(input: PosDraftInput) {
-    const result = enqueueDraft(this.queue(), input);
-    if (!result.ok) return result;
-    this.state = { ...this.state, queue: result.snapshot };
-    await this.persist();
-    return result;
+  async enqueue(input: PosDraftInput): Promise<ReturnType<typeof enqueueDraft>> {
+    return this.commit<ReturnType<typeof enqueueDraft>>(() => {
+      const result = enqueueDraft(this.queue(), input);
+      if (!result.ok) return { persist: false, result };
+      this.state = { ...this.state, queue: result.snapshot };
+      return { persist: true, result };
+    });
   }
 
   async resume(): Promise<void> {
-    this.state = { ...this.state, queue: resumeAfterReauth(this.queue()) };
-    await this.persist();
+    await this.commit(() => {
+      this.state = { ...this.state, queue: resumeAfterReauth(this.queue()) };
+      return { persist: true, result: undefined };
+    });
   }
 
   /**
@@ -120,6 +123,7 @@ export class PosOfflineRuntime {
     renew: (originalProof: string) => Promise<string | null>,
     needsRenewal: (proof: string) => boolean = () => true
   ): Promise<void> {
+    await this.refresh();
     const candidates = this.queue().drafts.filter(
       (draft) =>
         draft.status !== 'COMPLETED' &&
@@ -130,33 +134,37 @@ export class PosOfflineRuntime {
     for (const candidate of candidates) {
       const composerProof = await renew(candidate.composerProof);
       if (!composerProof) continue;
-      this.state = {
-        ...this.state,
-        queue: {
-          ...this.queue(),
-          drafts: this.queue().drafts.map((draft) =>
-            draft.draftId === candidate.draftId && draft.composerProof === candidate.composerProof
-              ? { ...draft, composerProof }
-              : draft
-          ),
-        },
-      };
-      await this.persist();
+      await this.commit(() => {
+        this.state = {
+          ...this.state,
+          queue: {
+            ...this.queue(),
+            drafts: this.queue().drafts.map((draft) =>
+              draft.draftId === candidate.draftId && draft.composerProof === candidate.composerProof
+                ? { ...draft, composerProof }
+                : draft
+            ),
+          },
+        };
+        return { persist: true, result: undefined };
+      });
     }
   }
 
   async resolveReview(draftId: string, decision: 'REPLAY' | 'DISCARD'): Promise<void> {
-    this.state = {
-      ...this.state,
-      queue: resolveReviewedDraft(
-        this.queue(),
-        draftId,
-        decision,
-        this.state.catalog?.version ?? '',
-        this.state.catalog ?? null
-      ),
-    };
-    await this.persist();
+    await this.commit(() => {
+      this.state = {
+        ...this.state,
+        queue: resolveReviewedDraft(
+          this.queue(),
+          draftId,
+          decision,
+          this.state.catalog?.version ?? '',
+          this.state.catalog ?? null
+        ),
+      };
+      return { persist: true, result: undefined };
+    });
   }
 
   replay(
@@ -164,7 +172,8 @@ export class PosOfflineRuntime {
     send: (request: PosReplayRequest) => Promise<PosReplayResponse>
   ): Promise<ReplayResult> {
     if (this.activeReplay) return this.activeReplay;
-    const replay = this.runReplay(staffProfileId, send);
+    // One replaying tab per terminal; the others wait and then find the work done.
+    const replay = this.lock(this.replayLock, () => this.runReplay(staffProfileId, send));
     this.activeReplay = replay;
     const clear = () => {
       if (this.activeReplay === replay) this.activeReplay = null;
@@ -178,43 +187,73 @@ export class PosOfflineRuntime {
     send: (request: PosReplayRequest) => Promise<PosReplayResponse>
   ): Promise<ReplayResult> {
     for (;;) {
-      const next = nextReplayCommand(this.queue(), this.scope.deviceId, staffProfileId);
-      if (next.status === 'REFUSED' && next.reason === 'OPERATOR_MISMATCH') {
-        return {
-          state: 'REFUSED' as const,
-          discarded: null,
-          waitingComposers: next.composerStaffProfileIds,
+      const step = await this.commit<ReplayStep>(() => {
+        const next = nextReplayCommand(this.queue(), this.scope.deviceId, staffProfileId);
+        if (next.status === 'REFUSED' && next.reason === 'OPERATOR_MISMATCH') {
+          return {
+            persist: false,
+            result: {
+              done: {
+                state: 'REFUSED' as const,
+                discarded: null,
+                waitingComposers: next.composerStaffProfileIds,
+              },
+            },
+          };
+        }
+        if (next.status !== 'READY') {
+          return { persist: false, result: { done: { state: next.status, discarded: null } } };
+        }
+        const built = buildReplayRequest(next.draft, next.command);
+        if (!built.ok) {
+          return {
+            persist: false,
+            result: { done: { state: 'REFUSED' as const, discarded: null } },
+          };
+        }
+        this.state = {
+          ...this.state,
+          queue: beginReplay(this.queue(), next.draft.draftId, next.command.commandId),
         };
-      }
-      if (next.status !== 'READY') return { state: next.status, discarded: null };
-      const built = buildReplayRequest(next.draft, next.command);
-      if (!built.ok) return { state: 'REFUSED' as const, discarded: null };
+        return {
+          persist: true,
+          result: {
+            draftId: next.draft.draftId,
+            commandId: next.command.commandId,
+            request: built.request,
+          },
+        };
+      });
+      if ('done' in step) return step.done;
 
-      this.state = {
-        ...this.state,
-        queue: beginReplay(this.queue(), next.draft.draftId, next.command.commandId),
-      };
-      await this.persist();
-
+      // The network call runs outside the state lock so other tabs can keep saving.
       let response: PosReplayResponse;
       try {
-        response = await send(built.request);
+        response = await send(step.request);
       } catch {
         response = { status: 0 };
       }
-      const applied = applyReplayOutcome(this.queue(), {
-        draftId: next.draft.draftId,
-        commandId: next.command.commandId,
-        outcome: classifyReplayOutcome(response),
-        serverRef: response.serverRef,
+      const outcome = classifyReplayOutcome(response);
+      const applied = await this.lock(this.stateLock, async () => {
+        await this.loadOrThrow();
+        const result = applyReplayOutcome(this.queue(), {
+          draftId: step.draftId,
+          commandId: step.commandId,
+          outcome,
+          serverRef: response.serverRef,
+        });
+        this.state = { ...this.state, queue: result.snapshot };
+        if (result.snapshot.replay === 'STOPPED_REVOKED') {
+          await purgePosScope(this.driver, this.scope);
+        } else {
+          await this.persist();
+        }
+        return result;
       });
-      this.state = { ...this.state, queue: applied.snapshot };
       if (applied.snapshot.replay === 'STOPPED_REVOKED') {
-        await purgePosScope(this.driver, this.scope);
         return { state: 'STOPPED' as const, discarded: applied.discarded };
       }
-      await this.persist();
-      if (classifyReplayOutcome(response).action !== 'ACK') {
+      if (outcome.action !== 'ACK') {
         return { state: 'PAUSED' as const, discarded: applied.discarded };
       }
     }
@@ -228,10 +267,76 @@ export class PosOfflineRuntime {
     return this.state.queue ?? createQueueSnapshot(this.scope.deviceId);
   }
 
+  /**
+   * Replace the in-memory state with the persisted document. Callers hold the state
+   * lock. Schema v1 also contains pre-proof drafts: preserve them for explicit
+   * discard, but never let unverifiable authorship block newer signed work.
+   */
+  private async load(): Promise<'ok' | 'empty' | 'unrecoverable'> {
+    const result = await readPosState<PosQueueSnapshot>(this.driver, this.scope);
+    if (result.status === 'unrecoverable') return 'unrecoverable';
+    if (result.status === 'empty') {
+      // A confirmed revocation purged the document; this runtime stays stopped
+      // rather than recreating local work the device can never send.
+      if (this.queue().replay !== 'STOPPED_REVOKED') {
+        this.state = emptyPosState(this.scope);
+        this.state.queue = createQueueSnapshot(this.scope.deviceId);
+      }
+      return 'empty';
+    }
+    if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
+      return 'unrecoverable';
+    }
+    const queue = result.state.queue ?? createQueueSnapshot(this.scope.deviceId);
+    this.state = {
+      ...result.state,
+      queue: {
+        ...queue,
+        drafts: queue.drafts.map((draft) =>
+          draft.status !== 'COMPLETED' && (!draft.composerStaffProfileId || !draft.composerProof)
+            ? {
+                ...draft,
+                status: 'QUARANTINED',
+                review: {
+                  reason: 'COMPOSER_UNVERIFIED',
+                  message:
+                    'This saved order has no verified composer. Recreate it and discard this copy.',
+                  atCommandId: null,
+                },
+              }
+            : draft
+        ),
+      },
+    };
+    return 'ok';
+  }
+
+  private async loadOrThrow(): Promise<void> {
+    if ((await this.load()) === 'unrecoverable') {
+      throw new PosStorageError(
+        'UNRECOVERABLE',
+        'Local terminal storage changed in another tab and can no longer be read. Reload the POS.'
+      );
+    }
+  }
+
+  /** Lock the scope, apply `transition` to the freshly read document, then write it. */
+  private commit<T>(transition: () => { persist: boolean; result: T }): Promise<T> {
+    return this.lock(this.stateLock, async () => {
+      await this.loadOrThrow();
+      const { persist, result } = transition();
+      if (persist) await this.persist();
+      return result;
+    });
+  }
+
   private persist(): Promise<void> {
     return writePosState(this.driver, this.state);
   }
 }
+
+type ReplayStep =
+  { done: ReplayResult } | { draftId: string; commandId: string; request: PosReplayRequest };
 
 type ReplayResult = {
   state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';

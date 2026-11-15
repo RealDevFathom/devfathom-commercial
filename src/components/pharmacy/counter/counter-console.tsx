@@ -35,6 +35,8 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
+import { readActiveBill, rememberActiveBill, type ActiveBillScope } from './active-bill-storage';
 import { CounterLostSaleChips, type LostSaleChoice } from './counter-lost-sale-chips';
 import {
   CounterReceiptView,
@@ -95,6 +97,7 @@ import {
   counterBillMovedOn,
   counterErrorMessage,
   counterErrorTone,
+  counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
@@ -591,6 +594,27 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  // DEV-97: the drawer and payment controls belong to whoever takes payment
+  // (`pharmacy:counter`). A pharmacist builds the bill and counter staff take it.
+  // Only a confirmed answer for this account counts; a failed read withholds
+  // payment. The server stays the authority for every drawer and tender write.
+  const settlementAccess = trpc.pharmacySales.settlementAccess.useQuery(undefined, {
+    retry: false,
+  });
+  const settlementIdentityMatches =
+    settlementAccess.data?.userId === accountId &&
+    settlementAccess.data.organizationId === organizationId;
+  const canSettlePayments =
+    settlementIdentityMatches &&
+    settlementAccess.data?.authorized === true &&
+    !settlementAccess.isError;
+  // Only a confirmed "no" lifts the opening-drawer step (DEV-725): while access is
+  // unknown, a cashier still opens the drawer before the first bill.
+  const settlementDenied =
+    settlementIdentityMatches &&
+    settlementAccess.data?.authorized === false &&
+    !settlementAccess.isError;
   const savedReceiptFormat = trpc.pharmacySales.counterReceiptFormat.useQuery(
     { branchId },
     { enabled: branchAuthorized, staleTime: 60_000, retry: false }
@@ -731,12 +755,18 @@ function ScopedPharmacyCounterConsole({
     { branchId, saleId: saleId ?? '' },
     { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
   );
+  // DEV-623: every unpaid bill in the branch, so none is stranded with its stock.
+  const openBillsQuery = trpc.pharmacySales.openBills.useQuery(
+    { branchId },
+    { enabled: branchAuthorized, staleTime: 15_000 }
+  );
+  const refetchOpenBills = openBillsQuery.refetch;
 
   // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
-  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId);
+  const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
   const deviceUnavailable = useHydrated() && deviceId === null;
@@ -744,7 +774,8 @@ function ScopedPharmacyCounterConsole({
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
   );
-  const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
+  // A disabled query still returns cached data, so a revoked grant drops it here.
+  const openDrawerSession = settlementDenied ? null : (drawerQuery.data?.openDrawer ?? null);
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
   // DEV-725: opening the drawer is the first step of the shift. Until the server
   // reports an OPEN drawer for this device, the opening-cash step replaces
@@ -752,7 +783,8 @@ function ScopedPharmacyCounterConsole({
   // keeps the step, with a retry, rather than offering a bill the server refuses.
   // A failed read is an unknown drawer, even when older data says it was open.
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
-  const drawerRequired = branchAuthorized && !drawerOpen;
+  // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
+  const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -818,7 +850,7 @@ function ScopedPharmacyCounterConsole({
   );
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
-    { enabled: Boolean(branchId) }
+    { enabled: Boolean(branchId) && canSettlePayments }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
@@ -1008,6 +1040,60 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+
+  // DEV-623: the bill open on this device survives a reload. It is restored once
+  // payment recovery has run (an in-flight payment takes precedence), and only
+  // when the server's own cart read still says OPEN; otherwise it is forgotten
+  // here and stays under Open bills.
+  const activeBillScope = useMemo<ActiveBillScope | null>(
+    () => (branchAuthorized && branchId ? { organizationId, accountId, branchId } : null),
+    [accountId, branchAuthorized, branchId, organizationId]
+  );
+  const activeBillKey = JSON.stringify([organizationId, accountId, branchId]);
+  // The scope whose remembered bill has been checked; nothing is written before.
+  const activeBillChecked = useRef<string | null>(null);
+  const currentSaleId = useRef(saleId);
+  useEffect(() => {
+    currentSaleId.current = saleId;
+  }, [saleId]);
+  useEffect(() => {
+    if (!activeBillScope) return;
+    if (activeBillChecked.current !== activeBillKey) {
+      if (!recoveryReady) return;
+      activeBillChecked.current = activeBillKey;
+      const stored = saleId || attemptRef.current ? null : readActiveBill(activeBillScope);
+      if (stored) {
+        // Still this scope, still no bill on the counter, and the stored id unchanged.
+        const unchanged = () =>
+          activeBillChecked.current === activeBillKey &&
+          !currentSaleId.current &&
+          !attemptRef.current &&
+          readActiveBill(activeBillScope) === stored;
+        void utils.client.pharmacySales.counterCart
+          .query({ branchId: activeBillScope.branchId, saleId: stored })
+          .then(
+            (read) => (read.status === 'OPEN' ? 'open' : 'closed'),
+            (error: { data?: { code?: string } | null }) =>
+              // Gone or out of reach is final; a transient failure keeps the record.
+              error?.data?.code === 'NOT_FOUND' || error?.data?.code === 'FORBIDDEN'
+                ? 'closed'
+                : 'unknown'
+          )
+          .then((verdict) => {
+            if (verdict === 'unknown' || !unchanged()) return;
+            if (verdict === 'closed') {
+              rememberActiveBill(activeBillScope, null);
+              return;
+            }
+            setActiveSale(stored);
+            setNotice({ tone: 'success', message: 'The open bill on this counter was restored.' });
+          });
+        return;
+      }
+    }
+    rememberActiveBill(activeBillScope, saleId);
+  }, [activeBillKey, activeBillScope, recoveryReady, saleId, setActiveSale, utils]);
+
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -1202,8 +1288,8 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const openPayment = useCallback(() => {
-    setPaymentOpen(true);
-  }, []);
+    if (canSettlePayments) setPaymentOpen(true);
+  }, [canSettlePayments]);
 
   // Leave the settled bill and everything tied to its patient behind.
   const clearBill = useCallback(() => {
@@ -1298,8 +1384,9 @@ function ScopedPharmacyCounterConsole({
         throw error;
       });
     setActiveSale(created.id);
+    void refetchOpenBills();
     return created.id;
-  }, [branchId, createSale, setActiveSale, utils]);
+  }, [branchId, createSale, refetchOpenBills, setActiveSale, utils]);
 
   const ensureSale = useCallback(async () => saleId ?? (await openSale()), [openSale, saleId]);
 
@@ -1597,9 +1684,98 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       } finally {
         setPending(null);
+        void refetchOpenBills();
       }
     },
-    [branchId, busy, focusSearch, heldSaleId, refreshCart, saleId, setActiveSale, transition]
+    [
+      branchId,
+      busy,
+      focusSearch,
+      heldSaleId,
+      refetchOpenBills,
+      refreshCart,
+      saleId,
+      setActiveSale,
+      transition,
+    ]
+  );
+
+  // DEV-623: pick up a bill from Open bills. An OPEN bill is simply loaded; a HELD
+  // one is resumed on the server first (which re-checks the licence gate).
+  const resumeOpenBill = useCallback(
+    async (bill: CounterOpenBill) => {
+      if (busy) return false;
+      setPending('resume');
+      setNotice(null);
+      try {
+        if (bill.status === 'HELD')
+          await transition.mutateAsync({ branchId, saleId: bill.saleId, action: 'resume' });
+        setActiveSale(bill.saleId);
+        if (heldSaleId === bill.saleId) setHeldSaleId(null);
+        await refreshCart();
+        setNotice({ tone: 'success', message: 'Bill resumed.' });
+        focusSearch();
+        return true;
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      } finally {
+        setPending(null);
+        void refetchOpenBills();
+      }
+    },
+    [
+      branchId,
+      busy,
+      focusSearch,
+      heldSaleId,
+      refetchOpenBills,
+      refreshCart,
+      setActiveSale,
+      transition,
+    ]
+  );
+
+  // DEV-623: void an OPEN or HELD bill from the list; its stock goes back on sale.
+  const voidOpenBill = useCallback(
+    async (bill: CounterOpenBill) => {
+      if (busy) return false;
+      setPending('void');
+      setNotice(null);
+      try {
+        const result = await transition.mutateAsync({
+          branchId,
+          saleId: bill.saleId,
+          action: 'void',
+          reason: 'Voided from open bills.',
+        });
+        if (result && typeof result === 'object' && 'blocked' in result) {
+          setNotice({ tone: 'warning', message: String(result.blocked) });
+          return false;
+        }
+        if (bill.saleId === saleId) setActiveSale(null);
+        if (bill.saleId === heldSaleId) setHeldSaleId(null);
+        await refreshCart();
+        setNotice({ tone: 'success', message: 'Bill voided. Its stock is back on sale.' });
+        return true;
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      } finally {
+        setPending(null);
+        void refetchOpenBills();
+      }
+    },
+    [
+      branchId,
+      busy,
+      heldSaleId,
+      refetchOpenBills,
+      refreshCart,
+      saleId,
+      setActiveSale,
+      transition,
+    ]
   );
 
   const loadKhataAccounts = useCallback(async () => {
@@ -1724,6 +1900,7 @@ function ScopedPharmacyCounterConsole({
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
       if (
+        !canSettlePayments ||
         !saleId ||
         busy ||
         blocked ||
@@ -1823,7 +2000,10 @@ function ScopedPharmacyCounterConsole({
         if (!dispatched) setStorageError(true);
         outcome =
           !dispatched || tenderRejected(error)
-            ? { status: 'rejected', message: `Payment was not accepted. ${messageFrom(error)}` }
+            ? {
+                status: 'rejected',
+                message: `Payment was not accepted. ${counterPaymentErrorMessage(error)}`,
+              }
             : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
       setTenderOutcome(outcome);
@@ -1849,6 +2029,7 @@ function ScopedPharmacyCounterConsole({
       blocked,
       branchId,
       busy,
+      canSettlePayments,
       discardReceiptIntent,
       paidMinor,
       recoveryScope,
@@ -2554,6 +2735,18 @@ function ScopedPharmacyCounterConsole({
             id="counter-actions"
             className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
           >
+            {branchAuthorized ? (
+              <CounterOpenBills
+                bills={openBillsQuery.data}
+                loading={openBillsQuery.isLoading}
+                error={openBillsQuery.isError ? messageFrom(openBillsQuery.error) : null}
+                activeSaleId={saleId}
+                disabled={busy}
+                onRefresh={() => void refetchOpenBills()}
+                onResume={resumeOpenBill}
+                onVoid={voidOpenBill}
+              />
+            ) : null}
             <CounterReturnPanel
               branchId={branchId}
               organizationId={organizationId}
@@ -2561,13 +2754,15 @@ function ScopedPharmacyCounterConsole({
               deviceId={counterDeviceId}
               businessDate={todayBusinessDate}
             />
-            <CounterKhataPaymentPanel
-              branchId={branchId}
-              organizationId={organizationId}
-              accountId={accountId}
-              deviceId={counterDeviceId}
-              businessDate={todayBusinessDate}
-            />
+            {canSettlePayments ? (
+              <CounterKhataPaymentPanel
+                branchId={branchId}
+                organizationId={organizationId}
+                accountId={accountId}
+                deviceId={counterDeviceId}
+                businessDate={todayBusinessDate}
+              />
+            ) : null}
             <Link
               className={buttonVariants({
                 variant: 'outline',
@@ -2703,7 +2898,7 @@ function ScopedPharmacyCounterConsole({
 
               {drawerRequired ? (
                 <CounterOpenDrawerStep
-                  disabled={busy || !drawerStatusKnown}
+                  disabled={busy || !drawerStatusKnown || !canSettlePayments}
                   statusError={drawerQuery.isError}
                   deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
@@ -2725,7 +2920,7 @@ function ScopedPharmacyCounterConsole({
                         })
                       )
                       .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: messageFrom(error) })
+                        setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
                       )
                       // Either way the server now holds the truth about this device's drawer;
                       // stay busy until it is read back, so the step cannot be sent twice.
@@ -2952,7 +3147,11 @@ function ScopedPharmacyCounterConsole({
             </section>
           </SectionCard>
           {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard
+              compact
+              eyebrow="Same medicine, other brands"
+              title="Exact substitute suggestions"
+            >
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={
@@ -3066,7 +3265,7 @@ function ScopedPharmacyCounterConsole({
             ) : (
               <Button
                 className="h-14 w-full justify-between"
-                disabled={billState !== 'ready' || blocked || busy}
+                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
                 onClick={openPayment}
               >
                 <span>Pay</span>
@@ -3076,6 +3275,29 @@ function ScopedPharmacyCounterConsole({
                 </kbd>
               </Button>
             )}
+            {!canSettlePayments ? (
+              <div
+                role="status"
+                className={`mt-2 text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
+              >
+                <p>
+                  {settlementAccess.isError
+                    ? "Couldn't check payment access."
+                    : settlementDenied
+                      ? 'Payments are taken by counter staff.'
+                      : 'Checking payment access…'}
+                </p>
+                {settlementAccess.isError ? (
+                  <Button
+                    variant="outline"
+                    className="mt-2 min-h-11"
+                    onClick={() => void settlementAccess.refetch()}
+                  >
+                    Retry payment access
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
               {blocked
                 ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
@@ -3087,7 +3309,7 @@ function ScopedPharmacyCounterConsole({
                       ? 'Refresh this bill to verify payment before taking more money.'
                       : 'Cash, card, bank transfer, wallet or khata.'}
             </p>
-            {billState !== 'ready' && billState !== 'settled' && saleId ? (
+            {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
                 Review payment status
               </Button>
@@ -3133,7 +3355,11 @@ function ScopedPharmacyCounterConsole({
       >
         <div className="min-w-0 flex-1">
           <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+            {settlementDenied
+              ? 'Payments are taken by counter staff.'
+              : blocked
+                ? 'Payment locked · safety block'
+                : 'Balance due'}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
@@ -3150,7 +3376,7 @@ function ScopedPharmacyCounterConsole({
         </Button>
         <Button
           className="h-13 min-w-28 rounded-[var(--radius-sm)]"
-          disabled={billState !== 'ready' || blocked || busy}
+          disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
           onClick={openPayment}
         >
           Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
@@ -3158,6 +3384,7 @@ function ScopedPharmacyCounterConsole({
       </div>
       <CounterOverlay
         title="Payment"
+        enabled={canSettlePayments}
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         initialFocus={tenderRef}
@@ -3371,6 +3598,12 @@ function ScopedPharmacyCounterConsole({
                 <p className="text-text-muted">
                   Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                 </p>
+                {customerQuery.data.earnRateSet === false ? (
+                  // DEV-746: no owner-set earn rate means nothing new is earned; say so.
+                  <p role="status" className="mt-2 font-medium text-warning">
+                    Points are not being earned: set an earn rate in Loyalty settings
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Label htmlFor="counter-redeem-points" className="sr-only">
@@ -3556,6 +3789,7 @@ function ScopedPharmacyCounterConsole({
 function CounterOverlay({
   title,
   open,
+  enabled = true,
   onOpenChange,
   initialFocus,
   finalFocus,
@@ -3566,6 +3800,8 @@ function CounterOverlay({
 }: {
   title: string;
   open: boolean;
+  /** False unmounts even the normally retained, closed contents (DEV-97: lost access). */
+  enabled?: boolean;
   onOpenChange: (open: boolean) => void;
   initialFocus?: RefObject<HTMLDivElement | null>;
   finalFocus: RefObject<HTMLInputElement | null>;
@@ -3574,6 +3810,7 @@ function CounterOverlay({
   drawer?: boolean;
   children: ReactNode;
 }) {
+  if (!enabled) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal keepMounted>

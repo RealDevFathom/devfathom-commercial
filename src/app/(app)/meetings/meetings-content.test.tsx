@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -81,8 +83,8 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
-        update: mutation(),
+        create: { useMutation: () => ({ mutate: mocks.create, isPending: false }) },
+        update: { useMutation: () => ({ mutate: mocks.update, isPending: false }) },
         delete: mutation(),
       },
       team: { getAll: { useQuery: () => ({ data: [] }) } },
@@ -184,4 +186,86 @@ describe('MeetingsContent pagination', () => {
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
+});
+
+describe('meeting form time order', () => {
+  beforeEach(() => {
+    mocks.upcoming = [];
+    mocks.pages = [];
+    mocks.hasNextPage = false;
+    mocks.create.mockClear();
+    mocks.update.mockClear();
+    // jsdom has no layout or scrolling API. Keep the real TimePicker interaction.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  function chooseTime(label: string, option: string) {
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  }
+
+  it.each(['9:00 AM', '10:00 AM'])(
+    'blocks creating a meeting ending at %s and allows correction',
+    (endLabel) => {
+      const { container } = render(<MeetingsContent />);
+      fireEvent.click(screen.getByRole('button', { name: /schedule meeting/i }));
+      fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
+        target: { value: 'Planning' },
+      });
+      fireEvent.change(container.querySelector('input[type="date"]')!, {
+        target: { value: '2026-12-01' },
+      });
+      chooseTime('Start time', '10:00 AM');
+      chooseTime('End time', endLabel);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The end time must be after the start time.'
+      );
+      expect(screen.getByRole('group', { name: 'Meeting times' })).toHaveAccessibleDescription(
+        'The end time must be after the start time.'
+      );
+      const create = screen.getByRole('button', { name: /^schedule$/i });
+      expect(create).toBeDisabled();
+      fireEvent.click(create);
+      expect(mocks.create).not.toHaveBeenCalled();
+      chooseTime('End time', '11:00 AM');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(create).toBeEnabled();
+      fireEvent.click(create);
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startTime: new Date('2026-12-01T10:00'),
+          endTime: new Date('2026-12-01T11:00'),
+        })
+      );
+    }
+  );
+
+  it.each(['9:00 AM', '10:00 AM'])(
+    'blocks saving an edit ending at %s and allows correction',
+    (endLabel) => {
+      mocks.upcoming = [
+        { ...meeting('Planning', new Date('2026-12-01T10:00')), createdById: 'user_1' },
+      ];
+      render(<MeetingsContent />);
+      fireEvent.click(screen.getByTitle('Edit'));
+      chooseTime('End time', endLabel);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The end time must be after the start time.'
+      );
+      expect(screen.getByRole('group', { name: 'Meeting times' })).toHaveAccessibleDescription(
+        'The end time must be after the start time.'
+      );
+      const save = screen.getByRole('button', { name: /save/i });
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(mocks.update).not.toHaveBeenCalled();
+      chooseTime('End time', '11:00 AM');
+      expect(save).toBeEnabled();
+      fireEvent.click(save);
+      expect(mocks.update).toHaveBeenCalledOnce();
+    }
+  );
 });

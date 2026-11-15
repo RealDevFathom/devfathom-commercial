@@ -29,3 +29,14 @@ export const PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE =
  */
 export const PHARMACY_SOP_CHANGED_MESSAGE =
   'This procedure has changed since you opened it. Refresh to see its current state.';
+
+/**
+ * Overdue escalation (opt-in per branch, OFF by default): how long after a
+ * procedure's window closes, unsubmitted, before the chosen manager is told in
+ * the app. The router and the Setup form accept the same bounds.
+ */
+export const PHARMACY_SOP_ESCALATION_DELAY = {
+  defaultMinutes: 30,
+  minMinutes: 0,
+  maxMinutes: 1440,
+} as const;

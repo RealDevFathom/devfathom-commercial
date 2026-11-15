@@ -69,6 +69,7 @@ vi.mock('@/lib/trpc', () => ({
     },
   },
 }));
+import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
@@ -191,6 +192,46 @@ describe('tenant department invitation', () => {
     expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
   });
 
+  it('shows delivery failure, copies the link, and replaces it after a resend', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        inviteUrl: '/invite/first',
+        emailDelivery: 'FAILED',
+      })
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Invite email failed');
+    expect(screen.queryByText(/Invitation sent to/)).toBeNull();
+    expect(screen.getByText('/invite/first')).toBeVisible();
+    expect(state.invalidateOverview).toHaveBeenCalledOnce();
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }))
+    );
+    expect(writeText).toHaveBeenCalledWith('/invite/first');
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invite' }));
+    expect(state.invite.mutate.mock.calls[1][0]).toEqual(state.invite.mutate.mock.calls[0][0]);
+    act(() => state.invite.mutate.mock.calls[1][1].onError({ message: 'Try again later' }));
+    expect(screen.getByText('Try again later')).toBeVisible();
+    expect(screen.getByText('/invite/first')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invite' }));
+    act(() =>
+      state.invite.mutate.mock.calls[2][1].onSuccess({
+        inviteUrl: '/invite/replacement',
+        emailDelivery: 'SENT',
+      })
+    );
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+    expect(screen.getByText('/invite/replacement')).toBeVisible();
+    expect(screen.queryByText('/invite/first')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resend invite' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeEnabled();
+  });
+
   it('refreshes member queries and notifies the host only after a successful invitation', () => {
     const onInvited = vi.fn();
     render(<AddMemberModal onClose={vi.fn()} onInvited={onInvited} />);
@@ -205,7 +246,12 @@ describe('tenant department invitation', () => {
     expect(state.invalidateOverview).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
-    act(() => state.invite.mutate.mock.calls[1][1].onSuccess({ inviteUrl: '/invite/token' }));
+    act(() =>
+      state.invite.mutate.mock.calls[1][1].onSuccess({
+        inviteUrl: '/invite/token',
+        emailDelivery: 'SENT',
+      })
+    );
     expect(onInvited).toHaveBeenCalledOnce();
     expect(state.invalidateDirectory).toHaveBeenCalledOnce();
     expect(state.invalidateOverview).toHaveBeenCalledOnce();
@@ -221,20 +267,131 @@ describe('vertical-aware invitation copy', () => {
       { id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' },
     ];
     const { container } = render(<AddMemberModal onClose={vi.fn()} />);
-    const roleSelect = screen.getByLabelText('Pharmacy staff role');
+    const roleSelect = screen.getByLabelText('Role');
     expect(roleSelect).toHaveAttribute('id', 'invite-role-template');
+    expect(screen.queryByLabelText('Pharmacy staff role')).toBeNull();
     expect(screen.getByRole('option', { name: 'Owner / Operator' })).toHaveValue('role_owner');
     expect(screen.getByRole('option', { name: 'Pharmacist' })).toHaveValue('role_pharmacist');
     expect(screen.getByRole('option', { name: 'No pharmacy role' })).toHaveValue('');
     expect(screen.getByPlaceholderText('Pharmacist')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('+92 300 1234567')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Staff' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manager' })).toBeInTheDocument();
+    // DEV-673: one role picker; the Staff / Manager / Admin switch is folded into it.
+    expect(screen.getAllByRole('combobox')).toHaveLength(2); // Department and Role
+    for (const name of ['Staff', 'Manager', 'Admin']) {
+      expect(screen.queryByRole('button', { name })).toBeNull();
+    }
     expect(container.textContent).not.toMatch(/restaurant/i);
     const placeholders = Array.from(container.querySelectorAll('[placeholder]')).map((el) =>
       el.getAttribute('placeholder')
     );
     expect(placeholders.join(' ')).not.toMatch(/restaurant|555-01|Full Stack Developer/i);
+  });
+
+  describe('pharmacy single role picker (DEV-673)', () => {
+    beforeEach(() => {
+      state.vertical = 'PHARMACY';
+      state.roles.data = [
+        { id: 'role_admin', key: 'admin', name: 'Organization administrator' },
+        { id: 'role_owner', key: 'owner', name: 'Owner' },
+        { id: 'role_operator', key: 'owner-operator', name: 'Owner / Operator' },
+        { id: 'role_manager', key: 'manager', name: 'Manager' },
+        { id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' },
+        { id: 'role_cashier', key: 'cashier', name: 'Cashier' },
+      ];
+    });
+
+    function fillPharmacy() {
+      fireEvent.change(screen.getByPlaceholderText('Ali Raza'), {
+        target: { value: 'Second operator' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('ali@pharmacy.pk'), {
+        target: { value: 'second@e2e.invalid' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('Pharmacist'), {
+        target: { value: 'Counter operator' },
+      });
+      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    }
+
+    it.each([
+      ['Organization administrator', 'role_admin', 'ADMIN'],
+      ['Owner', 'role_owner', 'ADMIN'],
+      ['Owner / Operator', 'role_operator', 'ADMIN'],
+      ['Manager', 'role_manager', 'HR'],
+      ['Pharmacist', 'role_pharmacist', 'EMPLOYEE'],
+      ['Cashier', 'role_cashier', 'EMPLOYEE'],
+      ['No pharmacy role', '', 'EMPLOYEE'],
+    ])('sends %s (%s) with its %s base role from one picker', (_name, id, baseRole) => {
+      render(<AddMemberModal onClose={vi.fn()} />);
+      fillPharmacy();
+      fireEvent.change(screen.getByLabelText('Role'), { target: { value: id } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ role: baseRole, organizationRoleId: id || null }),
+        expect.any(Object)
+      );
+    });
+
+    // DEV-622: the one-person "Pharmacist and cashier" role explains itself and stays staff.
+    it('explains the Pharmacist and cashier role and invites it as staff', () => {
+      state.roles.data = [
+        ...state.roles.data,
+        { id: 'role_combined', key: 'pharmacist-cashier', name: 'Pharmacist and cashier' },
+      ];
+      render(<AddMemberModal onClose={vi.fn()} />);
+      fillPharmacy();
+      const picker = screen.getByLabelText('Role');
+      const help = document.getElementById('invite-role-template-help')!;
+      expect(screen.getByRole('option', { name: 'Pharmacist and cashier' })).toHaveValue(
+        'role_combined'
+      );
+      expect(help).not.toHaveTextContent(/one-person shop/);
+      fireEvent.change(picker, { target: { value: 'role_combined' } });
+      expect(help).toHaveTextContent(
+        'Dispenses prescriptions and takes payment, for a one-person shop or a pharmacist who also runs the till.'
+      );
+      expect(help).toHaveTextContent('Access level: Staff.');
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ role: 'EMPLOYEE', organizationRoleId: 'role_combined' }),
+        expect.any(Object)
+      );
+    });
+
+    it('explains how each owner-type role differs and shows the access level', () => {
+      render(<AddMemberModal onClose={vi.fn()} />);
+      const picker = screen.getByLabelText('Role');
+      const help = document.getElementById('invite-role-template-help')!;
+      expect(picker).toHaveAttribute('aria-describedby', 'invite-role-template-help');
+      expect(help).toHaveTextContent('Access level: Staff.');
+      const seen = new Set<string>();
+      for (const id of ['role_admin', 'role_owner', 'role_operator']) {
+        fireEvent.change(picker, { target: { value: id } });
+        expect(help).toHaveTextContent('Access level: Admin.');
+        expect(help.textContent).not.toContain(inviteCopyForVertical('PHARMACY').staffRoleHelp);
+        seen.add(help.textContent ?? '');
+      }
+      expect(seen.size).toBe(3);
+      fireEvent.change(picker, { target: { value: 'role_operator' } });
+      expect(help).toHaveTextContent(/dispensing/);
+      fireEvent.change(picker, { target: { value: 'role_manager' } });
+      expect(help).toHaveTextContent('Access level: Manager.');
+    });
+  });
+
+  it('keeps the base role switch for a restaurant tenant and submits the chosen base role', () => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'HR' }));
+    fireEvent.change(screen.getByLabelText('Restaurant staff role'), {
+      target: { value: 'role_gm' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ role: 'HR', organizationRoleId: 'role_gm' }),
+      expect.any(Object)
+    );
   });
 
   it('keeps restaurant copy for a restaurant tenant', () => {
@@ -414,7 +571,10 @@ describe('pharmacy team without HR', () => {
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
     expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
-    expect(state.overviewQuery).toHaveBeenLastCalledWith(undefined, { enabled: false, retry: false });
+    expect(state.overviewQuery).toHaveBeenLastCalledWith(undefined, {
+      enabled: false,
+      retry: false,
+    });
     expect(state.invite.mutate).not.toHaveBeenCalled();
   });
 
@@ -440,7 +600,12 @@ describe('pharmacy team without HR', () => {
       expect.objectContaining({ email: 'ayesha@e2e.invalid', department: 'COUNTER' }),
       expect.any(Object)
     );
-    act(() => state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: '/invite/token' }));
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        inviteUrl: '/invite/token',
+        emailDelivery: 'SENT',
+      })
+    );
     expect(state.invalidateDirectory).toHaveBeenCalledOnce();
     expect(state.invalidateOverview).toHaveBeenCalledOnce();
     expect(screen.getByText('Invitation sent to ayesha@e2e.invalid')).toBeVisible();

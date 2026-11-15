@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +44,19 @@ export function cashMinor(value: string): number | null {
   return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
 }
 
+/**
+ * DEV-623: unpaid bills keep their stock off the shelf. The close does not void
+ * them; it says how many are left so they are resumed or voided on the counter.
+ */
+export function openBillsWarning(bills: { open: number; held: number }): string {
+  const parts = [
+    bills.open ? `${bills.open} open` : '',
+    bills.held ? `${bills.held} held` : '',
+  ].filter(Boolean);
+  const total = bills.open + bills.held;
+  return `${parts.join(' and ')} ${total === 1 ? 'bill is' : 'bills are'} still unpaid and holding stock. Resume or void ${total === 1 ? 'it' : 'them'} from Open bills on the counter.`;
+}
+
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 // Optional deep link (e.g. Ask Fathom's cash-close drill-through): the branch and
@@ -65,18 +79,10 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   // DEV-127: a non-administrator opens the console only when the server's own
   // day-close guard (`pharmacy:close` through the ABAC engine) admits them. The
   // procedures re-check it on every call; this only avoids a dead-end screen.
-  const access = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: memberSession,
-    // As the rail does: a transient failure is retried; only a refusal is final.
-    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
-    staleTime: 30_000,
-  });
-  // A cached answer for another signed-in identity cannot open the console.
-  const closeGranted = Boolean(
-    memberSession &&
-    access.data?.userId === user?.id &&
-    access.data?.capabilities.includes('pharmacy:close')
-  );
+  // DEV-240: the same member- and tenant-bound read as the rail, so an answer
+  // cached for another identity cannot open the console.
+  const { query: access, capabilities } = usePharmacyNavigationAccess(memberSession);
+  const closeGranted = memberSession && capabilities.includes('pharmacy:close');
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
@@ -407,6 +413,11 @@ function DayCloseForm({
               });
             }}
           >
+            {data.openBills && data.openBills.open + data.openBills.held > 0 ? (
+              <p className="text-sm text-warning" role="alert">
+                {openBillsWarning(data.openBills)}
+              </p>
+            ) : null}
             {!data.drawers.length && (
               <p>No drawers were opened for this date. You can record and lock an empty day.</p>
             )}

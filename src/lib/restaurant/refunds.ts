@@ -35,6 +35,7 @@ import {
   type PaymentCapability,
   type PaymentStatus,
 } from './payment-adapter';
+import { allocateIncrementalTaxRefundCents } from './refund-tax-allocation';
 
 /**
  * M5-L4 / C7 — refund / reversal against an original tender (`payments:refund`).
@@ -296,18 +297,21 @@ export async function refundTender(
           .div(tender.amount)
           .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
           .toNumber();
-    const cumulativeTaxShares =
-      tenderTaxTotal === 0
-        ? []
-        : allocate(new Prisma.Decimal(cumulativeTaxCents).div(100), originalTaxCents);
-    const taxRefundRows = frozenTaxAllocations.map((allocation, index) => {
-      const already = sum(allocation.refundAllocations.map((row) => row.cents.toString()));
-      const cumulative = cumulativeTaxShares[index]?.mul(100) ?? ZERO;
-      return { allocation, cents: cumulative.minus(already).toNumber() };
-    });
-    if (taxRefundRows.some((row) => row.cents < 0)) {
+    const alreadyRefundedTaxCents = frozenTaxAllocations.map((allocation) =>
+      sum(allocation.refundAllocations.map((row) => row.cents.toString())).toNumber()
+    );
+    const taxRefundCents = allocateIncrementalTaxRefundCents(
+      originalTaxCents,
+      alreadyRefundedTaxCents,
+      cumulativeTaxCents
+    );
+    if (!taxRefundCents) {
       throw new RefundError('Frozen tax refund evidence is inconsistent.', 'INVALID');
     }
+    const taxRefundRows = frozenTaxAllocations.map((allocation, index) => ({
+      allocation,
+      cents: taxRefundCents[index]!,
+    }));
     const taxRefundAmount = new Prisma.Decimal(
       taxRefundRows.reduce((total, row) => total + row.cents, 0)
     ).div(100);
