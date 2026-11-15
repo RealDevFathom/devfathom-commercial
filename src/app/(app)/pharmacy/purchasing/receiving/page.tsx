@@ -684,7 +684,12 @@ export default async function PharmacyReceivingPage({
           Input tax is calculated from posted, creditable invoice lines. Confirm the claim with your
           tax adviser; this report is a reconciliation aid, not a tax filing.
         </p>
-        {inputTaxReport.rows.some((row) => row.flagged) ? (
+        {inputTaxReport.rows.length === 0 ? (
+          <p className="mt-3 text-sm text-text-muted">
+            No bills to check. Nothing has been received at this branch yet, so this is not an
+            all-clear.
+          </p>
+        ) : inputTaxReport.rows.some((row) => row.flagged) ? (
           <ul className="mt-3 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-warning/40">
             {inputTaxReport.rows
               .filter((row) => row.flagged)
