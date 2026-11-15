@@ -88,6 +88,13 @@ import {
   loadTemperatureZoneStatuses,
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
+import {
+  enrollColdChainSensor,
+  listColdChainSensors,
+  PharmacyColdChainSensorError,
+  revokeColdChainSensor,
+  rotateColdChainSensorSecret,
+} from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
@@ -150,6 +157,17 @@ function domainError(error: unknown): never {
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyColdChainSensorError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DUPLICATE_DEVICE_IDENTIFIER' || error.reason === 'REVOKED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -928,6 +946,60 @@ export const pharmacyInventoryRouter = router({
           input.stockLocationId,
           new CsvTemperatureReadingSource(input.csv)
         );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /**
+   * DEV-82 — live cold-chain sensors. Like the storage zones and readings they
+   * feed, they belong to whoever runs the stock (`pharmacy:inventory`) AND is
+   * admitted to the branch, not just to a branch of the tenant. A push secret
+   * is returned once and only its hash is stored; every call is audited.
+   */
+  coldChainSensors: inventoryControl
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      listColdChainSensors(ctx.db, await admittedScopeFor(ctx, input.branchId))
+    ),
+
+  enrollColdChainSensor: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1).max(128),
+          name: z.string().trim().min(1).max(120),
+          deviceIdentifier: z.string().trim().min(1).max(120),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await enrollColdChainSensor(ctx.db, scope, input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  rotateColdChainSensorSecret: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await rotateColdChainSensorSecret(ctx.db, scope, input.sensorId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  revokeColdChainSensor: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await revokeColdChainSensor(ctx.db, scope, input.sensorId, new Date());
       } catch (error) {
         domainError(error);
       }

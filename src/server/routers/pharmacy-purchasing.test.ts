@@ -1354,6 +1354,195 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(line).not.toHaveProperty('organizationId');
   });
 
+  it('stamps the order landed cost, with its rebate, freight and other charges, on the receipt line', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+      freightMinor: 3_000,
+      otherChargesMinor: 1_200,
+    });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 10,
+        bonusPacks: 2,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 500,
+        taxBps: 0,
+        taxCreditable: false,
+      },
+      {
+        id: 'poline_b',
+        medicineId: 'medicine_b',
+        packLevelId: 'pack_a',
+        orderedPacks: 5,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 19_000,
+        discountBps: 0,
+        rebateBps: 0,
+        taxBps: 0,
+        taxCreditable: false,
+      },
+    ]);
+
+    await caller().createGoodsReceipt(RECEIPT);
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // Order line A nets 100_000 − 5% rebate = 95_000; B nets 95_000, so the
+    // 4_200 of freight and charges splits 2_100 / 2_100. Line A lands at
+    // 97_100 over 120 units — not the 833 that the invoice price alone gives.
+    expect(line).toMatchObject({
+      acceptedCanonicalUnits: 120,
+      unitCostMinor: 809,
+      allocatedOrderChargeMinor: 2_100,
+    });
+    expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { lineNumber: 'asc' } })
+    );
+  });
+
+  it('carries only the delivered share of the order charge on a partial receipt', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+      freightMinor: 4_000,
+      otherChargesMinor: 0,
+    });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 20,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 0,
+        taxBps: 0,
+        taxCreditable: false,
+      },
+    ]);
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, bonusPacks: 0 }],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // Half the ordered packs arrive, so half the 4_000 freight: (100_000 + 2_000) / 100.
+    expect(line).toMatchObject({ acceptedCanonicalUnits: 100, unitCostMinor: 1_020 });
+  });
+
+  /** A one-line order of ten 10-unit packs with `freightMinor` of freight. */
+  function chargedOrder(freightMinor: number) {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+      freightMinor,
+      otherChargesMinor: 0,
+    });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 0,
+        taxBps: 0,
+        taxCreditable: false,
+      },
+    ]);
+  }
+
+  it('prorates the order charge by paid units when the delivered pack size differs', async () => {
+    chargedOrder(1_000);
+    // Five 20-unit packs are the whole 100 ordered units: all of the freight.
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        {
+          ...RECEIPT_LINE,
+          receivedPacks: 5,
+          bonusPacks: 0,
+          canonicalUnitsPerPack: 20,
+          invoicedPricePerPackMinor: 20_000,
+        },
+      ],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line).toMatchObject({ acceptedCanonicalUnits: 100, unitCostMinor: 1_010 });
+  });
+
+  it('capitalises the order charge once across lots that over-deliver one order line', async () => {
+    chargedOrder(10_000);
+    const lot = { ...RECEIPT_LINE, bonusPacks: 0 };
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [lot, { ...lot, batchNumber: 'B-2292' }],
+    });
+    const [first, second] = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(first).toMatchObject({ unitCostMinor: 1_100 });
+    expect(second).toMatchObject({ unitCostMinor: 1_000 });
+  });
+
+  it('counts paid units already posted against the order line before allocating its charge', async () => {
+    chargedOrder(10_000);
+    db.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      { purchaseOrderLineId: 'poline_a', receivedCanonicalUnits: 60 },
+    ]);
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, bonusPacks: 0 }],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // Only the 40 units still unreceived carry freight: (100_000 + 4_000) / 100.
+    expect(line).toMatchObject({ unitCostMinor: 1_040 });
+    expect(db.pharmacyGoodsReceiptLine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          purchaseOrderLineId: { in: ['poline_a'] },
+          goodsReceipt: { status: 'POSTED' },
+        },
+      })
+    );
+  });
+
+  it('costs an unordered line on an order receipt at its invoice terms alone', async () => {
+    chargedOrder(10_000);
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, purchaseOrderLineId: undefined, bonusPacks: 0 }],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // The order's charges were allocated over its ordered lines only, and an
+    // unordered item has no order-line rebate: 100_000 over 100 units.
+    expect(line).toMatchObject({ purchaseOrderLineId: null, unitCostMinor: 1_000 });
+  });
+
+  it('adds no order charge or rebate to a direct purchase line', async () => {
+    db.pharmacyPurchaseOrderLine.findMany.mockClear();
+    await caller().createGoodsReceipt({
+      ...withoutOrder(),
+      directPurchase: { reason: 'Emergency', approvedByUserId: 'approver_b', pin: '1234' },
+    });
+    expect(db.pharmacyPurchaseOrderLine.findMany).not.toHaveBeenCalled();
+  });
+
   it('DEV-77: spreads receipt freight into the landed unit cost and records each share', async () => {
     await caller().createGoodsReceipt({ ...RECEIPT, freightMinor: 20_000 });
     const data = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data;
@@ -1370,6 +1559,45 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     const data = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data;
     expect(data.freightMinor).toBe(0);
     expect(data.lines.create[0]).toMatchObject({ allocatedFreightMinor: 0, unitCostMinor: 833 });
+  });
+
+  it('takes invoice freight instead of the order charges, and still applies the order rebate', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+      freightMinor: 10_000,
+      otherChargesMinor: 0,
+    });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 1_000,
+        taxBps: 0,
+        taxCreditable: false,
+      },
+    ]);
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      freightMinor: 2_000,
+      lines: [{ ...RECEIPT_LINE, bonusPacks: 0 }],
+    });
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    // 100_000 − 10% rebate = 90_000, plus the 2_000 the invoice billed — never
+    // the order's 10_000 as well: 92_000 over 100 units.
+    expect(line).toMatchObject({
+      allocatedFreightMinor: 2_000,
+      allocatedOrderChargeMinor: 0,
+      unitCostMinor: 920,
+    });
   });
 
   it('DEV-77: refuses negative freight before anything is drafted', async () => {

@@ -2858,16 +2858,16 @@ describe('DEV-618 counter composition', () => {
     );
     if (onHandUnits === 0) {
       expect(screen.getByText(/Out of stock/)).toHaveAttribute('role', 'status');
-      expect(screen.queryByText(/pack hierarchy does not match/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/pack setup does not match/)).not.toBeInTheDocument();
     } else {
-      expect(screen.getByText(/pack hierarchy does not match/)).toHaveAttribute('role', 'status');
+      expect(screen.getByText(/pack setup does not match/)).toHaveAttribute('role', 'status');
       expect(screen.queryByText(/Out of stock/)).not.toBeInTheDocument();
     }
     expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
-  it('clears the canonical-unit demand draft and captures only the replacement quantity', async () => {
+  it('clears the shortage draft and records only the replacement quantity', async () => {
     mocks.mutations.captureDemand!.mockResolvedValue({});
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() =>
@@ -2875,15 +2875,15 @@ describe('DEV-618 counter composition', () => {
         .at(-1)![0]
         .onSelect(barcodeRow({ saleUnits: [], onHandUnits: 0 }))
     );
-    const input = screen.getByLabelText('Requested canonical units') as HTMLInputElement;
+    const input = screen.getByLabelText('Requested tablets') as HTMLInputElement;
     expect(input.value).toBe('');
     fireEvent.change(input, { target: { value: '1' } });
     fireEvent.change(input, { target: { value: '' } });
     expect(input.value).toBe('');
-    expect(screen.queryByRole('button', { name: /Capture shortfall:/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Record shortage:/ })).not.toBeInTheDocument();
     expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: '8' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Capture shortfall: 8 canonical units' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Record shortage: 8 tablets' }));
     await waitFor(() =>
       expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ quantity: 8, saleUnit: 'UNIT' })
@@ -2932,7 +2932,7 @@ describe('DEV-618 counter composition', () => {
     expect(within(next).getByText('Paracetamol')).toHaveClass('block');
     expect(next).toHaveTextContent('Batch B-1');
     expect(next).toHaveTextContent('Store A');
-    expect(next).toHaveTextContent('FEFO batch B-1 is used');
+    expect(next).toHaveTextContent('Earliest-expiry batch B-1 is used');
     const quantity = within(next).getByLabelText('Quantity');
     expect(quantity).toHaveValue('');
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
@@ -3021,7 +3021,7 @@ describe('DEV-618 counter composition', () => {
     ).toBeInTheDocument();
   });
 
-  it('does not invent FEFO metadata when no recommended batch exists', () => {
+  it('does not invent batch metadata when no recommended batch exists', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() =>
       mocks.searchProps.mock.calls
@@ -3031,9 +3031,76 @@ describe('DEV-618 counter composition', () => {
         )
     );
     expect(screen.getByRole('region', { name: 'Next line' })).toHaveTextContent(
-      'No sellable FEFO batch is available.'
+      'No batch can be sold here right now.'
     );
-    expect(screen.queryByText(/FEFO batch B-1 is used/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/batch B-1 is used/)).not.toBeInTheDocument();
+  });
+
+  it('says a medicine with no stock here is out of stock, not a pack-setup problem', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        barcodeRow({
+          saleUnits: [],
+          onHandUnits: 0,
+          recommendedLotId: null,
+          batchNumber: null,
+          nearestSafeExpiry: null,
+        })
+      )
+    );
+    const next = screen.getByRole('region', { name: 'Next line' });
+    expect(within(next).getByRole('status')).toHaveTextContent(
+      'Out of stock at this branch. Receive stock or record it as a shortage.'
+    );
+    expect(next).toHaveTextContent('No batch of this medicine is in stock here.');
+    expect(next).not.toHaveTextContent(/pack hierarchy|pack setup|canonical|FEFO/i);
+  });
+
+  it('says blocked stock cannot be sold rather than calling it out of stock', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        barcodeRow({
+          saleUnits: [],
+          onHandUnits: 0,
+          recommendedLotId: null,
+          batchNumber: null,
+          nearestSafeExpiry: null,
+          blocked: ['EXPIRED', 'QUARANTINED'],
+        })
+      )
+    );
+    const next = screen.getByRole('region', { name: 'Next line' });
+    expect(within(next).getByRole('status')).toHaveTextContent(
+      'None of the stock here can be sold right now (expired, quarantined). Receive fresh stock or record it as a shortage.'
+    );
+    expect(next).not.toHaveTextContent('Out of stock');
+    expect(next).toHaveTextContent('No batch can be sold here right now.');
+  });
+
+  it('names the pack mismatch in shop words and links to the pack setup', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        barcodeRow({
+          saleUnits: [],
+          onHandUnits: 100,
+          packMismatch: {
+            received: '1 box = 100 tablets',
+            setup: '1 box = 12 strips × 10 tablets',
+          },
+        })
+      )
+    );
+    const status = within(screen.getByRole('region', { name: 'Next line' })).getByRole('status');
+    expect(status).toHaveTextContent(
+      'This batch was received as 1 box = 100 tablets but the medicine is set up as 1 box = 12 strips × 10 tablets, so it cannot be priced. Open Medicines › Paracetamol › Packs for receiving to fix it.'
+    );
+    expect(
+      within(status).getByRole('link', { name: 'Medicines › Paracetamol › Packs for receiving' })
+    ).toHaveAttribute('href', '/pharmacy/medicines');
+    expect(status).not.toHaveTextContent('Out of stock');
   });
 
   it('keeps totals and Hold/Resume/Void under Pay and preserves F7/F8', async () => {
