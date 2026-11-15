@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 import { normalizeRegulatoryProvince } from './regulatory-profile-form';
+import { regulatoryStartInstant } from './regulatory-start';
 
 export type BranchOperationDenialReason =
   | 'ORGANIZATION_NOT_ACTIVE'
@@ -24,6 +25,8 @@ export type BranchOperationAction = {
   at?: Date;
   schedule?: string;
   requiresQualifiedPerson?: boolean;
+  /** The workspace's IANA zone; date-only start dates begin at its local midnight. */
+  timeZone?: string | null;
 };
 
 export type BranchRegulatoryState = {
@@ -71,7 +74,7 @@ export type RegulatoryProfileBindingFields = {
   jurisdictionRuleSetId?: string | null;
 };
 
-export { normalizeRegulatoryProvince };
+export { normalizeRegulatoryProvince, regulatoryStartInstant };
 
 export function normalizeRegulatoryPremises(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -153,6 +156,7 @@ export function assertBranchMayOperate(
   action: BranchOperationAction
 ): void {
   const at = action.at ?? new Date();
+  const startedAt = regulatoryStartInstant(at, action.timeZone);
   const deny = (reason: BranchOperationDenialReason): never => {
     branch.auditDenied(reason, action);
     throw new BranchOperationDeniedError(reason);
@@ -171,7 +175,7 @@ export function assertBranchMayOperate(
     !branch.licenceCategory.trim() ||
     !branch.licenceEvidenceFileRef.trim() ||
     !permits(stringValues(branch.ruleSet.licenceCategories), branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
+    startedAt < branch.licenceValidFrom ||
     at >= branch.licenceValidTo
   ) {
     deny('LICENCE_INVALID');
@@ -181,7 +185,7 @@ export function assertBranchMayOperate(
     action.requiresQualifiedPerson !== false &&
     (!branch.qualifiedPersonRegistration.trim() ||
       !branch.qualifiedPersonCoverageRosterRef.trim() ||
-      at < branch.qualifiedPersonValidFrom ||
+      startedAt < branch.qualifiedPersonValidFrom ||
       at >= branch.qualifiedPersonValidTo)
   ) {
     deny('QUALIFIED_PERSON_COVERAGE_MISSING');
@@ -206,7 +210,8 @@ export function evaluateBranchRegulatoryStatus(
   branch: Omit<BranchRegulatoryState, 'auditDenied'>,
   effective: boolean,
   at: Date,
-  binding?: { profile: RegulatoryProfileBindingFields; site: RegulatoryProfileBranchSite }
+  binding?: { profile: RegulatoryProfileBindingFields; site: RegulatoryProfileBranchSite },
+  timeZone?: string | null
 ): BranchRegulatoryStatus {
   // The same branch binding the stored guard applies, so a profile that names
   // another province or premises is never shown "in force" while activation and
@@ -217,7 +222,7 @@ export function evaluateBranchRegulatoryStatus(
     try {
       assertBranchMayOperate(
         { ...branch, auditDenied: () => undefined },
-        { name: 'REGULATORY_PROFILE_VIEW', at, requiresQualifiedPerson: true }
+        { name: 'REGULATORY_PROFILE_VIEW', at, requiresQualifiedPerson: true, timeZone }
       );
     } catch (error) {
       if (!(error instanceof BranchOperationDeniedError)) throw error;
@@ -240,12 +245,13 @@ export async function assertStoredBranchMayOperate(
   action: BranchOperationAction
 ): Promise<void> {
   const at = action.at ?? new Date();
+  const startedAt = regulatoryStartInstant(at, action.timeZone);
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      effectiveFrom: { lte: startedAt },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
     },
     include: { jurisdictionRuleSet: true, branch: true },
     orderBy: { effectiveFrom: 'desc' },
@@ -313,7 +319,7 @@ export async function assertStoredPharmacyMayOperate(
     FOR SHARE`;
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
-    select: { status: true },
+    select: { status: true, timezone: true },
   });
   if (!organization || !OPERATING_ORGANIZATION_STATUSES.has(organization.status)) {
     recordAudit({
@@ -332,5 +338,8 @@ export async function assertStoredPharmacyMayOperate(
     });
     throw new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
   }
-  await assertStoredBranchMayOperate(db, organizationId, branchId, action);
+  await assertStoredBranchMayOperate(db, organizationId, branchId, {
+    ...action,
+    timeZone: action.timeZone ?? organization.timezone,
+  });
 }

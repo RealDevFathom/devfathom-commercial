@@ -25,6 +25,7 @@ import {
 } from '@/lib/vertical-catalog';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
+import { regulatoryStartInstant } from './regulatory-start';
 import { readSupplierCompliancePolicy } from './supplier-compliance-policy';
 
 export type PharmacyOnboardingGate =
@@ -254,57 +255,54 @@ export async function evaluatePharmacyReadiness(
   // DEV-753: the owner's supplier checks. Never rejects; a missing or unreadable row is on.
   const supplierPolicy = readSupplierCompliancePolicy(db, organizationId);
 
-  const [
-    organization,
-    claims,
-    branch,
-    seededRoleKeys,
-    catalogReady,
-    receivedLotCount,
-    supplierCount,
-  ] = await Promise.all([
-    db.organization.findUnique({
-      where: { id: organizationId },
-      select: { packageId: true, package: { select: { vertical: true } } },
-    }),
-    db.pharmacyOnboardingGateState.findMany({
-      where: { organizationId },
-      select: { gate: true, status: true, evidenceRef: true, actorId: true, recordedAt: true },
-    }),
-    // The licences gate is answered per branch; the organization is ready when
-    // at least one branch has an effective profile that PLAT-02 allows to
-    // operate. Pick the branch that owns the most recent effective profile.
-    db.branchRegulatoryProfile.findFirst({
-      where: {
-        organizationId,
-        branch: { active: true },
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-      },
-      select: { branchId: true },
-      orderBy: { effectiveFrom: 'desc' },
-    }),
-    // "Roles seeded" means the vertical's own role templates are present, not
-    // merely that the organization has some roles from another vertical.
-    db.organizationRole.count({
-      where: { organizationId, key: { in: requiredRoleKeys } },
-    }),
-    medicineCatalogReady(db, organizationId, at),
-    // INV-01 receipt: a lot exists but is only opening stock once received.
-    db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
-    // With supplier checks off, an active supplier counts whether or not it is authorized.
-    supplierPolicy.then(({ checksEnabled }) =>
-      db.pharmacySupplier.count({
-        where: checksEnabled
-          ? { organizationId, authorized: true, active: true }
-          : { organizationId, active: true },
-      })
-    ),
-  ]);
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { packageId: true, package: { select: { vertical: true } }, timezone: true },
+  });
+  // DEV-298: a profile dated today is in force from the workspace's local midnight.
+  const timeZone = organization?.timezone;
+  const startedAt = regulatoryStartInstant(at, timeZone);
+
+  const [claims, branch, seededRoleKeys, catalogReady, receivedLotCount, supplierCount] =
+    await Promise.all([
+      db.pharmacyOnboardingGateState.findMany({
+        where: { organizationId },
+        select: { gate: true, status: true, evidenceRef: true, actorId: true, recordedAt: true },
+      }),
+      // The licences gate is answered per branch; the organization is ready when
+      // at least one branch has an effective profile that PLAT-02 allows to
+      // operate. Pick the branch that owns the most recent effective profile.
+      db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId,
+          branch: { active: true },
+          effectiveFrom: { lte: startedAt },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
+        },
+        select: { branchId: true },
+        orderBy: { effectiveFrom: 'desc' },
+      }),
+      // "Roles seeded" means the vertical's own role templates are present, not
+      // merely that the organization has some roles from another vertical.
+      db.organizationRole.count({
+        where: { organizationId, key: { in: requiredRoleKeys } },
+      }),
+      medicineCatalogReady(db, organizationId, at),
+      // INV-01 receipt: a lot exists but is only opening stock once received.
+      db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
+      // With supplier checks off, an active supplier counts whether or not it is authorized.
+      supplierPolicy.then(({ checksEnabled }) =>
+        db.pharmacySupplier.count({
+          where: checksEnabled
+            ? { organizationId, authorized: true, active: true }
+            : { organizationId, active: true },
+        })
+      ),
+    ]);
 
   const evidence: PharmacyReadinessEvidence = {
     PREMISES_AND_LICENCES: branch
-      ? await branchMayOperate(db, organizationId, branch.branchId, at)
+      ? await branchMayOperate(db, organizationId, branch.branchId, at, timeZone)
       : false,
     COMMERCIAL_PACKAGE: Boolean(
       organization?.packageId &&
@@ -373,12 +371,14 @@ async function branchMayOperate(
   db: PrismaClient,
   organizationId: string,
   branchId: string,
-  at: Date
+  at: Date,
+  timeZone: string | null | undefined
 ): Promise<boolean> {
   try {
     await assertStoredBranchMayOperate(db, organizationId, branchId, {
       name: 'ONBOARDING_READINESS',
       at,
+      timeZone,
       requiresQualifiedPerson: true,
     });
     return true;

@@ -48,6 +48,7 @@ import {
   normalizeRegulatoryPremises,
   normalizeRegulatoryProvince,
 } from '@/lib/pharmacy/regulatory';
+import { regulatoryStartInstant } from '@/lib/pharmacy/regulatory-start';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -197,17 +198,19 @@ function reconcilePackageGate(
 async function readOverview(ctx: TRPCContext) {
   const organizationId = ctx.entitlements.organizationId;
   const now = new Date();
-  const [organization, evaluated, currentProfile] = await Promise.all([
-    ctx.db.organization.findFirst({
-      where: { id: organizationId },
-      select: { displayName: true, status: true, vertical: true, packageId: true },
-    }),
+  const organization = await ctx.db.organization.findFirst({
+    where: { id: organizationId },
+    select: { displayName: true, status: true, vertical: true, packageId: true, timezone: true },
+  });
+  // DEV-298: a profile dated today is current from the workspace's local midnight.
+  const startedAt = regulatoryStartInstant(now, organization?.timezone);
+  const [evaluated, currentProfile] = await Promise.all([
     evaluatePharmacyReadiness(ctx.db, organizationId, now),
     ctx.db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+        effectiveFrom: { lte: startedAt },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: startedAt } }],
       },
       select: { licenceValidTo: true },
       orderBy: { effectiveFrom: 'desc' },
@@ -447,6 +450,13 @@ export const pharmacyOnboardingRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const now = new Date();
+      const organization = await ctx.db.organization.findFirst({
+        where: { id: organizationId },
+        select: { timezone: true },
+      });
+      const timeZone = organization?.timezone;
+      // DEV-298: a version dated today is effective from the workspace's local midnight.
+      const startedAt = regulatoryStartInstant(now, timeZone);
       const branches = await ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         orderBy: { name: 'asc' },
@@ -506,8 +516,8 @@ export const pharmacyOnboardingRouter = router({
         selectedBranchId: selected?.id ?? null,
         versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
           const effective =
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now);
+            version.effectiveFrom <= startedAt &&
+            (version.effectiveTo === null || version.effectiveTo > startedAt);
           const status = evaluateBranchRegulatoryStatus(
             {
               ...version,
@@ -521,7 +531,8 @@ export const pharmacyOnboardingRouter = router({
             effective,
             now,
             // Listed branches are all active (see the query above).
-            selected ? { profile: version, site: { ...selected, active: true } } : undefined
+            selected ? { profile: version, site: { ...selected, active: true } } : undefined,
+            timeZone
           );
           return {
             ...version,
