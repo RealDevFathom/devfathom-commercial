@@ -188,6 +188,8 @@ function fixture(items: Item[], weights: number[], tax: TaxMode) {
       ]),
     },
     restaurantBillLine: { findMany: vi.fn(async () => []) },
+    // DEV-402: settlement subtracts already-refunded principal; these bills have none.
+    restaurantRefund: { aggregate: vi.fn(async () => ({ _sum: { amount: null } })) },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: {
       findMany: vi.fn(async () =>
