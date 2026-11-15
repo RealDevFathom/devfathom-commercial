@@ -10099,6 +10099,9 @@ model RestaurantMenuImportLine {
   reviewedDescription  String?
   reviewedPriceAmount  Decimal?                       @db.Decimal(12, 2)
   reviewedCurrency     String?
+  /// Sizes as the reviewer confirmed them (same shape as `extractedVariants`).
+  /// Null means not confirmed: commit never imports unconfirmed OCR sizes.
+  reviewedVariants     Json?
   reviewNote           String?
   /// Merge target while the import is open. Tenant-checked by composite FK in
   /// the migration and cleared once the import commits.
