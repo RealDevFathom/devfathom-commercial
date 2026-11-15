@@ -258,14 +258,16 @@ it('serves the isolated route with reports-only licensing, UTC filters, subtotal
     '30.00',
     'NET PROFIT',
     '20.00',
-    'finance_journal_lines',
+    'Source: posted accounts',
     'completeness and cost coverage',
     'unknown',
-    '2026-09-01T00:00:00.000Z',
-    '2026-09-03T00:00:00.000Z',
+    '1 Sep 2026, 12:00 AM UTC',
+    '3 Sep 2026, 12:00 AM UTC',
   ]) {
     expect(html).toContain(text);
   }
+  expect(html).not.toContain('finance_journal_lines');
+  expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   expect(mocks.raw).toHaveBeenCalledTimes(2);
   expect(mocks.journal).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 0 }));
   expect(mocks.audit).toHaveBeenCalledWith(

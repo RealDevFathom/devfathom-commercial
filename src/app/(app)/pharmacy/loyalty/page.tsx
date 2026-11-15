@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
+import { formatUtcInstant } from '@/lib/utc-instant';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
 import { describeLoyaltyEarnRule } from '@/lib/commerce/loyalty-arithmetic';
@@ -171,7 +172,7 @@ export default async function LoyaltyPage({
                     <td className="p-3">{describeLoyaltyEarnRule(version)}</td>
                     <td className="whitespace-nowrap p-3">
                       <time dateTime={version.effectiveFrom.toISOString()}>
-                        {version.effectiveFrom.toISOString().replace('T', ' ').slice(0, 16)}
+                        {formatUtcInstant(version.effectiveFrom)}
                       </time>
                     </td>
                   </tr>
@@ -312,7 +313,7 @@ export default async function LoyaltyPage({
                     >
                       <td className="whitespace-nowrap p-3">
                         <time dateTime={e.occurredAt.toISOString()}>
-                          {e.occurredAt.toISOString().replace('T', ' ').slice(0, 19)}
+                          {formatUtcInstant(e.occurredAt)}
                         </time>
                       </td>
                       <td className="p-3">

@@ -97,6 +97,7 @@ import {
   counterBillMovedOn,
   counterErrorMessage,
   counterErrorTone,
+  counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
@@ -1975,7 +1976,10 @@ function ScopedPharmacyCounterConsole({
         if (!dispatched) setStorageError(true);
         outcome =
           !dispatched || tenderRejected(error)
-            ? { status: 'rejected', message: `Payment was not accepted. ${messageFrom(error)}` }
+            ? {
+                status: 'rejected',
+                message: `Payment was not accepted. ${counterPaymentErrorMessage(error)}`,
+              }
             : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
       setTenderOutcome(outcome);
@@ -2889,7 +2893,7 @@ function ScopedPharmacyCounterConsole({
                         })
                       )
                       .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: messageFrom(error) })
+                        setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
                       )
                       // Either way the server now holds the truth about this device's drawer;
                       // stay busy until it is read back, so the step cannot be sent twice.
@@ -3116,7 +3120,11 @@ function ScopedPharmacyCounterConsole({
             </section>
           </SectionCard>
           {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard
+              compact
+              eyebrow="Same medicine, other brands"
+              title="Exact substitute suggestions"
+            >
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={

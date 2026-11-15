@@ -1,10 +1,14 @@
+import { Download } from 'lucide-react';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
 import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
 import { LicenceRenewalBanner } from '@/components/pharmacy/licence-renewal-banner';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { buttonVariants } from '@/components/ui/button';
+import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -49,6 +53,14 @@ export default async function PharmacyOnboardingPage() {
     caller.fbrTier1Status().catch(() => null),
     caller.licenceRenewals().catch(() => []),
   ]);
+  // DEV-93 — the owner's "no lock-in" export, offered only to the live owner.
+  const userId = ctx.session?.user?.id;
+  const organizationId = ctx.organization?.id;
+  const owner =
+    !!userId &&
+    !!organizationId &&
+    !ctx.session?.user?.isSupportSession &&
+    (await isLiveOrganizationOwner(ctx.db, organizationId, userId).catch(() => false));
 
   return (
     <main className="min-w-0 space-y-6">
@@ -56,6 +68,16 @@ export default async function PharmacyOnboardingPage() {
         eyebrow="Pharmacy"
         heading="Onboarding"
         description="The twelve steps between a new pharmacy workspace and its first legal sale. Each step says what it needs and where to do it."
+        actions={
+          owner ? (
+            <Link
+              href="/pharmacy/settings/data-export"
+              className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+            >
+              <Download aria-hidden /> Download my data
+            </Link>
+          ) : null
+        }
       />
       <LicenceRenewalBanner reminders={renewals} />
       <PharmacyOnboardingConsole initial={overview} />

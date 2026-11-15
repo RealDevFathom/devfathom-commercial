@@ -608,7 +608,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── PUR-04 review queue ────────────────────────────────────────────── */}
       <SectionCard
-        eyebrow="PUR-04"
+        eyebrow="Invoice matching"
         title={`Match exceptions — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
         titleLevel={2}
         actions={
@@ -739,7 +739,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
-      <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
           <EmptyState
             title="No order is out with a supplier"
@@ -983,7 +983,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-05 direct purchase ─────────────────────────────────────────── */}
-      <SectionCard eyebrow="PUR-05" title="Direct purchase — no purchase order" titleLevel={2}>
+      <SectionCard eyebrow="Goods in" title="Direct purchase — no purchase order" titleLevel={2}>
         <p className="text-sm text-text-muted">
           A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the
           same as receiving against an order — the only difference is that a bypass reason and a
@@ -1031,7 +1031,7 @@ export default async function PharmacyReceivingPage({
                 emptyHint={
                   checksOff
                     ? 'No supplier yet. Add one in the supplier register first.'
-                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                    : 'No supplier is ready to order from. Authorize one and file a verified licence first.'
                 }
                 label="Supplier"
                 name="supplierId"
@@ -1170,7 +1170,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── receipts, side by side with the selected one ───────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-02/04" title={`Receipts (${receipts.length})`} titleLevel={2}>
+        <SectionCard eyebrow="Goods in" title={`Receipts (${receipts.length})`} titleLevel={2}>
           {receipts.length === 0 ? (
             <EmptyState
               title="Nothing has been received at this branch"
@@ -1525,7 +1525,7 @@ function ReceiptDetail({
 }) {
   return (
     <SectionCard
-      eyebrow="PUR-02/04/05"
+      eyebrow="Goods receipt"
       title={receipt.reference}
       titleLevel={2}
       actions={<StatusPill status={receipt.status} />}
