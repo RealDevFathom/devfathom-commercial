@@ -43,6 +43,7 @@ import {
   type PharmacyReceiptTaxIdentity,
 } from './counter-receipt';
 import { counterLinePricing } from './counter-receipt-presentation';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
 export type { PharmacyReceiptTaxIdentity } from './counter-receipt';
@@ -229,14 +230,15 @@ export async function readPharmacyReceiptFormat(db: FormatDb, scope: BranchScope
 export async function readPharmacyReceiptTaxIdentity(
   db: FormatDb,
   scope: BranchScope,
-  at: Date
+  at: Date,
+  timeZone?: string | null
 ): Promise<PharmacyReceiptTaxIdentity> {
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      // DEV-298: a sale on a profile's start day uses it from local midnight.
+      ...regulatoryProfileInForceWhere(at, timeZone),
     },
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
     select: { premises: true, licenceNumber: true, ntn: true, strn: true },

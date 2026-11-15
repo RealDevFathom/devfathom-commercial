@@ -260,6 +260,38 @@ async function seedWorkspace(email: string, passwordHash: string) {
   });
 }
 
+/** DEV-621/DEV-501: returns and refunds need the signed-in manager's or owner's own PIN. */
+async function seedAdminPin() {
+  await asTenant(async (tx) => {
+    await tx.restaurantStaffProfile.upsert({
+      where: { id: PHARMACY_E2E.adminStaffProfileId },
+      update: { status: 'ACTIVE', updatedAt: FIXED_AT },
+      create: {
+        id: PHARMACY_E2E.adminStaffProfileId,
+        organizationId: PHARMACY_E2E.organizationId,
+        userId: PHARMACY_E2E.adminId,
+        displayName: 'Pharmacy Administrator',
+        status: 'ACTIVE',
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    await tx.restaurantOperatorCredential.upsert({
+      where: { id: PHARMACY_E2E.adminPinCredentialId },
+      update: { failedAttempts: 0, lockedUntil: null, revokedAt: null },
+      create: {
+        id: PHARMACY_E2E.adminPinCredentialId,
+        organizationId: PHARMACY_E2E.organizationId,
+        staffProfileId: PHARMACY_E2E.adminStaffProfileId,
+        type: 'PIN',
+        credentialHash: hashSync(PHARMACY_E2E.adminPin, 10),
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+}
+
 async function seedBranch() {
   await asTenant(async (tx) => {
     const branch = {
@@ -984,6 +1016,7 @@ async function main() {
 
     await seedCatalog();
     await seedWorkspace(email, passwordHash);
+    await seedAdminPin();
     await seedBranch();
     await seedCashier(passwordHash);
     await seedMedicines();

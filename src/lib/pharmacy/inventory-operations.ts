@@ -517,26 +517,36 @@ export async function writeOff(
     idempotencyKey: string;
     /** QUARANTINE and DAMAGED retire stock held by `quarantinePart`. */
     disposition?: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED';
-  }
+  },
+  /**
+   * DEV-628: set only after `authorizeWriteOffWitness` accepted the actor's own
+   * fresh PIN under the solo-pharmacy rule. Otherwise the witness is a second person.
+   */
+  options: { soloSelfWitness?: boolean } = {}
 ) {
   assertPositive(input.units);
-  if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-  const witness = await db.user.findFirst({
-    where: {
-      id: input.witnessId,
-      organizationId: scope.organizationId,
-      status: 'ACTIVE',
-      pharmacyBranchAssignments: {
-        some: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          active: true,
+  const selfWitness = input.witnessId === scope.actorId;
+  if (selfWitness !== (options.soloSelfWitness === true))
+    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  // The solo self-witness was already admitted to this branch by the router.
+  if (!selfWitness) {
+    const witness = await db.user.findFirst({
+      where: {
+        id: input.witnessId,
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            active: true,
+          },
         },
       },
-    },
-    select: { id: true },
-  });
-  if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+      select: { id: true },
+    });
+    if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,

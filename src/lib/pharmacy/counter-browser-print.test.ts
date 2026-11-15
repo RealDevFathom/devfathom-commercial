@@ -524,7 +524,9 @@ describe('isolated Pharmacy browser receipt', () => {
   it('rejects a reserved window whose document is no longer accessible', () => {
     const popup = {
       opener: window,
-      get document(): Document { throw new Error('Cross-origin window'); },
+      get document(): Document {
+        throw new Error('Cross-origin window');
+      },
       close: vi.fn(),
     };
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
@@ -590,4 +592,34 @@ it('isolates phone, licence and PKT date identifiers on RTL paper without permit
   );
   expect(dom.querySelector('script')).toBeNull();
   expect(dom.querySelector('img')).toBeNull();
+});
+
+describe('receipt tax identity on a profile start day (DEV-298)', () => {
+  const dayStart = new Date('2026-10-21T00:00:00.000Z');
+  it.each([
+    ['00:30 PKT on the start day', new Date('2026-10-20T19:30:00.000Z'), dayStart],
+    [
+      '23:59 PKT the day before',
+      new Date('2026-10-20T18:59:00.000Z'),
+      new Date('2026-10-20T18:59:00.000Z'),
+    ],
+  ])('selects the version in force on the workspace day at %s', async (_label, at, asOf) => {
+    const findFirst = vi.fn(async () => null);
+    await readPharmacyReceiptTaxIdentity(
+      { branchRegulatoryProfile: { findFirst } } as never,
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      at,
+      'Asia/Karachi'
+    );
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          effectiveFrom: { lte: asOf },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+        },
+      })
+    );
+  });
 });

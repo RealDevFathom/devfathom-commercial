@@ -31,6 +31,7 @@ import {
 } from '@/lib/pharmacy/action-error-message';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
 import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
+import { writeOffWitnessOptions } from '@/lib/pharmacy/write-off-witness';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -225,82 +226,92 @@ export default async function PharmacyInventoryPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const nearExpiry = await caller.nearExpiryBoard({ branchId: branch.id });
-  const [organizationLocations, lots, counts, transfers, recalls, signals, users, temperatureLogs] =
-    await Promise.all([
-      ctx.db.pharmacyStockLocation.findMany({
-        where: { organizationId, active: true },
-        orderBy: { name: 'asc' },
-      }),
-      ctx.db.pharmacyInventoryLot.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
-        include: {
-          batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
-          balances: { include: { location: true } },
-          // DEV-727: the received pack hierarchy, so stock reads as boxes + strips.
-          packLevel: {
-            select: {
-              presentation: {
-                select: {
-                  dosageForm: true,
-                  packLevels: {
-                    where: { organizationId },
-                    select: {
-                      id: true,
-                      level: true,
-                      parentPackLevelId: true,
-                      unitsPerParent: true,
-                    },
+  const [
+    organizationLocations,
+    lots,
+    counts,
+    transfers,
+    recalls,
+    signals,
+    writeOffWitnesses,
+    temperatureLogs,
+  ] = await Promise.all([
+    ctx.db.pharmacyStockLocation.findMany({
+      where: { organizationId, active: true },
+      orderBy: { name: 'asc' },
+    }),
+    ctx.db.pharmacyInventoryLot.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
+      include: {
+        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+        balances: { include: { location: true } },
+        // DEV-727: the received pack hierarchy, so stock reads as boxes + strips.
+        packLevel: {
+          select: {
+            presentation: {
+              select: {
+                dosageForm: true,
+                packLevels: {
+                  where: { organizationId },
+                  select: {
+                    id: true,
+                    level: true,
+                    parentPackLevelId: true,
+                    unitsPerParent: true,
                   },
                 },
               },
             },
           },
         },
-      }),
-      ctx.db.pharmacyInventoryCount.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyInterbranchTransfer.findMany({
-        where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyRecallNotice.findMany({
-        where: { organizationId },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { acknowledgements: true },
-      }),
-      ctx.db.pharmacyStockSignal.findMany({
-        where: {
-          organizationId,
-          branchId: branch.id,
-          status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
-        },
-        orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-        take: 50,
-        include: {
-          medicine: { select: { productName: true } },
-          location: { select: { name: true } },
-        },
-      }),
-      ctx.db.user.findMany({
-        where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true, title: true },
-      }),
-      ctx.db.pharmacyTemperatureLog.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: { recordedAt: 'desc' },
-        take: 20,
-        include: { location: { select: { name: true } } },
-      }),
-    ]);
+      },
+    }),
+    ctx.db.pharmacyInventoryCount.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyInterbranchTransfer.findMany({
+      where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyRecallNotice.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { acknowledgements: true },
+    }),
+    ctx.db.pharmacyStockSignal.findMany({
+      where: {
+        organizationId,
+        branchId: branch.id,
+        status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
+      },
+      orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
+      take: 50,
+      include: {
+        medicine: { select: { productName: true } },
+        location: { select: { name: true } },
+      },
+    }),
+    // DEV-628: only people the write-off will accept: colleagues assigned to
+    // this branch with a PIN, or the solo owner/pharmacist themself.
+    writeOffWitnessOptions(ctx.db, {
+      organizationId,
+      branchId: branch.id,
+      actorId: ctx.session.user.id,
+    }),
+    ctx.db.pharmacyTemperatureLog.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { recordedAt: 'desc' },
+      take: 20,
+      include: { location: { select: { name: true } } },
+    }),
+  ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
   const destinationLocations = organizationLocations.filter((item) => item.branchId !== branch.id);
@@ -417,6 +428,7 @@ export default async function PharmacyInventoryPage({
           stockLocationId: field(data, 'position').split(':')[1]!,
           units: number(data, 'units'),
           witnessId: field(data, 'witnessId'),
+          witnessPin: field(data, 'witnessPin'),
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
@@ -592,12 +604,16 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Lots by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then import your opening count or receive a supplier delivery.
+            No available lots yet. Set up a medicine and its pack, then import your opening count or
+            receive a supplier delivery.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
               </Link>
-              <Link href="/pharmacy/inventory/import" className={buttonVariants({ variant: 'outline' })}>
+              <Link
+                href="/pharmacy/inventory/import"
+                className={buttonVariants({ variant: 'outline' })}
+              >
                 Import opening stock
               </Link>
               <Link
@@ -1057,7 +1073,8 @@ export default async function PharmacyInventoryPage({
       ) : null}
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="Stock corrections">
-        {writeOffPositions.length && users.length ? (
+        {writeOffPositions.length &&
+        (writeOffWitnesses.witnesses.length || writeOffWitnesses.soloSelfWitness) ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
@@ -1082,12 +1099,35 @@ export default async function PharmacyInventoryPage({
             <label className="text-sm">
               Co-authorizing witness
               <select className={inputClass} name="witnessId">
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name} · {user.title}
-                  </option>
-                ))}
+                {writeOffWitnesses.soloSelfWitness ? (
+                  <option value={viewerId}>You (solo witness)</option>
+                ) : (
+                  writeOffWitnesses.witnesses.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name ?? 'Unnamed colleague'}
+                      {user.title ? ` · ${user.title}` : ''}
+                    </option>
+                  ))
+                )}
               </select>
+            </label>
+            <label className="text-sm">
+              Witness PIN
+              <Input
+                autoComplete="off"
+                className="mt-1"
+                inputMode="numeric"
+                maxLength={8}
+                name="witnessPin"
+                pattern="[0-9]{4,8}"
+                required
+                type="password"
+              />
+              <span className="mt-1 block text-xs text-text-muted">
+                {writeOffWitnesses.soloSelfWitness
+                  ? 'Nobody else is assigned to this branch. Confirm with your own PIN; the self-witness is audited.'
+                  : 'The witness enters their own PIN here. Only colleagues assigned to this branch with a PIN can witness.'}
+              </span>
             </label>
             <label className="text-sm">
               Evidence reference
@@ -1108,8 +1148,8 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available or quarantined stock and a different active organization
-            member as witness.
+            A write-off needs available or quarantined stock and a witness: a colleague assigned to
+            this branch who has a PIN set up.
           </Empty>
         )}
         {releasableQuarantined.length ? (
