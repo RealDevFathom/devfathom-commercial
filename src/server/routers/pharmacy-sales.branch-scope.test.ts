@@ -12,6 +12,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // need the counter capability and a branch assignment (DEV-279); that matrix is in
 // `pharmacy-sales.drawer-auth.test.ts`.
 vi.mock('server-only', () => ({}));
+// DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: async () => true,
+  authenticateRefundPin: async () => ({ verified: true }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -129,6 +135,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         amountMinor: 500,
         reason: 'Returned medicine',
         idempotencyKey: 'refund-1',
+        managerPin: '1234',
       }),
     OUTSIDE,
   ],

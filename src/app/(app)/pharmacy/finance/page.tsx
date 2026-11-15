@@ -13,6 +13,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { ManualPaymentSettingsPanel } from '@/components/pharmacy/counter/manual-payment-settings-panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { isCounterKhataRepayment } from '@/lib/pharmacy/bookkeeping';
 import {
   Table,
   TableBody,
@@ -675,7 +676,12 @@ export default async function PharmacyFinancePage({
                       />
                     </TableCell>
                     <TableCell>
-                      {item.status === 'POSTED' ? (
+                      {item.status === 'POSTED' && isCounterKhataRepayment(item) ? (
+                        <span className="text-sm text-text-muted">
+                          Counter khata receipt: also settled the khata and drawer, so it is
+                          not reversed here.
+                        </span>
+                      ) : item.status === 'POSTED' ? (
                         <form action={perform} className="flex min-w-72 gap-2">
                           <input type="hidden" name="action" value="reverse" />
                           <input type="hidden" name="branchId" value={branch.id} />
