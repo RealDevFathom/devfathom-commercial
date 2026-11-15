@@ -31,6 +31,7 @@ import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { getSearchCategoryAccess } from '@/lib/search-access';
 import { cn } from '@/lib/utils';
+import { inviteCopyForVertical } from '@/lib/vertical-catalog';
 import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
@@ -98,6 +99,11 @@ export function Topbar({
   const router = useRouter();
   const { data: session } = useSession();
   const { vertical, enabledModules } = useEntitlements();
+  const role = session?.user?.role;
+  const roleLabel =
+    role === 'ADMIN' || role === 'HR' || role === 'EMPLOYEE'
+      ? `Workspace role: ${inviteCopyForVertical(vertical).baseRoleLabels[role]}`
+      : 'Workspace member';
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
   const assistantAvailable = useAssistant((state) =>
@@ -216,7 +222,7 @@ export function Topbar({
             {session?.user?.name ?? 'Workspace'}
           </span>
           <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
-            {session?.user?.title ?? 'Team member'}
+            {roleLabel}
           </span>
         </div>
 
@@ -302,6 +308,7 @@ export function Topbar({
                 <div className="px-2 py-2">
                   <p className="text-sm font-medium">{session.user.name}</p>
                   <p className="text-xs text-muted-foreground">{session.user.email}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{roleLabel}</p>
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => router.push('/settings')}>

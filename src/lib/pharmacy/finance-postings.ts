@@ -40,7 +40,7 @@ import {
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { saleAllocationMoney } from './sale-line-money';
-import { pharmacyRefundTenderLabel, pharmacyTenderLabel } from './tender-labels';
+import { tenderTypeLabel } from './finance-labels';
 export { apportion } from './sale-line-money';
 
 export { FinancePostingError } from '@/lib/finance/journal';
@@ -919,7 +919,7 @@ export async function postTenderEntry(
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_TENDER',
     sourceId: tender.id,
-    description: `Payment received · ${pharmacyTenderLabel(tender.type) ?? 'Other tender'}`,
+    description: `Payment received · ${tenderTypeLabel(tender.type)}`,
     occurredAt: input.at,
     idempotencyKey: postingKey('PHARMACY_TENDER', tender.id),
     branchId: tender.branchId,
@@ -963,7 +963,8 @@ export async function postTenderRefundEntry(
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_REFUND',
     sourceId: refund.id,
-    description: `Refund · ${pharmacyRefundTenderLabel(refund) ?? 'Other tender'}`,
+    // A refund paid from a drawer leaves as cash, matching its settlement account.
+    description: `Refund · ${refund.drawerSessionId ? 'Cash' : tenderTypeLabel(refund.originalTender.type)}`,
     occurredAt: input.at,
     idempotencyKey: postingKey('PHARMACY_REFUND', refund.id),
     branchId: refund.branchId,

@@ -1758,6 +1758,85 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     }
   });
 
+  it('counts only completed, unreversed sale stock as sold in the recall trace', async () => {
+    const sales = await import('./sales');
+    const completion = await import('./sale-completion');
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-sold-units');
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.upsert({
+        where: { id: ORG_A },
+        update: { status: 'ACTIVE' },
+        create: {
+          id: ORG_A,
+          slug: ORG_A,
+          legalName: 'Recall tests',
+          displayName: 'Recall tests',
+          status: 'ACTIVE',
+        },
+      })
+    );
+    ruleSetIds.push(
+      await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), BRANCH_A)
+    );
+    const { batch, presentationId } = await inOrg(ORG_A, async (db) => {
+      const medicine = await db.medicine.update({
+        where: { id: fixture.medicineId },
+        data: { saleable: true, otc: true },
+        include: { presentations: true },
+      });
+      const { batch, lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'recall-sold-units',
+      });
+      await db.pharmacyInventoryLot.update({ where: { id: lot.id }, data: { unitCostMinor: 100 } });
+      return { batch, presentationId: medicine.presentations[0]!.id };
+    });
+    const draft = (db: ScopedDb, strips: number, label: string) =>
+      sales.createSale(db, scopeOf(fixture)).then(async (sale) => {
+        await sales.addSaleLine(db, scopeOf(fixture), {
+          saleId: sale.id,
+          medicineId: fixture.medicineId,
+          presentationId,
+          packLevelId: fixture.packLevelId,
+          saleUnit: 'STRIP',
+          quantity: strips,
+          canonicalUnitsPerSaleUnit: 10,
+          idempotencyKey: tag(label),
+        });
+        return sale;
+      });
+    // 20 units leave with a customer on a completed receipt.
+    await inOrg(ORG_A, async (db) => {
+      const sale = await draft(db, 2, 'recall-sold-completed');
+      const loaded = await db.pharmacySale.findFirstOrThrow({
+        where: { id: sale.id },
+        include: completion.completionSaleInclude,
+      });
+      await completion.completePaidPharmacySale(db, scopeOf(fixture), loaded, {
+        deviceId: tag('recall-sold-device'),
+        businessDate: NOW,
+      });
+    });
+    // 10 units go to a draft that is voided, and 10 sit on a draft never completed.
+    await inOrg(ORG_A, async (db) => {
+      const voided = await draft(db, 1, 'recall-sold-voided');
+      await sales.changeSaleStatus(db, scopeOf(fixture), voided.id, 'void', 'Customer left');
+      await draft(db, 1, 'recall-sold-open');
+    });
+    const trace = await inOrg(ORG_A, async (db) => {
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('sold-recall'), reason: 'Regulator notice' }
+      );
+      return deps.operations.recallTrace(db, ORG_A, notice.id);
+    });
+    expect(trace.length).toBeGreaterThan(0);
+    for (const row of trace) expect(row.soldUnits).toBe(20);
+  });
+
   it('does not reserve a supplier claim against a recalled batch', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'recalled-supplier-claim');
     const lotId = await inOrg(ORG_A, async (db) => {

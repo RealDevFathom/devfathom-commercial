@@ -11,6 +11,12 @@ import { searchCounterCatalog } from './counter';
 import { mrpRoundingIncrementForLot } from './medicine';
 import { addSaleLine } from './sales';
 
+// The persisted regulatory gate has its own suites (regulatory.test.ts, sale-regulatory-gate.test.ts).
+vi.mock('./regulatory', async () => ({
+  ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
+
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 
 // 1234 / 10 = 123 minor units pro rata per tablet. Batch B-1 rounds down to 5

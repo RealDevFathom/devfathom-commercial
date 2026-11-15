@@ -18,8 +18,6 @@ vi.mock('node:fs/promises', () => ({
     files.delete(name);
   }),
 }));
-vi.mock('@azure/identity', () => ({ DefaultAzureCredential: vi.fn() }));
-vi.mock('@azure/storage-blob', () => ({ BlobServiceClient: vi.fn() }));
 
 import type { CameraGatewayRuntime } from './camera-gateway-runtime';
 import { createSimulatedCameraGateway } from './camera-gateway.simulated';

@@ -55,9 +55,29 @@ export const POST = withApiAuth('projects:write', async (ctx, request) => {
   const { memberIds, startDate, endDate, ...data } = parsed.data;
   const allMembers = [...new Set([ctx.userId, ...memberIds])];
 
+  // Foreign-key constraints bypass row level security, so an existing id is
+  // not proof it belongs to this workspace. Scope every supplied reference.
+  if (
+    data.clientId &&
+    !(await ctx.db.client.findFirst({
+      where: { id: data.clientId, organizationId: ctx.organizationId },
+      select: { id: true },
+    }))
+  ) {
+    return NextResponse.json({ error: 'clientId does not exist.' }, { status: 400 });
+  }
+  const orgMembers = await ctx.db.user.findMany({
+    where: { id: { in: allMembers }, organizationId: ctx.organizationId },
+    select: { id: true },
+  });
+  if (orgMembers.length !== allMembers.length) {
+    return NextResponse.json({ error: 'memberIds contains an unknown user.' }, { status: 400 });
+  }
+
   const project = await ctx.db.project.create({
     data: {
       ...data,
+      clientId: data.clientId || null,
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
       members: {

@@ -214,6 +214,14 @@ describe('Ask Fathom context and suggestions', () => {
   });
 });
 
+describe('Ask Fathom initial focus', () => {
+  it('focuses the question box, not the close button, when the panel opens', async () => {
+    render(panel());
+    await waitFor(() => expect(screen.getByLabelText('Your question')).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Close assistant' })).not.toHaveFocus();
+  });
+});
+
 describe('Ask Fathom request and result states', () => {
   it('shows setup guidance without retry or provider diagnostics and preserves the question', async () => {
     fetchMock.mockResolvedValueOnce(
@@ -225,7 +233,7 @@ describe('Ask Fathom request and result states', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Ask Fathom isn't set up yet, contact support."
     );
-    expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
@@ -236,6 +244,17 @@ describe('Ask Fathom request and result states', () => {
   it('has no failure alert before a request fails', () => {
     render(panel());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+  it('offers pharmacy report example questions and hints on an empty send', () => {
+    render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
+    expect(screen.getByRole('button', { name: "What are today's sales?" })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Which medicines are expiring soon?' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
+    expect(screen.getByText('Type a question before sending.')).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Your question'), { target: { value: 'x' } });
+    expect(screen.queryByText('Type a question before sending.')).not.toBeInTheDocument();
   });
   it('sends an entitled suggestion through the SDK and shows its response', async () => {
     render(panel());
@@ -253,13 +272,14 @@ describe('Ask Fathom request and result states', () => {
     );
     render(panel());
     enter();
-    expect(await screen.findByRole('alert')).toHaveTextContent('currently unavailable');
-    expect(screen.getByRole('alert')).toHaveTextContent('No cached answer was used');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Ask Fathom can't answer right now");
+    expect(screen.getByRole('alert')).toHaveTextContent('if it keeps happening, contact support');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/action results/i);
     expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
     expect(screen.getByRole('textbox')).toBeEnabled();
     expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
     expect(screen.queryByText(/synthetic provider diagnostic/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review and retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(screen.getByLabelText('Your question')).toHaveFocus();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -275,7 +295,7 @@ describe('Ask Fathom request and result states', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
       expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
       expect(screen.getByLabelText('Your question')).toBeDisabled();
-      expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     }
   );
   it('shows an explicit empty response and retains its question', async () => {
@@ -354,6 +374,12 @@ describe('Ask Fathom request and result states', () => {
     render(panel(entitlement(vertical, [module])));
     expect(screen.getByText(`Read ${label}`)).toBeVisible();
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
+  });
+  it('lets mixed Urdu/English user text follow the paragraph direction', () => {
+    const text = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
+    fixtures.messages = [{ id: 'u1', role: 'user', parts: [{ type: 'text', text }] }];
+    render(panel());
+    expect(screen.getByText(text)).toHaveAttribute('dir', 'auto');
   });
   it('shows a declined tool as cancelled', () => {
     tool({ state: 'output-denied' });

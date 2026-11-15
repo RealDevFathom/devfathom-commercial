@@ -73,34 +73,6 @@ describe('authorized journal display context', () => {
     });
   });
 
-  it('names the tender of payment and refund entries without exposing its ID', async () => {
-    const db = fixture();
-    db.pharmacyTender.findMany.mockResolvedValue([
-      { id: 'same-id', type: 'JAZZCASH', sale: { receiptNumber: 42 } },
-    ]);
-    db.pharmacyRefund.findMany.mockResolvedValue([
-      {
-        id: 'same-id',
-        drawerSessionId: 'drawer',
-        originalTender: { type: 'CARD' },
-        sale: { receiptNumber: 43 },
-      },
-    ]);
-    const result = await journalDisplayContext(db as unknown as ScopedDb, scope, entries);
-    expect(result.map((entry) => entry.tenderName)).toEqual([null, 'JazzCash', 'Cash', null, null]);
-    expect(db.pharmacyTender.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ select: expect.objectContaining({ type: true }) })
-    );
-    expect(db.pharmacyRefund.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.objectContaining({
-          drawerSessionId: true,
-          originalTender: { select: { type: true } },
-        }),
-      })
-    );
-  });
-
   it('keeps missing, out-of-scope and unnumbered historical sources unavailable', async () => {
     const db = fixture();
     db.pharmacySaleLine.findMany.mockResolvedValue([
@@ -114,7 +86,7 @@ describe('authorized journal display context', () => {
       { sourceKind: 'PHARMACY_OPENING_STOCK', sourceId: 'internal', actorId: 'system' },
     ];
     expect(await journalDisplayContext(db as unknown as ScopedDb, scope, input)).toEqual(
-      input.map((entry) => ({ ...entry, billNumber: null, userName: null, tenderName: null }))
+      input.map((entry) => ({ ...entry, billNumber: null, userName: null }))
     );
     expect(db.pharmacyRefund.findMany).not.toHaveBeenCalled();
     expect(db.pharmacySaleReturnLine.findMany).not.toHaveBeenCalled();
@@ -138,12 +110,7 @@ describe('authorized journal display context', () => {
       page: 2,
     });
     expect(result.journal).toEqual(
-      entries.map((entry, index) => ({
-        ...entry,
-        billNumber: 41 + index,
-        userName: 'Saad',
-        tenderName: null,
-      }))
+      entries.map((entry, index) => ({ ...entry, billNumber: 41 + index, userName: 'Saad' }))
     );
     expect(db.financeJournalEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

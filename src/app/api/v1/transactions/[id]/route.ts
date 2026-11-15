@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
+import { paymentLedgerDeleteError, paymentLedgerUpdateError } from '@/lib/finance/payment-ledger';
 
 const updateSchema = z.object({
   type: z.enum(['INCOME', 'EXPENSE']).optional(),
@@ -43,11 +44,19 @@ export const PATCH = withApiAuth(
     }
     const existing = await authCtx.db.transaction.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, paymentId: true, type: true, amount: true, date: true },
     });
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
 
     const { date, ...data } = parsed.data;
+
+    // DEV-166: a payment-posted INCOME row only changes through its payment.
+    const lockedError = paymentLedgerUpdateError(existing, {
+      type: data.type,
+      amount: data.amount,
+      date: date ? new Date(date) : undefined,
+    });
+    if (lockedError) return NextResponse.json({ error: lockedError }, { status: 409 });
 
     // Foreign-key constraints only prove that a referenced row exists; they do
     // not prove that it belongs to the token's workspace. Keep nullable fields
@@ -85,9 +94,11 @@ export const DELETE = withApiAuth(
     const { id } = await ctx.params;
     const existing = await authCtx.db.transaction.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, paymentId: true },
     });
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    const lockedError = paymentLedgerDeleteError(existing);
+    if (lockedError) return NextResponse.json({ error: lockedError }, { status: 409 });
     await authCtx.db.transaction.delete({ where: { id } });
     return NextResponse.json({ success: true });
   }
