@@ -35,6 +35,12 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
   const clientVisibility = (): Prisma.ClientWhereInput | undefined =>
     h.isAdmin ? undefined : { projects: { some: { members: { some: { userId: h.ctx.userId } } } } };
 
+  // DEV-839: a visible client does not make all of its projects visible. Its
+  // linked projects (and their count) follow the projects router's rule: admins
+  // see all, everyone else only projects they are a member of.
+  const projectVisibility = (): Prisma.ProjectWhereInput | undefined =>
+    h.isAdmin ? undefined : { members: { some: { userId: h.ctx.userId } } };
+
   /** Resolve a free-text client name to one client the viewer can see. */
   const resolveClient = async (name: string) => {
     const clients = await db.client.findMany({
@@ -61,7 +67,7 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
           industry: true,
           location: true,
           status: true,
-          _count: { select: { projects: true } },
+          _count: { select: { projects: { where: projectVisibility() } } },
         },
       });
       const filtered = query ? clients.filter((c) => matchScore(query, c.name) > 0) : clients;
@@ -101,7 +107,7 @@ export function buildClientsTools(h: AssistantHelpers): ToolSet {
           contacts: {
             select: { name: true, role: true, email: true, phone: true, isPrimary: true },
           },
-          projects: { select: { name: true, status: true } },
+          projects: { where: projectVisibility(), select: { name: true, status: true } },
           invoices: { select: { status: true, total: true } },
         },
       });
