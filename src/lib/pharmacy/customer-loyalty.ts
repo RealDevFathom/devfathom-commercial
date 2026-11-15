@@ -418,21 +418,69 @@ async function assertLoyaltyHistoryBranch(db: ScopedDb, scope: LedgerScope) {
   if (!branch) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
 }
 
+const LOYALTY_SEARCH_MAX_TERMS = 6;
+
+// DEV-671: the loyalty name is a snapshot taken when the customer was first linked at the
+// counter, so matching only that one column missed customers known by their patient name,
+// phone number or loyalty number. Every word must match one of those identity fields.
+function loyaltyCustomerSearch(query: string): Prisma.PharmacyCustomerWhereInput[] {
+  return query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, LOYALTY_SEARCH_MAX_TERMS)
+    .map((term) => {
+      const match: Prisma.PharmacyCustomerWhereInput[] = [
+        { displayName: { contains: term, mode: 'insensitive' } },
+        { patient: { displayName: { contains: term, mode: 'insensitive' } } },
+        { id: term },
+      ];
+      const digits = term.replace(/\D/g, '');
+      if (/^\+?[\d()-]+$/.test(term) && digits.length >= 4) {
+        if (digits.length === 4) match.push({ phoneLast4: digits });
+        // Stored numbers mix +92 and 0 prefixes; compare the subscriber part.
+        const local = digits.length > 4 ? digits.replace(/^(?:92|0)/, '') : digits;
+        match.push({ patient: { phone: { contains: local } } });
+      }
+      return { OR: match };
+    });
+}
+
 export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, query = '') {
   if (query.trim().length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
   await assertLoyaltyHistoryBranch(db, scope);
+  const terms = loyaltyCustomerSearch(query);
   // Retail identities are tenant-wide; balances and entries below are branch-specific.
-  const customers = await db.pharmacyCustomer.findMany({
+  const rows = await db.pharmacyCustomer.findMany({
     where: {
       organizationId: scope.organizationId,
       active: true,
-      displayName: { contains: query.trim(), mode: 'insensitive' },
+      ...(terms.length ? { AND: terms } : {}),
     },
     select: { id: true, displayName: true, phoneLast4: true },
     orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
     take: 51,
   });
-  return { customers: customers.slice(0, 50), hasMore: customers.length > 50 };
+  const customers = rows.slice(0, 50);
+  const balances = customers.length
+    ? await db.pharmacyLoyaltyPointsEntry.groupBy({
+        by: ['customerId'],
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          customerId: { in: customers.map((customer) => customer.id) },
+        },
+        _sum: { points: true },
+      })
+    : [];
+  const pointsBy = new Map(balances.map((row) => [row.customerId, row._sum.points ?? 0]));
+  return {
+    customers: customers.map((customer) => ({
+      ...customer,
+      pointsBalance: pointsBy.get(customer.id) ?? 0,
+    })),
+    hasMore: rows.length > 50,
+  };
 }
 
 export async function readLoyaltyHistory(

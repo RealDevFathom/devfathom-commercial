@@ -89,6 +89,54 @@ export async function perpetualValuation(
      ORDER BY line."branchId", line."lotId", line."locationId"`);
 }
 
+/**
+ * Inventory value posted without a lot, e.g. opening stock migrated as one
+ * branch total. Sales from those lots still credit inventory per lot, so the
+ * per-lot rows above can read negative while the branch's stock is not; this
+ * amount is what reconciles them.
+ */
+export async function unallocatedInventoryValue(
+  db: ScopedDb,
+  scope: ReportScope,
+  at: Date
+): Promise<bigint> {
+  const [row] = await db.$queryRaw<{ valueMinor: bigint }[]>(Prisma.sql`
+    SELECT COALESCE(SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor"::bigint ELSE -line."amountMinor"::bigint END), 0)::bigint AS "valueMinor"
+      FROM "finance_journal_lines" line
+      JOIN "finance_journal_entries" entry
+        ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."accountCode" IN ('INVENTORY', 'INVENTORY_IN_TRANSIT')
+       AND line."lotId" IS NULL
+       AND entry."occurredAt" <= ${at}
+       ${branchFilter(scope)}`);
+  return BigInt(row?.valueMinor ?? 0);
+}
+
+/**
+ * Currencies the journal entries behind a report were posted in. Amounts in
+ * these reports are summed across entries, so the report can only name a
+ * currency when every contributing entry shares it.
+ */
+export async function ledgerCurrencies(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { accountCodes: readonly string[]; from?: Date; to: Date; inclusive?: boolean }
+): Promise<string[]> {
+  const rows = await db.$queryRaw<{ currency: string }[]>(Prisma.sql`
+    SELECT DISTINCT entry."currency"::text AS "currency"
+      FROM "finance_journal_lines" line
+      JOIN "finance_journal_entries" entry
+        ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."accountCode"::text IN (${Prisma.join(input.accountCodes)})
+       ${input.from ? Prisma.sql`AND entry."occurredAt" >= ${input.from}` : Prisma.empty}
+       ${input.inclusive ? Prisma.sql`AND entry."occurredAt" <= ${input.to}` : Prisma.sql`AND entry."occurredAt" < ${input.to}`}
+       ${branchFilter(scope)}
+     ORDER BY 1`);
+  return rows.map((row) => row.currency);
+}
+
 export type MarginDimension = 'line' | 'batch' | 'product' | 'branch' | 'productClass';
 
 export type MarginRow = {

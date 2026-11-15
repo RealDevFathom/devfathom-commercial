@@ -240,7 +240,7 @@ export class PharmacyCounterRuntime {
             occurredAt: input.envelope.safetyLease.issuedAt,
             lease: input.envelope.safetyLease,
             recallVersion: input.envelope.safetyLease.recallVersion,
-            recalledBatchIds: [],
+            recalledBatchIds: input.envelope.safetyLease.recalledBatchIds,
           },
         ],
       },
@@ -268,10 +268,17 @@ export class PharmacyCounterRuntime {
     const recallEvents = this.queue().safetyLeaseEvents.filter(
       (event) => event.type === 'RECALL_APPLIED'
     );
+    // #519: the signed lease carries the server's recall set at issue; a lot
+    // recalled by any cached lease or applied bulletin stays blocked offline.
     return {
       lease,
       appliedRecallVersion: Math.max(0, ...recallEvents.map((event) => event.recallVersion)),
-      recalledBatchIds: [...new Set(recallEvents.flatMap((event) => event.recalledBatchIds))],
+      recalledBatchIds: [
+        ...new Set([
+          ...leases.flatMap((cached) => cached.recalledBatchIds ?? []),
+          ...recallEvents.flatMap((event) => event.recalledBatchIds),
+        ]),
+      ],
     };
   }
 

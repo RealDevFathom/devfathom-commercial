@@ -54,6 +54,7 @@ function leasedReceipt() {
       recallVersion: 1,
       licenceVersion: 1,
       ruleVersion: 1,
+      recalledBatchIds: [],
     },
     signingKeyId: SNAPSHOT_SIGNING_KEY_ID,
   };
