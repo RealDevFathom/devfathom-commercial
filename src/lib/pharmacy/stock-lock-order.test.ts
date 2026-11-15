@@ -48,7 +48,7 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   verifyOperatorCredential: vi.fn(async () => true),
 }));
 
-import { transitionCustomerOrder } from './customer-ordering';
+import { reservationCandidates, transitionCustomerOrder } from './customer-ordering';
 import { postGoodsReceipt } from './goods-receipt';
 import { changeSaleStatus, returnSaleLine } from './sales';
 import {
@@ -558,5 +558,17 @@ describe('sales, voids and returns take stock locks in the global order', () => 
       trace.statements.findIndex(({ step }) => step === 'balance')
     );
     expect(trace.statements.some(({ text }) => /FOR UPDATE OF \w+,/.test(text))).toBe(false);
+  });
+
+  it('locks customer-order and refill reservation candidates in balance key order', async () => {
+    const trace = recorder(scope);
+    await reservationCandidates({ $queryRaw: trace.queryRaw } as never, scope, 'medicine', 'pack');
+    const locking = trace.statements.filter(({ text }) => /FOR (NO KEY )?UPDATE/.test(text));
+    expect(locking).toHaveLength(1);
+    expect(locking[0]!.text).toContain(balanceLockOrderBy('balance').sql);
+    expect(locking[0]!.text).not.toMatch(/ORDER BY[^?]*expiresAt/);
+    // The FEFO read comes after the lock, in its own statement.
+    expect(trace.statements.at(-1)!.text).toMatch(/ORDER BY batch."expiresAt"/);
+    expect(trace.statements.at(-1)!.text).not.toMatch(/FOR (NO KEY )?UPDATE/);
   });
 });

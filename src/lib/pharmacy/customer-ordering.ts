@@ -10,7 +10,7 @@ import { saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
-import { lockStockRowsFrom } from './stock-lock-order';
+import { balanceLockOrderBy, lockStockRowsFrom } from './stock-lock-order';
 
 export type CustomerOrderFulfillment = 'COLLECT' | 'DELIVER';
 export type CustomerOrderStatus =
@@ -187,6 +187,25 @@ export async function reservationCandidates(
   medicineId: string,
   packLevelId: string
 ) {
+  const candidates = Prisma.sql`
+    FROM "pharmacy_stock_balances" balance
+    JOIN "pharmacy_inventory_lots" lot
+      ON lot."organizationId" = balance."organizationId"
+     AND lot."branchId" = balance."branchId" AND lot."id" = balance."inventoryLotId"
+    JOIN "pharmacy_manufacturing_batches" batch
+      ON batch."organizationId" = lot."organizationId" AND batch."id" = lot."manufacturingBatchId"
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
+      AND batch."medicineId" = ${medicineId}
+      AND lot."packLevelId" = ${packLevelId}`;
+  // DEV-825: lock the balances in the global key order (stock-lock-order.ts),
+  // the order a counter sale locks the same rows in, then read them in FEFO
+  // order in a separate statement so the read sees what committed during a wait.
+  await db.$queryRaw(Prisma.sql`
+    SELECT balance."inventoryLotId"
+    ${candidates}
+    ${balanceLockOrderBy('balance')}
+    FOR UPDATE OF balance`);
   return db.$queryRaw<ReservationCandidate[]>(Prisma.sql`
     SELECT balance."inventoryLotId", balance."stockLocationId", balance."organizationId", balance."branchId",
            batch."state"::text AS "batchState", balance."disposition"::text AS disposition,
@@ -203,19 +222,9 @@ export async function reservationCandidates(
                    AND reservation."inventoryLotId" = balance."inventoryLotId"
                    AND reservation."stockLocationId" = balance."stockLocationId"
                    AND reservation."status" = 'RESERVED'), 0))::integer AS "availableUnits"
-    FROM "pharmacy_stock_balances" balance
-    JOIN "pharmacy_inventory_lots" lot
-      ON lot."organizationId" = balance."organizationId"
-     AND lot."branchId" = balance."branchId" AND lot."id" = balance."inventoryLotId"
-    JOIN "pharmacy_manufacturing_batches" batch
-      ON batch."organizationId" = lot."organizationId" AND batch."id" = lot."manufacturingBatchId"
-    WHERE balance."organizationId" = ${scope.organizationId}
-      AND balance."branchId" = ${scope.branchId}
-      AND batch."medicineId" = ${medicineId}
-      AND lot."packLevelId" = ${packLevelId}
+    ${candidates}
     ORDER BY batch."expiresAt", lot."receivedAt" NULLS FIRST,
              balance."inventoryLotId", balance."stockLocationId"
-    FOR UPDATE OF balance
   `);
 }
 
