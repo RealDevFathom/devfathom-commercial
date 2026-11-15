@@ -176,10 +176,15 @@ async function removalArrangement(
         });
   if (!balance || balance.onHandUnits < units)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-  const looseUnits = Math.min(balance.looseUnits, units);
-  const sealedUnits = units - looseUnits;
-  if (sealedUnits % unitsPerPack !== 0) throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
-  return { sealedPacks: sealedUnits / unitsPerPack, looseUnits };
+  // Prefer loose units, but a shelf can hold more than a pack's worth of them
+  // (a freshly broken strip), so step down to the largest loose take that
+  // leaves whole sealed packs instead of refusing a removal that fits.
+  let looseUnits = Math.min(balance.looseUnits, units);
+  looseUnits -= (unitsPerPack - ((units - looseUnits) % unitsPerPack)) % unitsPerPack;
+  const sealedPacks = (units - looseUnits) / unitsPerPack;
+  if (looseUnits < 0 || sealedPacks > balance.sealedPacks)
+    throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
+  return { sealedPacks, looseUnits };
 }
 
 export async function createCount(

@@ -140,3 +140,42 @@ describe('writeOff from a manual damaged hold', () => {
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 });
+
+describe('writeOff pack arrangement', () => {
+  it('keeps whole sealed packs when the shelf holds more than a pack of loose units', async () => {
+    const db = database({ id: input.witnessId });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 35,
+      sealedPacks: 2,
+      looseUnits: 15,
+    });
+
+    await writeOff(db as unknown as ScopedDb, scope, {
+      ...input,
+      units: 20,
+      disposition: 'DAMAGED',
+    });
+
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        quantityUnits: -20,
+        sealedPackDelta: -1,
+        looseUnitDelta: -10,
+      }),
+    });
+  });
+
+  it('refuses a removal that would need a sealed pack broken', async () => {
+    const db = database({ id: input.witnessId });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 13,
+      sealedPacks: 1,
+      looseUnits: 3,
+    });
+
+    await expect(
+      writeOff(db as unknown as ScopedDb, scope, { ...input, units: 5 })
+    ).rejects.toMatchObject({ reason: 'INVALID_ARRANGEMENT' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
