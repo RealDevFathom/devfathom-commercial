@@ -401,11 +401,14 @@ describe('Print routing settings', () => {
     );
     const posts = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST');
     const first = JSON.parse(posts[0][1]!.body as string);
-    expect(first).toMatchObject({
+    // The server authors the synthetic receipt; the browser supplies no printable content.
+    expect(first).toEqual({
       branchId: 'branch-1',
-      stationId: null,
-      document: { type: 'RECEIPT', title: 'RECEIPT PRINTER TEST' },
+      idempotencyKey: expect.stringMatching(/^receipt-test:[A-Za-z0-9-]{8,128}$/),
+      expectedDestination: expect.any(Object),
     });
+    expect(first).not.toHaveProperty('document');
+    expect(first).not.toHaveProperty('stationId');
     expect(posts[1][1]!.body).toBe(posts[0][1]!.body);
     fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Other' },
