@@ -2307,7 +2307,13 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  /** DEV-81: one tap on a counter outcome chip. Optional; never gates tender. */
+  /**
+   * DEV-81: one tap on a counter outcome chip. Optional; never gates tender.
+   * DEV-817: the counter's gate (canonical `pharmacy:counter`, the deny-wins
+   * counter family and an active branch assignment) runs before the event is
+   * read, so a member without counter access cannot relabel an outcome or touch
+   * the customer's notify-when-back phone. The phone is never echoed back.
+   */
   setDemandOutcome: protectedProcedure
     .input(
       z
@@ -2325,17 +2331,23 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const { branchId: branch, ...outcome } = input;
-        return await setDemandOutcome(ctx.db, await scopeFor(ctx, branch), outcome);
+        const scope = await requireCounterReceiptAccess(ctx, branch, true);
+        return await setDemandOutcome(ctx.db, scope, outcome);
       } catch (error) {
         fail(error);
       }
     }),
-  /** DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates. */
+  /**
+   * DEV-81: flips unanswered WILL_RETURN lines after 7 days and refreshes estimates.
+   * DEV-817: it rewrites the branch's lost-sales estimates, so it takes the same
+   * manager or owner gate (and active branch assignment) as `lostSalesSummary`.
+   */
   settleLostSales: protectedProcedure
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await settleLostSales(ctx.db, await scopeFor(ctx, input.branchId));
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        return await settleLostSales(ctx.db, scope);
       } catch (error) {
         fail(error);
       }

@@ -310,6 +310,19 @@ export function notifyCapture(input: { notifyOptIn?: boolean; notifyPhone?: stri
   return { notifyOptIn: Boolean(input.notifyOptIn), notifyPhone: phone };
 }
 
+/**
+ * What a chip tap returns. DEV-817: never the customer's notify-when-back
+ * phone; the counter only needs to know the tap was saved.
+ */
+const DEMAND_OUTCOME_RESULT = {
+  id: true,
+  outcome: true,
+  substituteProductId: true,
+  notifyOptIn: true,
+  lossProbability: true,
+  estLossPkrMinor: true,
+} as const;
+
 /** One tap on a counter outcome chip. Recomputes the loss on the server. */
 export async function setDemandOutcome(
   db: ScopedDb,
@@ -367,6 +380,7 @@ export async function setDemandOutcome(
         probability,
       }),
     },
+    select: DEMAND_OUTCOME_RESULT,
   });
 }
 
