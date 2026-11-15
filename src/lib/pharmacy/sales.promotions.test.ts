@@ -69,6 +69,12 @@ function counterDb(medicine: Record<string, unknown> = {}, promotions = [promoti
         },
       ]),
     },
+    // DEV-830: the stored pack setup the server derives the line multiplier from.
+    packLevel: {
+      findMany: vi.fn(async () => [
+        { id: 'pack-a', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
+      ]),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {

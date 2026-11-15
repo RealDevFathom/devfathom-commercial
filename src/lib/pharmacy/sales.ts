@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -157,6 +158,7 @@ export class PharmacySaleError extends Error {
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
+      | 'INVALID_SALE_UNIT'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
@@ -287,6 +289,64 @@ type AddSaleLineInput = {
 };
 
 /**
+ * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
+ * presentation and pack hierarchy, never from the request. The pack level must belong
+ * to the line's presentation and that presentation to its medicine. A loose UNIT is one
+ * canonical unit. A PACK or STRIP holds exactly what its stored level holds, or what a
+ * lot of this medicine at this branch was received as at that level (the counter's
+ * DEV-717 fallback). Anything else is refused before quota, stock or price is touched.
+ */
+export async function assertSaleUnitConversion(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: Pick<
+    AddSaleLineInput,
+    'medicineId' | 'presentationId' | 'packLevelId' | 'saleUnit' | 'canonicalUnitsPerSaleUnit'
+  >,
+  at = new Date()
+): Promise<void> {
+  const packLevels = await db.packLevel.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      presentationId: input.presentationId,
+      presentation: { organizationId: scope.organizationId, medicineId: input.medicineId },
+    },
+    select: {
+      id: true,
+      level: true,
+      parentPackLevelId: true,
+      unitsPerParent: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+      versionGroupId: true,
+    },
+  });
+  if (!packLevels.some((level) => level.id === input.packLevelId))
+    throw new PharmacySaleError('INVALID_SALE_UNIT');
+  if (input.saleUnit === 'UNIT') {
+    if (input.canonicalUnitsPerSaleUnit !== 1) throw new PharmacySaleError('INVALID_SALE_UNIT');
+    return;
+  }
+  if (
+    packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
+      input.canonicalUnitsPerSaleUnit
+    )
+  )
+    return;
+  const received = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      packLevelId: input.packLevelId,
+      unitsPerPack: input.canonicalUnitsPerSaleUnit,
+      batch: { medicineId: input.medicineId },
+    },
+    select: { id: true },
+  });
+  if (!received) throw new PharmacySaleError('INVALID_SALE_UNIT');
+}
+
+/**
  * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
  * reserved customer orders keep the price they quoted, so they never opt in.
  */
@@ -404,6 +464,9 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  // DEV-830 (F05): reserved customer-order and refill lines carry a multiplier the server
+  // derived from the stored lot when it reserved them; every other line is checked here.
+  if (!reservation) await assertSaleUnitConversion(db, scope, input);
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.

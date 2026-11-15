@@ -167,6 +167,8 @@ function saleDb() {
       })),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => [lot]) },
+    // DEV-830: the server derives the sale unit from the same stored pack setup.
+    packLevel: counterDb().packLevel,
     medicinePackMrp: mrpTable(),
     pharmacySaleLine: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
