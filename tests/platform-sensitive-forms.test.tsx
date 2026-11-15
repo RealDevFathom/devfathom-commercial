@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
@@ -96,4 +97,21 @@ it('preserves destructive confirmation before submitting a reason', () => {
   expect(confirm).toHaveBeenCalledWith('Revoke token?');
   expect(fetchMock).not.toHaveBeenCalled();
   confirm.mockRestore();
+});
+
+it('confirms a tenant password reset naming the tenant, the user and the consequence', () => {
+  const source = readFileSync('src/app/platform/(console)/organizations/[id]/page.tsx', 'utf8');
+  const start = source.indexOf('action="organization.user.password"');
+  expect(start).toBeGreaterThan(-1);
+  const form = source.slice(
+    source.lastIndexOf('<PlatformCommandForm', start),
+    source.indexOf('/>', start)
+  );
+  const confirm = /confirm=\{`([^`]*)`\}/.exec(form)?.[1];
+  expect(confirm).toBeDefined();
+  expect(confirm).toContain('${user.name}');
+  expect(confirm).toContain('${user.email}');
+  expect(confirm).toContain('${organization.displayName}');
+  expect(confirm).toMatch(/sessions end immediately/);
+  expect(confirm).toMatch(/new password at the next sign-in/);
 });

@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { EMPTY_LEDGER_LABELS, type LedgerLabels } from '@/lib/pharmacy/finance-labels';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { formatUtcInstant } from '@/lib/utc-instant';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
@@ -39,6 +40,26 @@ const profitGroupLabels: Record<ProfitGroup, string> = {
   staff: 'Staff',
 };
 const unknown = 'Not recorded';
+const groupLabels: Record<Group, string> = {
+  line: 'Sale line',
+  batch: 'Batch',
+  product: 'Medicine',
+  branch: 'Branch',
+};
+
+/** Name for a ledger dimension id; raw ids are never the primary label. */
+function named(map: Record<string, string> | undefined, id: string | null | undefined) {
+  if (!id) return unknown;
+  return map?.[id] ?? `Name not found (ref ${id})`;
+}
+
+function labelsOf(report: { labels?: LedgerLabels }): LedgerLabels {
+  return report.labels ?? EMPTY_LEDGER_LABELS;
+}
+
+function utcDate(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
 
 // Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
 function money(value: number | bigint | null, currency: string | null) {
@@ -62,24 +83,27 @@ function net(row: Margin['rows'][number]) {
   return total([row.revenueMinor, -row.discountMinor]);
 }
 
-function Metadata({ report }: { report: Report }) {
+function Metadata({ report, branchName }: { report: Report; branchName: string }) {
   return (
     <div className="space-y-2 break-words text-sm text-text-muted">
       <p>
         {'at' in report.period
-          ? `Through ${formatUtcInstant(report.period.at)} (inclusive).`
-          : `${formatUtcInstant(report.period.from)} to ${formatUtcInstant(report.period.to)} (start inclusive, end exclusive).`}{' '}
-        Timezone: {report.timezone}.
+          ? `Up to and including ${utcDate(report.period.at)}.`
+          : `From ${utcDate(report.period.from)} up to (not including) ${utcDate(report.period.to)}.`}{' '}
+        Dates are in {report.timezone}. Branch: {branchName}.
       </p>
       <p>
-        Currency: {report.currency ?? 'unknown — not recorded by the ledger reader'}. Integer minor
-        units displayed with two decimals.
+        {report.currency
+          ? `Amounts in ${report.currency}${report.currencyStatus === 'organization_setting' ? ", your organization's currency setting" : ', the currency these entries were posted in'}.`
+          : report.currencyStatus === 'mixed_posted_currencies'
+            ? 'Currency unknown: these entries were posted in more than one currency, so totals are not labelled with one.'
+            : 'Currency unknown: your organization has no currency setting.'}
       </p>
       <p>{report.definition}</p>
       <p>
-        Source: {plainReportSource(report.source) ?? 'posted accounts'}. Coverage: posted entries
-        only; completeness {report.coverage.completeness}. Refunds included only when posted as
-        reversals.
+        Built only from entries posted to the books (source:{' '}
+        {plainReportSource(report.source) ?? 'posted accounts'}); completeness{' '}
+        {report.coverage.completeness}. Refunds count only once they are posted as reversals.
       </p>
       <p>
         Retrieved: {formatUtcInstant(report.freshness.retrievedAt)}. Latest posting:{' '}
@@ -90,8 +114,8 @@ function Metadata({ report }: { report: Report }) {
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>
-        Missing costs are unknown, not zero. These values do not establish complete business
-        activity.
+        A missing cost is unknown, not zero. These figures may not cover every sale or stock
+        movement.
       </p>
     </div>
   );
@@ -142,53 +166,78 @@ function LedgerTable({
   );
 }
 
-export function ValuationLedger({ report }: { report: Valuation }) {
+export function ValuationLedger({ report, branchName }: { report: Valuation; branchName: string }) {
+  const labels = labelsOf(report);
+  const unallocated = BigInt(report.unallocatedValueMinor ?? 0);
+  const lotTotal = total(report.rows.map((row) => row.valueMinor));
+  const rows: ReactNode[][] = report.rows.map((row) => [
+    named(labels.branches, row.branchId),
+    row.lotId ? named(labels.lots, row.lotId) : unknown,
+    named(labels.locations, row.locationId),
+    money(row.unitCostMinor, report.currency),
+    money(row.valueMinor, report.currency),
+  ]);
+  if (unallocated !== BigInt(0))
+    rows.push([
+      branchName,
+      'Opening stock entered as one branch total (not split by batch)',
+      unknown,
+      money(null, report.currency),
+      money(unallocated, report.currency),
+    ]);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} />
-      {report.rows.length > 0 && (
+      <Metadata report={report} branchName={branchName} />
+      {rows.length > 0 && (
         <Stat
           label="Posted inventory value"
-          value={money(total(report.rows.map((row) => row.valueMinor)), report.currency)}
+          value={money(lotTotal === null ? null : lotTotal + unallocated, report.currency)}
           valueClassName="break-words text-xl"
-          sub="Net inventory plus inventory in transit through the selected instant."
+          sub="Stock on hand plus stock in transit, at cost, up to the selected date."
         />
       )}
+      {unallocated !== BigInt(0) && (
+        <p role="note" className="text-sm text-text-body">
+          Opening stock was entered as one branch total rather than batch by batch. Sales from those
+          batches are still costed batch by batch, so a batch can show a negative value here; the
+          opening stock row balances it and is included in the total.
+        </p>
+      )}
       <p className="text-sm text-text-body">
-        Disposition and usable quantity are not supplied by this reader. Valued stock must not be
-        treated as usable or available to dispense; quarantine and transit availability are
-        unverified. Lot unit cost is current metadata, not a historical cost reconstruction.
+        This shows value, not whether stock can be sold: quarantined or in-transit stock is included
+        and has not been checked for availability. Unit cost is the batch&apos;s current recorded
+        cost, not a rebuilt historical cost.
       </p>
       <LedgerTable
-        caption="Perpetual valuation by lot and location"
+        caption="Stock value by batch and location"
         columns={[
           { label: 'Branch' },
-          { label: 'Lot' },
-          { label: 'Batch' },
-          { label: 'Medicine' },
+          { label: 'Medicine and batch' },
           { label: 'Location' },
-          { label: 'Lot unit cost', numeric: true },
-          { label: 'Ledger value', numeric: true },
+          { label: 'Unit cost', numeric: true },
+          { label: 'Value', numeric: true },
         ]}
-        rows={report.rows.map((row) => [
-          row.branchId ?? unknown,
-          row.lotId,
-          row.manufacturingBatchId ?? unknown,
-          row.medicineId ?? unknown,
-          row.locationId ?? unknown,
-          money(row.unitCostMinor, report.currency),
-          money(row.valueMinor, report.currency),
-        ])}
+        rows={rows}
       />
     </div>
   );
 }
 
-export function MarginLedger({ report }: { report: Margin }) {
+function marginKeyLabel(report: Margin, key: string | null) {
+  const labels = labelsOf(report);
+  if (report.by === 'batch')
+    return key ? named(labels.batches, key) : 'Refunds not yet matched to a batch';
+  if (report.by === 'product') return named(labels.medicines, key);
+  if (report.by === 'branch') return named(labels.branches, key);
+  return key ? `Sale line ref ${key}` : unknown;
+}
+
+export function MarginLedger({ report, branchName }: { report: Margin; branchName: string }) {
   const revenue = total(report.rows.flatMap((row) => [row.revenueMinor, -row.discountMinor]));
+  const unmatchedReturns = report.by === 'batch' && report.rows.some((row) => row.key === null);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} />
+      <Metadata report={report} branchName={branchName} />
       {report.rows.length > 0 && (
         <div className="grid min-w-0 gap-5 md:grid-cols-3">
           <Stat
@@ -212,13 +261,21 @@ export function MarginLedger({ report }: { report: Margin }) {
         </div>
       )}
       <p role="status" className="text-sm text-text-body">
-        Cost coverage cannot be quantified by this reader. Missing or unposted costs may overstate
-        margin. Current purchase costs are not substituted for historical COGS.
+        We can&apos;t tell how much cost is missing. Missing or unposted costs make margin look
+        higher than it is. Today&apos;s purchase prices are never used in place of the cost recorded
+        at sale.
       </p>
+      {unmatchedReturns && (
+        <p role="note" className="text-sm text-text-body">
+          Refunds not yet matched to a batch: returned packs whose batch was not identified. Their
+          sale value is taken back, but their cost stays on the original batch until the pack is
+          identified, so this row shows negative revenue with no cost.
+        </p>
+      )}
       <LedgerTable
-        caption={`Gross margin grouped by ${report.by}`}
+        caption={`Gross margin by ${groupLabels[report.by].toLowerCase()}`}
         columns={[
-          { label: report.by },
+          { label: groupLabels[report.by] },
           { label: 'Gross revenue', numeric: true },
           { label: 'Discounts', numeric: true },
           { label: 'Net revenue', numeric: true },
@@ -226,7 +283,7 @@ export function MarginLedger({ report }: { report: Margin }) {
           { label: 'Gross margin', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.key ?? unknown,
+          marginKeyLabel(report, row.key),
           money(row.revenueMinor, report.currency),
           money(row.discountMinor, report.currency),
           money(net(row), report.currency),
@@ -238,10 +295,11 @@ export function MarginLedger({ report }: { report: Margin }) {
   );
 }
 
-export function LeakageLedger({ report }: { report: Leakage }) {
+export function LeakageLedger({ report, branchName }: { report: Leakage; branchName: string }) {
+  const labels = labelsOf(report);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} />
+      <Metadata report={report} branchName={branchName} />
       <p className="text-sm text-text-body">
         Recorded categories only: discounts, write-offs and signed shrinkage. Stock found offsets
         stock lost. Discounts are commercial decisions; these totals are not all realized loss.
@@ -251,15 +309,15 @@ export function LeakageLedger({ report }: { report: Leakage }) {
         caption="Recorded leakage by branch and product"
         columns={[
           { label: 'Branch' },
-          { label: 'Product' },
+          { label: 'Medicine' },
           { label: 'Discounts', numeric: true },
           { label: 'Write-offs', numeric: true },
           { label: 'Signed shrinkage', numeric: true },
           { label: 'Recorded total', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.branchId ?? unknown,
-          row.medicineId ?? unknown,
+          named(labels.branches, row.branchId),
+          named(labels.medicines, row.medicineId),
           money(row.discountMinor, report.currency),
           money(row.writeOffMinor, report.currency),
           money(row.shrinkageMinor, report.currency),
@@ -417,7 +475,7 @@ export async function LedgerReportsSection({
               {!groupValid && <option value={group}>Invalid grouping</option>}
               {groups.map((value) => (
                 <option key={value} value={value}>
-                  {value === 'line' ? 'Sale line' : value[0].toUpperCase() + value.slice(1)}
+                  {groupLabels[value]}
                 </option>
               ))}
             </select>
@@ -438,21 +496,21 @@ export async function LedgerReportsSection({
         <>
           <SectionCard title="Perpetual valuation" titleLevel={2}>
             {results[0].status === 'fulfilled' ? (
-              <ValuationLedger report={results[0].value} />
+              <ValuationLedger report={results[0].value} branchName={branch.name} />
             ) : (
               <Failure error={results[0].reason} />
             )}
           </SectionCard>
           <SectionCard title="Ledger gross margin" titleLevel={2}>
             {results[1].status === 'fulfilled' ? (
-              <MarginLedger report={results[1].value} />
+              <MarginLedger report={results[1].value} branchName={branch.name} />
             ) : (
               <Failure error={results[1].reason} />
             )}
           </SectionCard>
           <SectionCard title="Recorded leakage" titleLevel={2}>
             {results[2].status === 'fulfilled' ? (
-              <LeakageLedger report={results[2].value} />
+              <LeakageLedger report={results[2].value} branchName={branch.name} />
             ) : (
               <Failure error={results[2].reason} />
             )}
@@ -470,11 +528,17 @@ function profitKey(row: TrueProfit['rows'][number], by: ProfitGroup) {
   return row.label ? `${row.label} (${row.key})` : row.key;
 }
 
-export function TrueProfitLedger({ report }: { report: TrueProfit }) {
+export function TrueProfitLedger({
+  report,
+  branchName,
+}: {
+  report: TrueProfit;
+  branchName: string;
+}) {
   const label = profitGroupLabels[report.by];
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} />
+      <Metadata report={report} branchName={branchName} />
       {report.rows.length > 0 && (
         <div className="grid min-w-0 gap-5 md:grid-cols-3">
           <Stat
@@ -618,7 +682,7 @@ export async function TrueProfitSection({
       )}
       {result &&
         (result.status === 'fulfilled' ? (
-          <TrueProfitLedger report={result.value} />
+          <TrueProfitLedger report={result.value} branchName={branch.name} />
         ) : (
           <Failure error={result.reason} />
         ))}
