@@ -4,6 +4,7 @@ import {
   bindingSignature,
   COUNTER_ACTIONS,
   COUNTER_KEYMAP_PRESETS,
+  COUNTER_QUANTITY_FIELD_ATTRIBUTE,
   COUNTER_SCAN_FIELD_ATTRIBUTE,
   formatBinding,
   matchCounterAction,
@@ -223,6 +224,25 @@ describe('shouldHandleCounterKey', () => {
     other.blur();
     scan.remove();
     other.remove();
+  });
+
+  it('keeps F-keys live in the marked quantity field (DEV-633), but never while a dialog is open', () => {
+    const quantity = document.createElement('input');
+    quantity.setAttribute(COUNTER_QUANTITY_FIELD_ATTRIBUTE, '');
+    document.body.append(quantity);
+    quantity.focus();
+
+    expect(shouldHandleCounterKey({ key: 'F6', target: quantity })).toBe(true);
+    expect(shouldHandleCounterKey({ key: 'F9', target: quantity })).toBe(true);
+    expect(shouldHandleCounterKey({ key: 'F6', target: quantity }, true)).toBe(false);
+
+    // Digits, Enter and the editing keys stay with the field.
+    expect(shouldHandleCounterKey({ key: '2', target: quantity })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'Enter', target: quantity })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'Enter', ctrlKey: true, target: quantity })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'Backspace', target: quantity })).toBe(false);
+    quantity.blur();
+    quantity.remove();
   });
 });
 

@@ -1951,11 +1951,16 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
 
   it('does not run F9 while a field is focused or another dialog is open', async () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
-    const quantity = screen.getByLabelText('Quantity');
-    quantity.focus();
-    fireEvent.keyDown(quantity, { key: 'F9' });
-    expect(document.activeElement).toBe(quantity);
+    // The scan and quantity fields hand F-keys to the counter (DEV-633); any other field keeps them.
+    act(() =>
+      mocks.searchProps.mock.calls
+        .at(-1)![0]
+        .onSelect(barcodeRow({ saleUnits: [], onHandUnits: 0 }))
+    );
+    const field = screen.getByLabelText('Requested canonical units');
+    field.focus();
+    fireEvent.keyDown(field, { key: 'F9' });
+    expect(document.activeElement).toBe(field);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     const dialog = document.createElement('div');
@@ -3153,3 +3158,123 @@ it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
     expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
   }
 );
+
+describe('DEV-633 keyboard-only result picking', () => {
+  const rows = () => [
+    barcodeRow({ medicineId: 'med-a', displayName: 'Panadol', onHandUnits: 100 }),
+    barcodeRow({ medicineId: 'med-b', displayName: 'Panadol Extra', onHandUnits: 100 }),
+  ];
+
+  function searchPanadol() {
+    mocks.queries.counterSearch = query({ rows: rows(), truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    return search;
+  }
+
+  const staged = () => mocks.searchProps.mock.lastCall![0].activeMedicineId;
+
+  it('moves through the results with the arrow keys and keeps focus in the scan field', () => {
+    const search = searchPanadol();
+    expect(mocks.searchProps.mock.lastCall![0].state).toBe('ready');
+    expect(staged()).toBeNull();
+
+    expect(fireEvent.keyDown(search, { key: 'ArrowDown' })).toBe(false);
+    expect(staged()).toBe('med-a');
+    expect(screen.getByRole('region', { name: 'Next line' })).toHaveTextContent('Panadol');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(staged()).toBe('med-b');
+    expect(screen.getByRole('region', { name: 'Next line' })).toHaveTextContent('Panadol Extra');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(staged()).toBe('med-a');
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(staged()).toBe('med-b');
+    expect(document.activeElement).toBe(search);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('starts at the last result when ArrowUp is pressed first', () => {
+    const search = searchPanadol();
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(staged()).toBe('med-b');
+  });
+
+  it('leaves the arrow keys alone when there are no results to pick', () => {
+    mocks.queries.counterSearch = query({ rows: [], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(fireEvent.keyDown(search, { key: 'ArrowDown' })).toBe(true);
+    expect(staged()).toBeNull();
+  });
+
+  it('Enter on a picked row moves to Quantity, and F6 there adds the line once', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'line-a' });
+    const search = searchPanadol();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    const quantity = screen.getByLabelText('Quantity');
+    expect(document.activeElement).toBe(quantity);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+
+    fireEvent.change(quantity, { target: { value: '2' } });
+    // The counter claims F6 so the browser cannot move focus to its address bar.
+    expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: 'med-a', quantity: 2 })
+      )
+    );
+    await screen.findByText('2 × Panadol added.');
+    await waitFor(() => expect(document.activeElement).toBe(search));
+  });
+
+  it('Enter in Quantity adds the picked line', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'line-b' });
+    const search = searchPanadol();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    const quantity = screen.getByLabelText('Quantity');
+    fireEvent.change(quantity, { target: { value: '3' } });
+    expect(fireEvent.keyDown(quantity, { key: 'Enter' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: 'med-b', quantity: 3 })
+      )
+    );
+  });
+
+  it('Enter in the scan field adds a picked row once a quantity is entered', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'line-c' });
+    const search = searchPanadol();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    search.focus();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: 'med-a', quantity: 1 })
+      )
+    );
+  });
+
+  it('runs F9 from Quantity, but not while a dialog is open', async () => {
+    const search = searchPanadol();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+    expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(true);
+    expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    dialog.remove();
+    expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(false);
+    expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+  });
+});

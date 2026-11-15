@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, type Ref } from 'react';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,10 @@ export type CounterUnitToggleProps = {
   inline?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
   onQuantityChange: (quantity: string) => void;
+  /** Enter in the quantity field adds the line, as the add shortcut does. */
+  onSubmit?: () => void;
+  /** Lets the console move focus here when Enter finds no quantity yet. */
+  quantityRef?: Ref<HTMLInputElement>;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
 };
@@ -49,6 +53,8 @@ export function CounterUnitToggle({
   inline = false,
   onSelect,
   onQuantityChange,
+  onSubmit,
+  quantityRef,
   chordFor,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
@@ -144,6 +150,9 @@ export function CounterUnitToggle({
           </button>
           <Input
             id={quantityId}
+            ref={quantityRef}
+            // F-keys (F6 adds, F9 pays) reach the counter from here; see counter-keymap.
+            data-counter-quantity=""
             type="text"
             pattern="[0-9]*"
             inputMode="numeric"
@@ -161,6 +170,11 @@ export function CounterUnitToggle({
             }
             onFocus={(event) => event.currentTarget.select()}
             onChange={(event) => onQuantityChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (!onSubmit || event.key !== 'Enter' || event.altKey || event.shiftKey) return;
+              event.preventDefault();
+              onSubmit();
+            }}
             className="h-11 w-16 text-center tabular-nums"
           />
           <button

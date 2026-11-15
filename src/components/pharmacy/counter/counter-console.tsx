@@ -414,6 +414,10 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const quantityRef = useRef<HTMLInputElement>(null);
+  // Set when a line is added: the scan field is disabled until the add settles,
+  // so focus returns to it once `busy` clears, even from the quantity field.
+  const scanFocusPending = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -557,6 +561,16 @@ function ScopedPharmacyCounterConsole({
     { branchId, query: submittedQuery },
     { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
   );
+  const searchState =
+    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+      ? 'idle'
+      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+        ? 'loading'
+        : searchQuery.isError
+          ? 'error'
+          : 'ready';
+  const searchRows =
+    searchCurrent && !searchQuery.isPlaceholderData ? (searchQuery.data?.rows ?? []) : [];
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1217,6 +1231,7 @@ function ScopedPharmacyCounterConsole({
           message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
         setQuery('');
+        scanFocusPending.current = true;
         focusSearch();
       } catch (error) {
         const message = messageFrom(error);
@@ -2002,7 +2017,9 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && document.activeElement === document.body) focusSearch();
+    if (busy) return;
+    if (scanFocusPending.current || document.activeElement === document.body) focusSearch();
+    scanFocusPending.current = false;
   }, [busy, focusSearch]);
 
   const chordFor = useCallback(
@@ -2389,6 +2406,24 @@ function ScopedPharmacyCounterConsole({
                         setQuantityText('1');
                       }}
                       onKeyDown={(event) => {
+                        // Arrow keys stage the next or previous result, so a keyboard-only
+                        // cashier can pick a row without leaving the scan field (POS-01).
+                        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                          if (searchState !== 'ready' || searchRows.length === 0) return;
+                          event.preventDefault();
+                          const index = searchRows.findIndex(
+                            (row) => row.medicineId === activeRow?.medicineId
+                          );
+                          const count = searchRows.length;
+                          const next =
+                            event.key === 'ArrowDown'
+                              ? (index + 1) % count
+                              : index < 0
+                                ? count - 1
+                                : (index - 1 + count) % count;
+                          stageRow(searchRows[next]!);
+                          return;
+                        }
                         if (event.key !== 'Enter') return;
                         event.preventDefault();
                         const trimmed = event.currentTarget.value.trim();
@@ -2401,6 +2436,11 @@ function ScopedPharmacyCounterConsole({
                           return;
                         }
                         if (activeRow) {
+                          // A picked row starts without a quantity: Enter moves there first.
+                          if (quantity === null && quantityRef.current) {
+                            quantityRef.current.focus();
+                            return;
+                          }
                           void addToCart();
                           return;
                         }
@@ -2409,28 +2449,16 @@ function ScopedPharmacyCounterConsole({
                       className="h-12"
                     />
                     <p id="counter-search-help" className="text-xs text-text-muted">
-                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                      opens pay.
+                      {formatBinding(keymap.bindings.focusSearch)} focuses search. ↑ and ↓ pick a
+                      result; Enter adds the selected medicine, or a barcode.{' '}
+                      {formatBinding(keymap.bindings.openTender)} opens pay.
                     </p>
                   </div>
                 </div>
 
                 <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={
-                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
-                      ? 'idle'
-                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                        ? 'loading'
-                        : searchQuery.isError
-                          ? 'error'
-                          : 'ready'
-                  }
+                  rows={searchRows}
+                  state={searchState}
                   query={trimmedQuery}
                   disabled={busy || !branchAuthorized}
                   activeMedicineId={activeRow?.medicineId ?? null}
@@ -2486,6 +2514,8 @@ function ScopedPharmacyCounterConsole({
                       disabled={busy}
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantityText}
+                      onSubmit={() => void addToCart()}
+                      quantityRef={quantityRef}
                       chordFor={chordFor}
                     />
                     {activeRow.saleUnits.length === 0 ? (

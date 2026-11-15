@@ -1,5 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+
+import { COUNTER_QUANTITY_FIELD_ATTRIBUTE } from '@/lib/pharmacy/counter-keymap';
 
 import { CounterUnitToggle } from './counter-unit-toggle';
 import {
@@ -141,6 +144,21 @@ describe('CounterUnitToggle (POS-03)', () => {
 
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '7' } });
     expect(props.onQuantityChange).toHaveBeenLastCalledWith('7');
+  });
+
+  it('submits the line on Enter in the quantity field and marks it for counter F-keys (DEV-633)', () => {
+    const onSubmit = vi.fn();
+    const quantityRef = createRef<HTMLInputElement>();
+    renderToggle({ onSubmit, quantityRef });
+    const quantity = screen.getByLabelText('Quantity');
+    expect(quantityRef.current).toBe(quantity);
+    expect(quantity).toHaveAttribute(COUNTER_QUANTITY_FIELD_ATTRIBUTE);
+
+    expect(fireEvent.keyDown(quantity, { key: '5' })).toBe(true);
+    expect(fireEvent.keyDown(quantity, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(quantity, { key: 'Enter' })).toBe(false);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it('starts the stepper at one from an empty draft', () => {
