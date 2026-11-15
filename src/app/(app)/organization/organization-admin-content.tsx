@@ -959,8 +959,8 @@ export function OrganizationAdminContent() {
                 });
               }}
             >
-              <Input name="host" placeholder="hub.example.com" required />
-              <Input name="kind" defaultValue="APP" required />
+              <Input name="host" placeholder="hub.example.com" aria-label="Domain host" required />
+              <Input name="kind" defaultValue="APP" aria-label="Domain kind" required />
               <SubmitButton pending={addDomain.isPending}>Add</SubmitButton>
               <label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-3">
                 <input name="isPrimary" type="checkbox" /> Primary workspace domain

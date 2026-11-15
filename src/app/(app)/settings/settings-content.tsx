@@ -1088,6 +1088,7 @@ function NotificationsSection() {
                   <Switch
                     size="sm"
                     checked={isOn(s.key, 'inApp')}
+                    aria-label={`${s.label} in-app notifications`}
                     onCheckedChange={(v) => toggle(s.key, 'inApp', v)}
                   />
                 </div>
@@ -1095,6 +1096,7 @@ function NotificationsSection() {
                   <Switch
                     size="sm"
                     checked={isOn(s.key, 'email')}
+                    aria-label={`${s.label} email notifications`}
                     onCheckedChange={(v) => toggle(s.key, 'email', v)}
                   />
                 </div>
