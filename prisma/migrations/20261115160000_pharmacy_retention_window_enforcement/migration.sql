@@ -29,6 +29,10 @@ BEGIN;
 -- The sanctioned tenant purge ("app.purging_organization_id" with the platform
 -- flag) keeps its existing reach; legal holds still refuse it.
 
+-- The purge runs as one platform job per UTC hour. The value is added but not
+-- used in this migration, so ALTER TYPE ... ADD VALUE is safe in the transaction.
+ALTER TYPE "PlatformJobType" ADD VALUE IF NOT EXISTS 'pharmacy.record.retention.v1';
+
 CREATE OR REPLACE FUNCTION pharmacy_retention_json_days(value jsonb)
 RETURNS integer LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE days numeric;

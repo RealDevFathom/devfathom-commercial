@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync(
   path.join(
     process.cwd(),
-    'prisma/migrations/20261115100000_pharmacy_retention_window_enforcement/migration.sql'
+    'prisma/migrations/20261115160000_pharmacy_retention_window_enforcement/migration.sql'
   ),
   'utf8'
 );
@@ -83,6 +83,13 @@ describe('DEV-96 retention window migration contract', () => {
     expect(guard).toMatch(
       /OR EXISTS \(SELECT 1 FROM "pharmacy_controlled_register_entries" earlier[\s\S]*?earlier\."inventoryLotId" = p_old ->> 'inventoryLotId'\s+AND earlier\."serial" < \(p_old ->> 'serial'\)::integer\)\s+\) THEN\s+RETURN false;/
     );
+  });
+
+  it('adds the hourly retention purge job type without using it in the migration', () => {
+    expect(migration).toContain(
+      `ALTER TYPE "PlatformJobType" ADD VALUE IF NOT EXISTS 'pharmacy.record.retention.v1';`
+    );
+    expect(migration.match(/pharmacy\.record\.retention\.v1/g)).toHaveLength(1);
   });
 
   it('keeps the tenant purge exception behind the platform flag', () => {

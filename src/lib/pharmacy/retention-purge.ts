@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { PharmacyRecordClass } from './retention';
 
@@ -67,7 +69,19 @@ export const PURGE_ORDER: readonly PharmacyRecordClass[] = [
 const SCAN_BATCH = 200;
 const SAVEPOINT = 'pharmacy_retention_purge';
 
-type Candidate = { id: string; organizationId: string; anchor: Date };
+type Candidate = { id: string; organizationId: string; anchor: Date; retentionDays: number };
+
+/**
+ * The audit row for one purged record. Written inside the record's savepoint,
+ * so a delete the database refuses rolls the row back with it. Carries the
+ * class, id, the record's own date and the period applied; never contents.
+ */
+export const PURGE_AUDIT_SQL = `INSERT INTO "audit_logs"
+  ("id", "organizationId", "createdAt", "actorType", "actorName", "source", "category",
+   "operation", "action", "description", "targetType", "targetId", "metadata", "outcome")
+  VALUES ($1, $2, timezone('UTC', now()), 'SYSTEM', 'Retention purge', 'SYSTEM', 'PHARMACY',
+   'DELETE', 'pharmacy.retention.purge', 'Record purged after its retention period elapsed',
+   $3, $4, $5::jsonb, 'SUCCESS')`;
 
 /**
  * Records of one class whose retention window — resolved in SQL by
@@ -98,7 +112,7 @@ export function expiredRecordsSql(
     : Prisma.empty;
   return Prisma.sql`
     WITH s AS (${scope})
-    SELECT r."id", r."organizationId", ${anchor} AS "anchor"
+    SELECT r."id", r."organizationId", ${anchor} AS "anchor", s.days AS "retentionDays"
       FROM s
       JOIN ${Prisma.raw(`"${source.table}"`)} r ON r."organizationId" = s."organizationId" ${branchJoin}
      WHERE s.days IS NOT NULL
@@ -125,7 +139,8 @@ export type RetentionPurgeResult = {
  * the append-only prescription and register guards admit a DELETE; the
  * database re-checks the window and legal holds itself. A record the database
  * still refuses (a legal hold, or a retained row that references it) is rolled
- * back to its savepoint and reported, never forced. At most
+ * back to its savepoint and reported, never forced; each purged record gets an
+ * audit row in the same savepoint, so a refused one leaves none. At most
  * `maxPurgesPerClass` records of each class are removed per run.
  */
 export async function purgeExpiredPharmacyRecords(
@@ -161,6 +176,21 @@ export async function purgeExpiredPharmacyRecords(
           let removed = 0;
           for (const statement of source.deletes) {
             removed = await db.$executeRawUnsafe(statement, record.organizationId, record.id);
+          }
+          if (removed === 1) {
+            await db.$executeRawUnsafe(
+              PURGE_AUDIT_SQL,
+              randomUUID(),
+              record.organizationId,
+              recordClass,
+              record.id,
+              JSON.stringify({
+                recordClass,
+                recordId: record.id,
+                recordDate: new Date(record.anchor).toISOString(),
+                retentionDays: Number(record.retentionDays),
+              })
+            );
           }
           await db.$queryRaw(Prisma.sql`SELECT set_config('app.retention_purge_record', '', true)`);
           await db.$executeRawUnsafe(`RELEASE SAVEPOINT ${SAVEPOINT}`);

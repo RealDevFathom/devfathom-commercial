@@ -766,6 +766,9 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        // DEV-96: the result (per-class counts, refused record ids and reasons;
+        // never record contents) is stored on the job row.
+        PHARMACY_RECORD_RETENTION_V1: (database) => purgeExpiredPharmacyRecords(database),
       };
       return handlers[job.type](db, job, payload);
     },
@@ -773,7 +776,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       timeout:
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
+        job.type === 'PHARMACY_RECORD_RETENTION_V1'
           ? 120_000
           : 30_000,
     }
@@ -831,11 +835,13 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
 
 const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
 const CAMERA_EVIDENCE_RETENTION_JOB = 'camera.evidence.retention.v1';
+const PHARMACY_RECORD_RETENTION_JOB = 'pharmacy.record.retention.v1';
 
 /**
  * CAM-2: turn pending counter evidence into snapshot jobs, and give every
  * organization with due retention work (a still past its gateway period, or a
- * capture past its window) at most one retention pass per UTC hour. Both are
+ * capture past its window) at most one retention pass per UTC hour. DEV-96
+ * adds one platform-wide pharmacy record retention purge per UTC hour. All are
  * keyed, so each worker run can repeat them without queueing anything twice.
  */
 async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
@@ -872,39 +878,16 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
           type: 'CAMERA_EVIDENCE_RETENTION_V1' as const,
           idempotencyKey: `${CAMERA_EVIDENCE_RETENTION_JOB}:${organizationId}:${hour}`,
         })),
+        // DEV-96: one pharmacy record retention purge per UTC hour, platform-wide.
+        {
+          organizationId: null,
+          type: 'PHARMACY_RECORD_RETENTION_V1' as const,
+          idempotencyKey: `${PHARMACY_RECORD_RETENTION_JOB}:${hour}`,
+        },
       ],
       skipDuplicates: true,
     });
   });
-}
-
-/**
- * DEV-96: purge pharmacy records past their rule-set retention window, bounded
- * per run. Isolated from job processing: a purge that fails or times out is
- * logged and never stops stale recovery or claims.
- */
-const PHARMACY_RETENTION_PURGE_MINUTES = 5;
-
-async function runPharmacyRetentionPurge(now: Date): Promise<void> {
-  // Retention is measured in years, so one pass an hour is enough: only the
-  // first five-minute worker run of each UTC hour scans the record tables.
-  if (now.getUTCMinutes() >= PHARMACY_RETENTION_PURGE_MINUTES) return;
-  try {
-    const result = await withPlatformDb((db) => purgeExpiredPharmacyRecords(db), {
-      timeout: 120_000,
-    });
-    if (Object.values(result.purged).some(Boolean) || result.retained.length > 0) {
-      // Record classes, ids and database refusal reasons only; never record contents.
-      console.info('PHARMACY_RETENTION_PURGE', {
-        purged: result.purged,
-        retained: result.retained,
-      });
-    }
-  } catch (error) {
-    console.error('PHARMACY_RETENTION_PURGE_FAILED', {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 export type ProcessJobsResult = {
@@ -919,7 +902,6 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
-  await runPharmacyRetentionPurge(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

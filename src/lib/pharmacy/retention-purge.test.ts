@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { expiredRecordsSql, purgeExpiredPharmacyRecords } from './retention-purge';
+import { expiredRecordsSql, PURGE_AUDIT_SQL, purgeExpiredPharmacyRecords } from './retention-purge';
 
 type Sql = { text?: string; sql?: string; strings?: string[]; values: unknown[] };
 const text = (query: Sql) => query.text ?? query.sql ?? query.strings?.join('?') ?? '';
@@ -22,7 +22,11 @@ function fakeDb(
       }
       for (const [table, rows] of Object.entries(candidates)) {
         if (sql.includes(`JOIN "${table}" r`) && !sql.includes('r."id") > (')) {
-          return (rows ?? []).map((row) => ({ ...row, anchor: new Date('2020-01-01') }));
+          return (rows ?? []).map((row) => ({
+            ...row,
+            anchor: new Date('2020-01-01T00:00:00.000Z'),
+            retentionDays: 3653,
+          }));
         }
       }
       return [];
@@ -64,7 +68,16 @@ describe('DEV-96 retention purge', () => {
     expect(statements[1]).toMatch(/^DELETE FROM "pharmacy_prescription_fills"/);
     expect(statements[2]).toMatch(/^DELETE FROM "pharmacy_prescription_lines"/);
     expect(statements[3]).toMatch(/^DELETE FROM "pharmacy_prescriptions"/);
-    expect(statements[4]).toBe('RELEASE SAVEPOINT pharmacy_retention_purge');
+    expect(statements[4]).toBe(PURGE_AUDIT_SQL.replace(/\s+/g, ' ').trim());
+    expect(statements[5]).toBe('RELEASE SAVEPOINT pharmacy_retention_purge');
+    const [, , organizationId, recordClass, recordId, metadata] = executed[4];
+    expect([organizationId, recordClass, recordId]).toEqual(['org-a', 'PRESCRIPTION', 'rx-1']);
+    expect(JSON.parse(String(metadata))).toEqual({
+      recordClass: 'PRESCRIPTION',
+      recordId: 'rx-1',
+      recordDate: '2020-01-01T00:00:00.000Z',
+      retentionDays: 3653,
+    });
     for (const [, ...values] of executed.slice(1, 4)) expect(values).toEqual(['org-a', 'rx-1']);
   });
 
@@ -92,6 +105,26 @@ describe('DEV-96 retention purge', () => {
       'ROLLBACK TO SAVEPOINT pharmacy_retention_purge',
       'RELEASE SAVEPOINT pharmacy_retention_purge',
     ]);
+  });
+
+  it('writes an audit row for each purged record and none for a refused one', async () => {
+    const { db, executed } = fakeDb({
+      audit_logs: [
+        { id: 'held', organizationId: 'org-a' },
+        { id: 'expired', organizationId: 'org-a' },
+      ],
+    });
+    await purgeExpiredPharmacyRecords(db);
+    const audits = executed.filter(([statement]) => statement === PURGE_AUDIT_SQL);
+    expect(
+      audits.map(([, , organizationId, recordClass, recordId]) => [
+        organizationId,
+        recordClass,
+        recordId,
+      ])
+    ).toEqual([['org-a', 'AUDIT', 'expired']]);
+    expect(PURGE_AUDIT_SQL).toContain("'SYSTEM', 'Retention purge', 'SYSTEM', 'PHARMACY'");
+    expect(PURGE_AUDIT_SQL).toContain("'DELETE', 'pharmacy.retention.purge'");
   });
 
   it('bounds each class separately so an audit backlog cannot starve later classes', async () => {
