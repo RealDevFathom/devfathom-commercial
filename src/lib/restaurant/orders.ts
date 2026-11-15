@@ -189,11 +189,19 @@ function canonicalize(value: unknown): unknown {
 
 /** Deterministic SHA-256 of a command's payload (key order independent; transport
  * and server-time members excluded), so a reused key cannot replay a different
- * command or the same command against different targets. */
+ * command or the same command against different targets. A server assignment to
+ * the acting operator (the terminal derives it from whoever is unlocked) is hashed
+ * as that role rather than the staff id, so a retry after an operator handoff on
+ * the same device still replays. */
 export function orderCommandPayloadHash(input: Readonly<Record<string, unknown>>): string {
+  const actor = input.actor as Partial<CommandActor> | undefined;
   const payload: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
-    if (!NON_PAYLOAD_INPUT_KEYS.has(key)) payload[key] = value;
+    if (NON_PAYLOAD_INPUT_KEYS.has(key)) continue;
+    payload[key] =
+      key === 'serverStaffProfileId' && value != null && value === actor?.staffProfileId
+        ? { actingOperator: true }
+        : value;
   }
   return createHash('sha256')
     .update(JSON.stringify(canonicalize(payload)), 'utf8')

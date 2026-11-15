@@ -19,7 +19,7 @@ vi.mock('./loyalty', () => ({
 }));
 vi.mock('./outbox', () => ({ appendOrderEvent: mocks.appendOrderEvent }));
 
-import { cancelOrder, closeOrder, moveTable, orderCommandPayloadHash } from './orders';
+import { cancelOrder, closeOrder, moveTable, openOrder, orderCommandPayloadHash } from './orders';
 
 type KeyRow = { commandType: string; payloadHash: string | null; resultRef: string | null };
 
@@ -87,6 +87,38 @@ describe('order command idempotency binding', () => {
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect(orderCommandPayloadHash({ orderId: 'o', fromTableId: 'a', toTableId: 'c' })).not.toBe(a);
+  });
+
+  it('replays a terminal open-order retry after an operator handoff on the device', async () => {
+    const request = {
+      organizationId: 'organization-1',
+      entitlementLimits: {},
+      branchId: 'branch-1',
+      channel: 'TAKEAWAY' as const,
+      tableIds: ['t1'],
+    };
+    const first = { ...request, serverStaffProfileId: 'staff-1', actor };
+    const { db, tx } = makeDb({
+      commandType: 'order.open',
+      payloadHash: orderCommandPayloadHash(first),
+      resultRef: order.id,
+    });
+    const handoff = { ...actor, staffProfileId: 'staff-2' };
+
+    await expect(
+      openOrder(db, { ...request, serverStaffProfileId: 'staff-2', actor: handoff })
+    ).resolves.toEqual({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      businessDate: order.businessDate,
+      replayed: true,
+    });
+    expect(tx.restaurantOrderIdempotencyKey.create).not.toHaveBeenCalled();
+
+    // An explicit assignment to someone other than the acting operator stays bound.
+    await expect(
+      openOrder(db, { ...request, serverStaffProfileId: 'staff-3', actor: handoff })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
   });
 
   it('stores the command payload hash and replays only the identical command', async () => {
