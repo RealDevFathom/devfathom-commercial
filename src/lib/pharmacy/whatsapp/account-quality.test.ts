@@ -55,6 +55,25 @@ describe('parseAccountChanges', () => {
     expect(new Set(changes.map((c) => c.eventKey)).size).toBe(3);
   });
 
+  it('derives event identity from the signed payload, not receipt time', () => {
+    const untimed = {
+      entry: [
+        {
+          id: 'waba-a',
+          changes: [{ field: 'account_update', value: { event: 'ACCOUNT_DELETED' } }],
+        },
+      ],
+    };
+    const first = parseAccountChanges(untimed, 'waba-a', now);
+    const retry = parseAccountChanges(untimed, 'waba-a', new Date(now.getTime() + 3_600_000));
+    expect(retry[0]!.eventKey).toBe(first[0]!.eventKey);
+    const future = accountUpdateFixture();
+    future.entry[0]!.time = time + 7_200;
+    expect(parseAccountChanges(future, 'waba-a', now)[0]!.eventKey).toBe(
+      parseAccountChanges(future, 'waba-a', new Date(now.getTime() + 60_000))[0]!.eventKey
+    );
+  });
+
   it('fails closed for an unconfigured or foreign business account', () => {
     expect(parseAccountChanges(accountUpdateFixture(), null, now)).toEqual([]);
     expect(parseAccountChanges(accountUpdateFixture('waba-b'), 'waba-a', now)).toEqual([]);
@@ -172,8 +191,22 @@ describe('recordAccountChanges', () => {
 });
 
 describe('whatsappMarketingPause', () => {
-  const pauseDb = (rows: unknown[]) =>
-    ({ pharmacyWhatsAppAccountEvent: { findMany: async () => rows } }) as unknown as ScopedDb;
+  // Rows are newest first; findFirst applies the same equality / `in` filters as SQL.
+  const pauseDb = (rows: Array<Record<string, unknown>>) =>
+    ({
+      pharmacyWhatsAppAccountEvent: {
+        findFirst: async ({ where }: { where: Record<string, unknown> }) =>
+          rows.find((row) =>
+            Object.entries(where).every(([key, condition]) =>
+              key === 'organizationId'
+                ? true
+                : condition && typeof condition === 'object' && 'in' in condition
+                  ? (condition as { in: unknown[] }).in.includes(row[key])
+                  : row[key] === condition
+            )
+          ) ?? null,
+      },
+    }) as unknown as ScopedDb;
   const later = new Date(now.getTime() + 60_000);
   const earlier = new Date(now.getTime() - 60_000);
 
@@ -221,6 +254,25 @@ describe('whatsappMarketingPause', () => {
     };
     expect(await whatsappMarketingPause(pauseDb([strike, ban]), 'org-a', now)).toMatchObject({
       paused: true,
+    });
+  });
+
+  it('keeps an active block even behind a long tail of newer unrelated evidence', async () => {
+    const block = {
+      field: 'account_update',
+      event: 'DISABLED_UPDATE',
+      severity: 'BLOCK',
+      restrictedUntil: null,
+    };
+    const noise = Array.from({ length: 300 }, () => ({
+      field: 'phone_number_quality_update',
+      event: 'UPGRADE',
+      severity: 'CLEARED',
+      restrictedUntil: null,
+    }));
+    expect(await whatsappMarketingPause(pauseDb([...noise, block]), 'org-a', now)).toMatchObject({
+      paused: true,
+      reason: 'DISABLED_UPDATE',
     });
   });
 

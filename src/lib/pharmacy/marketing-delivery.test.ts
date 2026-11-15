@@ -72,7 +72,10 @@ beforeEach(() => {
   const capture = { id: 'capture-a', customerId: 'customer-a', campaignId: 'campaign-a' };
   db = {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'p', patientId: 'p' }]),
-    pharmacyWhatsAppAccountEvent: { findMany: async () => accountEvents },
+    pharmacyWhatsAppAccountEvent: {
+      findFirst: async ({ where }: { where: { field: string } }) =>
+        accountEvents.find((row) => row.field === where.field) ?? null,
+    },
     pharmacyCampaignCapture: {
       findMany: async () => [capture],
       findFirst: async () => capture,

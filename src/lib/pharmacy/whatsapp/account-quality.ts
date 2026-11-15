@@ -152,10 +152,10 @@ export function parseAccountChanges(
         event,
         ...classified,
         occurredAt,
+        // Identity comes only from the signed provider payload, never receipt time,
+        // so a retried delivery dedupes to the same row and alert.
         eventKey: createHash('sha256')
-          .update(
-            JSON.stringify([field, entry.id, event, classified.detail, occurredAt.toISOString()])
-          )
+          .update(JSON.stringify([field, entry.id, entry.time ?? null, raw]))
           .digest('hex'),
       });
     }
@@ -263,20 +263,19 @@ export async function whatsappMarketingPause(
   organizationId: string,
   now = new Date()
 ): Promise<MarketingPause> {
-  const rows = await db.pharmacyWhatsAppAccountEvent.findMany({
-    where: { organizationId, severity: { in: ['WARNING', 'BLOCK', 'CLEARED'] } },
-    orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
-    select: { field: true, event: true, severity: true, restrictedUntil: true },
-    take: 200,
-  });
-  const account = rows.find((row) => row.field === 'account_update' && row.severity !== 'WARNING');
+  // Each signal is read on its own so unrelated history can never displace an active pause.
+  const latest = (where: Record<string, unknown>) =>
+    db.pharmacyWhatsAppAccountEvent.findFirst({
+      where: { organizationId, ...where },
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+      select: { event: true, severity: true, restrictedUntil: true },
+    });
+  const [account, quality] = await Promise.all([
+    latest({ field: 'account_update', severity: { in: ['BLOCK', 'CLEARED'] } }),
+    latest({ field: 'phone_number_quality_update', event: { in: ['FLAGGED', 'UNFLAGGED'] } }),
+  ]);
   if (account?.severity === 'BLOCK' && (!account.restrictedUntil || account.restrictedUntil > now))
     return { paused: true, reason: account.event, until: account.restrictedUntil };
-  const quality = rows.find(
-    (row) =>
-      row.field === 'phone_number_quality_update' &&
-      (row.event === 'FLAGGED' || row.event === 'UNFLAGGED')
-  );
   if (quality?.event === 'FLAGGED') return { paused: true, reason: quality.event, until: null };
   return { paused: false };
 }
