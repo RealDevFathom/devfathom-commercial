@@ -190,7 +190,9 @@ export default async function PharmacyReportsPage({
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
   let expiryAdviceError = false;
-  let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
+  let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> = null;
+  // Pack scans record no supplier, so the reader returns null instead of unfiltered flags.
+  let authenticationNotFilterable = false;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
   let lostSales: Awaited<ReturnType<typeof caller.lostSalesRecovery>> | null = null;
@@ -246,8 +248,10 @@ export default async function PharmacyReportsPage({
         console.error('[pharmacy-reports] Expiry advice failed', expiryResult.reason);
       }
     }
-    if (authenticationResult.status === 'fulfilled')
+    if (authenticationResult.status === 'fulfilled') {
       authenticationFlags = authenticationResult.value;
+      authenticationNotFilterable = authenticationResult.value === null;
+    }
   }
   const demandScopeValid =
     !invalidRange &&
@@ -665,9 +669,10 @@ export default async function PharmacyReportsPage({
               splits days at midnight UTC, so its totals can differ for the same dates. It may
               differ from sales grouped by business date. Missing journal evidence is unavailable;
               posted totals do not establish complete source or cost coverage. Supplier, ingredient
-              and batch filters do not apply to these KPI totals, the daily work pack or observed
-              demand. Those panels use branch/date scope only; current snapshots use branch scope
-              only.
+              and batch filters narrow sales, gross margin, stock signals, recommended orders and
+              expiry exposure to the matching stock lots and products. Cash, cash variance and
+              refunds cannot be traced to a supplier, ingredient or batch, so they show — while one
+              is selected. The daily work pack and observed demand use branch/date scope only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(({ label, figure, flag, note }) => (
@@ -721,7 +726,8 @@ export default async function PharmacyReportsPage({
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
                 Ranked by projected stock value left at expiry, using only each branch&apos;s recent
                 completed dispensing and sales. Draft proposals do not reserve, move, quarantine,
-                write off, or return stock; a human must review and submit them.
+                write off, or return stock; a human must review and submit them. Supplier,
+                ingredient and batch filters narrow the lots listed.
               </p>
               {advisorMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
@@ -1029,7 +1035,8 @@ export default async function PharmacyReportsPage({
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
                 Receiving and dispensing scans compare GTIN, batch, expiry, and serial evidence with
                 this workspace. An unverifiable pack is never labelled counterfeit and never blocks
-                a sale by itself. Recalled batches remain blocked by the recall path.
+                a sale by itself. Recalled batches remain blocked by the recall path. Ingredient and
+                batch filters narrow flags to scans matched to that medicine or batch.
               </p>
               {authenticationMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
@@ -1096,6 +1103,11 @@ export default async function PharmacyReportsPage({
                 </p>
               )}
             </SectionCard>
+          ) : authenticationNotFilterable ? (
+            <ReportNotice
+              title="Pack authentication flags"
+              detail="Pack scans record the medicine and batch they matched, not the supplier, so these flags cannot be filtered by supplier. Clear the supplier filter to review them."
+            />
           ) : null}
           <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
