@@ -35,7 +35,7 @@ export function CounterSetupNextStep({ advice }: { advice: CounterSetupAdvice })
   if (!advice.link && !advice.nextStep) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      {advice.nextStep ? <p className="text-text-muted">{advice.nextStep}</p> : null}
+      {advice.nextStep ? <p className="text-text-body">{advice.nextStep}</p> : null}
       {advice.link ? (
         <Link
           href={advice.link.href}
