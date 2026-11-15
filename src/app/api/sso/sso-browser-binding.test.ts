@@ -5,7 +5,7 @@
  * unpredictable cookie set by the start route, and verified before any account
  * is provisioned or ticket issued.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type StateRow = {
   id: string;
@@ -30,10 +30,8 @@ let samlRequestCounter = 0;
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: vi.fn(() => undefined) }));
-vi.mock('@/lib/http-origin', () => ({
-  publicRequestOrigin: () => 'https://acme.example',
-  publicRequestUrl: (request: Request) => new URL(request.url),
-}));
+// The real proxy-aware origin helpers: the binding cookie's attributes follow
+// the scheme the browser used (DEV-849).
 vi.mock('@/lib/tenancy/host', () => ({ requireOrganizationForRequest: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
@@ -329,5 +327,102 @@ describe('SAML browser binding (F10)', () => {
     expect(ticketCookieSet(response)).toBe(true);
     expect(mocks.issueSsoTicket).toHaveBeenCalledWith('org_1', 'user_attacker');
     expect(states.every((row) => row.usedAt instanceof Date)).toBe(true);
+  });
+});
+
+describe('browser binding cookie attributes (DEV-849)', () => {
+  function bindingSetCookie(response: Response): string {
+    const header = response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SSO_BROWSER_BINDING_COOKIE}=`));
+    if (!header) throw new Error('start did not set the browser binding cookie');
+    return header.toLowerCase();
+  }
+
+  function startSaml(url: string, headers?: HeadersInit) {
+    return samlStart(new Request(url, { headers }), route('conn_saml'));
+  }
+
+  beforeEach(() => {
+    mocks.requireIdentityConnection.mockResolvedValue({
+      id: 'conn_saml',
+      organizationId: 'org_1',
+      ssoUrl: 'https://idp.example/saml',
+      certificate: 'CERT',
+      entityId: null,
+      issuer: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is SameSite=None; Secure on a non-production deployment served over HTTPS', async () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    const cookie = bindingSetCookie(
+      await startSaml('https://staging.acme.example/api/sso/saml/conn_saml/start')
+    );
+    expect(cookie).toContain('samesite=none');
+    expect(cookie).toContain('secure');
+    expect(cookie).toContain('httponly');
+    expect(cookie).toContain('path=/api/sso');
+  });
+
+  it('honors the proxy-forwarded HTTPS scheme outside production', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const cookie = bindingSetCookie(
+      await startSaml('http://internal:3000/api/sso/saml/conn_saml/start', {
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'staging.acme.example',
+      })
+    );
+    expect(cookie).toContain('samesite=none');
+    expect(cookie).toContain('secure');
+  });
+
+  it('falls back to SameSite=Lax only for plain-HTTP local development', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const cookie = bindingSetCookie(
+      await startSaml('http://localhost:3000/api/sso/saml/conn_saml/start')
+    );
+    expect(cookie).toContain('samesite=lax');
+    expect(cookie).not.toMatch(/;\s*secure/);
+  });
+
+  it('stays SameSite=None; Secure in production regardless of the request scheme', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    for (const url of [
+      'https://acme.example/api/sso/saml/conn_saml/start',
+      'http://internal:3000/api/sso/saml/conn_saml/start',
+    ]) {
+      const cookie = bindingSetCookie(await startSaml(url));
+      expect(cookie).toContain('samesite=none');
+      expect(cookie).toMatch(/;\s*secure/);
+      expect(cookie).toContain('httponly');
+    }
+  });
+
+  it('clears the cookie with the same attributes after a successful SAML POST', async () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    const start = await startSaml('https://staging.acme.example/api/sso/saml/conn_saml/start');
+    const binding = bindingCookieFrom(start);
+    const location = new URL(start.headers.get('location')!);
+    const form = new FormData();
+    form.set('SAMLResponse', location.searchParams.get('ID')!);
+    form.set('RelayState', location.searchParams.get('RelayState')!);
+    const response = await samlCallback(
+      new Request('https://staging.acme.example/api/sso/saml/conn_saml/callback', {
+        method: 'POST',
+        body: form,
+        headers: cookieHeader(binding),
+      }),
+      route('conn_saml')
+    );
+    expect(ticketCookieSet(response)).toBe(true);
+    const cleared = bindingSetCookie(response);
+    expect(cleared).toContain('samesite=none');
+    expect(cleared).toMatch(/;\s*secure/);
+    expect(cleared).toMatch(/max-age=0|expires=thu, 01 jan 1970/);
   });
 });

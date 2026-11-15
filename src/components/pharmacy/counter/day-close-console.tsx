@@ -73,6 +73,9 @@ const serverReady = () => false;
 // business day to open on. An unknown branch or malformed day falls back to defaults.
 export type DayCloseInitial = { branch?: string; date?: string };
 
+const DAY_CLOSE_PERMISSION_DETAIL =
+  'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
+
 export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -96,12 +99,12 @@ export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial
   if (
     status !== 'authenticated' ||
     !sessionVerdict.ok ||
+    !user ||
     !(isAdmin || closeGranted) ||
-    user?.organizationId !== entitlements.organizationId ||
+    user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
-    let detail =
-      'This day-close screen requires day-close permission. Ask your workspace administrator to review your day-close permission.';
+    let detail = DAY_CLOSE_PERMISSION_DETAIL;
     if (status === 'loading') {
       detail = 'Checking day-close access…';
     } else if (status !== 'authenticated') {
@@ -157,7 +160,12 @@ function DayCloseBranches({
 }) {
   // Read the tab's draft only after hydration, including when queries were prefetched.
   const hydrated = useSyncExternalStore(subscribeToNothing, clientReady, serverReady);
-  const branches = trpc.pharmacySales.counterBranches.useQuery();
+  // DEV-505: the server decides which branches this member may close (an
+  // administrator or day-close holder: every branch; a Manager: only their
+  // assigned branches), so the picker never offers a branch the close refuses.
+  const branches = trpc.pharmacySales.dayCloseBranches.useQuery(undefined, {
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+  });
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(
     initial?.date && DAY.test(initial.date) ? initial.date : null
@@ -170,6 +178,13 @@ function DayCloseBranches({
   const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
   const branchId = selected || linked || branches.data?.branches[0]?.id || '';
   const currency = branches.data?.currency;
+  if (branches.error?.data?.code === 'FORBIDDEN') {
+    return (
+      <SectionCard title="Day close unavailable">
+        <p role="status">{DAY_CLOSE_PERMISSION_DETAIL}</p>
+      </SectionCard>
+    );
+  }
   return (
     <div className="space-y-6">
       <PageHeader

@@ -84,12 +84,85 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
 }) => {
   await signIn(page);
   const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
-  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
+  // DEV-497: pharmacy destinations sit in task menus, opened from the keyboard.
+  // Capability-gated entries follow the rail's server read; Purchasing, alone
+  // in its menu, is the bar's own sign that the answer has arrived.
+  await expect(navigation.getByRole('link', { name: 'Purchasing' })).toBeVisible({
+    timeout: 30_000,
+  });
+  await pressControl(navigation.getByRole('button', { name: 'Sell', exact: true }));
   await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
+  await pressControl(navigation.getByRole('button', { name: 'Settings', exact: true }));
+  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeHidden();
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeHidden();
   await expect(navigation.getByRole('link', { name: 'Point of sale' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Restaurant staff' })).toHaveCount(0);
+});
+
+/**
+ * DEV-497: every role lands on a page it can work from after sign-in, and the
+ * `/pharmacy` front door sends a member who cannot run onboarding to their own
+ * work instead of a dead end.
+ */
+const LANDINGS = [
+  {
+    role: 'owner',
+    email: () => process.env.PHARMACY_E2E_ADMIN_EMAIL!,
+    signIn: /\/dashboard/,
+    signInHeading: 'Owner command centre',
+    pharmacy: /\/pharmacy$/,
+    pharmacyHeading: 'Onboarding',
+  },
+  {
+    role: 'pharmacist',
+    email: () => PHARMACY_E2E.pharmacistEmail,
+    signIn: /\/pharmacy\/pharmacist-queue$/,
+    signInHeading: 'Pharmacist queue',
+    pharmacy: /\/pharmacy\/pharmacist-queue$/,
+    pharmacyHeading: 'Pharmacist queue',
+  },
+  {
+    role: 'cashier',
+    email: () => PHARMACY_E2E.cashierEmail,
+    signIn: /\/dashboard/,
+    signInHeading: 'Your work today',
+    pharmacy: /\/pharmacy\/counter$/,
+    pharmacyHeading: 'Counter',
+  },
+] as const;
+
+for (const landing of LANDINGS) {
+  test(`the ${landing.role} lands on a usable page, never a dead end (DEV-497)`, async ({
+    page,
+  }) => {
+    await signIn(page, landing.email());
+    await expect(page).toHaveURL(landing.signIn);
+    await expect(
+      page.getByRole('heading', { name: landing.signInHeading, level: 1 })
+    ).toBeVisible();
+
+    await page.goto('/pharmacy');
+    await expect(page).toHaveURL(landing.pharmacy);
+    await expect(
+      page.getByRole('heading', { name: landing.pharmacyHeading, level: 1 })
+    ).toBeVisible();
+    await expect(page.getByText('Onboarding is not available to you')).toHaveCount(0);
+  });
+}
+
+test('the cashier is offered only destinations a cashier can open (DEV-497)', async ({ page }) => {
+  await signIn(page, PHARMACY_E2E.cashierEmail);
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
+  // Counter is gated on the rail's server read, so it marks the answer's arrival.
+  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible({ timeout: 30_000 });
+  for (const name of ['Day close', 'Purchasing', 'Inventory', 'Finance', 'Onboarding'])
+    await expect(navigation.getByRole('link', { name })).toHaveCount(0);
+  // No numeric prefixes anywhere in the bar.
+  await expect(navigation).not.toContainText(/\d/);
 });
 
 /**

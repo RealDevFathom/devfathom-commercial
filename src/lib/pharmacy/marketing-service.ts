@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { readTenantMedicineNames } from './medicine-names';
 import {
   isQuietHour,
   MARKETING_SEND_POLICY_DEFAULTS,
@@ -13,6 +14,12 @@ import {
   type MarketingSendPolicy,
 } from './marketing-send-policy';
 import { assertPromotableProducts, PharmacyProductClassError } from './product-class';
+import {
+  lintWhatsAppMessage,
+  whatsAppLintMessage,
+  type WhatsAppLintResult,
+} from './whatsapp/compliance-linter';
+import type { WhatsAppComplianceSubject } from './whatsapp/compliance-log';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -63,6 +70,16 @@ export type MarketingScope = {
 };
 
 export class MarketingWorkflowError extends Error {}
+/** A WhatsApp compliance block; the caller logs it from a transaction that commits. */
+export class WhatsAppComplianceError extends MarketingWorkflowError {
+  constructor(
+    readonly result: WhatsAppLintResult,
+    readonly subject: WhatsAppComplianceSubject,
+    readonly subjectId: string | null
+  ) {
+    super(whatsAppLintMessage(result));
+  }
+}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
@@ -72,6 +89,22 @@ export function validateMarketingBody(body: string) {
     );
   if (!body.toUpperCase().includes('STOP'))
     throw new MarketingWorkflowError('Include STOP opt-out instructions in the template.');
+}
+
+/** DEV-29: lint a marketing body against this tenant's catalogue names and the static list. */
+export async function lintMarketingBody(
+  db: ScopedDb,
+  body: string,
+  subject: WhatsAppComplianceSubject,
+  subjectId: string | null
+) {
+  const result = lintWhatsAppMessage({
+    purpose: 'MARKETING',
+    template: body,
+    catalogNames: await readTenantMedicineNames(db),
+  });
+  if (result.outcome === 'BLOCK') throw new WhatsAppComplianceError(result, subject, subjectId);
+  return result;
 }
 const whereScope = (scope: MarketingScope) => ({
   organizationId: scope.organizationId,
@@ -118,7 +151,8 @@ export async function approveMarketingTemplate(
   validateMarketingBody(parsed.body);
   const featuredMedicineIds = [...new Set(parsed.featuredMedicineIds)];
   await assertPromotableTemplateItems(db, scope, featuredMedicineIds);
-  return db.pharmacyMarketingTemplate.create({
+  const compliance = await lintMarketingBody(db, parsed.body, 'MARKETING_TEMPLATE', null);
+  const template = await db.pharmacyMarketingTemplate.create({
     data: {
       ...whereScope(scope),
       name: parsed.name,
@@ -129,6 +163,7 @@ export async function approveMarketingTemplate(
       approvedAt: now,
     },
   });
+  return { ...template, compliance };
 }
 
 async function templateFor(db: ScopedDb, scope: MarketingScope, templateId: string) {
@@ -324,6 +359,8 @@ async function evaluateCampaign(
   const policy = await readMarketingSendPolicy(db, scope.organizationId);
   requireMarketingNotPaused(policy);
   requireCaptureWindow(campaign, scope, now, policy);
+  // Send-time re-check: the catalogue may have gained names since the template was approved.
+  await lintMarketingBody(db, template.body, 'MARKETING_CAMPAIGN', campaignId);
   const cap = frequencyCap.parse(campaign.frequencyCap);
   // Only commercial receipt counts and recency. Never select names, phone,
   // medicine, line details, prescriptions, or clinical segmentation fields.

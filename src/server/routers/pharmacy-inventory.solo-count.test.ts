@@ -67,6 +67,8 @@ function makeDb() {
       }),
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    // DEV-505: approveCount admits only a branch the actor is assigned to.
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }) },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
@@ -187,5 +189,17 @@ describe('DEV-682 solo self-approval of a count variance', () => {
     });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a member who is not assigned to the branch before any count work (DEV-505)', async () => {
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(approve({ soloPin: '1234' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(mocks.soloOwnerApprovalAllowed).not.toHaveBeenCalled();
+    expect(mocks.verifyPurchaseApprover).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryCount.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
 });

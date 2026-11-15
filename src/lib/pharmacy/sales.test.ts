@@ -5,6 +5,7 @@ import {
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
+  linkRestockRecoveries,
   PharmacySaleError,
   priceFromLot,
   recoverDemandWithAlternate,
@@ -198,6 +199,87 @@ describe('POS sale voiding', () => {
       expect.objectContaining({ reversesMovementId: 'held-movement', quantityUnits: 20 }),
     ]);
     expect(events).toEqual([expect.objectContaining({ kind: 'VOIDED' })]);
+  });
+
+  it('keeps the void reason text and code on the void event and its reversals (DEV-508)', async () => {
+    let status = 'HELD';
+    const original = {
+      id: 'held-movement',
+      inventoryLotId: 'lot-a',
+      stockLocationId: 'shelf-a',
+      disposition: 'AVAILABLE',
+      quantityUnits: -20,
+      sealedPackDelta: -2,
+      looseUnitDelta: 0,
+      idempotencyKey: 'sale:held-line:0',
+    };
+    const reversals: Array<Record<string, unknown>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    const claims: Array<Record<string, unknown>> = [];
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-held', status, lines: [] }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          claims.push(where);
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: {
+        findMany: async () => [{ stockMovementId: original.id }],
+      },
+      pharmacyStockMovement: {
+        findFirst: async ({ where }: { where: { id: string } }) =>
+          where.id === original.id ? original : null,
+        findMany: async () => [original],
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          reversals.push(data);
+          return { id: `reversal-${reversals.length}`, ...data };
+        },
+      },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          events.push(data);
+          return data;
+        },
+      },
+      // A part payment that was refunded in full no longer blocks the void.
+      pharmacyTender: {
+        findMany: async () => [{ amountMinor: 500, refunds: [{ amountMinor: 500 }] }],
+      },
+    };
+
+    await changeSaleStatus(
+      db as never,
+      scope,
+      'sale-held',
+      'void',
+      manager,
+      'Duplicate bill',
+      undefined,
+      { voidReasonCode: 'DUPLICATE_BILL' }
+    );
+
+    expect(status).toBe('VOID');
+    expect(reversals).toEqual([
+      expect.objectContaining({ reversesMovementId: 'held-movement', reason: 'Duplicate bill' }),
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'VOIDED',
+        actorId: 'user-a',
+        reason: 'Duplicate bill',
+        payload: { voidReasonCode: 'DUPLICATE_BILL' },
+      }),
+    ]);
   });
 
   it.each(['OPEN', 'HELD'])(
@@ -469,6 +551,12 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      // DEV-830: the stored pack setup the server derives the line multiplier from.
+      packLevel: {
+        findMany: async () => [
+          { id: 'pack-level-a', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
+        ],
+      },
       user: {
         findFirst: async () => issuerRow,
         findUnique: async () =>
@@ -872,6 +960,197 @@ describe('DEM-03 restock interest', () => {
       ])
     );
     expect(result).toMatchObject({ recoveredSale: { receiptNumber: 42 } });
+  });
+});
+
+describe('DEV-79 back-in-stock capture and recovery', () => {
+  const DAY = 86_400_000;
+  const AT = new Date('2026-11-15T10:00:00.000Z');
+  const ago = (days: number) => new Date(AT.getTime() - days * DAY);
+  const policy = { requestExpiryDays: 14, recoveryWindowDays: 7 };
+
+  function arrivalDb(interests: Array<Record<string, unknown>>, consentGranted = true) {
+    const notified: string[] = [];
+    let interestWhere: Record<string, unknown> | undefined;
+    const db = {
+      $queryRaw: async () => [],
+      pharmacyInventoryLot: {
+        findFirst: async () => ({
+          id: 'lot-a',
+          receivedAt: ago(0),
+          batch: { medicineId: 'med-a', state: 'ACTIVE', expiresAt: new Date('2028-01-01') },
+          balances: [{ stockLocationId: 'shelf-a' }],
+        }),
+      },
+      pharmacyRestockInterest: {
+        findMany: async (args: { where: Record<string, unknown> }) => {
+          interestWhere = args.where;
+          return interests;
+        },
+        update: async () => ({}),
+      },
+      patientConsent: {
+        findFirst: async () => ({ id: 'consent-a', granted: consentGranted, revokedAt: null }),
+      },
+      pharmacyRestockNotification: {
+        create: async ({ data }: { data: { interestId: string } }) => {
+          notified.push(data.interestId);
+          return { id: `notice-${data.interestId}` };
+        },
+      },
+    };
+    return { db, notified, where: () => interestWhere };
+  }
+  const interest = (id: string, days: number) => ({
+    id,
+    status: 'OPEN',
+    createdAt: ago(days),
+    patientId: `patient-${id}`,
+    channel: 'WHATSAPP',
+    reserveOnArrival: false,
+    quantityUnits: 1,
+    patient: { phone: '03001234567' },
+  });
+
+  it('notifies waiting requests first-in, first-out and never after 14 days', async () => {
+    const { db, notified, where } = arrivalDb([
+      interest('newer', 2),
+      interest('expired', 15),
+      interest('oldest', 10),
+    ]);
+    await captureSafeRestockArrival(db as never, scope, {
+      inventoryLotId: 'lot-a',
+      at: AT,
+      policy,
+    });
+    expect(notified).toEqual(['oldest', 'newer']);
+    expect(where()).toMatchObject({ status: 'OPEN', createdAt: { gt: ago(14) } });
+  });
+
+  it('skips a customer whose consent was withdrawn without failing the rest', async () => {
+    const { db, notified } = arrivalDb([interest('a', 1)], false);
+    const result = await captureSafeRestockArrival(db as never, scope, {
+      inventoryLotId: 'lot-a',
+      at: AT,
+      policy,
+    });
+    expect(notified).toEqual([]);
+    expect(result).toEqual([{ interestId: 'a', reservation: null, notification: null }]);
+  });
+
+  function recoveryDb(
+    lines: Array<{ id: string; medicineId: string; completedAt: Date; patientId: string | null }>,
+    usedLineIds: string[] = [],
+    /** When the provider accepted the notice; null when it was never sent. */
+    sentAt: Date | null = ago(10)
+  ) {
+    const recovered: Array<{ interestId: string; saleLineId: string }> = [];
+    let current = '';
+    let logWhere: Record<string, unknown> | undefined;
+    const db = {
+      $queryRaw: async () => [],
+      pharmacyMessageLog: {
+        findMany: async (args: { where: Record<string, unknown> }) => {
+          logWhere = args.where;
+          return sentAt ? [{ dedupeKey: 'back-in-stock:notice-a', createdAt: sentAt }] : [];
+        },
+      },
+      pharmacyRestockInterest: {
+        findMany: async (args: { where: Record<string, unknown> }) =>
+          'recoveredSaleLineId' in args.where
+            ? usedLineIds.map((id) => ({ recoveredSaleLineId: id }))
+            : [
+                {
+                  id: 'interest-a',
+                  patientId: 'patient-a',
+                  demandEvent: { requestedMedicineId: 'med-a' },
+                  notifications: [{ id: 'notice-a' }],
+                },
+              ],
+        findFirst: async ({ where }: { where: { id: string } }) => {
+          current = where.id;
+          return {
+            id: where.id,
+            demandEventId: 'demand-a',
+            demandEvent: { requestedMedicineId: 'med-a' },
+          };
+        },
+        update: async ({ data }: { data: { recoveredSaleLineId: string } }) => {
+          recovered.push({ interestId: current, saleLineId: data.recoveredSaleLineId });
+          return { ...data, recoveredSale: null };
+        },
+      },
+      pharmacySaleLine: {
+        findMany: async () =>
+          lines.map((line) => ({
+            id: line.id,
+            saleId: `sale-${line.id}`,
+            medicineId: line.medicineId,
+            sale: {
+              completedAt: line.completedAt,
+              customer: line.patientId ? { patientId: line.patientId } : null,
+            },
+          })),
+        findFirst: async ({ where }: { where: { id: string } }) => {
+          const line = lines.find((row) => row.id === where.id)!;
+          return {
+            id: line.id,
+            saleId: `sale-${line.id}`,
+            medicineId: line.medicineId,
+            sale: { status: 'COMPLETED', receiptNumber: 7 },
+          };
+        },
+      },
+      unfulfilledDemandEvent: { update: async () => ({}) },
+      pharmacyRestockReservation: { updateMany: async () => ({ count: 0 }) },
+    };
+    return { db, recovered, logWhere: () => logWhere };
+  }
+
+  it('links a sale of the same SKU within 7 days of the notice, preferring the customer', async () => {
+    const { db, recovered } = recoveryDb([
+      { id: 'walk-in', medicineId: 'med-a', completedAt: ago(9), patientId: null },
+      { id: 'customer', medicineId: 'med-a', completedAt: ago(5), patientId: 'patient-a' },
+    ]);
+    const linked = await linkRestockRecoveries(db as never, scope, { now: AT, policy });
+    expect(recovered).toEqual([{ interestId: 'interest-a', saleLineId: 'customer' }]);
+    expect(linked).toMatchObject([{ interestId: 'interest-a', saleId: 'sale-customer' }]);
+  });
+
+  it('opens the window only when the notice was actually sent, from the send time', async () => {
+    const sale = [{ id: 'sale', medicineId: 'med-a', completedAt: ago(4), patientId: 'patient-a' }];
+    const unsent = recoveryDb(sale, [], null);
+    expect(await linkRestockRecoveries(unsent.db as never, scope, { now: AT, policy })).toEqual([]);
+    expect(unsent.recovered).toEqual([]);
+    expect(unsent.logWhere()).toMatchObject({
+      kind: 'BACK_IN_STOCK',
+      status: 'SENT',
+      dedupeKey: { in: ['back-in-stock:notice-a'] },
+    });
+    // Queued ten days ago but sent five days ago: a sale four days ago is within 7 days of sending.
+    const sentLate = recoveryDb(sale, [], ago(5));
+    expect(
+      await linkRestockRecoveries(sentLate.db as never, scope, { now: AT, policy })
+    ).toHaveLength(1);
+    // Sent after the sale: the sale cannot be a recovery.
+    const sentAfterSale = recoveryDb(sale, [], ago(3));
+    expect(
+      await linkRestockRecoveries(sentAfterSale.db as never, scope, { now: AT, policy })
+    ).toEqual([]);
+  });
+
+  it('does not link a sale more than 7 days after the notice or already linked elsewhere', async () => {
+    const late = recoveryDb([
+      { id: 'late', medicineId: 'med-a', completedAt: ago(2.9), patientId: 'patient-a' },
+    ]);
+    expect(await linkRestockRecoveries(late.db as never, scope, { now: AT, policy })).toEqual([]);
+    const used = recoveryDb(
+      [{ id: 'taken', medicineId: 'med-a', completedAt: ago(9), patientId: 'patient-a' }],
+      ['taken']
+    );
+    expect(await linkRestockRecoveries(used.db as never, scope, { now: AT, policy })).toEqual([]);
+    expect(late.recovered).toEqual([]);
+    expect(used.recovered).toEqual([]);
   });
 });
 

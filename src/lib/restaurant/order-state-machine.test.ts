@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_ORDER_PAYMENT_POLICY,
   KDS_DISPLAY_BY_ITEM_STATUS,
+  DELIVERY_HANDOFF_ITEM_TRANSITIONS,
   ORDER_ITEM_STATUSES,
   ORDER_ITEM_TRANSITIONS,
   ORDER_STATUSES,
@@ -18,6 +19,7 @@ import {
   assertOrderStatusChange,
   assertOrderTransition,
   assertRemakesResolvedForTerminal,
+  canHandOffItemOnDelivery,
   canTransitionItem,
   canTransitionOrder,
   deriveKitchenAggregate,
@@ -342,5 +344,22 @@ describe('assertOrderStatusChange composes edge + invariant checks', () => {
     expect(() =>
       assertOrderStatusChange('PAYMENT_PENDING', 'CLOSED', ['SERVED', 'VOIDED'])
     ).not.toThrow();
+  });
+});
+
+describe('delivery hand-off item transition', () => {
+  it('hands off only items the kitchen has received', () => {
+    for (const status of ORDER_ITEM_STATUSES) {
+      expect(canHandOffItemOnDelivery(status)).toBe(
+        status === 'QUEUED' || status === 'FIRING' || status === 'PREPARED'
+      );
+    }
+    expect(DELIVERY_HANDOFF_ITEM_TRANSITIONS.HELD).toEqual([]);
+    expect(DELIVERY_HANDOFF_ITEM_TRANSITIONS.REMAKE_REQUESTED).toEqual([]);
+  });
+
+  it('does not widen the kitchen item machine', () => {
+    expect(canTransitionItem('QUEUED', 'SERVED')).toBe(false);
+    expect(canTransitionItem('FIRING', 'SERVED')).toBe(false);
   });
 });
