@@ -30,6 +30,11 @@ const db = {
   restaurantStaffProfile: { findMany: vi.fn() },
   restaurantStaffJobRole: { findMany: vi.fn() },
   restaurantSopTemplateVersion: { findFirst: vi.fn() },
+  projectFile: { findFirst: vi.fn() },
+  taskAttachment: { findFirst: vi.fn() },
+  contract: { findFirst: vi.fn() },
+  projectMember: { findUnique: vi.fn() },
+  task: { findUnique: vi.fn() },
 };
 function actor(role = 'EMPLOYEE') {
   return { session: { user: { id: 'user_1', role } }, organization: { id: 'org_a' } };
@@ -47,6 +52,11 @@ beforeEach(() => {
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
+  db.projectFile.findFirst.mockResolvedValue(null);
+  db.taskAttachment.findFirst.mockResolvedValue(null);
+  db.contract.findFirst.mockResolvedValue(null);
+  db.projectMember.findUnique.mockResolvedValue(null);
+  db.task.findUnique.mockResolvedValue(null);
   mocks.granted = new Set();
 });
 describe('private attachment delivery', () => {
@@ -105,7 +115,10 @@ describe('private attachment delivery', () => {
   });
 
   it('keeps the SOP branch membership gate and admin exception', async () => {
-    db.restaurantSopEvidence.findFirst.mockResolvedValue({ occurrence: { branchId: 'branch_a' } });
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      serverCaptured: true,
+      occurrence: { branchId: 'branch_a' },
+    });
     expect((await read('sop.png')).status).toBe(404);
     expect(db.pharmacySopSite.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_a', sopBranchId: 'branch_a' } })
@@ -205,6 +218,184 @@ describe('private attachment delivery', () => {
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
       expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
       expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DEV-837: SOP proof binding (F17)', () => {
+    const LEGACY_CAPTURE = 'sop-12345678-1234-1234-1234-123456789abc.jpg';
+
+    it('ignores a caller-attached SOP reference to an unrelated file', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: false,
+        uploaderStaffProfileId: 'staff_x',
+        occurrence: { branchId: 'branch_other' },
+      });
+      const response = await read('company-logo.png');
+      expect(response.status).toBe(200);
+      expect(db.restaurantSopEvidence.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { storageRef: '/api/files/company-logo.png' },
+          orderBy: [{ serverCaptured: 'desc' }, { createdAt: 'asc' }],
+        })
+      );
+      expect(db.restaurantBranchAssignment.findUnique).not.toHaveBeenCalled();
+      expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('keeps the branch gate on proof captured before the provenance flag', async () => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: false,
+        occurrence: { branchId: 'branch_a' },
+      });
+      expect((await read(LEGACY_CAPTURE)).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'assignment_1' });
+      expect((await read(LEGACY_CAPTURE)).status).toBe(200);
+    });
+
+    it('denies a capture-named blob that no evidence row binds, even to admins', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read(LEGACY_CAPTURE)).status).toBe(404);
+      expect((await read('pharmacy-sop-orphan.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DEV-837: owner bindings are re-checked at download (F15)', () => {
+    const T1 = new Date('2026-11-01T10:00:00.000Z');
+    const T2 = new Date('2026-11-02T10:00:00.000Z');
+    const earliest = (where: Record<string, string>, select: Record<string, true>) => ({
+      where,
+      orderBy: { createdAt: 'asc' },
+      select,
+    });
+
+    it('denies a removed project member a saved project file URL and allows members', async () => {
+      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_1', createdAt: T1 });
+
+      const response = await read('plan.pdf');
+      expect(response.status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      expect(db.projectFile.findFirst).toHaveBeenCalledWith(
+        earliest({ url: '/api/files/plan.pdf' }, { projectId: true, createdAt: true })
+      );
+      expect(db.projectMember.findUnique).toHaveBeenCalledWith({
+        where: { projectId_userId: { projectId: 'project_1', userId: 'user_1' } },
+        select: { role: true },
+      });
+
+      db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
+      expect((await read('plan.pdf')).status).toBe(200);
+
+      db.projectMember.findUnique.mockResolvedValue(null);
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('plan.pdf')).status).toBe(200);
+    });
+
+    it('resolves a task attachment to its project and denies unresolved bindings', async () => {
+      db.taskAttachment.findFirst.mockResolvedValue({ taskId: 'task_1', createdAt: T1 });
+      db.task.findUnique.mockResolvedValue({
+        column: { board: { projectId: 'project_2' } },
+      });
+      expect((await read('spec.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      expect(db.taskAttachment.findFirst).toHaveBeenCalledWith(
+        earliest({ url: '/api/files/spec.png' }, { taskId: true, createdAt: true })
+      );
+
+      db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
+      expect((await read('spec.png')).status).toBe(200);
+      expect(db.projectMember.findUnique).toHaveBeenLastCalledWith({
+        where: { projectId_userId: { projectId: 'project_2', userId: 'user_1' } },
+        select: { role: true },
+      });
+
+      db.task.findUnique.mockResolvedValue(null);
+      mocks.getUpload.mockClear();
+      expect((await read('spec.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('denies a demoted administrator a signed contract document', async () => {
+      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
+      for (const role of ['EMPLOYEE', 'MANAGER']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read('signed-contract.pdf')).status).toBe(404);
+      }
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+      expect(db.contract.findFirst).toHaveBeenCalledWith(
+        earliest({ fileUrl: '/api/files/signed-contract.pdf' }, { id: true, createdAt: true })
+      );
+
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('signed-contract.pdf')).status).toBe(200);
+    });
+
+    it('does not let a later project binding widen access to a contract document', async () => {
+      // A former admin re-attaches a saved contract URL to a project they lead.
+      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
+      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_mine', createdAt: T2 });
+      db.projectMember.findUnique.mockResolvedValue({ role: 'LEAD' });
+      expect((await read('signed-contract.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('does not let a later binding to another project restrict the original readers', async () => {
+      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_a', createdAt: T1 });
+      db.taskAttachment.findFirst.mockResolvedValue({ taskId: 'task_in_b', createdAt: T2 });
+      db.task.findUnique.mockResolvedValue({ column: { board: { projectId: 'project_b' } } });
+      db.projectMember.findUnique.mockImplementation(
+        async ({ where }: { where: { projectId_userId: { projectId: string } } }) =>
+          where.projectId_userId.projectId === 'project_a' ? { role: 'MEMBER' } : null
+      );
+      // A member of the original project keeps access; project B is never consulted.
+      expect((await read('plan.pdf')).status).toBe(200);
+      expect(db.task.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('leaves a chat or SOP file to its own checks when attached to a project later', async () => {
+      db.messageAttachment.findFirst.mockResolvedValue({
+        createdAt: T1,
+        message: { channelId: 'channel_1' },
+      });
+      db.channelMember.findUnique.mockResolvedValue({ id: 'member_1' });
+      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_x', createdAt: T2 });
+      expect((await read('chat.png')).status).toBe(200);
+      expect(db.projectMember.findUnique).not.toHaveBeenCalled();
+      expect(db.messageAttachment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'asc' } })
+      );
+
+      db.messageAttachment.findFirst.mockResolvedValue(null);
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        serverCaptured: true,
+        createdAt: T1,
+        occurrence: { branchId: 'branch_a' },
+      });
+      db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'assignment_1' });
+      expect((await read('sop-proof.jpg')).status).toBe(200);
+      expect(db.projectMember.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('denies an ambiguous file owned by two kinds of record at the same instant', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      db.projectFile.findFirst.mockResolvedValue({ projectId: 'project_1', createdAt: T1 });
+      db.contract.findFirst.mockResolvedValue({ id: 'contract_1', createdAt: T1 });
+      expect((await read('both.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'restaurant-menu-import__cm0import1.pdf',
+      'owner-data-export-cm0job1.zip',
+      'Restaurant-Menu-Import__cm0import1.PNG',
+    ])('never serves server-only blob %s, even to admins', async (name) => {
+      for (const role of ['EMPLOYEE', 'ADMIN']) {
+        mocks.actor.mockResolvedValue(actor(role));
+        expect((await read(name)).status).toBe(404);
+      }
+      expect(mocks.tenantDb).not.toHaveBeenCalled();
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
   });
 

@@ -35,6 +35,10 @@ beforeEach(() => {
       pharmacySopSite: { findFirst: m.site },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
+      // DEV-837: unbound uploads (no project, task or contract owner).
+      projectFile: { findFirst: async () => null },
+      taskAttachment: { findFirst: async () => null },
+      contract: { findFirst: async () => null },
     })
   );
   m.get.mockRejectedValue(new StorageUnavailableError('disabled'));
@@ -53,7 +57,8 @@ test('anonymous and traversal requests never reach storage', async () => {
   expect(m.get).not.toHaveBeenCalled();
 });
 test('SOP branch denial hides resource even when storage is disabled', async () => {
-  m.sop.mockResolvedValue({ occurrence: { branchId: 'branch-a' } });
+  // A capture route's own row (DEV-837: only server captures bind a file).
+  m.sop.mockResolvedValue({ serverCaptured: true, occurrence: { branchId: 'branch-a' } });
   expect((await read()).status).toBe(404);
   expect(m.get).not.toHaveBeenCalled();
 });

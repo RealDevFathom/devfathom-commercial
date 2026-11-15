@@ -9446,6 +9446,11 @@ model RestaurantSopEvidence {
   sizeBytes              Int
   storageRef             String?
   uploaderStaffProfileId String?
+  /// DEV-837: true only when a server capture route wrote these bytes to tenant
+  /// storage itself and computed `contentHash` from them. Caller-asserted
+  /// metadata (the `attachEvidence` procedure) is stored with false and never
+  /// satisfies a photo/signature requirement or governs who may read a file.
+  serverCaptured         Boolean  @default(false)
   capturedAt             DateTime @default(now())
   createdAt              DateTime @default(now())
 
