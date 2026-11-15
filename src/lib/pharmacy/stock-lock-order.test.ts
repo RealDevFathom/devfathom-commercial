@@ -461,6 +461,8 @@ describe('sales, voids and returns take stock locks in the global order', () => 
       },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async () => ({}) },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: async () => ({ count: 0 }) },
     };
     await changeSaleStatus(
       db as never,
