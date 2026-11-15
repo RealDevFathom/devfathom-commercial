@@ -24,15 +24,25 @@ const mocks = vi.hoisted(() => {
         id: 'target-column',
         name: 'In Progress',
         board: { project: { id: 'destination-project', name: 'Destination' } },
-        defaultAssignees: [{ userId: 'stale-default' }, { userId: 'destination-member' }],
+        defaultAssignees: [
+          { userId: 'stale-default' },
+          { userId: 'destination-member' },
+          { userId: 'admin-without-membership' },
+        ],
       })),
     },
     taskAssignee,
+    user: {
+      findMany: vi.fn(async () => [
+        { id: 'destination-member' },
+        { id: 'admin-without-membership' },
+      ]),
+    },
     projectMember: {
+      findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
       count: vi.fn(
         async ({ where }: { where: { userId: { in: string[] } } }) => where.userId.in.length
       ),
-      findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
     },
   };
   return { db, taskAssignee };
@@ -67,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
-  it('drops destination non-members and only applies authorized column defaults', async () => {
+  it('keeps admins and destination members and applies only authorized column defaults', async () => {
     const response = await PATCH(
       new Request('https://example.test/api/v1/tasks/task-1', {
         method: 'PATCH',
@@ -85,19 +95,23 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
     });
-    expect(mocks.db.projectMember.findMany).toHaveBeenCalledWith({
+    expect(mocks.db.user.findMany).toHaveBeenCalledWith({
       where: {
-        projectId: 'destination-project',
-        userId: { in: ['stale-default', 'destination-member'] },
+        id: { in: ['stale-default', 'destination-member', 'admin-without-membership'] },
+        OR: [{ role: 'ADMIN' }, { projectMembers: { some: { projectId: 'destination-project' } } }],
       },
-      select: { userId: true },
+      select: { id: true },
     });
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
-      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+      data: [
+        { taskId: 'task-1', userId: 'destination-member' },
+        { taskId: 'task-1', userId: 'admin-without-membership' },
+      ],
       skipDuplicates: true,
     });
   });

@@ -32,7 +32,7 @@ import { projectsRouter } from './projects';
 
 const taskUpdate = vi.fn(async () => ({}));
 const assigneeDeleteMany = vi.fn(async () => ({ count: 1 }));
-const defaultAssigneeFindMany = vi.fn(async () => []);
+const defaultAssigneeFindMany = vi.fn(async (): Promise<{ userId: string }[]> => []);
 
 const tx = {
   task: {
@@ -79,13 +79,14 @@ beforeEach(() => {
 });
 
 describe('projects.moveTask', () => {
-  it('removes assignees who are not members of the destination project', async () => {
+  it('keeps admins and destination members while removing unauthorized assignees', async () => {
     await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
 
     expect(assigneeDeleteMany).toHaveBeenCalledWith({
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -93,7 +94,12 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
@@ -133,6 +139,7 @@ describe('projects.moveTask', () => {
       where: {
         taskId: { in: ['task-1'] },
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -140,7 +147,12 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
@@ -174,4 +186,52 @@ describe('projects.bulkMoveTasks concurrency', () => {
     expect(taskUpdate).not.toHaveBeenCalled();
     expect(assigneeDeleteMany).not.toHaveBeenCalled();
   });
+});
+
+describe('column defaults on task moves', () => {
+  it.each(['single', 'bulk'] as const)(
+    'adds admin and member defaults without replacing existing assignees on a %s move',
+    async (mode) => {
+      defaultAssigneeFindMany.mockResolvedValueOnce([
+        { userId: 'admin-without-membership' },
+        { userId: 'destination-member' },
+      ]);
+      tx.task.findMany.mockReset();
+      if (mode === 'bulk') {
+        tx.task.findMany
+          .mockResolvedValueOnce([{ id: 'task-1', columnId: 'source-column' }])
+          .mockResolvedValueOnce([{ id: 'task-1', columnId: 'source-column' }])
+          .mockResolvedValueOnce([
+            { id: 'task-1', column: { board: { projectId: 'source-project' } } },
+          ])
+          .mockResolvedValueOnce([]);
+        await caller().bulkMoveTasks({ taskIds: ['task-1'], targetColumnId: 'target-column' });
+      } else {
+        tx.task.findMany.mockResolvedValueOnce([{ id: 'task-1' }]).mockResolvedValueOnce([]);
+        await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
+      }
+
+      expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
+        where: {
+          columnId: 'target-column',
+          user: {
+            OR: [
+              { role: 'ADMIN' },
+              { projectMembers: { some: { projectId: 'destination-project' } } },
+            ],
+          },
+        },
+        select: { userId: true },
+      });
+      expect(tx.taskAssignee.createMany).toHaveBeenCalledExactlyOnceWith({
+        data: [
+          { taskId: 'task-1', userId: 'admin-without-membership' },
+          { taskId: 'task-1', userId: 'destination-member' },
+        ],
+        skipDuplicates: true,
+      });
+      expect(mocks.assertTaskAccess).toHaveBeenCalledWith(expect.anything(), 'task-1');
+      expect(mocks.assertColumnAccess).toHaveBeenCalledWith(expect.anything(), 'target-column');
+    }
+  );
 });

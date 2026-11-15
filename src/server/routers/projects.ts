@@ -810,12 +810,13 @@ export const projectsRouter = router({
           });
 
           // A cross-project move must not leak the destination board through My
-          // Tasks. Keep only assignees who are members of the destination project.
+          // Tasks. Match canAccessProject: admins or destination project members.
           if (task.column.board.projectId !== targetColumn.board.projectId) {
             await tx.taskAssignee.deleteMany({
               where: {
                 taskId: input.taskId,
                 user: {
+                  role: { not: 'ADMIN' },
                   projectMembers: { none: { projectId: targetColumn.board.projectId } },
                 },
               },
@@ -831,7 +832,10 @@ export const projectsRouter = router({
             where: {
               columnId: input.targetColumnId,
               user: {
-                projectMembers: { some: { projectId: targetColumn.board.projectId } },
+                OR: [
+                  { role: 'ADMIN' },
+                  { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
+                ],
               },
             },
             select: { userId: true },
@@ -948,12 +952,13 @@ export const projectsRouter = router({
 
         // Moving a task must not preserve principals who cannot access its new
         // project. Apply this to every cross-project task in the bulk operation
-        // before adding the destination column's (membership-filtered) defaults.
+        // before adding the destination column's authorized defaults.
         if (crossProjectTaskIds.length > 0) {
           await tx.taskAssignee.deleteMany({
             where: {
               taskId: { in: crossProjectTaskIds },
               user: {
+                role: { not: 'ADMIN' },
                 projectMembers: { none: { projectId: targetColumn.board.projectId } },
               },
             },
@@ -969,7 +974,10 @@ export const projectsRouter = router({
           where: {
             columnId: input.targetColumnId,
             user: {
-              projectMembers: { some: { projectId: targetColumn.board.projectId } },
+              OR: [
+                { role: 'ADMIN' },
+                { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
+              ],
             },
           },
           select: { userId: true },
