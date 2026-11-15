@@ -11,6 +11,11 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
+import {
+  localDateTimeLabel,
+  recentCompletedDays,
+  timeZoneLabel,
+} from '@/lib/pharmacy/marketing-dates';
 
 export const metadata = { title: 'Marketing · Pharmacy' };
 const control =
@@ -121,6 +126,9 @@ export default async function PharmacyMarketingPage({
     baskets,
     basketsUnavailable,
   } = workspace;
+  const zone = history.timezone;
+  const zoneLabel = timeZoneLabel(zone);
+  const recent = recentCompletedDays(zone, 7);
   return (
     <main key={branchId} className="min-w-0 space-y-6">
       {heading}
@@ -142,7 +150,7 @@ export default async function PharmacyMarketingPage({
         </form>
         <p className="mt-4 text-sm text-text-muted">
           Local sandbox only. No customer messages are sent. Sandbox delivery is simulated. Quiet
-          hours use {history.timezone}; schedules below use explicit UTC timestamps.
+          hours, dates and send times below use {zoneLabel}.
         </p>
       </SectionCard>
       <SectionCard title="Run due sandbox campaigns" titleLevel={2}>
@@ -166,10 +174,8 @@ export default async function PharmacyMarketingPage({
                 </label>
               ))}
           </fieldset>
-          <label className="block text-sm">
-            Batch request key (reuse for replay)
-            <Input className="mt-1 min-h-11" name="requestKey" required maxLength={128} />
-          </label>
+          {/* Generated per page load: resubmitting this form replays the same batch safely. */}
+          <input type="hidden" name="requestKey" value={browserUuid()} />
         </MarketingActionForm>
       </SectionCard>
       <GrowthPanel
@@ -177,8 +183,14 @@ export default async function PharmacyMarketingPage({
         history={growth}
         unavailable={growthUnavailable}
         templates={history.templates}
+        timeZone={zone}
       />
-      <BasketPanel branchId={branchId} history={baskets} unavailable={basketsUnavailable} />
+      <BasketPanel
+        branchId={branchId}
+        history={baskets}
+        unavailable={basketsUnavailable}
+        timeZone={zone}
+      />
       {review && (
         <SectionCard
           key={review.campaign.id}
@@ -193,7 +205,8 @@ export default async function PharmacyMarketingPage({
             />
             <p className="whitespace-pre-wrap break-words text-sm">{review.template.body}</p>
             <p className="text-sm text-text-muted">
-              Scheduled: {review.campaign.scheduledAt.toISOString()}. Rules:{' '}
+              Scheduled: {localDateTimeLabel(review.campaign.scheduledAt, zone)} ({zoneLabel}).
+              Rules:{' '}
               {review.rules.all
                 .map(
                   (rule) =>
@@ -318,25 +331,33 @@ export default async function PharmacyMarketingPage({
           branchId={branchId}
           operation="attribution"
           label="Generate receipt links"
+          timeZone={zone}
         >
-          <label className="block text-sm">
-            From (UTC)
-            <Input
-              name="from"
-              required
-              placeholder="2026-10-01T00:00:00Z"
-              className="mt-1 min-h-11"
-            />
-          </label>
-          <label className="block text-sm">
-            Cutoff (UTC, exclusive)
-            <Input
-              name="cutoff"
-              required
-              placeholder="2026-10-06T12:00:00Z"
-              className="mt-1 min-h-11"
-            />
-          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm">
+              First day
+              <Input
+                name="from"
+                type="date"
+                required
+                defaultValue={recent.firstDay}
+                max={recent.lastDay}
+                className="mt-1 min-h-11"
+              />
+            </label>
+            <label className="block text-sm">
+              Last day
+              <Input
+                name="lastDay"
+                type="date"
+                required
+                defaultValue={recent.lastDay}
+                max={recent.lastDay}
+                className="mt-1 min-h-11"
+              />
+            </label>
+          </div>
+          <p className="text-sm text-text-muted">Full days in {zoneLabel}.</p>
         </MarketingActionForm>
       </SectionCard>
       <SectionCard title="Campaign history" titleLevel={2}>
@@ -356,7 +377,7 @@ export default async function PharmacyMarketingPage({
                 <tr>
                   <th className="p-3">Campaign</th>
                   <th className="p-3">Status</th>
-                  <th className="p-3">Scheduled (UTC)</th>
+                  <th className="p-3">Scheduled ({zoneLabel})</th>
                   <th className="p-3">Review</th>
                 </tr>
               </thead>
@@ -375,7 +396,7 @@ export default async function PharmacyMarketingPage({
                       />
                     </td>
                     <td className="whitespace-nowrap p-3 font-mono text-xs">
-                      {campaign.scheduledAt.toISOString()}
+                      {localDateTimeLabel(campaign.scheduledAt, zone)}
                     </td>
                     <td className="p-3">
                       <Link
@@ -457,6 +478,7 @@ export default async function PharmacyMarketingPage({
             operation="draft"
             label="Save draft"
             disabled={!history.templates.length}
+            timeZone={zone}
           >
             {!history.templates.length && (
               <p className="text-sm text-text-muted">
@@ -499,14 +521,8 @@ export default async function PharmacyMarketingPage({
               </label>
             </div>
             <label className="block text-sm">
-              Scheduled time (ISO UTC)
-              <Input
-                name="scheduledAt"
-                className="mt-1 min-h-11"
-                required
-                placeholder="2026-10-07T07:00:00Z"
-                pattern=".*Z"
-              />
+              Send date and time ({zoneLabel})
+              <Input name="scheduledAt" type="datetime-local" className="mt-1 min-h-11" required />
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm">

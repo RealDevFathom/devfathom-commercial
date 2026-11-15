@@ -87,3 +87,31 @@ it('retains signed posted margin for an eligible loss-making receipt', async () 
     expect.objectContaining({ data: expect.objectContaining({ recoveredMarginMinor: -50 }) })
   );
 });
+it('allows ninety local calendar days across a daylight-saving change and no more', async () => {
+  const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    pharmacyCampaignAttribution: { createMany: vi.fn().mockResolvedValue({ count: 0 }) },
+  } as unknown as ScopedDb;
+  const scope = {
+    organizationId: 'org-a',
+    branchId: 'b',
+    actorId: 'a',
+    timezone: 'America/New_York',
+  };
+  await expect(
+    generateMarketingAttribution(
+      db,
+      scope,
+      new Date('2026-09-01T04:00:00Z'),
+      new Date('2026-11-30T05:00:00Z')
+    )
+  ).resolves.toMatchObject({ created: 0 });
+  await expect(
+    generateMarketingAttribution(
+      db,
+      scope,
+      new Date('2026-09-01T04:00:00Z'),
+      new Date('2026-12-01T05:00:00Z')
+    )
+  ).rejects.toThrow('at most 90 days');
+});

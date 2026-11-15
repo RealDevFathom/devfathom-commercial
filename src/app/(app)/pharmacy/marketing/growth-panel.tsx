@@ -4,6 +4,12 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Input } from '@/components/ui/input';
 import { GROWTH_METRICS, presentGrowthRecommendation } from '@/lib/ai/growth-recommendations';
 import type { listGrowthInsights } from '@/lib/pharmacy/growth-insights';
+import {
+  localInputValue,
+  recentCompletedDays,
+  timeZoneLabel,
+} from '@/lib/pharmacy/marketing-dates';
+import { workspaceTimezone } from '@/lib/timezone';
 import { MarketingActionForm } from './action-form';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
@@ -29,12 +35,18 @@ export function GrowthPanel({
   history,
   templates,
   unavailable = false,
+  timeZone,
 }: {
   branchId: string;
   history: History | null;
   templates: Array<{ id: string; name: string }>;
   unavailable?: boolean;
+  /** Workspace zone: periods and schedules are entered as local days and times. */
+  timeZone?: string;
 }) {
+  const zone = workspaceTimezone(timeZone);
+  const zoneLabel = timeZoneLabel(zone);
+  const recent = recentCompletedDays(zone, 30);
   return (
     <SectionCard title="AI growth insights" titleLevel={2}>
       <div className="space-y-6">
@@ -50,24 +62,52 @@ export function GrowthPanel({
             before retrying a review.
           </p>
         )}
+        <p id="growth-ai-setup" className="text-sm text-text-body">
+          AI insights need Ask Fathom turned on for your company.{' '}
+          <Link
+            className="underline focus-visible:outline-2 focus-visible:outline-ring"
+            href="/organization"
+          >
+            Turn on AI in Organization settings
+          </Link>
+          . If insights still say AI isn&apos;t set up, contact DevFathom support to connect the AI
+          service. Manual campaigns below work without AI.
+        </p>
         <MarketingActionForm
           branchId={branchId}
           operation="growth-generate"
           label="Generate insights"
+          timeZone={zone}
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="text-sm">
-              Period start (UTC)
-              <Input name="from" type="date" required className="mt-1 min-h-11" />
+              First day
+              <Input
+                name="from"
+                type="date"
+                required
+                defaultValue={recent.firstDay}
+                max={recent.lastDay}
+                aria-describedby="growth-period-help"
+                className="mt-1 min-h-11"
+              />
             </label>
             <label className="text-sm">
-              Exclusive cutoff (UTC)
-              <Input name="cutoff" type="date" required className="mt-1 min-h-11" />
+              Last day
+              <Input
+                name="lastDay"
+                type="date"
+                required
+                defaultValue={recent.lastDay}
+                max={recent.lastDay}
+                aria-describedby="growth-period-help"
+                className="mt-1 min-h-11"
+              />
             </label>
           </div>
-          <p className="text-sm text-text-muted">
-            One to ninety completed days, compared with the preceding equal period. Requires enabled
-            AI settings and a configured provider.
+          <p id="growth-period-help" className="text-sm text-text-muted">
+            Pre-filled with the last 30 full days. Choose 1 to 90 full days ending yesterday or
+            earlier, in {zoneLabel}. Results are compared with the same number of days just before.
           </p>
         </MarketingActionForm>
         {history && !history.insights.length && (
@@ -219,6 +259,7 @@ export function GrowthPanel({
                           branchId={branchId}
                           operation="growth-review"
                           label="Save review decision"
+                          timeZone={zone}
                         >
                           <input type="hidden" name="insightId" value={insight.id} />
                           <input type="hidden" name="recommendation" value={index} />
@@ -258,11 +299,11 @@ export function GrowthPanel({
                               </select>
                             </label>
                             <label className="text-sm">
-                              Scheduled at (UTC ISO)
+                              Send date and time ({zoneLabel})
                               <Input
                                 name="scheduledAt"
-                                placeholder="2026-10-10T12:00:00Z"
-                                defaultValue={edit?.scheduledAt}
+                                type="datetime-local"
+                                defaultValue={localInputValue(edit?.scheduledAt, zone)}
                                 className="mt-1 min-h-11"
                               />
                             </label>
