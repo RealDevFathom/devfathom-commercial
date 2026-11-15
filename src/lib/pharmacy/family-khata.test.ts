@@ -209,6 +209,102 @@ describe('CRM-L04 explainable health suggestion', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  describe('DEV-290: a manager or owner PIN approval at the till', () => {
+    const pinApproval = {
+      approvedByUserId: 'manager_1',
+      approvalPolicy: 'MANAGER_PIN',
+      selfApproved: false,
+      credentialId: 'cred_manager',
+    };
+    const writes = () => ({
+      update: vi.fn().mockResolvedValue({}),
+      create: vi.fn().mockResolvedValue({}),
+    });
+
+    it('records the PIN approver, the operator and the reason', async () => {
+      const { update, create } = writes();
+      await applyKhataLimitDecision(
+        { pharmacyFamilyAccount: { update }, pharmacyKhataLimitDecision: { create } } as never,
+        scope,
+        {
+          familyAccountId: 'family_1',
+          suggestion,
+          ownerAuthorized: true,
+          ownerAuthorizedByUserId: 'manager_1',
+          pinApproval,
+          overrideLimitMinor: 15_000,
+          overrideReason: 'Paying on Friday',
+        }
+      );
+      expect(create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kind: 'OVERRIDDEN',
+          ownerActorId: 'manager_1',
+          reasons: {
+            reasons: suggestion.reasons,
+            ownerAuthorizedByUserId: 'manager_1',
+            approvalPolicy: 'MANAGER_PIN',
+            approvalCredentialId: 'cred_manager',
+            selfApproved: false,
+            operatorUserId: scope.actorId,
+            ownerAuthorizedAt: now.toISOString(),
+            overrideReason: 'Paying on Friday',
+          },
+        }),
+      });
+    });
+
+    it.each([
+      ['an approver it does not name', { ownerAuthorizedByUserId: 'someone_else' }, pinApproval],
+      ['an unauthorized caller', { ownerAuthorized: false }, pinApproval],
+      [
+        'the operator approving themselves outside the solo rule',
+        { ownerAuthorizedByUserId: scope.actorId },
+        { ...pinApproval, approvedByUserId: scope.actorId },
+      ],
+    ])('refuses %s before any write', async (_name, change, approval) => {
+      const { update, create } = writes();
+      await expect(
+        applyKhataLimitDecision(
+          { pharmacyFamilyAccount: { update }, pharmacyKhataLimitDecision: { create } } as never,
+          scope,
+          {
+            familyAccountId: 'family_1',
+            suggestion,
+            ownerAuthorized: true,
+            ownerAuthorizedByUserId: 'manager_1',
+            pinApproval: approval,
+            overrideLimitMinor: 15_000,
+            overrideReason: 'Paying on Friday',
+            ...change,
+          }
+        )
+      ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+      expect(update).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a blank reason', async () => {
+      const { update, create } = writes();
+      await expect(
+        applyKhataLimitDecision(
+          { pharmacyFamilyAccount: { update }, pharmacyKhataLimitDecision: { create } } as never,
+          scope,
+          {
+            familyAccountId: 'family_1',
+            suggestion,
+            ownerAuthorized: true,
+            ownerAuthorizedByUserId: 'manager_1',
+            pinApproval,
+            overrideLimitMinor: 15_000,
+            overrideReason: '  ',
+          }
+        )
+      ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
+
   it('accepts reauthentication exactly five minutes old', async () => {
     const update = vi.fn().mockResolvedValue({ creditLimitMinor: 20_000 });
     const create = vi.fn().mockResolvedValue({ kind: 'ACCEPTED' });
@@ -356,7 +452,12 @@ describe('counter Khata ledger gate', () => {
     await authorizeKhataCharge(
       db as never,
       scope,
-      { ...input, amountMinor: 600, ownerOverride: true },
+      {
+        ...input,
+        amountMinor: 600,
+        ownerOverride: true,
+        overrideReason: '  Regular family, paying Friday  ',
+      },
       { authorized: true, passwordAuthenticatedAt: Date.now() }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
@@ -369,6 +470,7 @@ describe('counter Khata ledger gate', () => {
           reasons: expect.arrayContaining(['1 charge(s) in the stated window']),
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
+          overrideReason: 'Regular family, paying Friday',
         }),
       }),
     });
@@ -389,6 +491,22 @@ describe('counter Khata ledger gate', () => {
       },
     });
   });
+  it.each([undefined, '', '   '])(
+    'DEV-290: refuses an authorized over-limit override without a reason (%j)',
+    async (overrideReason) => {
+      const db = fixture();
+      await expect(
+        authorizeKhataCharge(
+          db as never,
+          scope,
+          { ...input, amountMinor: 600, ownerOverride: true, overrideReason },
+          { authorized: true, passwordAuthenticatedAt: Date.now() }
+        )
+      ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+      expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+      expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();
     await expect(

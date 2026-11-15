@@ -234,3 +234,12 @@ it("replaces the previous branch's premises with the selected branch's and saves
     })
   );
 });
+
+it("blames DevFathom's unreviewed rule config, not the province, when categories and schedules are empty (#1237)", () => {
+  const { container } = render(<PharmacyRegulatoryProfileForm initial={initial} />);
+  const text = container.textContent ?? '';
+  expect(text).toContain("DevFathom's licence category list for this province is unreviewed");
+  expect(text).toContain("DevFathom's schedule list for this province is unreviewed");
+  expect(text).toContain('operating gate stays in place');
+  expect(text).not.toContain('This province has not published');
+});
