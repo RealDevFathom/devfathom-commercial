@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
  * refused.
  */
 const ROOT = process.cwd();
-const AZURE = /azure/i;
+// Azure's own product words too, so a renamed reference ("Key Vault", a .bicep
+// template, a managed identity) is caught as well as the brand name.
+const AZURE = /azure|key\s*vault|\bbicep\b|managed[\s-]+identit(?:y|ies)/i;
 
 function filesUnder(path: string): string[] {
   const absolute = join(ROOT, path);
