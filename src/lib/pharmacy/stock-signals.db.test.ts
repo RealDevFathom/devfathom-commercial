@@ -433,13 +433,40 @@ describeIfDatabase('PUR-07 — facts come off the ledger, not off the caller', (
         label: 'cold-breach',
         locationId: fixture.fridgeId,
       });
-      await deps.ledger.transferStock(db, scopeOf(fixture), {
+      // DEV-608: a same-branch transfer now lands units AVAILABLE, and the
+      // ledger refuses that for cold-chain stock outside a validated zone. The
+      // breach is therefore built as non-saleable held stock: the units leave
+      // the fridge and sit IN_TRANSIT at the ambient store.
+      const common = {
+        organizationId: fixture.organizationId,
+        branchId: fixture.branchId,
         inventoryLotId: lot.id,
-        fromStockLocationId: fixture.fridgeId,
-        toStockLocationId: fixture.locationId,
-        units: 20,
-        at: NOW,
-        idempotencyKeyPrefix: tag('cold-breach-transfer'),
+        actorId: ACTOR,
+        occurredAt: NOW,
+      };
+      await db.pharmacyStockMovement.create({
+        data: {
+          ...common,
+          stockLocationId: fixture.fridgeId,
+          kind: 'TRANSFER_OUT',
+          disposition: 'AVAILABLE',
+          quantityUnits: -20,
+          sealedPackDelta: -2,
+          looseUnitDelta: 0,
+          idempotencyKey: tag('cold-breach-out'),
+        },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          ...common,
+          stockLocationId: fixture.locationId,
+          kind: 'TRANSFER_IN',
+          disposition: 'IN_TRANSIT',
+          quantityUnits: 20,
+          sealedPackDelta: 2,
+          looseUnitDelta: 0,
+          idempotencyKey: tag('cold-breach-in'),
+        },
       });
       await deps.signals.refreshStockSignals(db, scopeOf(fixture), NOW);
       return db.pharmacyStockSignal.findMany({ where: { branchId: fixture.branchId } });

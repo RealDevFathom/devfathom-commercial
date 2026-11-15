@@ -816,8 +816,13 @@ export type TransferInput = {
 /**
  * INV-03 on the transfer path: the hard blocks that stop a sale stop a transfer.
  *
- * The pair of movements leaves the units IN_TRANSIT at the receiving location,
- * so the same units are never AVAILABLE in two places at once.
+ * DEV-608: a same-branch location move has no dispatch, carrier or receipt
+ * step (those belong to the inter-branch transfer header and lines), so the
+ * pair of movements lands the units AVAILABLE at the destination in the same
+ * transaction that takes them from the source. Writing them IN_TRANSIT here
+ * stranded them: no transfer record exists to receive or cancel. The source
+ * lock and the single commit still mean the same units are never AVAILABLE in
+ * two places at once.
  */
 export async function transferStock(db: ScopedDb, scope: LedgerScope, input: TransferInput) {
   // DEV-660: read and lock the source balance only within the acting branch, so a
@@ -851,6 +856,33 @@ export async function transferStock(db: ScopedDb, scope: LedgerScope, input: Tra
     throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
   }
 
+  // The destination must be an active location of the acting branch; a sibling
+  // branch's or retired location answers as absent, never as a place to put stock.
+  const destination = await db.pharmacyStockLocation.findFirst({
+    where: {
+      id: input.toStockLocationId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+    },
+    select: { id: true, coldChain: true },
+  });
+  if (!destination) throw new PharmacyInventoryError('NOT_FOUND');
+
+  // INV-05 on the transfer path: the units arrive AVAILABLE, so cold-chain stock
+  // may only move into a validated cold-chain zone. Refuse it here with the
+  // domain reason rather than leave it to the storage trigger.
+  const lot = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      id: input.inventoryLotId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+    select: { batch: { select: { medicine: { select: { coldChain: true } } } } },
+  });
+  if (!lot) throw new PharmacyInventoryError('NOT_FOUND');
+  assertColdChainStorage(lot.batch.medicine.coldChain, destination.coldChain);
+
   const out = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -874,7 +906,7 @@ export async function transferStock(db: ScopedDb, scope: LedgerScope, input: Tra
       inventoryLotId: input.inventoryLotId,
       stockLocationId: input.toStockLocationId,
       kind: 'TRANSFER_IN',
-      disposition: 'IN_TRANSIT',
+      disposition: 'AVAILABLE',
       quantityUnits: input.units,
       sealedPackDelta: arrangement.sealedPacks,
       looseUnitDelta: arrangement.looseUnits,

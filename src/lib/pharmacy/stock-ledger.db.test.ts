@@ -2553,7 +2553,7 @@ describeIfDatabase('PH-INV hard blocks — INV-03', () => {
     ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
   });
 
-  it('leaves transferred units IN_TRANSIT, never available twice', async () => {
+  it('lands transferred units AVAILABLE at the destination, never available twice (DEV-608)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-ok');
     const projection = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, fixture, {
@@ -2572,12 +2572,22 @@ describeIfDatabase('PH-INV hard blocks — INV-03', () => {
       return deps.ledger.onHand(db, fixture, fixture.medicineId, NOW);
     });
 
-    const available = projection.find((row) => row.disposition === 'AVAILABLE')!;
-    const inTransit = projection.find((row) => row.disposition === 'IN_TRANSIT')!;
-    expect(available.onHandUnits).toBe(30);
-    expect(inTransit.onHandUnits).toBe(10);
-    // The in-transit half is on hand but not sellable.
-    expect(inTransit.blockedBy).toBe('IN_TRANSIT');
+    const origin = projection.find(
+      (row) => row.disposition === 'AVAILABLE' && row.stockLocationId === fixture.locationId
+    )!;
+    const destination = projection.find(
+      (row) =>
+        row.disposition === 'AVAILABLE' && row.stockLocationId === fixture.quarantineLocationId
+    )!;
+    expect(origin.onHandUnits).toBe(30);
+    expect(destination.onHandUnits).toBe(10);
+    // The moved units are usable where they now sit, and none are stranded in
+    // an IN_TRANSIT bucket that no transfer record can receive or cancel.
+    expect(destination.blockedBy).toBeNull();
+    expect(projection.some((row) => row.disposition === 'IN_TRANSIT' && row.onHandUnits > 0)).toBe(
+      false
+    );
+    expect(projection.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
   });
 });
 

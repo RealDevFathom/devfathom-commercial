@@ -1346,7 +1346,7 @@ export const pharmacyInventoryRouter = router({
       }
       try {
         // Both legs and the source lock commit together, so the units are never
-        // AVAILABLE at the origin and IN_TRANSIT at the destination at once.
+        // AVAILABLE at the origin and at the destination at once (DEV-608).
         return await ctx.db.$transaction(async (tx) =>
           transferStock(txDb(tx), await admittedScopeFor(ctx, input.branchId), {
             inventoryLotId: input.inventoryLotId,
