@@ -89,7 +89,7 @@ export async function requestLostDemandTransfer(form: FormData): Promise<string>
     return destination(
       ROUTE,
       {
-        message: `Draft transfer request for ${units} units created. The sending branch allocates it; nothing has moved.`,
+        message: `Transfer request for ${units} units recorded as a draft for the sending branch. Nothing has been allocated or moved.`,
         kind: 'success',
       },
       { branch: branchId }

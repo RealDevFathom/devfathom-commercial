@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const ledger = vi.hoisted(() => ({ loadStockCandidatesForRead: vi.fn() }));
 vi.mock('server-only', () => ({}));
+vi.mock('./stock-ledger', () => ledger);
 
 import { readLostDemandAdvice, saltStrengthKey } from './lost-demand-advice-reader';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -28,6 +30,21 @@ function demand(id: string, medicine: { id: string; brandName: string } | null, 
   };
 }
 
+function candidate(branchId: string, availableUnits: number, overrides: object = {}) {
+  return {
+    inventoryLotId: `lot_${branchId}_${availableUnits}`,
+    stockLocationId: 'loc',
+    organizationId: 'org_a',
+    branchId,
+    batchState: 'ACTIVE',
+    disposition: 'AVAILABLE',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+    receivedAt: ago(30),
+    availableUnits,
+    ...overrides,
+  };
+}
+
 let db: Record<string, Record<string, ReturnType<typeof vi.fn>>>;
 
 beforeEach(() => {
@@ -51,10 +68,18 @@ beforeEach(() => {
     demand('e3', { id: 'brand_b', brandName: 'Brand B' }, null as unknown as string),
     demand('e4', null),
   ]);
-  db.pharmacyStockBalance!.findMany!.mockResolvedValue([
-    { branchId: 'b1', onHandUnits: 4 },
-    { branchId: 'b2', onHandUnits: 300 },
-  ]);
+  ledger.loadStockCandidatesForRead.mockImplementation(
+    async (_db: unknown, scope: { branchId: string }) =>
+      scope.branchId === 'b1'
+        ? [candidate('b1', 4)]
+        : [
+            candidate('b2', 300),
+            // Expired, quarantined and fully reserved stock never counts.
+            candidate('b2', 900, { expiresAt: ago(1) }),
+            candidate('b2', 900, { disposition: 'QUARANTINE' }),
+            candidate('b2', 0),
+          ]
+  );
   db.pharmacySaleLine!.findMany!.mockResolvedValue([
     { branchId: 'b1', canonicalUnits: 300 },
     { branchId: 'b2', canonicalUnits: 30 },
@@ -111,7 +136,12 @@ describe('readLostDemandAdvice', () => {
       leadTimeDays: 4,
       leadTimeSource: 'RECORDED',
     });
-    expect(salt.transfer).toMatchObject({ fromBranchId: 'b2', fromBranchName: 'South' });
+    // Donor surplus counts only sellable, unreserved stock: 300 - 10 days of 1/day cover.
+    expect(salt.transfer).toMatchObject({
+      fromBranchId: 'b2',
+      fromBranchName: 'South',
+      surplusUnits: 290,
+    });
     // The unmatched text request is one request: below the threshold, no card.
     expect(advice.some((row) => row.demandKey.startsWith('text:'))).toBe(false);
   });

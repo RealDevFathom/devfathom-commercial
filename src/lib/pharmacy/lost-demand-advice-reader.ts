@@ -1,6 +1,8 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { blockReasonFor } from './inventory';
+import { loadStockCandidatesForRead } from './stock-ledger';
 import {
   buildLostDemandAdvice,
   evaluateLostDemandTriggers,
@@ -48,25 +50,32 @@ export async function loadLostDemandTriggerConfig(
   return resolveLostDemandTriggerConfig(row);
 }
 
+/**
+ * Sellable units per branch: the stock ledger's own read (net of supplier claims
+ * and customer restock reservations) with every INV-03 block applied, so expired,
+ * recalled, quarantined or unreceived stock never counts as on hand or as surplus.
+ */
 async function availableUnits(
   db: ScopedDb,
   organizationId: string,
   medicineId: string,
-  branchIds: readonly string[]
+  branchIds: readonly string[],
+  at: Date
 ) {
-  const balances = await db.pharmacyStockBalance.findMany({
-    where: {
-      organizationId,
-      branchId: { in: [...branchIds] },
-      disposition: 'AVAILABLE',
-      onHandUnits: { gt: 0 },
-      lot: { batch: { medicineId, state: 'ACTIVE' } },
-    },
-    select: { branchId: true, onHandUnits: true },
-  });
-  const totals = new Map<string, number>(branchIds.map((id) => [id, 0]));
-  for (const row of balances)
-    totals.set(row.branchId, (totals.get(row.branchId) ?? 0) + row.onHandUnits);
+  const totals = new Map<string, number>();
+  for (const branchId of branchIds) {
+    const candidates = await loadStockCandidatesForRead(
+      db,
+      { organizationId, branchId },
+      medicineId
+    );
+    totals.set(
+      branchId,
+      candidates
+        .filter((candidate) => blockReasonFor(candidate, { organizationId, branchId, at }) === null)
+        .reduce((total, candidate) => total + candidate.availableUnits, 0)
+    );
+  }
   return totals;
 }
 
@@ -189,7 +198,8 @@ async function distributorFacts(
 async function alternateFacts(
   db: ScopedDb,
   scope: LostDemandScope,
-  medicine: { id: string; strengths: StrengthRow[] }
+  medicine: { id: string; strengths: StrengthRow[] },
+  now: Date
 ): Promise<AlternateFact[]> {
   const key = saltStrengthKey(medicine.strengths);
   if (!key) return [];
@@ -206,7 +216,7 @@ async function alternateFacts(
   const matches = candidates.filter((row) => saltStrengthKey(row.strengths) === key);
   const alternates: AlternateFact[] = [];
   for (const row of matches.slice(0, 10)) {
-    const stock = await availableUnits(db, scope.organizationId, row.id, [scope.branchId]);
+    const stock = await availableUnits(db, scope.organizationId, row.id, [scope.branchId], now);
     const lastSale = await db.pharmacySaleLine.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -371,7 +381,7 @@ export async function readLostDemandAdvice(
     }
     const branchIds = [scope.branchId, ...donorBranches.map((branch) => branch.id)];
     const [stock, demand, inbound, distributors, alternates] = await Promise.all([
-      availableUnits(db, scope.organizationId, primary.id, branchIds),
+      availableUnits(db, scope.organizationId, primary.id, branchIds, now),
       dailyDemand(
         db,
         scope.organizationId,
@@ -382,7 +392,7 @@ export async function readLostDemandAdvice(
       ),
       onOrderUnits(db, scope, primary.id),
       distributorFacts(db, scope.organizationId, primary.id),
-      alternateFacts(db, scope, primary),
+      alternateFacts(db, scope, primary, now),
     ]);
     const donors: BranchStockFact[] = donorBranches.map((branch) => ({
       branchId: branch.id,

@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // every action creates a DRAFT only, records what the human did, takes its
 // quantity from the server's own advice and never approves or sends anything.
 
-const mocks = vi.hoisted(() => ({ readLostDemandAdvice: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  readLostDemandAdvice: vi.fn(),
+  loadStockCandidatesForRead: vi.fn(),
+}));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
@@ -24,6 +27,11 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/pharmacy/lost-demand-advice-reader', async (original) => ({
   ...(await original<object>()),
   readLostDemandAdvice: mocks.readLostDemandAdvice,
+}));
+
+vi.mock('@/lib/pharmacy/stock-ledger', async (original) => ({
+  ...(await original<object>()),
+  loadStockCandidatesForRead: mocks.loadStockCandidatesForRead,
 }));
 
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
@@ -134,6 +142,7 @@ function withAdvice(...rows: ReturnType<typeof advice>[]) {
 beforeEach(() => {
   db = makeDb();
   mocks.readLostDemandAdvice.mockReset();
+  mocks.loadStockCandidatesForRead.mockReset();
   m('user').findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const grants = PEOPLE[where.id];
     return grants
@@ -244,19 +253,40 @@ describe('Draft PO from lost-demand advice', () => {
 });
 
 describe('Transfer request from lost-demand advice', () => {
-  const balance = (lot: string, units: number, expiresAt: Date) => ({
+  const candidate = (lot: string, units: number, overrides: object = {}) => ({
     inventoryLotId: lot,
     stockLocationId: 'src_loc',
-    onHandUnits: units,
-    lot: { manufacturingBatchId: `batch_${lot}`, batch: { expiresAt } },
+    organizationId: 'org_a',
+    branchId: 'branch_b',
+    batchState: 'ACTIVE',
+    disposition: 'AVAILABLE',
+    expiresAt: new Date('2029-01-01'),
+    receivedAt: PAST,
+    availableUnits: units,
+    ...overrides,
   });
+  /** The ledger returns FEFO order; lots map to batches by id. */
+  const ledger = (...rows: ReturnType<typeof candidate>[]) => {
+    mocks.loadStockCandidatesForRead.mockResolvedValue(rows);
+    m('pharmacyInventoryLot').findMany.mockResolvedValue(
+      rows.map((row) => ({
+        id: row.inventoryLotId,
+        manufacturingBatchId: `batch_${row.inventoryLotId}`,
+      }))
+    );
+    m('pharmacyStockLocation').findMany.mockResolvedValue([{ id: 'src_loc' }]);
+  };
 
   it('creates a DRAFT transfer for the server-advised quantity, first expiry first', async () => {
     withAdvice(advice());
-    m('pharmacyStockBalance').findMany.mockResolvedValue([
-      balance('lot_late', 100, new Date('2029-01-01')),
-      balance('lot_early', 10, new Date('2028-01-01')),
-    ]);
+    ledger(
+      // Expired and quarantined stock is never requested.
+      candidate('lot_expired', 50, { expiresAt: new Date('2020-01-01') }),
+      candidate('lot_quarantine', 50, { disposition: 'QUARANTINE' }),
+      // Net of reservations: only 10 of this lot are free.
+      candidate('lot_early', 10, { expiresAt: new Date('2028-01-01') }),
+      candidate('lot_late', 100)
+    );
     const result = await caller('buyer').requestLostDemandTransfer({
       branchId: 'branch_a',
       demandKey: 'sku:medicine_a',
@@ -282,10 +312,7 @@ describe('Transfer request from lost-demand advice', () => {
 
   it('skips a recalled batch and refuses a recalled item', async () => {
     withAdvice(advice());
-    m('pharmacyStockBalance').findMany.mockResolvedValue([
-      balance('lot_a', 50, new Date('2028-01-01')),
-      balance('lot_b', 50, new Date('2029-01-01')),
-    ]);
+    ledger(candidate('lot_a', 50), candidate('lot_b', 50));
     m('pharmacyRecallNotice').findMany.mockResolvedValue([
       { medicineId: null, batchId: 'batch_lot_a' },
     ]);

@@ -29,7 +29,7 @@ import {
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
-import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { blockReasonFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
   centralDemand,
@@ -114,6 +114,7 @@ import {
 } from '@/lib/pharmacy/reorder-drafts';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { loadStockCandidatesForRead } from '@/lib/pharmacy/stock-ledger';
 import {
   lostDemandTriggerConfigSchema,
   type LostDemandAdvice,
@@ -2767,44 +2768,60 @@ const purchasingRouter = router({
         });
         if (!medicine || !destination)
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_DESTINATION' });
-        const balances = await db.pharmacyStockBalance.findMany({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: input.fromBranchId,
-            disposition: 'AVAILABLE',
-            onHandUnits: { gt: 0 },
-            lot: {
-              batch: { medicineId: advice.medicineId, state: 'ACTIVE', expiresAt: { gt: at } },
+        // The ledger's own read: net of supplier claims and restock reservations, in
+        // FEFO order, with every INV-03 block (expiry, recall, quarantine) applied.
+        const candidates = (
+          await loadStockCandidatesForRead(
+            db,
+            { organizationId: scope.organizationId, branchId: input.fromBranchId },
+            advice.medicineId
+          )
+        ).filter(
+          (candidate) =>
+            blockReasonFor(candidate, {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              at,
+            }) === null
+        );
+        const [lots, locations] = await Promise.all([
+          db.pharmacyInventoryLot.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              id: { in: candidates.map((candidate) => candidate.inventoryLotId) },
             },
-            location: { active: true, ...(medicine.coldChain ? { coldChain: true } : {}) },
-          },
-          select: {
-            inventoryLotId: true,
-            stockLocationId: true,
-            onHandUnits: true,
-            lot: { select: { manufacturingBatchId: true, batch: { select: { expiresAt: true } } } },
-          },
-        });
+            select: { id: true, manufacturingBatchId: true },
+          }),
+          db.pharmacyStockLocation.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              active: true,
+              ...(medicine.coldChain ? { coldChain: true } : {}),
+              id: { in: candidates.map((candidate) => candidate.stockLocationId) },
+            },
+            select: { id: true },
+          }),
+        ]);
+        const batchOfLot = new Map(lots.map((lot) => [lot.id, lot.manufacturingBatchId]));
+        const usableLocations = new Set(locations.map((location) => location.id));
         const recalls = await db.pharmacyRecallNotice.findMany({
           where: {
             organizationId: scope.organizationId,
             status: 'OPEN',
-            OR: [
-              { medicineId: advice.medicineId },
-              { batchId: { in: balances.map((balance) => balance.lot.manufacturingBatchId) } },
-            ],
+            OR: [{ medicineId: advice.medicineId }, { batchId: { in: [...batchOfLot.values()] } }],
           },
           select: { medicineId: true, batchId: true },
         });
         if (recalls.some((recall) => recall.medicineId === advice.medicineId))
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_RECALLED' });
         const recalledBatches = new Set(recalls.map((recall) => recall.batchId));
-        // First-expiry-first-out, deterministic on ties.
-        balances.sort(
-          (a, b) =>
-            a.lot.batch.expiresAt.getTime() - b.lot.batch.expiresAt.getTime() ||
-            a.inventoryLotId.localeCompare(b.inventoryLotId) ||
-            a.stockLocationId.localeCompare(b.stockLocationId)
+        const balances = candidates.filter(
+          (candidate) =>
+            usableLocations.has(candidate.stockLocationId) &&
+            batchOfLot.has(candidate.inventoryLotId) &&
+            !recalledBatches.has(batchOfLot.get(candidate.inventoryLotId)!)
         );
         let remaining = transfer.quantityUnits;
         const lines: Array<{
@@ -2815,8 +2832,7 @@ const purchasingRouter = router({
         }> = [];
         for (const balance of balances) {
           if (remaining <= 0) break;
-          if (recalledBatches.has(balance.lot.manufacturingBatchId)) continue;
-          const units = Math.min(remaining, balance.onHandUnits);
+          const units = Math.min(remaining, balance.availableUnits);
           lines.push({
             sourceLotId: balance.inventoryLotId,
             sourceStockLocationId: balance.stockLocationId,
