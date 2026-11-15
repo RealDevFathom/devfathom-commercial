@@ -550,3 +550,48 @@ describe('DEV-660 — only assigned branches are offered', () => {
     expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
   });
 });
+
+describe('expiry advice in context (DEV-594)', () => {
+  function asOwner() {
+    (ctx.session.user as { role?: string }).role = 'ADMIN';
+  }
+
+  it('links an owner from near-expiry stock to the expiry advisor for this branch', async () => {
+    asOwner();
+    await show();
+    expect(screen.getByRole('link', { name: 'Expiry advice' })).toHaveAttribute(
+      'href',
+      `/pharmacy/reports?branch=${branch.id}#expiry-advisor`
+    );
+    expect(mocks.can).toHaveBeenCalledWith(
+      ctx.session.user,
+      'reports:financial',
+      undefined,
+      expect.objectContaining({ db: ctx.db })
+    );
+  });
+
+  it('offers no advisor link to a member the advisor would refuse', async () => {
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Act on expiring stock' })).toBeVisible();
+  });
+
+  it('offers no advisor link without financial report access', async () => {
+    asOwner();
+    mocks.can.mockImplementation(
+      async (_user: unknown, action: string) => action !== 'reports:financial'
+    );
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+  });
+
+  it('offers no advisor link when Pharmacy Reports is not in the package', async () => {
+    asOwner();
+    mocks.module.mockImplementation(
+      (_entitlements: unknown, key: string) => key !== 'pharmacy-reports'
+    );
+    await show();
+    expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
+  });
+});

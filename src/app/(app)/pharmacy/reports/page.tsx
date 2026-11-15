@@ -557,6 +557,7 @@ export default async function PharmacyReportsPage({
           {expiryAdvice ? (
             <SectionCard
               eyebrow="AI-02 · Advisory only"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -642,6 +643,7 @@ export default async function PharmacyReportsPage({
           ) : expiryAdviceError ? (
             <SectionCard
               eyebrow="Could not load"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -653,6 +655,7 @@ export default async function PharmacyReportsPage({
           ) : (
             <SectionCard
               eyebrow="AI-02 · Owner only"
+              id="expiry-advisor"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
