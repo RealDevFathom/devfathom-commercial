@@ -9,10 +9,18 @@ import { assertRxSaleAllowed } from './rx-sale-gate';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
+import {
+  earnedPointsFor,
+  pointsForNetPaid,
+  redemptionFor,
+} from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { currentLoyaltyProgram, hasLoyaltyEarningConsent } from './loyalty-program';
 import type { LedgerScope } from './stock-ledger';
+
+/** Tenders that never earn at sale time: points themselves, and khata until it is paid. */
+export const SALE_EARN_EXCLUDED_TENDERS: readonly string[] = ['LOYALTY', 'CREDIT'];
 
 export class PharmacyLoyaltyError extends Error {
   constructor(
@@ -106,11 +114,18 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
     include: { tenders: true },
   });
   if (!sale?.customerId) return null;
+  // DEV-746: points are earned on money received. Points tenders never earn, and a khata
+  // (CREDIT) tender earns only when the debt is paid at the counter (earnKhataCollectionPoints).
   const netPaidMinor = sale.tenders
-    .filter((tender) => tender.type !== 'LOYALTY')
+    .filter((tender) => !SALE_EARN_EXCLUDED_TENDERS.includes(tender.type))
     .reduce((sum, tender) => sum + tender.amountMinor, 0);
-  const points = pointsForNetPaid(netPaidMinor);
+  if (netPaidMinor === 0) return null;
+  // No rate set by the owner means nothing is earned; no default rate is assumed.
+  const program = await currentLoyaltyProgram(db, scope.organizationId);
+  if (!program) return null;
+  const points = earnedPointsFor(netPaidMinor, program);
   if (points === 0) return null;
+  if (!(await hasLoyaltyEarningConsent(db, scope.organizationId, sale.customerId))) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
       organizationId: scope.organizationId,
@@ -120,6 +135,7 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       kind: 'EARN',
       points,
       netPaidMinor,
+      programVersionId: program.id,
       actorId: scope.actorId,
       idempotencyKey: `loyalty:earn:${sale.id}`,
     },

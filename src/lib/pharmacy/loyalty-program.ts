@@ -1,0 +1,106 @@
+import 'server-only';
+
+import { Prisma } from '@/generated/prisma/client';
+import {
+  assertLoyaltyEarnRule,
+  LOYALTY_PERCENT_SPEND_MINOR,
+  type LoyaltyEarnMode,
+  type LoyaltyEarnRule,
+} from '@/lib/commerce/loyalty-arithmetic';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import { lockCustomerConsent } from './consent-writer';
+
+/**
+ * DEV-746: the owner's setup options. Each resolves to one immutable program version.
+ * Percentages are stored as basis points over LOYALTY_PERCENT_SPEND_MINOR.
+ */
+export const LOYALTY_EARN_PRESETS = [
+  { id: 'percent-1', label: '1% of spend', rule: percentRule(100) },
+  { id: 'percent-2', label: '2% of spend', rule: percentRule(200) },
+  { id: 'percent-5', label: '5% of spend', rule: percentRule(500) },
+  { id: 'step-100', label: '1 point for every PKR 100 spent', rule: stepRule(1, 100) },
+  { id: 'step-1000', label: '1 point for every PKR 1,000 spent', rule: stepRule(1, 1_000) },
+] as const;
+export type LoyaltyEarnPresetId = (typeof LOYALTY_EARN_PRESETS)[number]['id'];
+
+export function percentRule(basisPoints: number): LoyaltyEarnRule & { earnMode: LoyaltyEarnMode } {
+  return {
+    earnMode: 'PERCENT_OF_SPEND',
+    earnPoints: basisPoints,
+    perSpendMinor: LOYALTY_PERCENT_SPEND_MINOR,
+  };
+}
+
+export function stepRule(
+  points: number,
+  stepRupees: number
+): LoyaltyEarnRule & { earnMode: LoyaltyEarnMode } {
+  return { earnMode: 'POINTS_PER_SPEND_STEP', earnPoints: points, perSpendMinor: stepRupees * 100 };
+}
+
+/** The rule in effect now: the newest version. Null means the owner has not set a rate. */
+export async function currentLoyaltyProgram(db: ScopedDb, organizationId: string) {
+  return db.pharmacyLoyaltyProgramVersion.findFirst({
+    where: { organizationId },
+    orderBy: { version: 'desc' },
+  });
+}
+
+export async function listLoyaltyProgramVersions(db: ScopedDb, organizationId: string) {
+  return db.pharmacyLoyaltyProgramVersion.findMany({
+    where: { organizationId },
+    orderBy: { version: 'desc' },
+    take: 20,
+  });
+}
+
+/**
+ * Appends the next program version. Caller is the audited owner procedure, inside its
+ * tenant transaction. Earlier versions and every points entry stay as they are.
+ */
+export async function publishLoyaltyProgramVersion(
+  db: ScopedDb,
+  scope: { organizationId: string; actorId: string },
+  rule: LoyaltyEarnRule
+) {
+  assertLoyaltyEarnRule(rule);
+  // Serializes concurrent owner saves so version numbers stay dense and ordered.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-loyalty-program:${scope.organizationId}`}, 0))`
+  );
+  const prior = await currentLoyaltyProgram(db, scope.organizationId);
+  return db.pharmacyLoyaltyProgramVersion.create({
+    data: {
+      organizationId: scope.organizationId,
+      version: (prior?.version ?? 0) + 1,
+      earnMode: rule.earnMode,
+      earnPoints: rule.earnPoints,
+      perSpendMinor: rule.perSpendMinor,
+      actorId: scope.actorId,
+    },
+  });
+}
+
+/**
+ * Locks the customer's consent rows, then answers whether LOYALTY consent stands now.
+ * Points are only earned while the customer consents at the moment of earning.
+ */
+export async function hasLoyaltyEarningConsent(
+  db: ScopedDb,
+  organizationId: string,
+  customerId: string
+) {
+  await lockCustomerConsent(db, organizationId, customerId);
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: customerId, organizationId, active: true },
+    select: { patientId: true },
+  });
+  if (!customer?.patientId) return false;
+  const consent = await db.patientConsent.findFirst({
+    where: { organizationId, patientId: customer.patientId, purpose: 'LOYALTY' },
+    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  return Boolean(consent?.granted && !consent.revokedAt);
+}
