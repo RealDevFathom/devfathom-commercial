@@ -462,6 +462,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof RefundError) {
     const notFound = err.reason === 'TENDER_NOT_FOUND' || err.reason === 'PAYMENT_NOT_FOUND';
     const conflict =
+      err.reason === 'BILL_NOT_SETTLED' ||
       err.reason === 'REFUND_EXCEEDS_TENDER' ||
       err.reason === 'TIP_REFUND_EXCEEDS_TENDER' ||
       err.reason === 'INVALID_REVERSAL' ||

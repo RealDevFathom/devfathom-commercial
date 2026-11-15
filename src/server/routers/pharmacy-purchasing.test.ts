@@ -2806,6 +2806,7 @@ const sensitiveReads = {
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  receiptDebitNotes: () => caller().receiptDebitNotes({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
     caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
@@ -2906,6 +2907,13 @@ const branchActions = {
   goodsReceipts: sensitiveReads.goodsReceipts,
   receivingExceptions: sensitiveReads.receivingExceptions,
   receivingExceptionQueue: sensitiveReads.receivingExceptionQueue,
+  receiptDebitNotes: sensitiveReads.receiptDebitNotes,
+  decideReceiptDebitNote: () =>
+    caller().decideReceiptDebitNote({
+      branchId: 'branch_a',
+      debitNoteId: 'debit',
+      decision: 'CONFIRMED',
+    }),
   lotsFromReceipt: sensitiveReads.lotsFromReceipt,
   returnableLots: sensitiveReads.returnableLots,
   debitNotePositions: sensitiveReads.debitNotePositions,
@@ -3123,6 +3131,7 @@ const readActions = {
   officialPriceAlerts: () => caller().officialPriceAlerts({ medicineIds: ['med_a'] }),
   goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
   receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  receiptDebitNotes: () => caller().receiptDebitNotes({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
     caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),

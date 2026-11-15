@@ -101,6 +101,8 @@ function fixture() {
     device: { branchId: 'branch' },
     movements,
   };
+  // Refund rows a test seeds directly (e.g. legacy refunds against an OPEN bill).
+  const refunds: Array<{ billId: string; originalTenderId: string; amount: Prisma.Decimal }> = [];
   const closedDays = new Set<number>();
   const locks: string[] = [];
   const keys = new Map<string, Record<string, unknown>>();
@@ -194,6 +196,11 @@ function fixture() {
     restaurantBill: {
       findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
+      // Respects every filter (including `status`), so a refund status guard is real.
+      findFirst: vi.fn(async ({ where }: { where: Where }) => {
+        const row = billsById.get(where.id!);
+        return row && matches(row, where) ? row : null;
+      }),
     },
     restaurantTender: {
       findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
@@ -283,7 +290,21 @@ function fixture() {
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
       findMany: vi.fn(async () => []),
-      aggregate: vi.fn(async () => ({ _sum: {} })),
+      aggregate: vi.fn(
+        async ({ where }: { where: { billId?: string; originalTenderId?: string } }) => {
+          const rows = refunds.filter((row) =>
+            where.billId
+              ? row.billId === where.billId
+              : row.originalTenderId === where.originalTenderId
+          );
+          return {
+            _sum:
+              rows.length === 0
+                ? {}
+                : { amount: rows.reduce((total, row) => total.plus(row.amount), D('0')) },
+          };
+        }
+      ),
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
@@ -332,6 +353,7 @@ function fixture() {
     billsById,
     linesByBill,
     defaultLine,
+    refunds,
   };
 }
 
@@ -555,6 +577,83 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
     expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
     expect(f.movements).toHaveLength(2);
+  });
+
+  it('refuses to refund a partial tender on an OPEN bill under the bill lock, before any write', async () => {
+    const f = fixture();
+    const partial = await f.collect({
+      tender: { type: 'CASH', amount: '1000', cashReceived: '1000' },
+    });
+    expect(partial.settled).toBe(false);
+    expect(f.bill.status).toBe('OPEN');
+    const idempotencyClaims = f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+    const movements = f.movements.length;
+    const locksBefore = f.locks.length;
+
+    await expect(
+      refundTender(f.db, {
+        originalTenderId: partial.tenderId,
+        amount: '1000',
+        reason: 'Refund before settlement',
+        approvingStaffProfileId: 'manager',
+        actor: { ...actor, idempotencyKey: 'open-bill-refund' },
+        branchId: 'branch',
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ name: 'RefundError', reason: 'BILL_NOT_SETTLED' });
+
+    // The status is read under the bill row lock, not from the unlocked tender load.
+    expect(f.locks.slice(locksBefore).some((sql) => sql.includes('restaurant_bills'))).toBe(true);
+    const lockOrder = f.raw.$queryRaw.mock.invocationCallOrder.at(-1)!;
+    expect(f.raw.restaurantBill.findFirst).toHaveBeenCalledWith({
+      where: { id: 'bill', status: 'SETTLED' },
+      select: { id: true },
+    });
+    expect(f.raw.restaurantBill.findFirst.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(
+      lockOrder
+    );
+    expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(idempotencyClaims);
+    expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+    expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+    expect(f.movements).toHaveLength(movements);
+
+    // The rest of the bill is still owed in full; settlement still needs 2860.
+    const final = await f.collect({
+      actor: { ...actor, idempotencyKey: 'final' },
+      tender: { type: 'CASH', amount: '2860', cashReceived: '2860' },
+    });
+    expect(final.settled).toBe(true);
+  });
+
+  it('does not count refunded principal toward settlement, so a bill cannot settle short', async () => {
+    const f = fixture();
+    const partial = await f.collect({
+      tender: { type: 'CASH', amount: '1000', cashReceived: '1000' },
+    });
+    // A legacy refund recorded against the still-OPEN bill returned the 1000.
+    f.refunds.push({ billId: 'bill', originalTenderId: partial.tenderId, amount: D('1000') });
+
+    const next = await f.collect({
+      actor: { ...actor, idempotencyKey: 'remaining' },
+      tender: { type: 'CASH', amount: '2860', cashReceived: '2860' },
+    });
+    expect(next.settled).toBe(false);
+    expect(next.remainingDue.toFixed(2)).toBe('1000.00');
+    expect(f.bill.status).toBe('OPEN');
+    expect(finalizeBillSettlement).not.toHaveBeenCalled();
+    await expect(
+      f.collect({
+        actor: { ...actor, idempotencyKey: 'over' },
+        tender: { type: 'CASH', amount: '1000.01', cashReceived: '1000.01' },
+      })
+    ).rejects.toMatchObject({ reason: 'OVER_TENDER' });
+    const final = await f.collect({
+      actor: { ...actor, idempotencyKey: 'final' },
+      tender: { type: 'CASH', amount: '1000', cashReceived: '1000' },
+    });
+    expect(final.settled).toBe(true);
   });
 
   it.each([
