@@ -12,7 +12,7 @@ it('uniquely matches all six journey links with their real accessible suffix', (
     ['Premises and licences', 'Open regulatory profile', '/pharmacy/regulatory'],
     ['Medicine catalog readiness', 'Set up medicines and packs', '/pharmacy/medicines'],
     ['Parties and balances', 'Set up suppliers', '/pharmacy/purchasing/suppliers'],
-    ['Opening stock readiness', 'Receive opening stock', '/pharmacy/purchasing/receiving'],
+    ['Opening stock readiness', 'Import opening stock', '/pharmacy/inventory/import'],
     ['Readiness and parallel run', 'Open pharmacy counter', '/pharmacy/counter'],
   ] as const;
   render(

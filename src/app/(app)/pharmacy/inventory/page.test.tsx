@@ -855,3 +855,20 @@ describe('expiry advice in context (DEV-594)', () => {
     expect(screen.queryByRole('link', { name: 'Expiry advice' })).not.toBeInTheDocument();
   });
 });
+
+describe('opening stock entry point (DEV-46)', () => {
+  it('uses the same opening-stock importer from the header and empty inventory', async () => {
+    lots.mockResolvedValue([]);
+    await show();
+    const links = screen.getAllByRole('link', { name: 'Import opening stock' });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute('href', '/pharmacy/inventory/import');
+    expect(screen.getByRole('link', { name: 'Receive supplier delivery' })).toHaveAttribute(
+      'href',
+      '/pharmacy/purchasing/receiving'
+    );
+    expect(screen.queryByRole('link', { name: 'Receive opening stock' })).toBeNull();
+    for (const link of screen.getAllByRole('link'))
+      expect(link.getAttribute('href') ?? '').not.toMatch(/\/pharmacy\/inventory\/counts/);
+  });
+});
