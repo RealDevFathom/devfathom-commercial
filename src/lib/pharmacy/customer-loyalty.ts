@@ -49,6 +49,10 @@ export class PharmacyLoyaltyError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_ADJUSTMENT'
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
+      // DEV-748: physical loyalty cards.
+      | 'LOYALTY_CARD_NOT_RECOGNISED'
+      | 'LOYALTY_CARD_NOT_ACTIVE'
+      | 'LOYALTY_CARD_REASON_REQUIRED'
   ) {
     super(reason);
   }
