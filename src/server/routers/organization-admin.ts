@@ -12,6 +12,7 @@ import {
 import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
+import { adminPasswordResetData } from '@/lib/auth/admin-password-reset';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -550,6 +551,8 @@ export const organizationAdminRouter = router({
         department: departmentKey,
       })
     )
+    // DEV-828: never hand back the whole User row (password verifier, TOTP seed).
+    .output(z.object({ id: z.string(), email: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const before = await ctx.db.user.findFirst({
@@ -609,6 +612,7 @@ export const organizationAdminRouter = router({
                 ? { increment: 1 }
                 : undefined,
           },
+          select: { id: true, email: true },
         });
       });
       annotateAudit(ctx, {
@@ -736,12 +740,7 @@ export const organizationAdminRouter = router({
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
       await ctx.db.user.update({
         where: { id: user.id },
-        data: {
-          password: await hash(input.password, 12),
-          passwordChangedAt: null,
-          mustChangePassword: true,
-          tokenVersion: { increment: 1 },
-        },
+        data: adminPasswordResetData(await hash(input.password, 12)),
       });
       annotateAudit(ctx, {
         targetType: 'User',

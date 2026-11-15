@@ -27,6 +27,8 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
+import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
+import { matchReceiptLine } from '@/lib/pharmacy/receiving';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
@@ -130,6 +132,15 @@ function resolvableCatalog() {
   db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a' });
   db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
   db.packLevel.findMany.mockResolvedValue([PACK_A_LEVEL]);
+  // createPurchaseOrder resolves every line's medicine and pack level by ID in one query each.
+  type IdQuery = { where?: { id?: { in?: string[] } } };
+  const ids = (args?: IdQuery) => args?.where?.id?.in;
+  db.medicine.findMany.mockImplementation(async (args?: IdQuery) =>
+    (ids(args) ?? []).map((id) => ({ id }))
+  );
+  db.packLevel.findMany.mockImplementation(async (args?: IdQuery) =>
+    ids(args) ? ids(args)!.map((id) => ({ id })) : [PACK_A_LEVEL]
+  );
 }
 
 const ORDER_LINE = {
@@ -433,6 +444,8 @@ describe('procurement write authorization', () => {
       expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
       expect(db.medicine.findFirst).not.toHaveBeenCalled();
       expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+      expect(db.medicine.findMany).not.toHaveBeenCalled();
+      expect(db.packLevel.findMany).not.toHaveBeenCalled();
       expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
       expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
       expect(db.$transaction).not.toHaveBeenCalled();
@@ -478,6 +491,8 @@ describe('procurement write authorization', () => {
     expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
     expect(db.medicine.findFirst).not.toHaveBeenCalled();
     expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.findMany).not.toHaveBeenCalled();
+    expect(db.packLevel.findMany).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
@@ -525,6 +540,8 @@ describe('procurement write authorization', () => {
     expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
     expect(db.medicine.findFirst).not.toHaveBeenCalled();
     expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.findMany).not.toHaveBeenCalled();
+    expect(db.packLevel.findMany).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
@@ -749,6 +766,36 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
         bonusCanonicalUnits: 20,
       },
     ]);
+  });
+
+  it('DEV-145: accepts the largest reorder draft with one lookup per table', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    const lines = Array.from({ length: REORDER_MAX_DRAFT_LINES }, (_, index) => ({
+      ...ORDER_LINE,
+      medicineId: `medicine_${index}`,
+    }));
+    await caller().createPurchaseOrder({ reference: 'PO-1', supplierId: 'supplier_a', lines });
+    expect(db.medicine.findMany).toHaveBeenCalledTimes(1);
+    expect(db.packLevel.findMany).toHaveBeenCalledTimes(1);
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create.mock.calls[0]![0].data.lines.create).toHaveLength(
+      REORDER_MAX_DRAFT_LINES
+    );
+  });
+
+  it('DEV-145: refuses an order when any line names an unknown medicine', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    db.medicine.findMany.mockResolvedValue([{ id: 'medicine_a' }]);
+    await expect(
+      caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE, { ...ORDER_LINE, medicineId: 'medicine_other_tenant' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
   });
 });
 
@@ -1264,6 +1311,43 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it.each([
+    ['its own branch', { branchId: 'branch_b', requisitionId: null }],
+    ['its requisition branch', { branchId: null, requisitionId: 'req_b' }],
+  ] as const)(
+    'refuses an order outside reach by %s before locking it or reading its status (#991)',
+    async (_label, placement) => {
+      const tx = {
+        ...db,
+        pharmacyRequisition: {
+          ...model(),
+          findFirst: vi.fn().mockResolvedValue({ branchId: 'branch_b' }),
+        },
+      };
+      db.$transaction.mockImplementation(async (fn: (inner: typeof db) => unknown) =>
+        fn(tx as typeof db)
+      );
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        status: 'CANCELLED',
+        ...placement,
+      });
+      await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      const locked = db.$queryRaw.mock.calls.some(([sql]) =>
+        String((sql as TemplateStringsArray).join?.('?') ?? '').includes(
+          'pharmacy_purchase_orders'
+        )
+      );
+      expect(locked).toBe(false);
+      expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
     ['branch_a', 'allow'],
     ['branch_b', 'refuse'],
     [null, 'allow'],
@@ -1732,13 +1816,25 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     const policySql = (db.$queryRaw.mock.calls[1]![0] as { sql: string }).sql;
     expect(policySql).toContain('pharmacy_owner_policies');
     expect(policySql).toContain('FOR SHARE');
-    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
-    );
+    // #991: the only read before the lock is the order's immutable branch
+    // placement, for the branch check; status and supplier are read under it.
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.calls[0]![0]).toEqual({
+      where: { id: 'po_a', organizationId: 'org_a' },
+      select: { branchId: true, requisitionId: true },
+    });
     expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      db.$queryRaw.mock.invocationCallOrder[0]!
+    );
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]!
+    );
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.calls[1]![0]).toEqual({
+      where: { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a' },
+    });
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacySupplier.findFirst.mock.invocationCallOrder[0]!
     );
-    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacyGoodsReceipt.create.mock.invocationCallOrder[0]!
     );
   });
@@ -2033,9 +2129,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       branchId: 'branch_b',
       status: 'SENT',
     });
+    // #991: a buyer without reach at the order's branch is refused by the branch
+    // boundary, before the order is locked or compared with the receipt.
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'CROSS_BRANCH_REFERENCE',
+      message: 'Branch is outside your scope.',
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
@@ -2273,6 +2371,56 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       })
     ).rejects.toMatchObject({ message: 'SERIALIZED_PACK_QUANTITY' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  // DEV-145: a serialized invoice files one line per pack. A supplier invoice is
+  // received once, so an over-delivered ordered line still drafts in full and is
+  // raised as an OVERAGE exception at posting instead of blocking the invoice.
+  it('drafts an over-delivered serialized line in full and matches it as an overage', async () => {
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        orderedPacks: 40,
+        bonusPacks: 2,
+      },
+    ]);
+    const packs = 43;
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: Array.from({ length: packs }, (_, index) => ({
+          ...SERIAL_LINE,
+          gtin: '08961234567894',
+          serialNumber: `SN${String(index).padStart(6, '0')}`,
+        })),
+      })
+    ).resolves.toBeDefined();
+    const drafted = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(drafted).toHaveLength(packs);
+    // Posting matches each lot cumulatively; the last serialized pack tips the ordered
+    // line over its 40 paid + 2 bonus packs and is raised for someone to resolve.
+    expect(
+      matchReceiptLine({
+        ordered: {
+          canonicalUnitsPerPack: 10,
+          orderedCanonicalUnits: 400,
+          bonusCanonicalUnits: 20,
+          listPricePerPackMinor: 10_000,
+          previouslyReceivedUnits: (packs - 1) * 10,
+        },
+        received: {
+          canonicalUnitsPerPack: 10,
+          arrivedCanonicalUnits: 10,
+          rejectedCanonicalUnits: 0,
+          rejectionReason: null,
+          invoicedPricePerPackMinor: 10_000,
+        },
+      })
+    ).toEqual([
+      expect.objectContaining({ kind: 'OVERAGE', expectedUnits: 420, observedUnits: 430 }),
+    ]);
   });
 
   it('drafts a mixed-lot delivery as separate lines against one order line', async () => {

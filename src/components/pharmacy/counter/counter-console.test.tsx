@@ -743,6 +743,27 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
   });
 });
 
+describe('DEV-499 exact cash with F9 then Enter', () => {
+  it('takes the prefilled balance as exact cash with F9 then Enter', async () => {
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByLabelText('Cash received')).toHaveValue('250.00');
+    // F9 focuses the tender panel itself; Enter there is the second and last step.
+    await waitFor(() =>
+      expect(document.activeElement).toContainElement(screen.getByLabelText('Cash received'))
+    );
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: 'CASH', amountMinor: 25000 })
+      )
+    );
+    expect(Object.hasOwn(mocks.mutations.tender!.mock.calls[0]![0], 'cashReceivedMinor')).toBe(
+      false
+    );
+  });
+});
+
 describe('PharmacyCounterConsole offline indicator (DEV-641)', () => {
   function goOffline(onLine: { mockReturnValue: (value: boolean) => unknown }, offline = true) {
     onLine.mockReturnValue(!offline);
@@ -3189,6 +3210,56 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
   it('shows the controlled authorization panel to a dispenser', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole prescription capture access (DEV-323)', () => {
+  function capture() {
+    return mocks.rxPanelProps.mock.lastCall![0].canCapturePrescription;
+  }
+
+  it('does not offer prescription capture to a counter-only cashier', () => {
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:counter'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(false);
+  });
+
+  it('offers prescription capture to a pharmacist with the dispensing module', () => {
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:counter', 'pharmacy:prescriptions', 'pharmacy:dispense'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(true);
+  });
+
+  it('withholds capture without the dispensing module or for another member', () => {
+    mocks.queries.navigation = query({
+      userId: 'account-a',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:prescriptions'],
+    });
+    const { unmount } = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(capture()).toBe(false);
+    unmount();
+
+    mocks.entitlements.enabledModules = ['pharmacy-counter', 'pharmacy-dispensing'];
+    mocks.queries.navigation = query({
+      userId: 'account-b',
+      organizationId: 'org-a',
+      capabilities: ['pharmacy:prescriptions'],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(capture()).toBe(false);
   });
 });
 

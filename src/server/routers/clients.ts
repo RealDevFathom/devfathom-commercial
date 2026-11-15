@@ -28,6 +28,15 @@ async function assertProjectExists(db: Prisma.TransactionClient, projectId: stri
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// DEV-839: the projects linked to a client are visible exactly as the projects
+// router shows them — admins see all, everyone else only projects they belong to.
+function visibleClientProjectsWhere(
+  userId: string,
+  isAdmin: boolean
+): Prisma.ProjectWhereInput | undefined {
+  return isAdmin ? undefined : { members: { some: { userId } } };
+}
+
 export const clientsRouter = router({
   // CANONICAL CLIENT-DIRECTORY TRUST POLICY (AUTHZ-04). One policy, applied across
   // tRPC, REST and the AI assistant so the three surfaces no longer disagree:
@@ -45,7 +54,14 @@ export const clientsRouter = router({
     const clients = await ctx.db.client.findMany({
       include: {
         contacts: { where: { isPrimary: true }, take: 1 },
-        _count: { select: { projects: true, invoices: true, documents: true } },
+        // DEV-839: a non-admin's project count covers only projects they belong to.
+        _count: {
+          select: {
+            projects: { where: visibleClientProjectsWhere(ctx.session.user.id, isAdmin) },
+            invoices: true,
+            documents: true,
+          },
+        },
       },
       orderBy: { name: 'asc' },
     });
@@ -84,12 +100,19 @@ export const clientsRouter = router({
       where: { id: input.id },
       include: {
         contacts: { orderBy: { isPrimary: 'desc' } },
+        // DEV-839: linked projects follow the projects router's visibility rule
+        // (admins see all, everyone else only projects they are a member of), and
+        // only the fields the client page renders are loaded — never budget,
+        // description or other project detail.
         projects: {
-          include: {
+          where: visibleClientProjectsWhere(ctx.session.user.id, isAdmin),
+          select: {
+            id: true,
+            name: true,
+            status: true,
             members: {
-              include: { user: { select: { id: true, name: true, avatar: true } } },
+              select: { user: { select: { id: true, name: true, avatar: true } } },
             },
-            _count: { select: { boards: true } },
           },
         },
         invoices: {

@@ -197,8 +197,10 @@ export const userRoom = (userId: string) => `user:${userId}`;
 // Clients publish typing pings here (separate from the subscribe-only message
 // channel, so a client can never forge a message event).
 export const typingRoom = (channelId: string) => `typing:${channelId}`;
-// Single global channel backing the online-presence roster (Ably presence).
-export const PRESENCE_CHANNEL = 'presence:global';
+// Online-presence roster (Ably presence), one per tenant. Derived from the
+// verified organization so users of one tenant can never attach to, or
+// enumerate, another tenant's roster on a shared Ably application.
+export const presenceRoom = (organizationId: string) => `presence:org:${organizationId}`;
 
 // ---------------------------------------------------------------------------
 // UI constants

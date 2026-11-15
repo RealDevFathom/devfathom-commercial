@@ -3,7 +3,7 @@ import { SectionCard } from '@/components/ui/section-card';
 
 export default function Loading() {
   return (
-    <main className="min-w-0 space-y-6" aria-busy="true" aria-label="Loading posted cash coverage">
+    <div className="min-w-0 space-y-6" aria-busy="true" aria-label="Loading posted cash coverage">
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Posted cash coverage"
@@ -14,6 +14,6 @@ export default function Loading() {
           Reading authorized branch postings…
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }

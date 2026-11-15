@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { prepareRuntimeRole, type RuntimeRoleClient } from '../prisma/prepare-runtime-role';
+import {
+  OWNER_SIMILARITY_GRANT,
+  prepareRuntimeRole,
+  type RuntimeRoleClient,
+} from '../prisma/prepare-runtime-role';
 
 type Role = {
   rolcanlogin: boolean;
@@ -20,7 +26,8 @@ const correctRole: Role = {
 
 function clientWithRoles(
   roles: Array<Role | undefined>,
-  errors: { attributes?: unknown; password?: unknown } = {}
+  errors: { attributes?: unknown; password?: unknown; similarity?: unknown } = {},
+  similarityExecutable = false
 ) {
   const queries: Array<{ sql: string; values?: unknown[] }> = [];
   const client: RuntimeRoleClient = {
@@ -32,6 +39,10 @@ function clientWithRoles(
         throw errors.password;
       if (sql.startsWith('ALTER ROLE') && !sql.includes('PASSWORD') && errors.attributes)
         throw errors.attributes;
+      if (sql.startsWith('GRANT EXECUTE ON FUNCTION public.similarity_op') && errors.similarity)
+        throw errors.similarity;
+      if (sql.includes('has_function_privilege'))
+        return { rows: [{ allowed: similarityExecutable }] as Row[] };
       if (sql.startsWith("SELECT format('ALTER ROLE"))
         return { rows: [{ sql: "ALTER ROLE devfathom_app PASSWORD 'redacted'" }] as Row[] };
       return { rows: [] };
@@ -121,5 +132,84 @@ describe('runtime role preparation', () => {
     const { client, queries } = clientWithRoles([privileged, privileged]);
     await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow();
     expect(queries.filter(({ sql }) => /^(CREATE|ALTER) ROLE/.test(sql))).toEqual([]);
+  });
+
+  describe('medicine search similarity operator', () => {
+    const denied = () =>
+      Object.assign(new Error('permission denied for function similarity_op'), { code: '42501' });
+
+    it('grants as the extension owner when DATABASE_URL may not grant it', async () => {
+      const { client } = clientWithRoles(
+        [correctRole, correctRole],
+        { similarity: denied() },
+        true
+      );
+      const admin = clientWithRoles([]);
+      const open = vi.fn(async () => admin.client);
+      const output = logger();
+      await prepareRuntimeRole(client, undefined, output, open);
+      expect(open).toHaveBeenCalledOnce();
+      expect(admin.queries.map(({ sql }) => sql)).toEqual([
+        'BEGIN',
+        OWNER_SIMILARITY_GRANT,
+        'COMMIT',
+      ]);
+      expect(OWNER_SIMILARITY_GRANT).toContain('SET LOCAL ROLE');
+      expect(OWNER_SIMILARITY_GRANT).toContain(
+        'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app'
+      );
+      expect(output.log).toHaveBeenCalledWith(
+        'medicine search similarity operator: granted (as extension owner)'
+      );
+    });
+
+    it('fails with guidance when the runtime role still cannot execute it', async () => {
+      const { client } = clientWithRoles([correctRole, correctRole], { similarity: denied() });
+      await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow(
+        'devfathom_app cannot execute public.similarity_op(text,text)'
+      );
+    });
+
+    it('fails when the owner grant still leaves the runtime role without access', async () => {
+      const { client } = clientWithRoles([correctRole, correctRole], { similarity: denied() });
+      const admin = clientWithRoles([]);
+      await expect(
+        prepareRuntimeRole(client, undefined, logger(), async () => admin.client)
+      ).rejects.toThrow('devfathom_app cannot execute public.similarity_op(text,text)');
+    });
+
+    it('accepts an existing grant made during extension preparation', async () => {
+      const { client } = clientWithRoles(
+        [correctRole, correctRole],
+        { similarity: denied() },
+        true
+      );
+      const output = logger();
+      await prepareRuntimeRole(client, undefined, output);
+      expect(output.log).toHaveBeenCalledWith(
+        'medicine search similarity operator: skipped (already executable)'
+      );
+    });
+
+    it('rethrows errors other than permission denied', async () => {
+      const broken = Object.assign(new Error('function does not exist'), { code: '42883' });
+      const { client } = clientWithRoles([correctRole, correctRole], { similarity: broken }, true);
+      await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow(
+        'function does not exist'
+      );
+    });
+
+    it('extension preparation re-grants it to an existing runtime role as the owner', () => {
+      const sql = readFileSync(join(process.cwd(), 'prisma', 'prepare-extensions.sql'), 'utf8');
+      const revoke = sql.indexOf("EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC'");
+      const grant = sql.indexOf(
+        'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app;'
+      );
+      const resetRole = sql.indexOf("EXECUTE format('SET LOCAL ROLE %I', configured_role);");
+      expect(revoke).toBeGreaterThan(-1);
+      expect(grant).toBeGreaterThan(revoke);
+      expect(grant).toBeLessThan(resetRole);
+      expect(sql).toContain("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'devfathom_app'");
+    });
   });
 });
