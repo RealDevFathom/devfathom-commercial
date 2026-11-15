@@ -48,7 +48,7 @@ describe('DEV-96 retention purge', () => {
     expect(sql).toContain('pharmacy_retention_days(b."organizationId"');
     expect(sql).toContain('s.days IS NOT NULL');
     expect(sql).toContain(
-      `COALESCE(r."completedAt", r."createdAt") <= timezone('UTC', now()) - make_interval(days => s.days)`
+      `COALESCE(r."completedAt", r."createdAt") <= timezone('UTC', now()) - make_interval(days => LEAST(s.days, 36525))`
     );
     expect(sql).toContain('AND r."branchId" = s."branchId"');
     const prescriptions = text(expiredRecordsSql('PRESCRIPTION', null, 50) as unknown as Sql);

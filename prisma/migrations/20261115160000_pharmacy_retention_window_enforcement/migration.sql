@@ -5,21 +5,25 @@ BEGIN;
 -- 1. pharmacy_retention_days() resolves the retention period of one record class
 --    from the branch's CURRENT jurisdiction rule set ("recordRetentionByClass",
 --    and "prescriptionRetentionDays" for prescriptions) and the tenant's LONGEST
---    pharmacy_retention_classes row (a later, shorter row never shortens it). The longer period wins: a tenant
---    may extend a statutory period, never shorten it.
+--    pharmacy_retention_classes row, so a later, shorter row never shortens it.
+--    The longer period wins: a tenant may extend a statutory period, never
+--    shorten it. Every source is capped at 36525 days (100 years) so no value
+--    can overflow the date arithmetic of the delete guard or the purge.
 --    Built-in defaults are a floor for the pharmacy-only classes, so a branch
 --    with no confirmed statutory value still has a period: PRESCRIPTION,
 --    CONTROLLED_REGISTER and FISCAL default to 3653 days (10 years), longer than
 --    the six-year record-keeping minima commonly applied to tax records. They
 --    are provisional until legal confirms per-jurisdiction values; the owner
---    lengthens them with a retention class. AUDIT has no built-in default: the
---    table is shared by every vertical, so its period comes only from a rule
---    set or the owner's retention class.
+--    lengthens them with a retention class.
+--    AUDIT is a recorded class only. Audit logs are immutable for the life of a
+--    tenant: the retention purge never selects or deletes them, and nothing in
+--    this migration admits an audit_logs DELETE. An AUDIT period can only make
+--    the delete guard below refuse more.
 -- 2. A BEFORE DELETE trigger refuses deleting a prescription, controlled register
---    entry, sale (FISCAL) or audit row while it is inside its retention window.
---    Pharmacy records with no resolvable period are refused outright (fail
---    closed); audit_logs is shared by every vertical, so a row of an organization
---    with no pharmacy retention period is left to the existing rules.
+--    entry or sale (FISCAL) while it is inside its retention window; pharmacy
+--    records with no resolvable period are refused outright (fail closed). The
+--    same trigger on audit_logs only ever refuses: it never admits a delete that
+--    another guard (DEV-155's append-only trigger) would refuse.
 -- 3. The append-only guards on prescriptions and the controlled register admit a
 --    DELETE only from the retention purge: transaction-local
 --    "app.retention_purge_record" must name exactly this record's root, the
@@ -41,8 +45,8 @@ BEGIN
   IF jsonb_typeof(value) = 'number' THEN
     days := (value #>> '{}')::numeric;
     IF days IS NULL OR days <= 0 THEN RETURN NULL; END IF;
-    -- 1000 years caps a malformed value before it overflows the interval.
-    RETURN LEAST(ceil(days), 365000)::integer;
+    -- 100 years caps a malformed value before it overflows the interval.
+    RETURN LEAST(ceil(days), 36525)::integer;
   END IF;
   IF jsonb_typeof(value) = 'object' THEN
     SELECT max(pharmacy_retention_json_days(entry.value)) INTO days FROM jsonb_each(value) AS entry;
@@ -88,7 +92,9 @@ BEGIN
      AND p."effectiveFrom" <= at_utc
      AND (p."effectiveTo" IS NULL OR p."effectiveTo" > at_utc);
 
-  RETURN GREATEST(tenant_days, rule_days, default_days);
+  -- Capped at 100 years: a stored value beyond it (written before the input
+  -- limit existed) can never overflow the window arithmetic for any tenant.
+  RETURN LEAST(GREATEST(tenant_days, rule_days, default_days), 36525);
 END $$;
 
 -- Same latest-event-per-holdKey rule as pharmacy_safe_refuse_delete_under_hold().

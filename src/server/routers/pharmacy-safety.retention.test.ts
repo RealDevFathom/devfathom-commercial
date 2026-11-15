@@ -87,6 +87,22 @@ describe('DEV-96 setRetentionClass only lengthens a period', () => {
     );
   });
 
+  it('refuses a period longer than 100 years before touching the database', async () => {
+    const f = fixture(null);
+    await expect(f.caller.setRetentionClass(input('FISCAL', 36_526))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('A retention period cannot exceed 100 years (36525 days).'),
+    });
+    expect(f.db.pharmacyRetentionClass.aggregate).not.toHaveBeenCalled();
+    expect(f.db.pharmacyRetentionClass.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly 100 years', async () => {
+    const f = fixture(3653);
+    await f.caller.setRetentionClass(input('FISCAL', 36_525));
+    expect(f.db.pharmacyRetentionClass.create).toHaveBeenCalledOnce();
+  });
+
   it('accepts the first period of a class and audits it', async () => {
     const f = fixture(null);
     await f.caller.setRetentionClass(input('AUDIT', 30));

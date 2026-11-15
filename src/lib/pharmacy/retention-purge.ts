@@ -117,7 +117,9 @@ export function expiredRecordsSql(
       FROM s
       JOIN ${Prisma.raw(`"${source.table}"`)} r ON r."organizationId" = s."organizationId" ${branchJoin}
      WHERE s.days IS NOT NULL
-       AND ${anchor} <= timezone('UTC', now()) - make_interval(days => s.days)
+       -- LEAST again here so one tenant's out-of-range value can never overflow
+       -- the shared scan and stop the run for every tenant.
+       AND ${anchor} <= timezone('UTC', now()) - make_interval(days => LEAST(s.days, 36525))
        ${cursor}
      ORDER BY 3 ASC, 1 ASC
      LIMIT ${limit}`;

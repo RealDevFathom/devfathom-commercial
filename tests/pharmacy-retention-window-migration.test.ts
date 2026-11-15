@@ -20,7 +20,9 @@ describe('DEV-96 retention window migration contract', () => {
     expect(migration).toContain(`r."recordRetentionByClass" -> 'values' -> (p_record_class::text)`);
     expect(migration).toContain(`r."prescriptionRetentionDays" -> 'values'`);
     expect(migration).toContain('FROM "pharmacy_retention_classes" rc');
-    expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days, default_days);');
+    expect(migration).toContain(
+      'RETURN LEAST(GREATEST(tenant_days, rule_days, default_days), 36525);'
+    );
   });
 
   it('gives the pharmacy-only classes a 10-year default floor and AUDIT none', () => {
@@ -28,7 +30,17 @@ describe('DEV-96 retention window migration contract', () => {
       /default_days integer := CASE p_record_class\s+WHEN 'PRESCRIPTION' THEN 3653\s+WHEN 'CONTROLLED_REGISTER' THEN 3653\s+WHEN 'FISCAL' THEN 3653\s+END;/
     );
     expect(migration).not.toMatch(/WHEN 'AUDIT' THEN \d+/);
-    expect(migration).toContain('RETURN GREATEST(tenant_days, rule_days, default_days);');
+    expect(migration).toContain(
+      'RETURN LEAST(GREATEST(tenant_days, rule_days, default_days), 36525);'
+    );
+  });
+
+  it('caps every resolved period at 100 years so no value overflows the window arithmetic', () => {
+    expect(migration).toContain('RETURN LEAST(ceil(days), 36525)::integer;');
+    expect(migration).toContain(
+      'RETURN LEAST(GREATEST(tenant_days, rule_days, default_days), 36525);'
+    );
+    expect(migration).not.toContain('365000');
   });
 
   it('takes the longest tenant retention class, so a later shorter row never shortens it', () => {

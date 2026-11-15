@@ -40,6 +40,8 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
 }
 
 const safety = capabilityProcedure('pharmacy:safety');
+/** DEV-96: 100 years. Matches the cap in pharmacy_retention_days(). */
+const MAX_RETENTION_DAYS = 36_525;
 
 export const pharmacySafetyRouter = router({
   access: protectedProcedure.query(async ({ ctx }) => {
@@ -271,7 +273,11 @@ export const pharmacySafetyRouter = router({
         .object({
           id: z.string().min(1),
           recordClass: z.enum(['PRESCRIPTION', 'CONTROLLED_REGISTER', 'FISCAL', 'AUDIT']),
-          retentionDays: z.number().int().positive(),
+          retentionDays: z
+            .number()
+            .int()
+            .positive()
+            .max(MAX_RETENTION_DAYS, 'A retention period cannot exceed 100 years (36525 days).'),
           effectiveFrom: z.date(),
           reason: z.string().trim().min(1),
         })
