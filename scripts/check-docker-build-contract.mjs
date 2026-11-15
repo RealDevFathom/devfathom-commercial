@@ -30,10 +30,9 @@ export function checkDockerBuildContract(packageSource, dockerfile) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [packageSource, dockerfile] = await Promise.all([
-    readFile(new URL('../package.json', import.meta.url), 'utf8'),
-    readFile(new URL('../Dockerfile', import.meta.url), 'utf8'),
-  ]);
-  checkDockerBuildContract(packageSource, dockerfile);
+  const packageSource = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+  for (const name of ['Dockerfile', 'Dockerfile.aws']) {
+    checkDockerBuildContract(packageSource, await readFile(new URL(`../${name}`, import.meta.url), 'utf8'));
+  }
   console.log('Dockerfile and package.json build contracts are synchronized.');
 }

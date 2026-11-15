@@ -17,17 +17,24 @@ RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM node:22-trixie-slim AS builder
 WORKDIR /app
-ENV NODE_OPTIONS=--max-old-space-size=8192 \
-    NEXT_TELEMETRY_DISABLED=1
+# Bun has no V8 heap cap; Node sizes one from host memory and `tsc` exhausts the
+# default in a container this size (exit 134). Keep this at the main Dockerfile's
+# 8192 ceiling, which is safe only with `experimental.cpus: 1` in next.config.ts.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock next.config.ts tsconfig.json postcss.config.mjs prisma.config.ts ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 COPY src ./src
 COPY public ./public
+# `tsconfig.json` includes `.next/types`; `next typegen` has to run before `tsc` or every
+# route-type global (`PageProps`, `LayoutProps`, `RouteContext`) is `TS2304`.
+# scripts/check-docker-build-contract.mjs guards this Prisma/typegen/tsc/build sequence
+# against drift from package.json's build contract, for Dockerfile and Dockerfile.aws.
 RUN node node_modules/prisma/build/index.js generate \
  && node node_modules/next/dist/bin/next typegen \
  && node node_modules/typescript/bin/tsc --noEmit
-ENV NEXT_BUILD_SKIP_TYPECHECK=1
+ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
+    NEXT_TELEMETRY_DISABLED=1
 # Inert build-only placeholder; no real environment files or secrets in context.
 # NEXT_PUBLIC_* values are inlined into client bundles at build time. Pass per environment,
 # e.g. --build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com. Empty keeps the fallback.
@@ -36,6 +43,8 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
 FROM oven/bun:1.4.3-slim AS runner
+# Bun remains an accepted serving-time risk. See docs/operations/build-runtime.md
+# before changing this stage or CMD.
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -43,6 +52,8 @@ ENV NODE_ENV=production \
     PORT=3000
 # Standalone preserves traced dependencies, including generated Prisma/native files.
 # Do not add whole src/scripts/prisma trees or initialization commands here.
+# The builder's Prisma engines are resolved for Debian trixie (node:22-trixie-slim).
+RUN . /etc/os-release && test "$VERSION_CODENAME" = trixie
 COPY --chown=bun:bun --from=builder /app/.next/standalone ./
 COPY --chown=bun:bun --from=builder /app/.next/static ./.next/static
 COPY --chown=bun:bun --from=builder /app/public ./public
