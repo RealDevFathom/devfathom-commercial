@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { verticalForModuleKey } from '@/lib/module-catalog';
 import { inviteCopyForVertical } from './invite-copy';
+import {
+  INVITE_ROLE_MISMATCH,
+  INVITE_ROLE_NOT_OFFERED,
+  inviteRoleRefusal,
+} from '@/lib/vertical-catalog';
 
 const restaurantVertical = verticalForModuleKey('restaurant-core')!;
 const flatten = (value: unknown): string => JSON.stringify(value);
@@ -15,18 +20,17 @@ describe('inviteCopyForVertical', () => {
     expect(copy.baseRoleLabels).toEqual({ EMPLOYEE: 'Staff', HR: 'Manager', ADMIN: 'Admin' });
   });
 
-  it('gives pharmacy one role picker with distinct owner-role descriptions (DEV-673)', () => {
+  it('gives pharmacy one role picker whose labels match the grant (DEV-673, SEC-I)', () => {
     const copy = inviteCopyForVertical('PHARMACY');
-    expect(copy.roleTemplateBaseRoles).toEqual({
-      admin: 'ADMIN',
-      owner: 'ADMIN',
-      'owner-operator': 'ADMIN',
-      manager: 'HR',
-    });
-    const descriptions = copy.roleTemplateDescriptions!;
-    const owners = ['admin', 'owner', 'owner-operator'].map((key) => descriptions[key]);
-    expect(owners.every((text) => typeof text === 'string' && text.length > 0)).toBe(true);
-    expect(new Set(owners).size).toBe(3);
+    // Only the administrator role carries a base role above Staff.
+    expect(copy.roleTemplateBaseRoles).toEqual({ admin: 'ADMIN' });
+    expect(copy.inviteHiddenRoleTemplateKeys).toEqual(['owner', 'owner-operator']);
+    expect(copy.roleTemplateDescriptions!.admin).toMatch(/billing and team/);
+    // Hidden roles carry no description that could describe a grant they no longer get.
+    expect(copy.roleTemplateDescriptions).not.toHaveProperty('owner');
+    expect(copy.roleTemplateDescriptions).not.toHaveProperty('owner-operator');
+    (copy.inviteHiddenRoleTemplateKeys as string[]).pop();
+    expect(inviteCopyForVertical('PHARMACY').inviteHiddenRoleTemplateKeys).toHaveLength(2);
     // A caller mutating its copy never leaks into the next tenant's form.
     (copy.roleTemplateBaseRoles as Record<string, string>).pharmacist = 'ADMIN';
     expect(inviteCopyForVertical('PHARMACY').roleTemplateBaseRoles).not.toHaveProperty(
@@ -82,6 +86,45 @@ describe('inviteCopyForVertical', () => {
     'drops the US placeholder phone for %s',
     (vertical) => {
       expect(flatten(inviteCopyForVertical(vertical))).not.toMatch(/555-01|\+1 \(/);
+    }
+  );
+});
+
+// SEC-I (DEV-827): the server refuses an invite whose base role is not what the
+// chosen role's label grants.
+describe('inviteRoleRefusal', () => {
+  it.each([
+    ['admin', 'ADMIN'],
+    ['manager', 'EMPLOYEE'],
+    ['pharmacist', 'EMPLOYEE'],
+    ['cashier', 'EMPLOYEE'],
+    [null, 'EMPLOYEE'],
+  ] as const)('accepts pharmacy %s at %s', (key, baseRole) => {
+    expect(inviteRoleRefusal('PHARMACY', baseRole, key)).toBeNull();
+  });
+
+  it.each([
+    ['manager', 'HR'],
+    ['manager', 'ADMIN'],
+    ['pharmacist', 'ADMIN'],
+    ['admin', 'EMPLOYEE'],
+    [null, 'HR'],
+    [null, 'ADMIN'],
+  ] as const)('refuses pharmacy %s at %s', (key, baseRole) => {
+    expect(inviteRoleRefusal('PHARMACY', baseRole, key)).toBe(INVITE_ROLE_MISMATCH);
+  });
+
+  it.each(['owner', 'owner-operator'])('refuses pharmacy %s at any base role', (key) => {
+    for (const baseRole of ['ADMIN', 'HR', 'EMPLOYEE'] as const) {
+      expect(inviteRoleRefusal('PHARMACY', baseRole, key)).toBe(INVITE_ROLE_NOT_OFFERED);
+    }
+  });
+
+  it.each(['AGENCY', 'HOSPITALITY', restaurantVertical, null, undefined] as const)(
+    'leaves the separate base role switch of %s unconstrained',
+    (vertical) => {
+      expect(inviteRoleRefusal(vertical, 'ADMIN', 'owner')).toBeNull();
+      expect(inviteRoleRefusal(vertical, 'HR', null)).toBeNull();
     }
   );
 });
