@@ -172,7 +172,13 @@ describe('purchasing reversal witness enumeration', () => {
       },
       permissionOverrides: [],
     });
-    f.db.user.findMany.mockResolvedValue([{ id: 'second-pharmacist', status: 'ACTIVE' }]);
+    f.db.user.findMany.mockResolvedValue([
+      {
+        id: 'second-pharmacist',
+        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      },
+    ]);
     f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ id: 'receipt' });
     await expect(query(f)).resolves.toEqual([]);
     expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledTimes(1);
