@@ -4,6 +4,7 @@ import { SupplierPriceListsConsole } from '@/components/pharmacy/supplier-price-
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
 import { AccessState, PurchasingHeader, PurchasingTabs } from '../_components/console-chrome';
 import { PURCHASING_ROUTE, tenantContext } from '../_lib/console';
 
@@ -22,19 +23,22 @@ export default async function PharmacySupplierPriceListsPage() {
   const moduleEnabled = hasModule(ctx.entitlements, 'pharmacy-procurement');
   if (!moduleEnabled || !ctx.session?.user || !(await actorCanProcure(ctx.db, ctx.session.user.id)))
     return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />;
-  // The server refuses approvals without this capability; offer the control
-  // only to the people it lets through (Manager, Owner and the solo owner).
-  const canApprove = await can(
-    subjectFromSession(ctx.session.user),
-    'pharmacy:procurement-approve',
-    undefined,
-    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
-  );
+  // The server refuses approvals without owner/administrator authority (the
+  // same as setting a pack price); offer the control only to those people.
+  const user = ctx.session.user;
+  const [canApprove, soloOwner] = await Promise.all([
+    can(subjectFromSession(user), 'admin:access', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta?.ip ?? null,
+    }),
+    soloOwnerApprovalAllowed(ctx.db, ctx.entitlements.organizationId, user.id),
+  ]);
   return (
     <main className="min-w-0 space-y-6">
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
-      <SupplierPriceListsConsole canApprove={canApprove} />
+      <SupplierPriceListsConsole canApprove={canApprove} actorId={user.id} soloOwner={soloOwner} />
     </main>
   );
 }

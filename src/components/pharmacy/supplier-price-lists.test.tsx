@@ -29,7 +29,7 @@ import { pkr, SupplierPriceListsConsole } from './supplier-price-lists';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), lines: [line] };
+  mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), importedById: 'manager', lines: [line] };
   mocks.upload.mutateAsync.mockResolvedValue({ priceListId: 'list-1', replayed: false });
   mocks.decide.mutateAsync.mockResolvedValue([]);
 });
@@ -43,7 +43,7 @@ describe('supplier price lists console', () => {
   });
 
   it('imports for the chosen supplier and says no price changed', async () => {
-    render(<SupplierPriceListsConsole canApprove />);
+    render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
     expect(screen.getByLabelText('CSV or XLSX price list')).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'sup' } });
     const file = new File(['Product,MRP\nX,1\n'], 'list.csv', { type: 'text/csv' });
@@ -54,7 +54,7 @@ describe('supplier price lists console', () => {
   });
 
   it('shows the SQL-computed alerts and lets an approver approve one draft', async () => {
-    render(<SupplierPriceListsConsole canApprove />);
+    render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(screen.getByText('+PKR 50.00 (+6.25%)')).toBeVisible();
     expect(screen.getByText('+PKR 100.00 (+10.00%)')).toBeVisible();
@@ -63,15 +63,34 @@ describe('supplier price lists console', () => {
   });
 
   it('offers no approval control to someone without the approver permission', () => {
-    render(<SupplierPriceListsConsole canApprove={false} />);
+    render(<SupplierPriceListsConsole canApprove={false} actorId="manager" soloOwner={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(screen.queryByRole('button', { name: /Approve shelf price/ })).toBeNull();
-    expect(screen.getByText('Awaiting manager approval')).toBeVisible();
+    expect(screen.getByText('Awaiting owner approval')).toBeVisible();
+  });
+
+  it('never offers the importer approval of their own list unless they are a solo owner', () => {
+    render(<SupplierPriceListsConsole canApprove actorId="manager" soloOwner={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(screen.queryByRole('button', { name: /Approve shelf price/ })).toBeNull();
+    expect(screen.getByText('Another owner or admin approves')).toBeVisible();
+  });
+
+  it('asks a solo owner who imported the list for a fresh PIN before approving', async () => {
+    render(<SupplierPriceListsConsole canApprove actorId="manager" soloOwner />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    const approveButton = screen.getByRole('button', { name: 'Approve shelf price for row 2' });
+    expect(approveButton).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Your approval PIN/), { target: { value: '1234' } });
+    fireEvent.click(approveButton);
+    await waitFor(() =>
+      expect(mocks.decide.mutateAsync).toHaveBeenCalledWith({ lineIds: ['line-1'], decision: 'APPROVE', pin: '1234' })
+    );
   });
 
   it('blocks a stale draft instead of offering approval', () => {
-    mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), lines: [{ ...line, stale: true }] };
-    render(<SupplierPriceListsConsole canApprove />);
+    mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), importedById: 'manager', lines: [{ ...line, stale: true }] };
+    render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(screen.queryByRole('button', { name: /Approve shelf price/ })).toBeNull();
     expect(screen.getByText('Price changed · re-import')).toBeVisible();

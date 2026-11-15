@@ -36,7 +36,17 @@ function change(minor: number | null, bps: number | null) {
 
 const MATCH_LABEL = { MATCHED: 'Matched', NO_MATCH: 'Not in catalogue', AMBIGUOUS: 'Needs mapping' };
 
-export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean }) {
+export function SupplierPriceListsConsole({
+  canApprove,
+  actorId,
+  soloOwner,
+}: {
+  /** Owner or administrator: the server's `admin:access`, as for setting a pack price. */
+  canApprove: boolean;
+  actorId: string;
+  /** The only active member, who may approve a list they imported with a fresh PIN. */
+  soloOwner: boolean;
+}) {
   const utils = trpc.useUtils();
   const options = trpc.pharmacySupplierPriceLists.options.useQuery(undefined, { retry: false });
   const lists = trpc.pharmacySupplierPriceLists.list.useQuery(undefined, { retry: false });
@@ -51,6 +61,7 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reading, setReading] = useState(false);
+  const [pin, setPin] = useState('');
   const busy = reading || upload.isPending || decide.isPending;
   const denied =
     options.error?.data?.code === 'FORBIDDEN' || options.error?.data?.code === 'UNAUTHORIZED';
@@ -91,7 +102,12 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
     setError('');
     setNotice('');
     try {
-      await decide.mutateAsync({ lineIds: [lineId], decision });
+      await decide.mutateAsync({
+        lineIds: [lineId],
+        decision,
+        ...(decision === 'APPROVE' && importedByMe ? { pin } : {}),
+      });
+      setPin('');
       setNotice(decision === 'APPROVE' ? 'Shelf price approved and saved.' : 'Draft rejected. No price changed.');
       await Promise.all([
         utils.pharmacySupplierPriceLists.review.invalidate(),
@@ -125,6 +141,11 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
     );
 
   const lines = review.data?.lines ?? [];
+  const importedByMe = review.data?.importedById === actorId;
+  // Segregation of duties, mirrored from the server: the importer does not
+  // approve their own list unless they are a solo owner re-entering a PIN.
+  const mayApprove = canApprove && (!importedByMe || soloOwner);
+  const pinNeeded = mayApprove && importedByMe;
   return (
     <div className="min-w-0 space-y-6">
       {error && (
@@ -140,8 +161,8 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
       <SectionCard title="Import a distributor price list" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
           Prices are per pack in PKR. Rows are matched by pack barcode, or by the exact catalogue
-          name or alias. Importing never changes a price: changed MRPs become drafts that a manager
-          or owner approves one by one. PDF lists: export or copy them to Excel or CSV first.
+          name or alias. Importing never changes a price: changed MRPs become drafts that an owner
+          or administrator other than the importer approves one by one. PDF lists: export or copy them to Excel or CSV first.
         </p>
         <div className="mb-5 flex flex-wrap gap-3">
           <a
@@ -250,6 +271,26 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
           ) : review.error ? (
             <p role="alert" className="text-sm text-destructive">This price list could not be loaded.</p>
           ) : (
+            <div className="min-w-0 space-y-4">
+            {pinNeeded && (
+              <label className="block max-w-xs space-y-2 text-sm text-text-body">
+                <span>Your approval PIN</span>
+                <Input
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  className="min-h-11"
+                  value={pin}
+                  disabled={busy}
+                  aria-describedby="price-pin-help"
+                  onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                />
+                <span id="price-pin-help" className="block text-xs text-text-muted">
+                  You imported this list and are the only active member, so re-enter your PIN to
+                  approve. The approval is recorded under the solo-owner policy.
+                </span>
+              </label>
+            )}
             <div className="overflow-x-auto">
               <Table>
                 <caption className="sr-only">
@@ -322,12 +363,14 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
                           line.stale ? (
                             <StatusPill status="blocked" label="Price changed · re-import" />
                           ) : !canApprove ? (
-                            <StatusPill status="pending" label="Awaiting manager approval" />
+                            <StatusPill status="pending" label="Awaiting owner approval" />
+                          ) : !mayApprove ? (
+                            <StatusPill status="pending" label="Another owner or admin approves" />
                           ) : (
                             <div className="flex justify-end gap-2">
                               <Button
                                 size="touch"
-                                disabled={busy}
+                                disabled={busy || (pinNeeded && !/^\d{4,8}$/.test(pin))}
                                 aria-label={`Approve shelf price for row ${line.rowNumber}`}
                                 onClick={() => void decideLine(line.id, 'APPROVE')}
                               >
@@ -354,6 +397,7 @@ export function SupplierPriceListsConsole({ canApprove }: { canApprove: boolean 
                   ))}
                 </TableBody>
               </Table>
+            </div>
             </div>
           )}
         </SectionCard>

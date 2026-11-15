@@ -14,14 +14,16 @@ import {
 
 /**
  * DEV-681 — supplier price lists. Deny by default: importing and reading the
- * alerts is procurement work; turning a draft into a shelf price needs the
- * approver capability (Manager, Owner and the solo owner hold it).
+ * alerts is procurement work a manager or buyer may do; turning a draft into a
+ * shop-wide shelf price needs the same authority as `setPackPrice` (owner or
+ * administrator). The importer never approves their own list, except a solo
+ * owner who re-enters their PIN.
  */
 export const PRICE_LIST_PROCUREMENT = {
   capabilities: ['pharmacy:procurement'],
 } as const satisfies ProcedureMeta;
 export const PRICE_LIST_APPROVAL = {
-  capabilities: ['pharmacy:procurement-approve'],
+  capabilities: ['admin:access'],
 } as const satisfies ProcedureMeta;
 
 function scope(ctx: TRPCContext) {
@@ -77,8 +79,15 @@ export const pharmacySupplierPriceListsRouter = router({
         .object({
           lineIds: z.array(id).min(1).max(100),
           decision: z.enum(['APPROVE', 'REJECT']),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => decideSupplierPriceDrafts(ctx.db, scope(ctx), input)),
+    .mutation(({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      return decideSupplierPriceDrafts(ctx.db, scope(ctx), input);
+    }),
 });

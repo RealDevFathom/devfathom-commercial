@@ -9,6 +9,12 @@ import { normalizeMedicineText } from './medicine';
 import { parseOwnerUpload } from './migration/owner-import-upload';
 import { readMoneyMinor, readText, type SourceTable } from './migration/source-values';
 import { currentPackPrice, lockPrices } from './pricing';
+import {
+  APPROVAL_BLOCKED,
+  SOLO_OWNER_POLICY,
+  soloOwnerApprovalAllowed,
+  verifyPurchaseApprover,
+} from './purchase-approval';
 
 /**
  * DEV-681 — supplier price-list import and price-change alerts.
@@ -394,6 +400,7 @@ export async function supplierPriceListReview(
     supplierName: list.supplier.name,
     fileName: list.fileName,
     createdAt: list.createdAt,
+    importedById: list.importedById,
     lines,
   };
 }
@@ -403,10 +410,13 @@ export async function supplierPriceListReview(
  * organization price policy (source `supplier`) only when the policy the draft
  * was compared with is still current, and never above the new MRP.
  */
+export const SELF_PRICE_APPROVAL =
+  'You imported this price list, so another owner or administrator must approve it.';
+
 export async function decideSupplierPriceDrafts(
   db: ScopedDb,
   scope: SupplierPriceListScope,
-  input: { lineIds: readonly string[]; decision: 'APPROVE' | 'REJECT' }
+  input: { lineIds: readonly string[]; decision: 'APPROVE' | 'REJECT'; pin?: string }
 ) {
   const ids = input.lineIds;
   if (!ids.length || ids.length > 100 || new Set(ids).size !== ids.length)
@@ -415,12 +425,32 @@ export async function decideSupplierPriceDrafts(
     const scoped = tx as ScopedDb;
     await lockPrices(scoped, scope);
     const now = new Date();
+    const lines = await scoped.pharmacySupplierPriceListLine.findMany({
+      where: { organizationId: scope.organizationId, id: { in: [...ids] } },
+      include: { priceList: { select: { importedById: true } } },
+    });
+    if (lines.length !== ids.length)
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Price draft not found.' });
+    // Segregation of duties: whoever imported a list does not approve its
+    // prices. The one exception is a solo owner, who has nobody else to ask:
+    // they re-enter their PIN now, and the approval names that policy.
+    const selfApproval =
+      input.decision === 'APPROVE' &&
+      lines.some((line) => line.priceList.importedById === scope.actorId);
+    if (selfApproval) {
+      if (!(await soloOwnerApprovalAllowed(scoped, scope.organizationId, scope.actorId)))
+        throw new TRPCError({ code: 'FORBIDDEN', message: SELF_PRICE_APPROVAL });
+      const attempt = await verifyPurchaseApprover(scoped, {
+        organizationId: scope.organizationId,
+        approverId: scope.actorId,
+        actorId: scope.actorId,
+        pin: input.pin,
+      });
+      if ('blocked' in attempt) throw new TRPCError({ code: 'FORBIDDEN', message: APPROVAL_BLOCKED });
+    }
     const results = [];
     for (const id of [...ids].sort()) {
-      const line = await scoped.pharmacySupplierPriceListLine.findFirst({
-        where: { organizationId: scope.organizationId, id },
-      });
-      if (!line) throw new TRPCError({ code: 'NOT_FOUND', message: 'Price draft not found.' });
+      const line = lines.find((candidate) => candidate.id === id)!;
       if (line.draftStatus !== 'DRAFT' || !line.packLevelId || line.draftMrpMinor === null)
         return bad(`Row ${line.rowNumber} has no open price draft.`);
       let packPriceId: string | null = null;
@@ -490,6 +520,9 @@ export async function decideSupplierPriceDrafts(
             sellingPriceMinor: line.draftSellingPriceMinor,
             packPriceId,
           },
+          ...(selfApproval && line.priceList.importedById === scope.actorId
+            ? { metadata: { policy: SOLO_OWNER_POLICY, pinVerified: true, importedById: scope.actorId } }
+            : {}),
         },
       });
       results.push({ id, decision: input.decision, packPriceId });

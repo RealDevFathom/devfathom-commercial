@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+const approval = vi.hoisted(() => ({
+  soloOwnerApprovalAllowed: vi.fn(async () => false),
+  verifyPurchaseApprover: vi.fn(
+    async (): Promise<{ blocked: string } | { verified: true }> => ({ verified: true })
+  ),
+}));
+vi.mock('./purchase-approval', () => ({
+  APPROVAL_BLOCKED: 'An authorized approver must enter a valid PIN.',
+  SOLO_OWNER_POLICY: 'PHARMACY_SOLO_OWNER_PIN',
+  ...approval,
+}));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -11,7 +22,7 @@ import {
   readPriceListRows,
 } from './supplier-price-lists';
 
-const scope = { organizationId: 'org-a', actorId: 'manager' };
+const scope = { organizationId: 'org-a', actorId: 'owner' };
 
 describe('DEV-681 price-list reading', () => {
   it('finds product, pack, barcode, TP and MRP columns by exact header synonyms', () => {
@@ -198,12 +209,15 @@ describe('DEV-681 a person decides each draft', () => {
       currentPackPriceId: 'price-old',
       currentMrpMinor: 100000,
       currentSellingPriceMinor: 95000,
+      priceList: { importedById: 'buyer' },
     };
+    approval.soloOwnerApprovalAllowed.mockResolvedValue(false);
+    approval.verifyPurchaseApprover.mockResolvedValue({ verified: true });
     db = {
       $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
       $queryRaw: vi.fn(async () => []),
       pharmacySupplierPriceListLine: {
-        findFirst: vi.fn(async () => line),
+        findMany: vi.fn(async () => [line]),
         updateMany: vi.fn(async () => ({ count: 1 })),
       },
       packLevel: { findFirst: vi.fn(async () => ({ id: 'box', presentationId: 'pres' })) },
@@ -214,8 +228,48 @@ describe('DEV-681 a person decides each draft', () => {
       auditLog: { create: vi.fn() },
     };
   });
-  const decide = (decision: 'APPROVE' | 'REJECT', lineIds = ['line-1']) =>
-    decideSupplierPriceDrafts(db as unknown as ScopedDb, scope, { lineIds, decision });
+  const decide = (decision: 'APPROVE' | 'REJECT', lineIds = ['line-1'], pin?: string) =>
+    decideSupplierPriceDrafts(db as unknown as ScopedDb, scope, { lineIds, decision, pin });
+
+  it('refuses the importer approving their own list when they are not a solo owner', async () => {
+    line.priceList = { importedById: 'owner' };
+    await expect(decide('APPROVE', ['line-1'], '1234')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('another owner or administrator'),
+    });
+    expect(approval.verifyPurchaseApprover).not.toHaveBeenCalled();
+    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+  });
+
+  it('lets a solo owner approve their own import only with a fresh PIN, and audits the policy', async () => {
+    line.priceList = { importedById: 'owner' };
+    approval.soloOwnerApprovalAllowed.mockResolvedValue(true);
+    approval.verifyPurchaseApprover.mockResolvedValue({ blocked: 'An authorized approver must enter a valid PIN.' });
+    await expect(decide('APPROVE')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+
+    approval.verifyPurchaseApprover.mockResolvedValue({ verified: true });
+    await decide('APPROVE', ['line-1'], '1234');
+    expect(approval.verifyPurchaseApprover).toHaveBeenLastCalledWith(db, {
+      organizationId: 'org-a',
+      approverId: 'owner',
+      actorId: 'owner',
+      pin: '1234',
+    });
+    expect(db.pharmacyPackPrice.create).toHaveBeenCalledTimes(1);
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'pharmacySupplierPriceLists.approveDraft',
+        metadata: { policy: 'PHARMACY_SOLO_OWNER_PIN', pinVerified: true, importedById: 'owner' },
+      }),
+    });
+  });
+
+  it('needs no PIN when a different owner approves', async () => {
+    await decide('APPROVE');
+    expect(approval.soloOwnerApprovalAllowed).not.toHaveBeenCalled();
+    expect(approval.verifyPurchaseApprover).not.toHaveBeenCalled();
+  });
 
   it('approval writes a supplier-sourced price policy under the price lock and audits it', async () => {
     await expect(decide('APPROVE')).resolves.toEqual([
@@ -228,12 +282,12 @@ describe('DEV-681 a person decides each draft', () => {
         mrpMinor: 110000,
         sellingPriceMinor: 95000,
         source: 'supplier',
-        createdById: 'manager',
+        createdById: 'owner',
       }),
     });
     expect(db.pharmacySupplierPriceListLine.updateMany).toHaveBeenCalledWith({
       where: { organizationId: 'org-a', id: 'line-1', draftStatus: 'DRAFT' },
-      data: expect.objectContaining({ draftStatus: 'APPROVED', decidedById: 'manager', packPriceId: 'price-new' }),
+      data: expect.objectContaining({ draftStatus: 'APPROVED', decidedById: 'owner', packPriceId: 'price-new' }),
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -248,7 +302,7 @@ describe('DEV-681 a person decides each draft', () => {
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
     expect(db.pharmacySupplierPriceListLine.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ draftStatus: 'REJECTED', decidedById: 'manager', packPriceId: null }),
+        data: expect.objectContaining({ draftStatus: 'REJECTED', decidedById: 'owner', packPriceId: null }),
       })
     );
   });
@@ -263,6 +317,11 @@ describe('DEV-681 a person decides each draft', () => {
     line.draftSellingPriceMinor = 120000;
     await expect(decide('APPROVE')).rejects.toThrow('Selling price cannot exceed MRP');
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a draft that does not exist in this organization', async () => {
+    db.pharmacySupplierPriceListLine.findMany.mockResolvedValue([]);
+    await expect(decide('REJECT')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('refuses a row with no open draft, and a draft decided concurrently', async () => {
