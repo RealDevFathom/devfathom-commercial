@@ -111,6 +111,8 @@ function credentialsErrorKey(code: string | null): LoginErrorKey {
       return 'sso-required';
     case 'suspended':
       return 'suspended';
+    case 'rate_limited':
+      return 'rate-limited';
     default:
       return 'invalid';
   }

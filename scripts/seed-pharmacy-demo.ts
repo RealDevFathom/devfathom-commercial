@@ -146,7 +146,7 @@ export function validateEvidence(input: unknown, now: Date): PharmacyDemoEvidenc
     'targetKey environment observedAt organizationId vertical organizationActive branchId branchActive currency timezone owners runtimeRole schemaSha256 migrationsSha256 migrationCount actors references modules'
   );
   requireFact(
-    ['lan', 'azure-staging', 'disposable'].includes(t.environment as string) &&
+    ['lan', 'staging', 'disposable'].includes(t.environment as string) &&
       o.environment === t.environment,
     'UNSAFE_ENVIRONMENT'
   );
@@ -456,7 +456,7 @@ export async function pharmacyMigrationManifest() {
 
 let boundDisposable: string | undefined;
 /** No arbitrary URL input. Private Unix socket + actual cluster/database/role checks below.
- * Only the fresh verifier provisions this TEST identity. LAN/Azure are unsupported. */
+ * Only the fresh verifier provisions this TEST identity. LAN/staging are unsupported. */
 async function bindDisposable(target: DisposablePharmacyTarget) {
   object(target, 'directory database');
   requireFact(/^wha1388_[a-f0-9]{24}$/.test(target.database), 'DISPOSABLE_ID_REQUIRED');

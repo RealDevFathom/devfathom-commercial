@@ -586,7 +586,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
             <button
               onClick={handleSubmit}
               disabled={!name.trim() || createProject.isPending}
-              className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+              className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
             >
               {createProject.isPending ? (
                 <>

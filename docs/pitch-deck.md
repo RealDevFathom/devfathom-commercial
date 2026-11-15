@@ -24,9 +24,9 @@ Speaker note: Point to `README.md` and `docs/admin-platform/control-plane.md` as
 
 - Organization-scoped access and forced PostgreSQL RLS.
 - Role-aware authorization and audited support access.
-- Azure staging with separate production preparation.
+- AWS staging with separate production preparation.
 
-Speaker note: These are repository-backed controls, not a certification claim. Cite the RLS ADR, threat model, and Azure deployment record.
+Speaker note: These are repository-backed controls, not a certification claim. Cite the RLS ADR, threat model, and AWS deployment record (`docs/deploy/aws.md`).
 
 ## Slide 5 — Current product surface
 
@@ -56,7 +56,7 @@ Speaker note: Use the [status ledger](status-ledger.md) for release truth.
 
 - Source-backed module and route inventory.
 - Tenant-isolation tests and release workflows in repository.
-- Azure staging evidence.
+- AWS staging evidence.
 
 Speaker note: `[VERIFY: current test run, staging URL, and approved metrics]`. Never turn a local build into production or customer evidence.
 

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   transactionFindUnique: vi.fn(),
   transactionUpdate: vi.fn(),
+  transactionDelete: vi.fn(),
   projectFindFirst: vi.fn(),
   clientFindFirst: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/api-auth', () => ({
             transaction: {
               findUnique: mocks.transactionFindUnique,
               update: mocks.transactionUpdate,
+              delete: mocks.transactionDelete,
             },
             project: { findFirst: mocks.projectFindFirst },
             client: { findFirst: mocks.clientFindFirst },
@@ -29,7 +31,8 @@ vi.mock('@/lib/api-auth', () => ({
       ),
 }));
 
-import { PATCH } from './route';
+import { PAYMENT_LEDGER_LOCKED_MESSAGE } from '@/lib/finance/payment-ledger';
+import { DELETE, PATCH } from './route';
 
 function patch(body: Record<string, unknown>) {
   return PATCH(
@@ -46,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.transactionFindUnique.mockResolvedValue({ id: 'transaction-owned' });
   mocks.transactionUpdate.mockResolvedValue({ id: 'transaction-owned' });
+  mocks.transactionDelete.mockResolvedValue({ id: 'transaction-owned' });
   mocks.projectFindFirst.mockResolvedValue({ id: 'project-owned' });
   mocks.clientFindFirst.mockResolvedValue({ id: 'client-owned' });
 });
@@ -88,5 +92,67 @@ describe('PATCH /api/v1/transactions/:id organization references', () => {
       where: { id: 'transaction-owned' },
       data: { projectId: null, clientId: null },
     });
+  });
+});
+
+describe('/api/v1/transactions/:id payment-posted income (DEV-166)', () => {
+  const paidAt = new Date('2026-10-22T14:50:00.000Z');
+
+  function remove() {
+    return DELETE(
+      new Request('https://example.test/api/v1/transactions/transaction-owned', {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ id: 'transaction-owned' }) }
+    );
+  }
+
+  beforeEach(() => {
+    mocks.transactionFindUnique.mockResolvedValue({
+      id: 'transaction-owned',
+      paymentId: 'payment-6',
+      type: 'INCOME',
+      amount: 100,
+      date: paidAt,
+    });
+  });
+
+  it('refuses to delete the revenue a payment posted', async () => {
+    const response = await remove();
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: PAYMENT_LEDGER_LOCKED_MESSAGE });
+    expect(mocks.transactionDelete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['amount', { amount: 1 }],
+    ['type', { type: 'EXPENSE' }],
+    ['date', { date: '2026-10-01T00:00:00.000Z' }],
+  ])('refuses to change the %s of payment-posted revenue', async (_field, change) => {
+    const response = await patch(change);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: PAYMENT_LEDGER_LOCKED_MESSAGE });
+    expect(mocks.transactionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still allows renaming payment-posted revenue', async () => {
+    const response = await patch({ description: 'Acme retainer' });
+
+    expect(response.status).toBe(200);
+    expect(mocks.transactionUpdate).toHaveBeenCalledWith({
+      where: { id: 'transaction-owned' },
+      data: { description: 'Acme retainer' },
+    });
+  });
+
+  it('keeps manually entered transactions deletable', async () => {
+    mocks.transactionFindUnique.mockResolvedValue({ id: 'transaction-owned', paymentId: null });
+
+    const response = await remove();
+
+    expect(response.status).toBe(200);
+    expect(mocks.transactionDelete).toHaveBeenCalledWith({ where: { id: 'transaction-owned' } });
   });
 });

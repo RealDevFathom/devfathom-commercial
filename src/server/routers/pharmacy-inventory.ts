@@ -76,6 +76,12 @@ import {
 } from '@/lib/pharmacy/stock-signals-operations';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  authorizeCounterApproval,
+  confirmCounterApproval,
+  CounterApprovalDenied,
+  fefoOverrideApprovalPolicy,
+} from '@/lib/pharmacy/counter-line-approval';
+import {
   CsvTemperatureReadingSource,
   ingestTemperatureReadings,
   loadTemperatureZoneStatuses,
@@ -134,6 +140,8 @@ function txDb(tx: unknown): ScopedDb {
 }
 
 function domainError(error: unknown): never {
+  if (error instanceof CounterApprovalDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyInventoryError) {
     const code =
       error.reason === 'NOT_FOUND'
@@ -1167,11 +1175,18 @@ export const pharmacyInventoryRouter = router({
           medicineId: z.string().min(1),
           requiredUnits: z.number().int().positive(),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+          // #520: the approver is proven by a PIN the server verifies, never named by the caller.
           override: z
             .object({
               inventoryLotId: z.string().min(1),
               reason: z.string().trim().min(1).max(500),
-              approvalPolicy: z.string().trim().min(1).max(200),
+              approval: z
+                .object({
+                  staffProfileId: z.string().trim().min(1).max(128),
+                  pin: z.string().regex(/^\d{4,8}$/),
+                })
+                .strict()
+                .optional(),
             })
             .strict()
             .optional(),
@@ -1185,19 +1200,38 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
       try {
+        // #520: a FEFO override needs the pharmacist on duty or a pharmacist's PIN, verified
+        // before the stock transaction takes a connection and re-checked inside it.
+        const approval = input.override
+          ? await authorizeCounterApproval(
+              ctx.db as unknown as ScopedDb,
+              scope,
+              'FEFO_OVERRIDE',
+              input.override.approval
+            )
+          : null;
         // One transaction: the FOR UPDATE locks the allocator takes over the
         // candidate balances are what stop two counters overselling the same
         // last unit, and they only hold until this transaction ends (INV-02).
-        return await ctx.db.$transaction(async (tx) =>
-          allocateForSale(txDb(tx), scope, {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (approval) await confirmCounterApproval(db, scope, 'FEFO_OVERRIDE', approval);
+          return allocateForSale(db, scope, {
             medicineId: input.medicineId,
             requiredUnits: input.requiredUnits,
             at: new Date(),
             idempotencyKeyPrefix: input.idempotencyKeyPrefix,
-            override: input.override,
+            override:
+              input.override && approval
+                ? {
+                    inventoryLotId: input.override.inventoryLotId,
+                    reason: input.override.reason,
+                    approvalPolicy: fefoOverrideApprovalPolicy(approval, scope.actorId),
+                  }
+                : undefined,
             emergency: input.emergency,
-          })
-        );
+          });
+        });
       } catch (error) {
         domainError(error);
       }

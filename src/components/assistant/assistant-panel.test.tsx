@@ -237,6 +237,17 @@ describe('Ask Fathom request and result states', () => {
     render(panel());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+  it('offers pharmacy report example questions and hints on an empty send', () => {
+    render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
+    expect(screen.getByRole('button', { name: "What are today's sales?" })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Which medicines are expiring soon?' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
+    expect(screen.getByText('Type a question before sending.')).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Your question'), { target: { value: 'x' } });
+    expect(screen.queryByText('Type a question before sending.')).not.toBeInTheDocument();
+  });
   it('sends an entitled suggestion through the SDK and shows its response', async () => {
     render(panel());
     fireEvent.click(screen.getByRole('button', { name: 'Find notes I can access' }));
@@ -354,6 +365,12 @@ describe('Ask Fathom request and result states', () => {
     render(panel(entitlement(vertical, [module])));
     expect(screen.getByText(`Read ${label}`)).toBeVisible();
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
+  });
+  it('lets mixed Urdu/English user text follow the paragraph direction', () => {
+    const text = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
+    fixtures.messages = [{ id: 'u1', role: 'user', parts: [{ type: 'text', text }] }];
+    render(panel());
+    expect(screen.getByText(text)).toHaveAttribute('dir', 'auto');
   });
   it('shows a declined tool as cancelled', () => {
     tool({ state: 'output-denied' });

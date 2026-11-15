@@ -80,7 +80,7 @@ describe.skipIf(!enabled)('WHA-1606 disposable database transaction/RLS evidence
       await setManualPackPrice(tx, scope(), {
         packLevelId: packId,
         mrpMinor: 20000,
-        sellingPriceMinor: 21000,
+        sellingPriceMinor: 19500,
         effectiveFrom: at,
       });
       await setManualPackPrice(tx, scope(), {

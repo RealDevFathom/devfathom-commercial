@@ -24,7 +24,7 @@ Interactive platform endpoints are available only on the admin host.
 | `DELETE /api/platform/support` | `support:write`; exact origin | platform-side revocation when cookie is present |
 | `GET                           | POST /api/platform/jobs/process` | `Authorization: Bearer <CRON_SECRET>` | recover/claim/process jobs |
 
-`/api/platform/jobs/process` is a bearer-secret-protected worker endpoint. Azure scheduling/trigger configuration is a production gate; it does not use a platform cookie.
+`/api/platform/jobs/process` is a bearer-secret-protected worker endpoint. AWS scheduling (the `platform-jobs` schedule) is a production gate; it does not use a platform cookie.
 
 ### Platform command envelope
 

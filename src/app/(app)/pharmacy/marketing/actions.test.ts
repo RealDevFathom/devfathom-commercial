@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   revalidate: vi.fn(),
   createDraft: vi.fn(),
   reviewGrowth: vi.fn(),
+  generateGrowth: vi.fn(),
   generateBaskets: vi.fn(),
   reviewBasket: vi.fn(),
   approve: vi.fn(),
@@ -189,4 +190,43 @@ it('preserves sandbox replay key and retry intent without any live provider choi
     outcome: 'REJECTED',
   });
   expect(result.message).toContain('No live messages sent');
+});
+it('reads growth periods as whole local days and shows a plain next step without status codes', async () => {
+  mocks.generateGrowth.mockResolvedValue({ status: 'UNAVAILABLE', failureCode: 'CONFIGURATION' });
+  const result = await marketingAction(
+    form({
+      operation: 'growth-generate',
+      timeZone: 'Asia/Karachi',
+      from: '2026-10-01',
+      lastDay: '2026-10-30',
+    })
+  );
+  expect(mocks.generateGrowth).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    from: new Date('2026-09-30T19:00:00Z'),
+    cutoff: new Date('2026-10-30T19:00:00Z'),
+  });
+  expect(result.message).toContain('Contact DevFathom support');
+  expect(result.message).not.toMatch(/UNAVAILABLE|CONFIGURATION/);
+});
+it('reads send times as workspace wall-clock time', async () => {
+  mocks.createDraft.mockResolvedValue({ id: 'saved-draft' });
+  await marketingAction(
+    form({
+      operation: 'draft',
+      timeZone: 'Asia/Karachi',
+      field: 'receiptCount',
+      name: 'Generic outreach',
+      templateId: 'template-a',
+      scheduledAt: '2026-10-10T12:00',
+      threshold: '1',
+      quietStart: '22',
+      quietEnd: '8',
+      cap: '1',
+      window: '7',
+    })
+  );
+  expect(mocks.createDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ scheduledAt: new Date('2026-10-10T07:00:00Z') })
+  );
 });

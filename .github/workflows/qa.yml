@@ -132,27 +132,6 @@ jobs:
       CAMERA_CREDENTIAL_KEY: 1111111111111111111111111111111111111111111111111111111111111111
       DEFAULT_ORGANIZATION_ID: org_devfathom
       SEED_PASSWORD: gate-seed-ci-only
-      DEVFATHOM_REGISTRY_NAME: gatecompileonly
-      DEVFATHOM_STAGING_IMAGE: gatecompileonly.azurecr.io/devfathom:gate
-      DEVFATHOM_PRODUCTION_IMAGE: gatecompileonly.azurecr.io/devfathom:gate
-      DEVFATHOM_STAGING_POSTGRES_PASSWORD: gate-compile-only-postgres-password
-      DEVFATHOM_STAGING_APP_DATABASE_PASSWORD: gate-placeholder
-      DEVFATHOM_STAGING_AUTH_SECRET: gate-compile-only-auth-secret-000000
-      DEVFATHOM_STAGING_PLATFORM_ENCRYPTION_KEY: gate-compile-only-platform-key-00000
-      DEVFATHOM_STAGING_CAMERA_CREDENTIAL_KEY: gate-compile-only-camera-key-000000
-      DEVFATHOM_STAGING_CRON_SECRET: gate-compile-only-cron-secret-000000
-      DEVFATHOM_STAGING_SEED_PASSWORD: gate-compile-only-seed-password
-      DEVFATHOM_STAGING_ADMIN_PASSWORD: gate-compile-only-admin-password
-      DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD: gate-compile-only-platform-admin
-      DEVFATHOM_PRODUCTION_POSTGRES_PASSWORD: gate-compile-only-postgres-password
-      DEVFATHOM_PRODUCTION_APP_DATABASE_PASSWORD: gate-placeholder
-      DEVFATHOM_PRODUCTION_AUTH_SECRET: gate-compile-only-auth-secret-000000
-      DEVFATHOM_PRODUCTION_PLATFORM_ENCRYPTION_KEY: gate-compile-only-platform-key-00000
-      DEVFATHOM_PRODUCTION_CAMERA_CREDENTIAL_KEY: gate-compile-only-camera-key-000000
-      DEVFATHOM_PRODUCTION_CRON_SECRET: gate-compile-only-cron-secret-000000
-      DEVFATHOM_PRODUCTION_ADMIN_PASSWORD: gate-compile-only-admin-password
-      DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD: gate-compile-only-platform-admin
-      DEVFATHOM_MEETINGS_SSH_PUBLIC_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGF0ZWNvbXBpbGVvbmx5a2V5MDAwMDAwMDAw gate@ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -322,14 +301,6 @@ jobs:
           NODE_OPTIONS=--max-old-space-size=8192 run build bun run build
           run browser-dependencies bunx playwright install --with-deps chromium
           run vitest-platform-login bunx tsx scripts/ci-platform-login-a11y.ts
-          for file in infra/*.bicep; do
-            name="bicep-$(basename "$file" .bicep)"
-            run "$name" az bicep build --file "$file" --outfile "gate/${name}.json"
-          done
-          for file in infra/*.bicepparam; do
-            name="bicep-$(basename "$file" .bicepparam)-params"
-            run "$name" az bicep build-params --file "$file" --outfile "gate/${name}.json"
-          done
       - name: Upload automated-gate evidence
         if: always()
         uses: actions/upload-artifact@v7
