@@ -8,6 +8,9 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
+import { readTenantMedicineNames } from '../medicine-names';
+import { lintWhatsAppMessage } from './compliance-linter';
+import { recordWhatsAppComplianceBlock } from './compliance-log';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -160,6 +163,8 @@ export async function processDueWhatsAppKhataReminders(
   if (!result.configured || !organizationId || !config.phoneNumberId) return result;
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
+  // Catalogue names for the send-time variable re-check, read once per run.
+  let catalogNames: Set<string> | null = null;
   const accounts = await withPlatformDb((db) =>
     readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
   );
@@ -262,6 +267,23 @@ export async function processDueWhatsAppKhataReminders(
             kind: 'configuration',
             configurationError: `KHATA_TEMPLATE_${language.toUpperCase()}_NOT_CONFIGURED`,
           };
+        // DEV-29: re-check the send-time values (a display name can name a medicine).
+        catalogNames ??= await readTenantMedicineNames(db);
+        const compliance = lintWhatsAppMessage({
+          purpose: 'UTILITY',
+          variables: parameters,
+          catalogNames,
+        });
+        if (compliance.outcome === 'BLOCK') {
+          await recordWhatsAppComplianceBlock(db, {
+            organizationId: account.organizationId,
+            branchId: account.branchId,
+            subject: 'KHATA_REMINDER',
+            subjectId: account.familyAccountId,
+            result: compliance,
+          });
+          return { kind: 'configuration', configurationError: 'WHATSAPP_COMPLIANCE_BLOCKED' };
+        }
         const day = new Intl.DateTimeFormat('en-CA', {
           timeZone,
           year: 'numeric',

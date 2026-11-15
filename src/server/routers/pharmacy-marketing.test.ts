@@ -18,8 +18,14 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  audit: vi.fn(),
+  freshTransaction: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: (organizationId: string, run: (db: unknown) => unknown) =>
+    mocks.freshTransaction(organizationId, run),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -60,12 +66,15 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
   generateGrowthRecommendations: mocks.growthGenerate,
 }));
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
+import { WhatsAppComplianceError } from '@/lib/pharmacy/marketing-service';
+import { lintWhatsAppMessage } from '@/lib/pharmacy/whatsapp/compliance-linter';
 function caller(role = 'ADMIN') {
   const transactionDb = {
     user: { findFirst: mocks.actor, findUnique: mocks.permissions },
     $queryRaw: mocks.branchMatch,
     organization: { findUnique: mocks.organization },
     pharmacyBranch: { findFirst: mocks.branch },
+    auditLog: { create: mocks.audit },
   };
   const db = { ...transactionDb, $transaction: mocks.transaction };
   mocks.transaction.mockImplementation((fn) => fn(transactionDb));
@@ -172,6 +181,37 @@ describe('marketing workflow authorization', () => {
       'campaign-a'
     );
   });
+  it('logs a WhatsApp compliance block in a fresh transaction and refuses the request', async () => {
+    mocks.freshTransaction.mockImplementation(async (_org, run) =>
+      run({ auditLog: { create: mocks.audit } })
+    );
+    const result = lintWhatsAppMessage({ purpose: 'MARKETING', template: 'Panadol in stock' });
+    mocks.capture.mockRejectedValue(
+      new WhatsAppComplianceError(result, 'MARKETING_CAMPAIGN', 'campaign-a')
+    );
+    await expect(caller().capture({ ...input, campaignId: 'campaign-a' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('cannot name a medicine'),
+    });
+    // The request transaction rolls back; the log uses its own tenant transaction.
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.freshTransaction).toHaveBeenCalledWith('org-a', expect.any(Function));
+    expect(mocks.audit).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org-a',
+        actorId: 'owner-a',
+        action: 'pharmacy.whatsappCompliance.blocked',
+        targetType: 'MARKETING_CAMPAIGN',
+        targetId: 'campaign-a',
+        outcome: 'FAILURE',
+        metadata: expect.objectContaining({
+          branchId: 'branch-a',
+          linterVersion: 'wa-compliance-lint-v1',
+          outcome: 'BLOCK',
+        }),
+      }),
+    });
+  });
   it('honors current AI-off policy without calling the provider', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: false });
     expect(await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' })).toEqual({
@@ -268,39 +308,43 @@ describe('growth current authorization', () => {
     );
     expect(mocks.growthHistory).toHaveBeenCalledTimes(1);
   });
-  it.each(['branch', 'actor', 'licence', 'lifecycle', 'reports:financial', 'reports:operational'] as const)(
-    'rejects %s revocation during model latency',
-    async (kind) => {
-      mocks.settings.mockResolvedValue({ askFathomEnabled: true });
-      mocks.growthBuild.mockResolvedValue({ facts: [] });
-      mocks.growthGenerate.mockImplementation(async () => {
-        if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
-        if (kind === 'actor') mocks.actor.mockResolvedValue(null);
-        if (kind === 'licence') mocks.licensed.mockReturnValue(false);
-        if (kind === 'reports:financial' || kind === 'reports:operational')
-          mocks.permissions.mockResolvedValue({
-            organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
-            permissionOverrides: [{ capability: kind, effect: 'DENY' }],
-          });
-        if (kind === 'lifecycle')
-          mocks.organization.mockResolvedValue({
-            id: 'org-a',
-            vertical: 'PHARMACY',
-            status: 'SUSPENDED',
-          });
-        return { status: 'UNAVAILABLE' };
-      });
-      await expect(
-        caller().generateGrowth({
-          ...input,
-          from: new Date('2026-09-01'),
-          cutoff: new Date('2026-10-01'),
-        })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
-      expect(mocks.growthSave).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    'branch',
+    'actor',
+    'licence',
+    'lifecycle',
+    'reports:financial',
+    'reports:operational',
+  ] as const)('rejects %s revocation during model latency', async (kind) => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.growthBuild.mockResolvedValue({ facts: [] });
+    mocks.growthGenerate.mockImplementation(async () => {
+      if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
+      if (kind === 'actor') mocks.actor.mockResolvedValue(null);
+      if (kind === 'licence') mocks.licensed.mockReturnValue(false);
+      if (kind === 'reports:financial' || kind === 'reports:operational')
+        mocks.permissions.mockResolvedValue({
+          organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+          permissionOverrides: [{ capability: kind, effect: 'DENY' }],
+        });
+      if (kind === 'lifecycle')
+        mocks.organization.mockResolvedValue({
+          id: 'org-a',
+          vertical: 'PHARMACY',
+          status: 'SUSPENDED',
+        });
+      return { status: 'UNAVAILABLE' };
+    });
+    await expect(
+      caller().generateGrowth({
+        ...input,
+        from: new Date('2026-09-01'),
+        cutoff: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
+    expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
 });
 describe('campaign generation and approval stay owner-only (DEV-31)', () => {
   const from = new Date('2026-10-01T00:00:00.000Z');

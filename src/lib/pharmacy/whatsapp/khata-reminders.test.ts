@@ -7,6 +7,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  catalog: [] as string[],
+  audits: [] as Array<Record<string, unknown>>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -33,6 +35,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       }),
     },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
+    medicine: {
+      findMany: async () =>
+        store.catalog.map((productName, index) => ({ id: `m${index}`, productName })),
+    },
+    medicineAlias: { findMany: async () => [] },
+    ingredient: { findMany: async () => [] },
+    auditLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        store.audits.push(data);
+        return data;
+      },
+    },
     pharmacyCustomer: {
       findFirst: async ({ where }: { where: { id: string } }) =>
         store.customers.find((customer) => customer.id === where.id) ?? null,
@@ -113,6 +127,8 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.catalog = [];
+  store.audits = [];
   store.timezone = 'Asia/Karachi';
 });
 
@@ -488,5 +504,52 @@ describe('reminder text and daily customer dedupe', () => {
     const provider = new MockWhatsAppProvider(config);
     await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
     expect(provider.calls[0]).toMatchObject({ parameters: ['Khan', '500.00'] });
+  });
+});
+
+describe('DEV-29 send-time variable compliance re-check', () => {
+  it.each([
+    ['a catalogue brand', 'Zyrtecin Family', ['Zyrtecin 10mg Tablet']],
+    ['a static salt with a misspelling', 'Paracitamol Wala', []],
+    ['a static brand written in Urdu script', 'پیناڈول والے', []],
+  ])('blocks a display name naming %s and logs the block', async (_label, displayName, catalog) => {
+    store.catalog = catalog;
+    store.accounts = [{ ...account(), displayName }];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(provider.calls).toHaveLength(0);
+    expect(store.logs).toHaveLength(0);
+    expect(result).toMatchObject({
+      sent: 0,
+      skippedConfiguration: 1,
+      configurationErrors: ['WHATSAPP_COMPLIANCE_BLOCKED'],
+    });
+    expect(store.audits).toHaveLength(1);
+    expect(store.audits[0]).toMatchObject({
+      action: 'pharmacy.whatsappCompliance.blocked',
+      actorType: 'SYSTEM',
+      targetType: 'KHATA_REMINDER',
+      targetId: 'family-1',
+      outcome: 'FAILURE',
+      metadata: {
+        linterVersion: 'wa-compliance-lint-v1',
+        outcome: 'BLOCK',
+        reasons: [expect.objectContaining({ source: 'VARIABLE', index: 0, outcome: 'BLOCK' })],
+      },
+    });
+    // The raw variable value is never logged.
+    expect(JSON.stringify(store.audits[0])).not.toContain(displayName);
+  });
+  it('sends an ordinary display name without a log row', async () => {
+    store.catalog = ['Zyrtecin 10mg Tablet'];
+    store.accounts = [{ ...account(), displayName: 'Khan Family' }];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(provider.calls).toHaveLength(1);
+    expect(store.audits).toHaveLength(0);
   });
 });
