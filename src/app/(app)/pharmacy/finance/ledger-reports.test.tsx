@@ -119,6 +119,21 @@ describe('ledger reports show names and the organization currency', () => {
     expect(container.textContent).not.toMatch(/cmvz/);
   });
 
+  it('shows leakage dates in PKT, not UTC ISO strings or ledger jargon', () => {
+    const report = {
+      ...meta,
+      period: {
+        from: new Date('2026-09-01T00:00:00Z'),
+        to: new Date('2026-09-03T00:00:00Z'),
+        bounds: '[from,to)',
+      },
+      rows: [],
+    } as unknown as LeakageProps;
+    const { container } = render(<LeakageLedger report={report} branchName="Main" />);
+    expect(container.textContent).toContain('1 Sept 2026, 05:00 PKT');
+    expect(container.textContent).not.toMatch(/T\d\d:\d\d|finance_journal_lines|UTC/);
+  });
+
   it('keeps an unresolved id visible as a reference rather than inventing a name', () => {
     const report = {
       ...meta,

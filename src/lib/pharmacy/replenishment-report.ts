@@ -8,6 +8,8 @@ import {
   type PharmacyDemandEvidenceReaderInput,
 } from './demand-evidence-reader';
 import { loadForecastingInputs } from './forecasting-inputs';
+import { listSeasonalWindows } from './seasonal-calendar-operations';
+import { learnSeasonalUplift } from './seasonal-calendar';
 import {
   simulateReplenishmentDecision,
   type ReplenishmentDecision,
@@ -143,8 +145,38 @@ export async function readPharmacyReplenishmentReport(
   if (supply.stock.length + supply.excludedStock.length > 10_000 || supply.inbound.length > 10_000)
     throw new RangeError('Supply row limit exceeded.');
 
+  // DEV-74: the branch's own seasonal calendar feeds forecasting wherever eligible
+  // demand evidence exists, and its uplift is learned from this branch's history only.
+  const windows = await listSeasonalWindows(db, {
+    organizationId,
+    branchId: input.branchId,
+  });
+  const calendarWindows = windows.map(({ kind, label, startDate, endDateExclusive }) => ({
+    kind,
+    label,
+    startDate,
+    endDateExclusive,
+  }));
   const { forecastInput, ...demand } = evidence;
-  const forecast = forecastInput ? forecastDemandEvidence(forecastInput) : null;
+  const forecast = forecastInput
+    ? forecastDemandEvidence(
+        calendarWindows.length
+          ? { ...forecastInput, seasonalCalendar: { windows: calendarWindows } }
+          : forecastInput
+      )
+    : null;
+  const seasonalCalendar = {
+    label: 'ESTIMATE' as const,
+    basis: 'BUSINESS_DATE_CONSUMPTION' as const,
+    windows,
+    ...learnSeasonalUplift({
+      days: demand.consumption.days.map((day) => ({
+        date: day.date,
+        units: day.observedCanonicalUnits,
+      })),
+      windows: calendarWindows,
+    }),
+  };
   let decision: ReplenishmentDecision | null = null;
   let goalComparison: ReturnType<typeof compareReplenishmentGoals> | null = null;
   const scenario = request.manualScenario;
@@ -209,6 +241,7 @@ export async function readPharmacyReplenishmentReport(
       status: forecast ? ('AVAILABLE' as const) : ('INSUFFICIENT_EVIDENCE' as const),
       result: forecast,
     },
+    seasonalCalendar,
     backtest: {
       status: 'INELIGIBLE' as const,
       result: null,
@@ -234,6 +267,11 @@ export async function readPharmacyReplenishmentReport(
       'Demand and supply are separate current reads, not an atomic snapshot or historical replay.',
       'Manual planning assumes a constant daily rate and only recorded eligible stock carried to a future UTC origin. Stock completeness remains unverified. Scenario coverage is model input coverage, not empirical performance.',
       'Planning is read-only and requires financial report access. No order, reservation or approval is created.',
+      ...(windows.length
+        ? [
+            'Seasonal uplift is an estimate from completed-sale units on this branch; no-sale days are unknown, not zero.',
+          ]
+        : []),
     ],
   };
 }

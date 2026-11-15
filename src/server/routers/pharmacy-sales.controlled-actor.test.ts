@@ -17,6 +17,15 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),
 }));
+// DEV-629: the prescription reference rules have their own suites; here they resolve.
+vi.mock('@/lib/pharmacy/rx-prescription-reference', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/rx-prescription-reference')>()),
+  resolvePrescriptionReference: vi.fn(async () => ({
+    prescriptionLineId: 'rx-line-1',
+    patientId: 'patient-1',
+  })),
+  attachPrescriptionReference: vi.fn(async () => undefined),
+}));
 vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
   verifyOperatorCredential: vi.fn(),
@@ -388,4 +397,38 @@ describe('pharmacySales.addLine controlled actor', () => {
       expect(addSaleLine).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('pharmacySales.addLine prescription reference (DEV-629)', () => {
+  it('queues the pharmacist review that settlement waits on when a pharmacist attaches a prescription', async () => {
+    const { caller, db } = callerFor([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    db.medicine.findFirst = async () =>
+      ({
+        id: 'medicine-1',
+        controlled: false,
+        rx: true,
+        restricted: false,
+        manufacturer: 'Maker',
+      }) as never;
+    const review = vi.fn().mockResolvedValue({ id: 'review-1' });
+    Object.assign(db, { pharmacyPharmacistReviewItem: { create: review } });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'sale-line-1' } } as never);
+    await caller.addLine({
+      ...line,
+      controlledAuthorization: undefined,
+      idempotencyKey: 'counter:sale-1:rx',
+      prescription: { prescriptionLineId: 'rx-line-1', patientId: 'patient-1' },
+    });
+    expect(review).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        organizationId: 'org-1',
+        prescriptionLineId: 'rx-line-1',
+        saleLineId: 'sale-line-1',
+        requestedByUserId: 'cashier-1',
+      },
+    });
+  });
 });

@@ -300,19 +300,98 @@ describe('POS sale voiding', () => {
   });
 });
 
+describe('DEV-819 voucher uses on a voided bill', () => {
+  it('gives back the voucher uses taken by an unpaid bill when it is voided', async () => {
+    let status = 'OPEN';
+    const released: unknown[] = [];
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({
+          id: 'sale-a',
+          status,
+          lines: [
+            { voucherId: 'voucher-a', medicine: { controlled: false } },
+            { voucherId: 'voucher-a', medicine: { controlled: false } },
+            { voucherId: null, medicine: { controlled: false } },
+          ],
+        }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacyVoucher: {
+        updateMany: async (args: unknown) => {
+          released.push(args);
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: { findMany: async () => [] },
+      pharmacyStockMovement: {
+        findFirst: async () => null,
+        findMany: async () => [],
+        create: async () => ({}),
+      },
+      pharmacyControlledRegisterEntry: { findMany: async () => [] },
+      pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+      pharmacyTender: { findMany: async () => [] },
+    };
+
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Wrong bill');
+
+    expect(released).toEqual([
+      {
+        where: {
+          id: 'voucher-a',
+          organizationId: 'org-a',
+          branchId: 'branch-a',
+          usedCount: { gte: 2 },
+        },
+        data: { usedCount: { decrement: 2 } },
+      },
+    ]);
+  });
+});
+
 describe('DEV-27 voucher scoping at the POS', () => {
   const storedVoucher = {
     id: 'voucher-a',
     discountMinor: 100,
     eligibleCategories: ['NON_DRUG'],
     issuedByUserId: 'owner-a',
-    validUntil: null as Date | null,
+    approvedByUserId: 'owner-a' as string | null,
+    approvalPolicy: 'VOUCHER_WITHIN_CAP' as string | null,
+    validUntil: new Date(Date.now() + 86_400_000) as Date | null,
+    maxUses: 5,
+    usedCount: 0,
+    revokedAt: null as Date | null,
+  };
+  const issuer = {
+    id: 'owner-a',
+    organizationId: 'org-a',
+    status: 'ACTIVE',
+    role: 'ADMIN',
+    department: null,
   };
   function voucherDb(
     medicine: Record<string, unknown>,
-    voucher: typeof storedVoucher | null = storedVoucher
+    voucher: typeof storedVoucher | null = storedVoucher,
+    options: { issuer?: Record<string, unknown> | null; taken?: number } = {}
   ) {
-    const state = { allocations: 0, voucherWhere: undefined as unknown };
+    const state = {
+      allocations: 0,
+      voucherReads: 0,
+      voucherWhere: undefined as unknown,
+      useWhere: undefined as unknown,
+    };
+    const issuerRow = options.issuer === undefined ? issuer : options.issuer;
     return {
       state,
       pharmacySale: {
@@ -320,10 +399,20 @@ describe('DEV-27 voucher scoping at the POS', () => {
         updateMany: async () => ({ count: 1 }),
       },
       medicine: { findFirst: async () => ({ id: 'medicine-a', saleable: true, ...medicine }) },
+      user: {
+        findFirst: async () => issuerRow,
+        findUnique: async () =>
+          issuerRow ? { organizationRole: null, permissionOverrides: [] } : null,
+      },
       pharmacyVoucher: {
         findFirst: async (args: { where: unknown }) => {
+          state.voucherReads += 1;
           state.voucherWhere = args.where;
           return voucher;
+        },
+        updateMany: async (args: { where: unknown }) => {
+          state.useWhere = args.where;
+          return { count: options.taken ?? 1 };
         },
       },
       pharmacyInventoryLot: {
@@ -343,6 +432,7 @@ describe('DEV-27 voucher scoping at the POS', () => {
     quantity: 1,
     canonicalUnitsPerSaleUnit: 1,
     voucherId: 'voucher-a',
+    voucherCashierPinVerified: true as const,
     idempotencyKey: 'line-a',
   };
   const flags = { rx: false, otc: false, restricted: false, controlled: false };
@@ -363,6 +453,8 @@ describe('DEV-27 voucher scoping at the POS', () => {
       organizationId: 'org-a',
       branchId: 'branch-a',
       active: true,
+      revokedAt: null,
+      validUntil: { gt: expect.any(Date) },
     });
   });
 
@@ -390,6 +482,75 @@ describe('DEV-27 voucher scoping at the POS', () => {
       );
       expect(db.state.allocations).toBe(0);
     }
+  });
+
+  const frontShop = { ...flags, productFamily: 'FRONT_SHOP' };
+
+  it('DEV-819: refuses a voucher line without the cashier PIN before reading the voucher', async () => {
+    const db = voucherDb(frontShop);
+    const withoutPin: Omit<typeof line, 'voucherCashierPinVerified'> &
+      Partial<Pick<typeof line, 'voucherCashierPinVerified'>> = { ...line };
+    delete withoutPin.voucherCashierPinVerified;
+    await expect(addSaleLine(db as never, scope, withoutPin)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_PIN_REQUIRED')
+    );
+    expect(db.state.voucherReads).toBe(0);
+    expect(db.state.allocations).toBe(0);
+  });
+
+  it('DEV-819: refuses a used-up, revoked or never-expiring voucher', async () => {
+    for (const voucher of [
+      { ...storedVoucher, usedCount: 5 },
+      { ...storedVoucher, revokedAt: new Date() },
+      { ...storedVoucher, validUntil: null },
+    ]) {
+      const db = voucherDb(frontShop, voucher);
+      await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+        new PharmacySaleError('VOUCHER_INVALID')
+      );
+      expect(db.state.useWhere).toBeUndefined();
+      expect(db.state.allocations).toBe(0);
+    }
+  });
+
+  it("DEV-819: re-checks the issuer's owner rights when the voucher is redeemed", async () => {
+    for (const issuerRow of [
+      null,
+      { ...issuer, role: 'EMPLOYEE' },
+      { ...issuer, status: 'SUSPENDED' },
+      { ...issuer, organizationId: 'org-b' },
+    ]) {
+      const db = voucherDb(frontShop, storedVoucher, { issuer: issuerRow });
+      await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+        new PharmacySaleError('VOUCHER_INVALID')
+      );
+      expect(db.state.useWhere).toBeUndefined();
+      expect(db.state.allocations).toBe(0);
+    }
+  });
+
+  it('DEV-819: refuses a voucher above the value cap that the issuer approved alone', async () => {
+    const db = voucherDb(frontShop, { ...storedVoucher, discountMinor: 150_000 });
+    await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_INVALID')
+    );
+    expect(db.state.allocations).toBe(0);
+  });
+
+  it('DEV-819: takes one use with a compare-and-set and refuses a lost race', async () => {
+    const db = voucherDb(frontShop, { ...storedVoucher, usedCount: 4 }, { taken: 0 });
+    await expect(addSaleLine(db as never, scope, line)).rejects.toThrow(
+      new PharmacySaleError('VOUCHER_INVALID')
+    );
+    expect(db.state.useWhere).toEqual({
+      id: 'voucher-a',
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      active: true,
+      revokedAt: null,
+      usedCount: 4,
+    });
+    expect(db.state.allocations).toBe(0);
   });
 });
 

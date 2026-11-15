@@ -216,7 +216,7 @@ describe('fresh Pharmacy setup destinations', () => {
     const items = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items;
     for (const [key, href] of [
       ['MEDICINE_CATALOG_READINESS', '/pharmacy/medicines'],
-      ['OPENING_STOCK_READINESS', '/pharmacy/purchasing/receiving'],
+      ['OPENING_STOCK_READINESS', '/pharmacy/inventory/import'],
       ['PARTIES_AND_BALANCES', '/pharmacy/purchasing/suppliers'],
     ]) {
       expect(items.find((item) => item.key === key)).toMatchObject({
