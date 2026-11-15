@@ -41,7 +41,8 @@ describe('canOpenPharmacyCommandCentre (DEV-20)', () => {
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'], false],
     ['procurement', ['pharmacy:procurement'], false],
     ['finance', ['reports:financial'], false],
-    ['manager', ['pharmacy:manage', 'pharmacy:orders'], true],
+    ['manager without reports', ['pharmacy:manage', 'pharmacy:orders'], false],
+    ['manager with reports', ['pharmacy:manage', 'reports:operational'], true],
     ['auditor', ['reports:operational'], true],
   ])('decides the %s from their grants', async (_role, grants, expected) => {
     grant(...grants);

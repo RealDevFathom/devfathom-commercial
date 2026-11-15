@@ -11,14 +11,12 @@ type HomeUser = {
 
 /**
  * DEV-20: the Owner command centre is the dashboard of the organization administrator
- * (Owner/Admin), a pharmacy manager, and holders of the operational reports grant. Every
- * other pharmacy role (cashier, pharmacist, procurement, inventory, finance) lands on its
- * own staff home instead. Decided on the server for every dashboard render.
+ * (Owner/Admin) and holders of the operational reports grant, which its report queries and
+ * preference saves require. Every other pharmacy role (cashier, pharmacist, procurement,
+ * inventory, finance, and managers without the reports grant) lands on its own staff home
+ * instead. Decided on the server for every dashboard render.
  */
-export const PHARMACY_COMMAND_CENTRE_ACTIONS = [
-  'reports:operational',
-  'pharmacy:manage',
-] as const satisfies readonly Action[];
+export const PHARMACY_COMMAND_CENTRE_ACTIONS = ['reports:operational'] as const satisfies readonly Action[];
 
 export async function canOpenPharmacyCommandCentre(db: ScopedDb, user: HomeUser) {
   if (user.role === 'ADMIN') return true;
