@@ -260,6 +260,8 @@ describe('POS sale voiding', () => {
       pharmacyTender: {
         findMany: async () => [{ amountMinor: 500, refunds: [{ amountMinor: 500 }] }],
       },
+      // DEV-92: a void releases any pack serial the bill claimed.
+      pharmacySoldPackSerial: { updateMany: async () => ({ count: 0 }) },
     };
 
     await changeSaleStatus(

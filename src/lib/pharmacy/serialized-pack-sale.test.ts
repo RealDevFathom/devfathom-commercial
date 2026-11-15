@@ -163,6 +163,20 @@ function saleDb(
         controlled: false,
       })),
     },
+    // The bottle is its own sellable pack: one unit, no carton level above it.
+    packLevel: {
+      findMany: vi.fn(async () => [
+        {
+          id: 'pack-bottle',
+          level: 'UNIT',
+          parentPackLevelId: null,
+          unitsPerParent: 1,
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+          effectiveTo: null,
+          versionGroupId: 'pack-bottle',
+        },
+      ]),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
