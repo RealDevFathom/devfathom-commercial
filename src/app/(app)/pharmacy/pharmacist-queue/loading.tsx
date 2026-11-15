@@ -5,7 +5,7 @@ export default function Loading() {
   return (
     <main className="space-y-6" aria-busy="true">
       <PageHeader
-        eyebrow="Pharmacy · RX-03"
+        eyebrow="Pharmacy · Pharmacist review"
         heading="Pharmacist queue"
         description="Triage in request order, leave an explicit clinical decision, then sign to release."
       />

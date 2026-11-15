@@ -43,10 +43,7 @@ const validDate = (value: string | undefined, fallback: string) => {
 function State({ kind }: { kind: 'disabled' | 'permission' | 'error' }) {
   const copy = {
     disabled: ['SOP reports unavailable', 'Enable the Restaurant SOP module to view reporting.'],
-    permission: [
-      'Permission denied',
-      'The reports:operational permission and branch access are required.',
-    ],
+    permission: ['Permission denied', 'Operational reports access and branch access are required.'],
     error: [
       'SOP report could not load',
       'No SOP data was changed. Check the filters and try again.',

@@ -47,7 +47,7 @@ describe('owner importer wizard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
     await screen.findByText('Opening stock committed');
     expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'branch', stockLocationId: 'location', confirmed: true, previewHash: 'a'.repeat(64), mapping }));
-    expect(screen.getByText(/10 base units posted/)).toBeVisible();
+    expect(screen.getByText(/10 single units posted/)).toBeVisible();
   });
   it('invalidates the dry run and confirmation after a mapping edit', async () => {
     render(<OwnerImportWizard />);
@@ -100,6 +100,6 @@ it('shows rejected rows outside the valid-unit valuation and leaves commit disab
   preview.lines.push({...preview.lines[0],rowNumber:3,sourceRef:'INVALID',errors:['Invalid pack'],countedUnits:20});
   mocks.preview.mutateAsync.mockResolvedValue(preview);
   render(<OwnerImportWizard/>);await uploadAndPreview();
-  expect(screen.getByText(/1 of 2 valid rows · 10 counted base units · PKR 12.50 opening valuation/)).toBeVisible();
+  expect(screen.getByText(/1 of 2 valid rows · 10 counted single units · PKR 12.50 opening valuation/)).toBeVisible();
   expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();expect(screen.getByRole('button',{name:'Commit opening stock'})).toBeDisabled();
 });

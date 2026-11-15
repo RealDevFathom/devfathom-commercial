@@ -136,7 +136,7 @@ function WidgetState({
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
-          sub={value == null ? 'Not available in this release' : sourceLine(contract?.source)}
+          sub={value == null ? 'No data recorded yet' : sourceLine(contract?.source)}
         />
       ))}
     </div>

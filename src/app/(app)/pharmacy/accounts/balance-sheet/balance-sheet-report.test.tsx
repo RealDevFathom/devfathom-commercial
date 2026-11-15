@@ -53,7 +53,8 @@ describe('BalanceSheetReport', () => {
     expect(html).not.toContain('Classification incomplete');
     expect(html).toContain('CASH');
     expect(html).toContain('100.00');
-    expect(html).toContain('finance_journal_lines');
+    expect(html).toContain('Source: posted accounts');
+    expect(html).not.toContain('finance_journal_lines');
   });
 
   it('renders a balanced posted equation as classification-incomplete when nonzero unmapped accounts offset', async () => {

@@ -494,7 +494,7 @@ export default async function PharmacyFinancePage({
         ) : null}
       </SectionCard>
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Record money movement" eyebrow="FIN-02">
+        <SectionCard title="Record money movement" eyebrow="Cash and bank">
           <form action={perform} className="grid gap-4 sm:grid-cols-2">
             <input type="hidden" name="action" value="post" />
             <input type="hidden" name="branchId" value={branch.id} />
@@ -820,7 +820,7 @@ export default async function PharmacyFinancePage({
             </p>
           )}
         </SectionCard>
-        <SectionCard title="Publish tax profile" eyebrow="FIN-04 · Accountant approval">
+        <SectionCard title="Publish tax profile" eyebrow="Tax · Accountant approval">
           <a
             href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
             className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
