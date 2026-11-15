@@ -225,6 +225,7 @@ describe('Restaurant device security UI', () => {
         name: 'POS-1',
         branch: { id: 'branch_1', name: 'Downtown' },
         status: 'ACTIVE',
+        canRevoke: true,
         health: 'HEALTHY',
         lastSeenAt: new Date('2026-08-18T08:00:00Z'),
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -332,6 +333,7 @@ describe('Restaurant device security UI', () => {
         name: 'Kitchen display',
         branch: { id: 'branch_1', name: 'Downtown' },
         status: 'ACTIVE',
+        canRevoke: true,
         health: 'HEALTHY',
         lastSeenAt: new Date('2026-08-18T08:00:00Z'),
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -384,6 +386,7 @@ describe('Restaurant device security UI', () => {
         name: 'Devices-only POS',
         branch: { id: 'branch_1', name: 'Downtown' },
         status: 'ACTIVE',
+        canRevoke: true,
         health: 'HEALTHY',
         lastSeenAt: null,
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -411,6 +414,29 @@ describe('Restaurant device security UI', () => {
       'Eligible approvers could not be loaded for this device.'
     );
     expect(screen.getByRole('button', { name: 'Confirm rotation' })).toBeDisabled();
+  });
+
+  it('hides Revoke but keeps Rotate when the actor lacks devices:revoke for the device', () => {
+    mocks.devices.data = [
+      {
+        id: 'device_1',
+        name: 'Manage-only POS',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        status: 'ACTIVE',
+        canRevoke: false,
+        health: 'HEALTHY',
+        lastSeenAt: null,
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ];
+
+    renderConsole(true);
+
+    expect(screen.getByRole('button', { name: 'Rotate secret' })).toBeEnabled();
+    expect(
+      screen.queryByRole('button', { name: 'Revoke Manage-only POS' })
+    ).not.toBeInTheDocument();
+    expect(mocks.approverQueries.every((query) => !query.enabled)).toBe(true);
   });
 
   // ── WHA-1181 (9b): the kitchen-display enrollment dead end ─────────────────

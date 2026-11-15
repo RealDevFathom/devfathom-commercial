@@ -19,6 +19,14 @@ import {
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import {
+  actorMayRefund,
+  authenticateRefundPin,
+  REFUND_FORBIDDEN,
+  REFUND_PIN_BLOCKED,
+  REFUND_PIN_POLICY,
+} from '@/lib/pharmacy/refund-authorization';
+import { annotateAudit } from '@/server/audit';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -76,9 +84,33 @@ const orderLine = z
 export const pharmacyOrderingRouter = router({
   deliveryCommand: staffProcedure.input(deliveryCommandInput).mutation(async ({ ctx, input }) => {
     try {
-      return await ctx.db.$transaction(async (tx) =>
-        recordDeliveryCommand(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      return await ctx.db.$transaction(async (tx) => {
+        const scope = await scopeFor(ctx, input.branchId);
+        return recordDeliveryCommand(txDb(tx), scope, input, {
+          // DEV-647: a physical return that refunds cash needs a manager or owner PIN.
+          authorizeRefund: async () => {
+            if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+              throw new TRPCError({ code: 'FORBIDDEN', message: REFUND_FORBIDDEN });
+            // An independent transaction, so a refused PIN commits its lockout strike.
+            const pin = input.managerPin
+              ? await authenticateRefundPin({
+                  organizationId: scope.organizationId,
+                  actorId: scope.actorId,
+                  pin: input.managerPin,
+                  action: 'pharmacyOrdering.deliveryCommand',
+                })
+              : { blocked: REFUND_PIN_BLOCKED };
+            annotateAudit(ctx, {
+              metadata: {
+                policy: REFUND_PIN_POLICY,
+                approverId: scope.actorId,
+                pinVerified: 'verified' in pin,
+              },
+            });
+            if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
+          },
+        });
+      });
     } catch (error) {
       fail(error);
     }

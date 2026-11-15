@@ -562,11 +562,34 @@ export async function postInterbranchTransferEntry(
     throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   }
 
+  return postTransferDispatch(db, scope, line, line.quantityUnits, input.at);
+}
+
+type DispatchedLine = {
+  id: string;
+  transferId: string;
+  sourceBranchId: string;
+  sourceLotId: string;
+  sourceStockLocationId: string;
+  destinationStockLocationId: string;
+  transfer: { toBranchId: string };
+};
+
+/** The dispatch entry itself: `units` of the source lot's value into transit. */
+async function postTransferDispatch(
+  db: ScopedDb,
+  scope: PostingScope,
+  line: DispatchedLine,
+  units: number,
+  at: Date
+) {
   const lots = await loadLots(db, scope, [line.sourceLotId]);
   const lot = lots.get(line.sourceLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const amountMinor = lot.unitCostMinor * line.quantityUnits;
+  const amountMinor = lot.unitCostMinor * units;
+  // A zero-cost lot moves units but no value; there is nothing to journal.
+  if (amountMinor === 0) return null;
 
   return postJournalEntry(
     db,
@@ -575,7 +598,7 @@ export async function postInterbranchTransferEntry(
       sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
       sourceId: line.id,
       description: `Inter-branch transfer ${line.transferId}`,
-      occurredAt: input.at,
+      occurredAt: at,
       idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
       branchId: line.sourceBranchId,
       lines: nonZero([
@@ -605,11 +628,210 @@ export async function postInterbranchTransferEntry(
 }
 
 /**
+ * FIN-01 (transfer receipt): the destination branch shelves what arrived, and
+ * the value the dispatch parked in transit against it comes back into its
+ * inventory at the same cost.
+ *
+ * One entry per receiving movement, because a line may be received in parts;
+ * whatever never arrives stays in transit, exactly as the stock ledger keeps it.
+ */
+export async function postInterbranchTransferReceiptEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { transferLineId: string; stockMovementId: string; at: Date }
+) {
+  const line = await db.pharmacyInterbranchTransferLine.findFirst({
+    where: { id: input.transferLineId, organizationId: scope.organizationId },
+    include: { transfer: true },
+  });
+  if (!line) throw new PharmacyFinanceError('NOT_FOUND');
+  if (line.transfer.toBranchId !== scope.branchId) {
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  }
+  const movement = await db.pharmacyStockMovement.findFirst({
+    where: { id: input.stockMovementId, organizationId: scope.organizationId },
+  });
+  if (!movement) throw new PharmacyFinanceError('NOT_FOUND');
+  if (movement.branchId !== scope.branchId) {
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  }
+  if (
+    movement.kind !== 'TRANSFER_IN' ||
+    movement.disposition !== 'AVAILABLE' ||
+    movement.quantityUnits <= 0 ||
+    movement.stockLocationId !== line.destinationStockLocationId
+  ) {
+    throw new PharmacyFinanceError('INVALID_STATE');
+  }
+
+  const lots = await loadLots(db, scope, [movement.inventoryLotId]);
+  const lot = lots.get(movement.inventoryLotId);
+  if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
+
+  const amountMinor = lot.unitCostMinor * movement.quantityUnits;
+  if (amountMinor === 0) return null;
+  await ensureTransferDispatchPosted(db, scope, line, input.at);
+
+  return postJournalEntry(
+    db,
+    { organizationId: scope.organizationId, actorId: scope.actorId },
+    {
+      sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+      sourceId: line.id,
+      description: `Inter-branch transfer ${line.transferId} received`,
+      occurredAt: input.at,
+      idempotencyKey: `${postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id)}:receipt:${movement.id}`,
+      branchId: scope.branchId,
+      lines: nonZero([
+        {
+          accountCode: 'INVENTORY',
+          side: 'DEBIT',
+          amountMinor,
+          branchId: scope.branchId,
+          productId: lot.medicineId,
+          lotId: movement.inventoryLotId,
+          locationId: movement.stockLocationId,
+          sourceLineId: line.id,
+        },
+        {
+          accountCode: 'INVENTORY_IN_TRANSIT',
+          side: 'CREDIT',
+          amountMinor,
+          branchId: scope.branchId,
+          productId: lot.medicineId,
+          lotId: line.sourceLotId,
+          locationId: line.destinationStockLocationId,
+          sourceLineId: line.id,
+        },
+      ]),
+    }
+  );
+}
+
+/**
+ * FIN-01 (transfer loss): units dispatched but closed short at receipt are
+ * written off out of transit, so a short-closed transfer leaves no transit
+ * asset behind for stock that no longer exists.
+ *
+ * The receiving branch closes the variance, and the transit value is carried
+ * against it, so the loss is that branch's.
+ */
+export async function postInterbranchTransferLossEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { transferLineId: string; stockMovementId: string; at: Date }
+) {
+  const line = await db.pharmacyInterbranchTransferLine.findFirst({
+    where: { id: input.transferLineId, organizationId: scope.organizationId },
+    include: { transfer: true },
+  });
+  if (!line) throw new PharmacyFinanceError('NOT_FOUND');
+  if (line.transfer.toBranchId !== scope.branchId) {
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  }
+  const movement = await db.pharmacyStockMovement.findFirst({
+    where: { id: input.stockMovementId, organizationId: scope.organizationId },
+  });
+  if (!movement) throw new PharmacyFinanceError('NOT_FOUND');
+  if (movement.branchId !== line.sourceBranchId || movement.inventoryLotId !== line.sourceLotId) {
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  }
+  if (
+    movement.kind !== 'WRITE_OFF' ||
+    movement.disposition !== 'IN_TRANSIT' ||
+    movement.quantityUnits >= 0
+  ) {
+    throw new PharmacyFinanceError('INVALID_STATE');
+  }
+
+  const lots = await loadLots(db, { ...scope, branchId: line.sourceBranchId }, [line.sourceLotId]);
+  const lot = lots.get(line.sourceLotId);
+  if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
+
+  const amountMinor = lot.unitCostMinor * Math.abs(movement.quantityUnits);
+  if (amountMinor === 0) return null;
+  await ensureTransferDispatchPosted(db, scope, line, input.at);
+
+  // The same dimensions the dispatch debited transit with, so the line's
+  // transit balance nets to zero once it is received and closed.
+  const dimensions = {
+    branchId: scope.branchId,
+    productId: lot.medicineId,
+    lotId: line.sourceLotId,
+    locationId: line.destinationStockLocationId,
+    sourceLineId: line.id,
+  };
+
+  return postJournalEntry(
+    db,
+    { organizationId: scope.organizationId, actorId: scope.actorId },
+    {
+      sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+      sourceId: line.id,
+      description: movement.reason ?? `Inter-branch transfer ${line.transferId} short`,
+      occurredAt: input.at,
+      idempotencyKey: `${postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id)}:loss:${movement.id}`,
+      branchId: scope.branchId,
+      lines: [
+        { ...dimensions, accountCode: 'INVENTORY_WRITE_OFF', side: 'DEBIT', amountMinor },
+        { ...dimensions, accountCode: 'INVENTORY_IN_TRANSIT', side: 'CREDIT', amountMinor },
+      ],
+    }
+  );
+}
+
+/**
+ * Nothing may leave transit that was never put there. A transfer dispatched
+ * before dispatches were journalled has no dispatch entry, so the first posting
+ * that clears its transit backfills it — once, under the dispatch's own
+ * idempotency key, on the source branch, at the recorded dispatch time and in
+ * the recorded dispatcher's name.
+ *
+ * The backfill values only what is still in transit at that moment: units the
+ * line had already received before receipts were journalled never reached the
+ * GL, so putting them into transit now would leave them there for good. The
+ * caller must clear transit before it increments the line's `receivedUnits`.
+ */
+async function ensureTransferDispatchPosted(
+  db: ScopedDb,
+  scope: PostingScope,
+  line: DispatchedLine & {
+    quantityUnits: number;
+    receivedUnits: number;
+    transfer: { dispatchedAt: Date | null; dispatchedById: string | null };
+  },
+  fallbackAt: Date
+) {
+  const posted = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
+    },
+    select: { id: true },
+  });
+  if (posted) return;
+  const outstanding = line.quantityUnits - line.receivedUnits;
+  if (outstanding <= 0) return;
+  await postTransferDispatch(
+    db,
+    {
+      organizationId: scope.organizationId,
+      branchId: line.sourceBranchId,
+      actorId: line.transfer.dispatchedById ?? scope.actorId,
+    },
+    line,
+    outstanding,
+    line.transfer.dispatchedAt ?? fallbackAt
+  );
+}
+
+/**
  * FIN-01 (count adjustment): a counted variance is a real gain or loss of
  * value, so it is posted rather than absorbed.
  *
- * A line that counted exactly what the book said posts nothing and returns
- * null — an entry recording that nothing happened is noise in a leakage report.
+ * A line that counted exactly what the book said — or whose lot carries no
+ * cost — posts nothing and returns null: an entry recording that nothing
+ * happened is noise in a leakage report.
  */
 export async function postCountAdjustmentEntry(
   db: ScopedDb,
@@ -632,6 +854,7 @@ export async function postCountAdjustmentEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * Math.abs(variance);
+  if (amountMinor === 0) return null;
   const dimensions = {
     branchId: line.branchId,
     productId: lot.medicineId,

@@ -545,6 +545,30 @@ describe('fallback chain', () => {
     });
   });
 
+  it('reports unavailable when every keyed provider has a secret id but no loadable key', async () => {
+    // DEV-583: the launcher offered Ask Fathom while every question failed.
+    const env = { ...ENV, BEDROCK_REGION: undefined };
+    const { calls } = setup({ keys: { anthropic: null, openai: null } });
+    await expect(generate(env)).rejects.toMatchObject({
+      name: 'AIUnavailableError',
+      reason: 'NOT_CONFIGURED',
+    });
+    expect(calls).toEqual([]);
+    await expect(readRoutedAvailability(env)).resolves.toEqual({
+      available: false,
+      reason: 'NOT_CONFIGURED',
+    });
+  });
+
+  it('stays available while another provider can still answer', async () => {
+    setup({ keys: { anthropic: null } });
+    await expect(readRoutedAvailability({ ...ENV, BEDROCK_REGION: undefined })).resolves.toEqual({
+      available: true,
+    });
+    setup({ keys: { anthropic: null, openai: null } });
+    await expect(readRoutedAvailability(ENV)).resolves.toEqual({ available: true });
+  });
+
   it('treats unreadable spend as capped rather than spending blind', async () => {
     quiet();
     const { calls } = setup({ spendFails: true });
