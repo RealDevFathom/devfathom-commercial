@@ -33,7 +33,7 @@ describe('pharmacy safety register procedures', () => {
   });
 });
 
-function fixture(provisional: boolean | undefined, profileExists = true) {
+function fixture(provisional: boolean | undefined, profileExists = true, branchProvince = 'PK-SD') {
   const rules = {
     licenceCategories: { provisional: false },
     permittedSchedules: { provisional: false },
@@ -43,14 +43,12 @@ function fixture(provisional: boolean | undefined, profileExists = true) {
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
-      findFirstOrThrow: vi
-        .fn()
-        .mockResolvedValue({
-          provinceCode: 'PK-SD',
-          regulatoryProfiles: profileExists
-            ? [{ provinceCode: 'PK-SD', jurisdictionRuleSet: rules }]
-            : [],
-        }),
+      findFirstOrThrow: vi.fn().mockResolvedValue({
+        provinceCode: branchProvince,
+        regulatoryProfiles: profileExists
+          ? [{ provinceCode: 'PK-SD', jurisdictionRuleSet: rules }]
+          : [],
+      }),
     },
     jurisdictionRuleSet: { findFirst: vi.fn().mockResolvedValue(rules) },
     pharmacyControlledRegisterEntry: { findMany: vi.fn().mockResolvedValue([]) },
@@ -101,13 +99,26 @@ it('reports published pending province rules before a profile exists', async () 
   });
   expect(db.jurisdictionRuleSet.findFirst).toHaveBeenCalledWith({
     where: {
-      code: 'PK-SD',
+      code: { in: ['PK-SD', 'SD'] },
       isPlaceholder: false,
       effectiveFrom: { lte: expect.any(Date) },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: expect.any(Date) } }],
     },
     orderBy: { effectiveFrom: 'desc' },
   });
+});
+
+it('finds published pending rules for a branch stored with the bare province code', async () => {
+  const { db, caller } = fixture(true, false, 'SD');
+  expect(await caller.controlledRegister({ branchId: 'branch-1' })).toMatchObject({
+    provinceName: 'Sindh',
+    pendingLegalReview: true,
+  });
+  expect(db.jurisdictionRuleSet.findFirst).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({ code: { in: ['SD', 'PK-SD'] } }),
+    })
+  );
 });
 
 it('refuses an unassigned branch before reading its regulatory status or register', async () => {

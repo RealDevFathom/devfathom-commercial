@@ -162,18 +162,13 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
-  const branchJurisdiction = data.jurisdictions.find(
-    (candidate) =>
-      candidate.provinceCode ===
-      data.branches.find((branch) => branch.id === branchId)?.provinceCode
-  );
   const pendingProvince =
     data.selectedBranchId === branchId && current
       ? current.pendingLegalReview
         ? current.provinceName
         : null
-      : branchJurisdiction?.provisional
-        ? branchJurisdiction.provinceName
+      : jurisdiction?.provisional
+        ? jurisdiction.provinceName
         : null;
 
   async function uploadEvidence(file: File) {

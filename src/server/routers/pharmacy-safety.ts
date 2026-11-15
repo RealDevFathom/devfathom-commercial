@@ -8,7 +8,11 @@ import {
   listControlledPinWitnesses,
 } from '@/lib/pharmacy/controlled-register';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
-import { provinceName, rulesPendingLegalReview } from '@/lib/pharmacy/regulatory-profile-form';
+import {
+  normalizeRegulatoryProvince,
+  provinceName,
+  rulesPendingLegalReview,
+} from '@/lib/pharmacy/regulatory-profile-form';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
@@ -107,7 +111,15 @@ export const pharmacySafetyRouter = router({
         profile?.jurisdictionRuleSet ??
         (await ctx.db.jurisdictionRuleSet.findFirst({
           where: {
-            code: branch.provinceCode,
+            code: {
+              in: [
+                ...new Set([
+                  branch.provinceCode,
+                  normalizeRegulatoryProvince(branch.provinceCode),
+                  `PK-${normalizeRegulatoryProvince(branch.provinceCode)}`,
+                ]),
+              ],
+            },
             isPlaceholder: false,
             effectiveFrom: { lte: now },
             OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],

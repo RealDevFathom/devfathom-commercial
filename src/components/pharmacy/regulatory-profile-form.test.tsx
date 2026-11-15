@@ -292,6 +292,19 @@ it('shows a warning for a branch in a provisional province and none for confirme
   expect(screen.queryByText('Pending legal review')).not.toBeInTheDocument();
 });
 
+it('shows the pending warning for a branch stored with the bare province code', () => {
+  render(
+    <PharmacyRegulatoryProfileForm
+      initial={{
+        ...initial,
+        branches: [{ ...initial.branches[0]!, provinceCode: 'SD' }],
+        jurisdictions,
+      }}
+    />
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Sindh rules are provisional');
+});
+
 it('keeps the effective profile warning when newer published rules and the draft are confirmed', () => {
   const version = {
     id: 'version-1',
