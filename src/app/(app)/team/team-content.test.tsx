@@ -191,6 +191,46 @@ describe('tenant department invitation', () => {
     expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
   });
 
+  it('shows delivery failure, copies the link, and replaces it after a resend', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        inviteUrl: '/invite/first',
+        emailDelivery: 'FAILED',
+      })
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Invite email failed');
+    expect(screen.queryByText(/Invitation sent to/)).toBeNull();
+    expect(screen.getByText('/invite/first')).toBeVisible();
+    expect(state.invalidateOverview).toHaveBeenCalledOnce();
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }))
+    );
+    expect(writeText).toHaveBeenCalledWith('/invite/first');
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invite' }));
+    expect(state.invite.mutate.mock.calls[1][0]).toEqual(state.invite.mutate.mock.calls[0][0]);
+    act(() => state.invite.mutate.mock.calls[1][1].onError({ message: 'Try again later' }));
+    expect(screen.getByText('Try again later')).toBeVisible();
+    expect(screen.getByText('/invite/first')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invite' }));
+    act(() =>
+      state.invite.mutate.mock.calls[2][1].onSuccess({
+        inviteUrl: '/invite/replacement',
+        emailDelivery: 'SENT',
+      })
+    );
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+    expect(screen.getByText('/invite/replacement')).toBeVisible();
+    expect(screen.queryByText('/invite/first')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resend invite' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeEnabled();
+  });
+
   it('refreshes member queries and notifies the host only after a successful invitation', () => {
     const onInvited = vi.fn();
     render(<AddMemberModal onClose={vi.fn()} onInvited={onInvited} />);
@@ -205,7 +245,12 @@ describe('tenant department invitation', () => {
     expect(state.invalidateOverview).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
-    act(() => state.invite.mutate.mock.calls[1][1].onSuccess({ inviteUrl: '/invite/token' }));
+    act(() =>
+      state.invite.mutate.mock.calls[1][1].onSuccess({
+        inviteUrl: '/invite/token',
+        emailDelivery: 'SENT',
+      })
+    );
     expect(onInvited).toHaveBeenCalledOnce();
     expect(state.invalidateDirectory).toHaveBeenCalledOnce();
     expect(state.invalidateOverview).toHaveBeenCalledOnce();
@@ -414,7 +459,10 @@ describe('pharmacy team without HR', () => {
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
     expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
-    expect(state.overviewQuery).toHaveBeenLastCalledWith(undefined, { enabled: false, retry: false });
+    expect(state.overviewQuery).toHaveBeenLastCalledWith(undefined, {
+      enabled: false,
+      retry: false,
+    });
     expect(state.invite.mutate).not.toHaveBeenCalled();
   });
 
@@ -440,7 +488,12 @@ describe('pharmacy team without HR', () => {
       expect.objectContaining({ email: 'ayesha@e2e.invalid', department: 'COUNTER' }),
       expect.any(Object)
     );
-    act(() => state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: '/invite/token' }));
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        inviteUrl: '/invite/token',
+        emailDelivery: 'SENT',
+      })
+    );
     expect(state.invalidateDirectory).toHaveBeenCalledOnce();
     expect(state.invalidateOverview).toHaveBeenCalledOnce();
     expect(screen.getByText('Invitation sent to ayesha@e2e.invalid')).toBeVisible();

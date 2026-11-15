@@ -12,6 +12,9 @@ const credentials = {
   AGENCY_E2E: '1',
   AGENCY_E2E_ADMIN_EMAIL: 'admin@agency-e2e.test',
   AGENCY_E2E_ADMIN_PASSWORD: 'test-only-password',
+  NEXT_PUBLIC_APP_URL: 'https://agency.example.test',
+  BREVO_API_KEY: 'test-only-key',
+  BREVO_SENDER_EMAIL: 'invites@example.test',
 };
 
 describe('Agency E2E fail-closed runner', () => {
@@ -25,6 +28,65 @@ describe('Agency E2E fail-closed runner', () => {
     const env = agencyE2eEnvironment({ AGENCY_E2E_DATABASE_URL: target, ...credentials });
     expect(env.DATABASE_URL).toBe(new URL(target).href);
     expect(env.TEST_DATABASE_URL).toBe(env.DATABASE_URL);
+  });
+
+  test.each(['BREVO_API_KEY', 'BREVO_SENDER_EMAIL'] as const)(
+    'requires %s before the lane starts',
+    (name) => {
+      expect(() =>
+        agencyE2eEnvironment({
+          ...credentials,
+          AGENCY_E2E_DATABASE_URL: target,
+          [name]: ' ',
+        })
+      ).toThrow(name);
+    }
+  );
+
+  test.each([
+    undefined,
+    '',
+    'invalid',
+    'javascript:alert(1)',
+    'http://staging.example.test',
+    'http://localhost:4327',
+    'https://user:password@example.test',
+  ])('rejects a missing or unsafe application URL %s', (url) => {
+    expect(() =>
+      agencyE2eEnvironment({
+        ...credentials,
+        AGENCY_E2E_DATABASE_URL: target,
+        NEXT_PUBLIC_APP_URL: url,
+      })
+    ).toThrow(/application URL/);
+  });
+
+  test('uses runtime application URL precedence and accepts HTTPS auth fallbacks', () => {
+    const env = { ...credentials, AGENCY_E2E_DATABASE_URL: target, NEXT_PUBLIC_APP_URL: undefined };
+    expect(
+      agencyE2eEnvironment({ ...env, NEXTAUTH_URL: 'https://auth.example.test' }).DATABASE_URL
+    ).toBe(target);
+    expect(
+      agencyE2eEnvironment({ ...env, AUTH_URL: 'https://auth.example.test' }).DATABASE_URL
+    ).toBe(target);
+    expect(() =>
+      agencyE2eEnvironment({
+        ...env,
+        NEXT_PUBLIC_APP_URL: 'http://staging.example.test',
+        AUTH_URL: 'https://auth.example.test',
+      })
+    ).toThrow('HTTPS');
+  });
+
+  test('refuses capture mode and malformed sender addresses', () => {
+    const env = { ...credentials, AGENCY_E2E_DATABASE_URL: target };
+    expect(() => agencyE2eEnvironment({ ...env, EMAIL_DELIVERY_MODE: 'capture' })).toThrow(
+      'real email delivery'
+    );
+    expect(() => agencyE2eEnvironment({ ...env, BREVO_SENDER_EMAIL: 'not-an-email' })).toThrow(
+      'valid sender'
+    );
+    expect(agencyE2eEnvironment({ ...env, EMAIL_DELIVERY_MODE: 'send' }).DATABASE_URL).toBe(target);
   });
 
   test.each([

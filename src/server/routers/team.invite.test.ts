@@ -129,6 +129,34 @@ describe('team.inviteMember duplicate guard', () => {
     );
   });
 
+  it.each(['SENT', 'FAILED'] as const)(
+    'reports %s while retaining a usable invitation',
+    async (delivery) => {
+      mocks.findFirst.mockResolvedValue(null);
+      mocks.create.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+      mocks.invitationUpsert.mockResolvedValue({});
+      mocks.sendEmail.mockResolvedValue({ messageId: 'provider-id' });
+      if (delivery === 'FAILED')
+        mocks.sendEmail.mockRejectedValueOnce(new Error('Provider unavailable'));
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const result = await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+        expect(result).toEqual({
+          id: 'user_invited',
+          inviteUrl: expect.stringMatching(/^https:\/\/www\.devfathom\.com\/invite\/.+/),
+          emailDelivery: delivery,
+        });
+        expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+        expect(mocks.sendEmail).toHaveBeenCalledOnce();
+        expect(mocks.invitationUpsert.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.sendEmail.mock.invocationCallOrder[0]!
+        );
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
   it('stores a restaurant role template on the invited member', async () => {
     mocks.findFirst.mockResolvedValue(null);
     mocks.roleFindFirst.mockResolvedValue({ id: 'role_gm', name: 'General Manager' });
