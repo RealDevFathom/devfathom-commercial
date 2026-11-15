@@ -31,6 +31,11 @@ import {
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  readKhataReminderSettings,
+  saveKhataReminderSettings,
+} from '@/lib/pharmacy/khata-reminder-branch-settings';
+import { khataReminderSettingsSchema } from '@/lib/pharmacy/khata-reminder-settings';
+import {
   executeSandboxPayment,
   sandboxPaymentInput,
   PharmacyPaymentSandboxError,
@@ -950,6 +955,31 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
+  // DEV-76: the owner sets each branch's khata reminder cadence and balance floor.
+  khataReminderSettings: adminProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) =>
+      readKhataReminderSettings(ctx.db, await branchScopeOrForbidden(ctx, input.branchId))
+    ),
+  saveKhataReminderSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: khataReminderSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, khataReminderSettings: input.settings },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });

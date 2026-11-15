@@ -85,6 +85,27 @@ describe('readWhatsAppConfig', () => {
     expect(config.khataParameterOrder).toEqual({ en: ['balance', 'name'], ur: null });
   });
 
+  it('DEV-76: accepts due-date and pay-to placeholders in any approved order', () => {
+    const config = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name, balance, dueDate, payTo',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'payTo,balance,name',
+    });
+    expect(config.khataParameterOrder).toEqual({
+      en: ['name', 'balance', 'dueDate', 'payTo'],
+      ur: ['payTo', 'balance', 'name'],
+    });
+  });
+
+  it.each(['name,name,balance', 'balance,dueDate', 'name,payTo', 'name,balance,product', ''])(
+    'DEV-76: fails closed for the Khata parameter contract %j',
+    (parameters) => {
+      const config = readWhatsAppConfig({
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: parameters,
+      });
+      expect(config.khataParameterOrder.ur).toBeNull();
+    }
+  );
+
   it('rejects an out-of-range reminder lead', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '5' }).reminderLeadDays).toBe(
       5
