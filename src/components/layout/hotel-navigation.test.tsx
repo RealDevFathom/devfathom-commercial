@@ -109,6 +109,7 @@ const priorHrefs = [
   '/pharmacy/finance',
   '/pharmacy/reports',
   '/pharmacy/cameras',
+  '/pharmacy/khata',
   '/pharmacy/loyalty',
   '/pharmacy/marketing',
   '/pharmacy/prescriptions',
