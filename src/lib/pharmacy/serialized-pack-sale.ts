@@ -41,8 +41,8 @@ export type ResolvedSerializedPack = {
   gtin: string;
   serialNumber: string;
   serialKey: string;
-  /** The lot this physical pack belongs to, or null when stock-in never recorded it. */
-  inventoryLotId: string | null;
+  /** The lot this physical pack belongs to. A pack that resolves to no lot is refused. */
+  inventoryLotId: string;
 };
 
 /** Allocation evidence for a pinned lot. Only recorded when the lot is not FEFO's choice. */
@@ -103,19 +103,24 @@ export async function resolveSerializedPackForSale(
   }
 
   // A pack stocked before 2D capture, or moved here from another branch, is
-  // matched by the batch printed in its code.
+  // matched by the batch printed in its code, to a lot that still has sellable
+  // stock (an emptied lot of the same batch must not shadow a stocked one).
   const lot = batch
     ? await db.pharmacyInventoryLot.findFirst({
         where: {
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           batch: { medicineId: input.medicineId, batchNumber: batch },
+          balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true },
       })
     : null;
-  return { gtin, serialNumber: serial, serialKey, inventoryLotId: lot?.id ?? null };
+  // Never let an unidentified pack fall back to FEFO: that would debit, and
+  // record against this serial, a batch the pack does not belong to.
+  if (!lot) throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+  return { gtin, serialNumber: serial, serialKey, inventoryLotId: lot.id };
 }
 
 /** Claim the pack for the line that sold it. Concurrent claims lose on the live unique index. */
@@ -123,7 +128,7 @@ export async function claimSoldPackSerial(
   db: ScopedDb,
   scope: SerializedPackScope,
   pack: ResolvedSerializedPack,
-  sale: { saleId: string; saleLineId: string; inventoryLotId: string | null }
+  sale: { saleId: string; saleLineId: string; inventoryLotId: string }
 ) {
   try {
     return await db.pharmacySoldPackSerial.create({
@@ -145,18 +150,24 @@ export async function claimSoldPackSerial(
   }
 }
 
-/** A voided sale never sold its packs, so their serials may be sold again. */
+/**
+ * A voided sale never sold its packs, and a pack returned whole to sellable
+ * stock is back on the shelf, so their serials may be sold again. Pass a
+ * `saleLineId` to release only that line's pack.
+ */
 export async function releaseSoldPackSerials(
   db: ScopedDb,
   scope: Omit<SerializedPackScope, 'actorId'>,
   saleId: string,
-  at = new Date()
+  at = new Date(),
+  saleLineId?: string
 ) {
   return db.pharmacySoldPackSerial.updateMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       saleId,
+      ...(saleLineId ? { saleLineId } : {}),
       releasedAt: null,
     },
     data: { releasedAt: at },

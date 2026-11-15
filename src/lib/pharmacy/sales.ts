@@ -336,15 +336,13 @@ async function addSaleLineWithAllocation(
       medicineId: input.medicineId,
       payload: input.scannedPack.payload,
     });
-    if (pack.inventoryLotId) {
-      if (override && override.inventoryLotId !== pack.inventoryLotId)
-        throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
-      override ??= {
-        inventoryLotId: pack.inventoryLotId,
-        reason: serializedPackOverrideReason(pack.serialNumber),
-        approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
-      };
-    }
+    if (override && override.inventoryLotId !== pack.inventoryLotId)
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    override ??= {
+      inventoryLotId: pack.inventoryLotId,
+      reason: serializedPackOverrideReason(pack.serialNumber),
+      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+    };
   }
   const allocationInput = {
     medicineId: input.medicineId,
@@ -371,7 +369,7 @@ async function addSaleLineWithAllocation(
     if (
       allocation.allocations.some(
         (part) =>
-          (pinned !== null && part.inventoryLotId !== pinned) ||
+          part.inventoryLotId !== pinned ||
           lotById.get(part.inventoryLotId)?.unitsPerPack !== input.canonicalUnitsPerSaleUnit
       )
     )
@@ -469,7 +467,7 @@ async function addSaleLineWithAllocation(
     await claimSoldPackSerial(db, scope, pack, {
       saleId: input.saleId,
       saleLineId: line.id,
-      inventoryLotId: pack.inventoryLotId ?? allocation.allocations[0]?.inventoryLotId ?? null,
+      inventoryLotId: pack.inventoryLotId,
     });
   }
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
@@ -997,6 +995,14 @@ export async function returnSaleLine(
   });
   if (remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-92: a serialized pack returned whole to sellable stock may be sold again.
+  if (
+    disposition === 'RESTOCK' &&
+    line.returnLines.reduce((total, returned) => total + returned.canonicalUnits, 0) >=
+      line.canonicalUnits
+  ) {
+    await releaseSoldPackSerials(db, scope, line.saleId, new Date(), line.id);
+  }
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {
     returnId: saleReturn.id,
     disposition,

@@ -273,3 +273,46 @@ it('routes a legacy restock payload without a location to existing branch quaran
   });
   expect(db.pharmacyReturnVerificationTask.create).toHaveBeenCalledOnce();
 });
+
+// DEV-92: a serialized pack returned whole to sellable stock may be sold again.
+describe('serialized pack return', () => {
+  function serializedFixture() {
+    const { db, line } = fixture();
+    line.canonicalUnits = 1;
+    line.allocations = [
+      { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 1 },
+    ];
+    line.returnLines = [];
+    db.pharmacySaleReturnLine.create.mockImplementation(
+      async ({ data }: { data: { canonicalUnits: number } }) => data
+    );
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    return { db: { ...db, pharmacySoldPackSerial: { updateMany } }, updateMany };
+  }
+
+  it('releases the line serial when the pack is restocked', async () => {
+    const { db, updateMany } = serializedFixture();
+    await returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'o',
+        branchId: 'b',
+        saleId: 'sale',
+        saleLineId: 'line',
+        releasedAt: null,
+      },
+      data: { releasedAt: expect.any(Date) },
+    });
+  });
+
+  it('keeps the serial sold when the pack goes to quarantine', async () => {
+    const { db, updateMany } = serializedFixture();
+    await returnSaleLine(db as never, scope, {
+      ...input,
+      canonicalUnits: 1,
+      disposition: 'QUARANTINE',
+      quarantineLocationId: 'quarantine',
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+});

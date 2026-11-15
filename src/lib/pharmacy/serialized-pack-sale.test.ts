@@ -49,6 +49,7 @@ function saleDb(
   options: {
     received?: { branchId: string; inventoryLotId: string } | null;
     barcodeMedicineId?: string;
+    batchLot?: { id: string } | null;
   } = {}
 ) {
   const claims: Claim[] = [];
@@ -84,7 +85,9 @@ function saleDb(
       ),
     },
     pharmacyInventoryLot: {
-      findFirst: vi.fn(async () => ({ id: 'lot-scanned' })),
+      findFirst: vi.fn(async () =>
+        options.batchLot === undefined ? { id: 'lot-scanned' } : options.batchLot
+      ),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         lots.filter((entry) => where.id.in.includes(entry.id))
       ),
@@ -241,6 +244,8 @@ describe('DEV-92 serialized pack resolution', () => {
           organizationId: 'org-a',
           branchId: 'branch-a',
           batch: { medicineId: 'medicine-syrup', batchNumber: 'CRM-77' },
+          // Only a lot that still holds sellable stock of the batch is chosen.
+          balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
         },
       })
     );
@@ -270,6 +275,25 @@ describe('DEV-92 serialized pack resolution', () => {
     await expect(
       resolveSerializedPackForSale(db as never, scope, { medicineId: 'medicine-syrup', payload })
     ).rejects.toMatchObject({ reason: 'SERIAL_NOT_READABLE' });
+  });
+
+  it('refuses a pack whose serial and printed batch match no stocked lot here', async () => {
+    const { db } = saleDb({ received: null, batchLot: null });
+    await expect(
+      resolveSerializedPackForSale(db as never, scope, {
+        medicineId: 'medicine-syrup',
+        payload: SYRUP_BOTTLE,
+      })
+    ).rejects.toMatchObject({ reason: 'SERIAL_LOT_UNAVAILABLE' });
+  });
+
+  it('never falls back to FEFO for an unidentified pack at the counter', async () => {
+    const { db } = saleDb({ received: null, batchLot: null });
+    await expect(addSaleLine(db as never, scope, bottleLine())).rejects.toMatchObject({
+      reason: 'SERIAL_LOT_UNAVAILABLE',
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacySoldPackSerial.create).not.toHaveBeenCalled();
   });
 
   it('refuses a serial whose GTIN belongs to another medicine', async () => {
