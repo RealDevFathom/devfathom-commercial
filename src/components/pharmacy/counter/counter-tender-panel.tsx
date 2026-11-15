@@ -185,7 +185,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
     // Null until edited, so the selected patient's name fills it without an effect.
     const [buyerDraft, setBuyerDraft] = useState<string | null>(initialDraft?.buyerName ?? null);
-    const buyerName = buyerDraft ?? khataSignupPatient?.displayName ?? '';
+    // Patient names allow 200 characters; the cash memo, tender and recovery record take 100.
+    const buyerName = (buyerDraft ?? khataSignupPatient?.displayName ?? '').slice(0, 100);
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
     );
