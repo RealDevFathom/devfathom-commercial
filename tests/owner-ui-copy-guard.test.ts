@@ -74,6 +74,15 @@ const files = [
   ...EXTRA_FILES.map((file) => path.join(ROOT, file)),
 ];
 
+// The source fixture is immutable within this suite. Parse its text once so
+// each guard checks the same complete UI without repeatedly building the AST.
+const uiText = files.flatMap((file) =>
+  userFacingText(file, readFileSync(file, 'utf8')).map((hit) => ({
+    ...hit,
+    file: path.relative(ROOT, file),
+  }))
+);
+
 /**
  * `.toISOString()` rendered as visible JSX content (a child expression, not an
  * attribute such as `dateTime`, `value` or `href`) shows owners a raw ISO stamp.
@@ -194,11 +203,9 @@ function rawKeysInJsx(file: string, content: string): string[] {
 }
 
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
-      .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+  return uiText
+    .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
+    .map(({ file, line, text }) => `${file}:${line} ${JSON.stringify(text)}`);
 }
 
 describe('owner UI copy guard', () => {
