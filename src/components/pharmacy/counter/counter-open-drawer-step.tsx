@@ -11,6 +11,8 @@ import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-draw
 export type CounterOpenDrawerStepProps = {
   /** Status not yet known, a write in flight, or no authorized branch. */
   disabled: boolean;
+  /** Presentation only; the server checks manager access on every float write. */
+  canDeclareFloat?: boolean;
   /** The drawer status read failed: the drawer may or may not be open. */
   statusError?: boolean;
   /** Site storage is blocked, so this browser has no counter device id. */
@@ -42,6 +44,7 @@ export const OPENING_FLOAT_QUICK_AMOUNTS = ['0', '1000', '2000', '5000'] as cons
  */
 export function CounterOpenDrawerStep({
   disabled,
+  canDeclareFloat = false,
   statusError = false,
   deviceUnavailable = false,
   checking = false,
@@ -54,8 +57,8 @@ export function CounterOpenDrawerStep({
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
-  const chooseCashier = Boolean(cashiers?.length);
-  const openingFloatMinor = parseAmountMinor(openingCash);
+  const chooseCashier = canDeclareFloat && Boolean(cashiers?.length);
+  const openingFloatMinor = canDeclareFloat ? parseAmountMinor(openingCash) : 0;
   const invalid = submitted && openingFloatMinor === null;
 
   return (
@@ -77,8 +80,9 @@ export function CounterOpenDrawerStep({
           Open the cash drawer to start the shift
         </h3>
         <p className="text-sm text-text-body">
-          Count the cash in the drawer and enter it below. Bills can be started once the drawer is
-          open.
+          {canDeclareFloat
+            ? 'Count the cash in the drawer and enter it below. Bills can be started once the drawer is open.'
+            : 'Open with 0 only if the drawer is empty. Ask a manager or owner to declare any opening float. Bills can be started once the drawer is open.'}
         </p>
       </div>
       {context ? (
@@ -140,7 +144,8 @@ export function CounterOpenDrawerStep({
             autoComplete="off"
             autoFocus
             placeholder="0.00"
-            value={openingCash}
+            value={canDeclareFloat ? openingCash : '0'}
+            readOnly={!canDeclareFloat}
             disabled={disabled}
             aria-invalid={invalid}
             aria-describedby={invalid ? 'counter-opening-cash-error' : undefined}
@@ -173,24 +178,28 @@ export function CounterOpenDrawerStep({
           Open drawer
         </Button>
       </div>
-      <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
-        {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
-          <Button
-            key={amount}
-            type="button"
-            variant="outline"
-            className="h-11 font-mono tabular-nums"
-            aria-pressed={openingCash === amount}
-            disabled={disabled}
-            onClick={() => setOpeningCash(amount)}
-          >
-            {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
-          </Button>
-        ))}
-      </div>
-      <p className="text-xs text-text-muted">
-        An opening cash above 0 needs a manager or owner. Enter 0 when the drawer is empty.
-      </p>
+      {canDeclareFloat ? (
+        <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
+          {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
+            <Button
+              key={amount}
+              type="button"
+              variant="outline"
+              className="h-11 font-mono tabular-nums"
+              aria-pressed={openingCash === amount}
+              disabled={disabled}
+              onClick={() => setOpeningCash(amount)}
+            >
+              {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {canDeclareFloat ? (
+        <p className="text-xs text-text-muted">
+          An opening cash above 0 needs a manager or owner. Enter 0 when the drawer is empty.
+        </p>
+      ) : null}
       {chooseCashier ? (
         <p className="text-sm text-text-muted">
           Only the cashier who runs the till, or a manager or owner, can take cash into it.

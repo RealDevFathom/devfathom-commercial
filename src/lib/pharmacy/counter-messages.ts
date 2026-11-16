@@ -278,3 +278,25 @@ export function counterPaymentErrorMessage(error: unknown): string {
     return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
   return counterErrorMessage(error);
 }
+
+/**
+ * Drawer operations have different gates: only opening an empty till for yourself
+ * uses payment access. A float or another cashier requires manager access. Match
+ * only the generic capability refusal; preserve scope and other specific errors.
+ */
+export function counterDrawerErrorMessage(
+  error: unknown,
+  action: 'open' | 'open-with-float' | 'assign-cashier' | 'handover'
+): string {
+  if (action === 'open') return counterPaymentErrorMessage(error);
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  ) {
+    return action === 'open-with-float'
+      ? 'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+      : 'Only a manager or owner can assign the till to another cashier. Ask a manager.';
+  }
+  return counterErrorMessage(error);
+}

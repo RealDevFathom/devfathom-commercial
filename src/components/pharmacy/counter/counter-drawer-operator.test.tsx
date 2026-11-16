@@ -15,6 +15,7 @@ describe('CounterOpenDrawerStep: who runs the till (DEV-821)', () => {
     render(
       <CounterOpenDrawerStep
         disabled={false}
+        canDeclareFloat
         cashiers={cashiers}
         currentUserId="manager-1"
         onOpen={onOpen}
@@ -34,6 +35,7 @@ describe('CounterOpenDrawerStep: who runs the till (DEV-821)', () => {
     render(
       <CounterOpenDrawerStep
         disabled={false}
+        canDeclareFloat
         cashiers={cashiers}
         currentUserId="manager-1"
         onOpen={onOpen}
