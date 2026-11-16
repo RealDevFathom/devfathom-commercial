@@ -1631,3 +1631,75 @@ describe('three-way match draft debit notes (DEV-691)', () => {
     expect(screen.getByRole('button', { name: 'Discard' })).toBeDefined();
   });
 });
+
+describe('receipt line expiry (QA-3)', () => {
+  const receiptLine = (overrides: Record<string, unknown>) => ({
+    id: 'grl-1',
+    batchNumber: 'AB-12',
+    serialNumber: null,
+    gtin: null,
+    printedExpiry: new Date('2027-12-31T00:00:00.000Z'),
+    expiryPrecision: 'MONTH',
+    printedMrpMinor: 12_000,
+    receivedPacks: 2,
+    bonusPacks: 0,
+    canonicalUnitsPerPack: 10,
+    receivedCanonicalUnits: 20,
+    bonusCanonicalUnits: 0,
+    acceptedCanonicalUnits: 20,
+    rejectedCanonicalUnits: 0,
+    rejectionReason: null,
+    allocatedFreightMinor: 0,
+    unitCostMinor: 1_000,
+    medicine: { productName: 'Amoxicillin 500mg', controlled: false },
+    packLevel: { level: 'STRIP' },
+    stockLocation: { name: 'Main store' },
+    quarantineLocation: null,
+    ...overrides,
+  });
+  const receipt = {
+    id: 'gr-1',
+    reference: 'GRN-9',
+    status: 'POSTED',
+    supplier: { name: 'Karachi Distributors' },
+    supplierInvoiceRef: 'INV-9',
+    supplierInvoiceDate: new Date('2026-11-10T00:00:00.000Z'),
+    receivedAt: new Date('2026-11-10T09:00:00.000Z'),
+    purchaseOrder: null,
+    distributorNtn: '1234567-8',
+    distributorStrn: '17-00-1234-567-89',
+    directPurchase: false,
+    bypassReason: null,
+    bypassApprovedAt: null,
+    exceptions: [],
+    qualifiedPersonUserId: null,
+    reversalRequiresWitness: false,
+    reversalReason: null,
+    lines: [
+      receiptLine({}),
+      receiptLine({
+        id: 'grl-2',
+        batchNumber: 'RETAIL-NOEXP',
+        printedExpiry: new Date('9998-12-31T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+        medicine: { productName: 'Baby lotion', controlled: false },
+      }),
+    ],
+  };
+
+  it('shows "No expiry" for a non-drug line received without one, never 9998-12-31', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({ goodsReceipts: vi.fn().mockResolvedValue([receipt]) })
+    );
+    const view = render(
+      await ReceivingPage({ searchParams: params({ branch: 'branch-1', receipt: 'gr-1' }) })
+    );
+    const retail = screen.getByText(/Batch RETAIL-NOEXP/);
+    expect(retail).toHaveTextContent('No expiry');
+    expect(retail.textContent).not.toContain('9998');
+    expect(screen.getByText(/Batch AB-12/)).toHaveTextContent(
+      'expires 31-Dec-2027 (month precision)'
+    );
+    view.unmount();
+  });
+});

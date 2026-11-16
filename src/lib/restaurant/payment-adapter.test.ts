@@ -11,7 +11,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -19,7 +19,9 @@ import {
   MOCK_PROVIDER,
   PAYMENT_CAPABILITIES,
   PaymentAdapterError,
+  MOCK_IN_PRODUCTION_CODE,
   REGISTERED_PROVIDERS,
+  isExplicitApproval,
   appendPaymentEvent,
   getPaymentProvider,
   type PaymentCapability,
@@ -158,6 +160,53 @@ describe('MOCK — deterministic references and scriptable declines', () => {
     expect(
       MOCK_PROVIDER.execute({ capability: 'SALE', amount: '99.54', operationRef: 'd' }).declineCode
     ).toBe('EXPIRED_CARD');
+  });
+
+  it('refuses every SALE/AUTH in production: the MOCK never approves a card sale', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      for (const amount of ['10.00', '10.13', '5.51', '99.54']) {
+        for (const capability of ['SALE', 'AUTH'] as const) {
+          const outcome = MOCK_PROVIDER.execute({ capability, amount, operationRef: 'p' });
+          expect(outcome.approved).toBe(false);
+          expect(outcome.status).toBe('DECLINED');
+          expect(outcome.declineCode).toBe(MOCK_IN_PRODUCTION_CODE);
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('lets the MOCK approve in production only when the caller allows it (demo organizations)', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const allowed = MOCK_PROVIDER.execute({
+        capability: 'SALE',
+        amount: '10.00',
+        operationRef: 'd',
+        allowMock: true,
+      });
+      expect(allowed.approved).toBe(true);
+      expect(allowed.status).toBe('CAPTURED');
+      expect(
+        MOCK_PROVIDER.execute({ capability: 'SALE', amount: '10.00', operationRef: 'd' }).approved
+      ).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('counts only an explicit approved outcome as approval', () => {
+    const base = { approved: true, declineCode: null, status: 'CAPTURED' };
+    expect(isExplicitApproval(base)).toBe(true);
+    expect(isExplicitApproval({ ...base, status: 'AUTHORIZED' })).toBe(true);
+    expect(isExplicitApproval({ ...base, approved: undefined })).toBe(false);
+    expect(isExplicitApproval({ ...base, approved: 'true' })).toBe(false);
+    expect(isExplicitApproval({ ...base, declineCode: 'SOMETHING_NEW' })).toBe(false);
+    expect(isExplicitApproval({ ...base, status: 'DECLINED' })).toBe(false);
+    expect(isExplicitApproval({ ...base, status: 'WHO_KNOWS' })).toBe(false);
+    expect(isExplicitApproval(null)).toBe(false);
   });
 
   it('never declines a post-authorization operation on a designated amount', () => {

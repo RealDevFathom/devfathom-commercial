@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertPromotableProducts,
+  formatLotExpiry,
+  isNoExpiryDate,
   isValidEan13,
   NON_DRUG_NO_EXPIRY,
   PharmacyProductClassError,
@@ -134,5 +136,35 @@ describe('receiving bench lot arrival (#718)', () => {
     const extra = { ...lot, primaryLot: false, productFamily: 'FRONT_SHOP' };
     expect(receivingLotArrived(extra)).toBe(false);
     expect(receivingLotArrived({ ...extra, printedExpiry: '2027-06-30' })).toBe(true);
+  });
+});
+
+describe('isNoExpiryDate (QA-3)', () => {
+  it('recognises the stored marker as the printed date and as its expiry instant', () => {
+    expect(isNoExpiryDate(NON_DRUG_NO_EXPIRY)).toBe(true);
+    expect(isNoExpiryDate('9998-12-31T19:00:00.000Z')).toBe(true);
+    expect(isNoExpiryDate(new Date('9998-12-31T19:00:00.000Z'))).toBe(true);
+  });
+
+  it('treats real, missing and malformed dates as real or absent, never as no expiry', () => {
+    expect(isNoExpiryDate(new Date('2027-04-30T00:00:00.000Z'))).toBe(false);
+    expect(isNoExpiryDate('2099-12-31T19:00:00.000Z')).toBe(false);
+    expect(isNoExpiryDate(null)).toBe(false);
+    expect(isNoExpiryDate(undefined)).toBe(false);
+    expect(isNoExpiryDate('')).toBe(false);
+    expect(isNoExpiryDate('not a date')).toBe(false);
+  });
+});
+
+describe('formatLotExpiry (QA-3)', () => {
+  const iso = (value: Date | string) => new Date(value).toISOString().slice(0, 10);
+  it('renders the marker as "No expiry" and a real date with the caller rendering', () => {
+    expect(formatLotExpiry(NON_DRUG_NO_EXPIRY, iso)).toBe('No expiry');
+    expect(formatLotExpiry('9998-12-31T19:00:00.000Z', (value) => `exp ${iso(value)}`)).toBe(
+      'No expiry'
+    );
+    expect(formatLotExpiry('2027-04-30T19:00:00.000Z', (value) => `exp ${iso(value)}`)).toBe(
+      'exp 2027-04-30'
+    );
   });
 });

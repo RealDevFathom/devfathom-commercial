@@ -499,6 +499,12 @@ export class PharmacyCounterRuntime {
       // Apply the outcome to the queue as it is NOW — a sale enqueued while the
       // request was in flight must survive this whole-document write.
       const settled = await this.exclusive(async (): Promise<ReplayResult | null> => {
+        // A heartbeat may have revoked this counter and purged its storage while
+        // the request was in flight. Revocation is final: never write the stale
+        // result back over the purged scope.
+        if (this.queue().replay === 'STOPPED_REVOKED') {
+          return { state: 'STOPPED', discarded: null };
+        }
         const applied = applyCounterReplayOutcome(this.queue(), {
           commandId: next.command.commandId,
           outcome,

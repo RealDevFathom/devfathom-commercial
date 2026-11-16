@@ -171,7 +171,8 @@ export async function grossMargin(
 
 export function grossMarginQuery(
   scope: JournalReportScope,
-  input: { from: Date; to: Date; by: MarginDimension }
+  /** `where` narrows the journal legs (aliases `line`, `lot`); it must start with AND. */
+  input: { from: Date; to: Date; by: MarginDimension; where?: Prisma.Sql }
 ) {
   const key = {
     line: Prisma.sql`line."sourceLineId"`,
@@ -204,6 +205,7 @@ export function grossMarginQuery(
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
          ${branchFilter(scope)}
+         ${input.where ?? Prisma.empty}
     )
     SELECT "key",
            -- Revenue is a credit account: a credit increases it, so its signed

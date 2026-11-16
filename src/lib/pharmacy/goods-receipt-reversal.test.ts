@@ -544,7 +544,9 @@ describe('DEV-610: reversing a receipt whose stock has moved on', () => {
     db.pharmacyStockBalance.findMany.mockResolvedValue([shelfBalance(0, 0, 0)]);
     await expect(run()).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
     expectNothingWritten(db);
-    const sql = db.$queryRaw.mock.calls.map(([strings]) => String(strings));
+    const sql = db.$queryRaw.mock.calls.map(([strings]) =>
+      Array.isArray(strings) ? String(strings) : (strings as { strings: string[] }).strings.join('')
+    );
     const registerLock = sql.findIndex((text) => text.includes('pg_advisory_xact_lock'));
     const balanceLock = sql.findIndex((text) => text.includes('pharmacy_stock_balances'));
     expect(registerLock).toBeGreaterThanOrEqual(0);
@@ -554,16 +556,17 @@ describe('DEV-610: reversing a receipt whose stock has moved on', () => {
   it('locks the balance row before reading it', async () => {
     const { db, run } = fixture();
     await run();
-    const balanceLock = db.$queryRaw.mock.calls.findIndex(([strings]) =>
-      String(strings).includes('pharmacy_stock_balances')
+    const balanceLock = db.$queryRaw.mock.calls.findIndex(([sql]) =>
+      (sql as { strings: string[] }).strings?.join('').includes('pharmacy_stock_balances')
     );
     expect(balanceLock).toBeGreaterThanOrEqual(0);
-    expect(db.$queryRaw.mock.calls[balanceLock]!.slice(1)).toEqual([
-      'org',
-      'lot',
-      'shelf',
-      'AVAILABLE',
-    ]);
+    // DEV-825: one statement through the shared lock helper, keys in global order.
+    const lock = db.$queryRaw.mock.calls[balanceLock]![0] as {
+      strings: string[];
+      values: unknown[];
+    };
+    expect(lock.strings.join('')).toContain('FOR UPDATE');
+    expect(lock.values).toEqual(['org', 'branch', 'lot', 'shelf', 'AVAILABLE']);
     expect(db.$queryRaw.mock.invocationCallOrder[balanceLock]).toBeLessThan(
       db.pharmacyStockBalance.findMany.mock.invocationCallOrder[0]!
     );

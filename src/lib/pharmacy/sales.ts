@@ -29,14 +29,25 @@ import {
   authorizeControlledRestoration,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
-import { appendControlledRestorations } from './controlled-register';
+import { appendControlledRestorations, lockRegister } from './controlled-register';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  claimSoldPackSerial,
+  PharmacySerializedPackError,
+  releaseSoldPackSerials,
+  resolveSerializedPackForSale,
+  SERIALIZED_PACK_APPROVAL_POLICY,
+  serializedPackOverrideReason,
+  type ResolvedSerializedPack,
+} from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
 import {
   backInStockQueue,
   backInStockReference,
@@ -302,6 +313,8 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
+  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
+  scannedPack?: { payload: string };
   idempotencyKey: string;
 };
 
@@ -394,7 +407,7 @@ export async function addSaleLine(
 export async function addReservedSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
-  input: Omit<AddSaleLineInput, 'override'>,
+  input: Omit<AddSaleLineInput, 'override' | 'scannedPack'>,
   reservation: ReservedSaleAllocation
 ) {
   return addSaleLineWithAllocation(db, scope, input, reservation);
@@ -468,7 +481,12 @@ async function voucherForRedemption(
   }
   let approverUserId: string;
   try {
-    approverUserId = await assertVoucherIssuerRights(db, scope.organizationId, voucher);
+    approverUserId = await assertVoucherIssuerRights(
+      db,
+      scope.organizationId,
+      scope.branchId,
+      voucher
+    );
   } catch (error) {
     if (error instanceof VoucherIssuerRevoked) throw new PharmacySaleError('VOUCHER_INVALID');
     throw error;
@@ -543,6 +561,24 @@ async function addSaleLineWithAllocation(
   // DEV-830 (F05): reserved customer-order and refill lines carry a multiplier the server
   // derived from the stored lot when it reserved them; every other line is checked here.
   if (!reservation) await assertSaleUnitConversion(db, scope, input, saleUnitAt);
+  // DEV-92: a scanned serial names exactly one sealed pack of one lot.
+  let pack: ResolvedSerializedPack | null = null;
+  let override = input.override;
+  if (input.scannedPack) {
+    if (reservation || input.saleUnit !== 'PACK' || input.quantity !== 1)
+      throw new PharmacySaleError('INVALID_QUANTITY');
+    pack = await resolveSerializedPackForSale(db, scope, {
+      medicineId: input.medicineId,
+      payload: input.scannedPack.payload,
+    });
+    if (override && override.inventoryLotId !== pack.inventoryLotId)
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    override ??= {
+      inventoryLotId: pack.inventoryLotId,
+      reason: serializedPackOverrideReason(pack.serialNumber),
+      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+    };
+  }
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.
@@ -552,7 +588,7 @@ async function addSaleLineWithAllocation(
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
-    override: input.override,
+    override,
   };
   const allocation = reservation
     ? await allocateReservedForSale(db, scope, allocationInput, input.packLevelId, reservation)
@@ -566,6 +602,18 @@ async function addSaleLineWithAllocation(
     include: { batch: { select: { batchNumber: true } } },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  if (pack) {
+    // The whole line must come out of the scanned pack's own lot, as one sealed pack.
+    const pinned = pack.inventoryLotId;
+    if (
+      allocation.allocations.some(
+        (part) =>
+          part.inventoryLotId !== pinned ||
+          lotById.get(part.inventoryLotId)?.unitsPerPack !== input.canonicalUnitsPerSaleUnit
+      )
+    )
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+  }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
   const mrpRules = lots.length
@@ -686,6 +734,13 @@ async function addSaleLineWithAllocation(
       })
     )
   );
+  if (pack) {
+    await claimSoldPackSerial(db, scope, pack, {
+      saleId: input.saleId,
+      saleLineId: line.id,
+      inventoryLotId: pack.inventoryLotId,
+    });
+  }
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
     saleLineId: line.id,
     ...(promotion
@@ -712,8 +767,7 @@ async function addSaleLineWithAllocation(
  * delivery path has already authorized voids its own order sale.
  */
 export type SaleTransitionAuthority =
-  | { kind: 'COUNTER'; actorIsManager: boolean }
-  | { kind: 'FAILED_DELIVERY_RETURN' };
+  { kind: 'COUNTER'; actorIsManager: boolean } | { kind: 'FAILED_DELIVERY_RETURN' };
 
 function mayVoidSale(
   authority: SaleTransitionAuthority | undefined,
@@ -779,8 +833,15 @@ export async function changeSaleStatus(
     // the refund path's own manager/owner gate. Read after the claim: the sale
     // row is locked, so a tender that committed earlier is seen here and a later
     // one finds the bill no longer OPEN. A refusal rolls the claim back.
+    // DEV-764: a points tender is not money taken: the void releases it below instead, so it
+    // never needs a money refund (or refund authority) first.
     const tenders = await db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId,
+        type: { not: 'LOYALTY' },
+      },
       select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
     });
     const unrefundedMinor = tenders.reduce(
@@ -791,6 +852,7 @@ export async function changeSaleStatus(
       0
     );
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
+    await releaseVoidedSaleRedemptions(db, scope, saleId);
     // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
     // claimed above, so this runs once per void.
     const voucherUses = new Map<string, number>();
@@ -816,6 +878,9 @@ export async function changeSaleStatus(
       orderBy: { createdAt: 'asc' },
       select: { stockMovementId: true },
     });
+    // DEV-825: a controlled void writes the register, so it takes the register
+    // lock before the reversals lock any balance (stock-lock-order.ts).
+    if (witness) await lockRegister(db, scope.organizationId, scope.branchId);
     const reversals = await reverseMovements(db, scope, {
       movementIds: allocations.map((allocation) => allocation.stockMovementId),
       reason: reason ?? 'Sale voided',
@@ -842,6 +907,7 @@ export async function changeSaleStatus(
         restoreSellable: true,
       })),
     });
+    await releaseSoldPackSerials(db, scope, saleId);
   }
 
   await event(db, scope, saleId, kind, reason, eventPayload);
@@ -1306,12 +1372,41 @@ export async function returnSaleLine(
   }> = [];
   // DEV-501: the same pure plan prices the counter's refund quote.
   const plan = planLotReturn(line, input.lotId, input.canonicalUnits);
+  // DEV-825: every lock this return takes, before its first write and in the
+  // global order (stock-lock-order.ts): the register when it writes one, then the
+  // batch (a restock shares the recall boundary; never restore unsafe stock as
+  // available), then every slice's balance in key order. Slices follow the
+  // allocation's FEFO order, which is not the key order when one lot was sold
+  // from two locations.
+  if (witness) await lockRegister(db, scope.organizationId, scope.branchId);
+  if (disposition === 'RESTOCK' && plan.slices.length)
+    await lockStockRowsFrom(
+      db,
+      scope.organizationId,
+      Prisma.sql`SELECT l."manufacturingBatchId" AS "batchId" FROM pharmacy_inventory_lots l
+        WHERE l."organizationId"=${scope.organizationId}
+          AND l.id IN (${Prisma.join(plan.slices.map(({ allocation }) => allocation.inventoryLotId))})`,
+      { batch: 'update' }
+    );
+  await lockStockBalances(
+    db,
+    scope,
+    plan.slices.map(({ allocation }) =>
+      disposition === 'RESTOCK'
+        ? {
+            inventoryLotId: allocation.inventoryLotId,
+            stockLocationId: allocation.stockLocationId,
+            disposition: 'AVAILABLE',
+          }
+        : {
+            inventoryLotId: allocation.inventoryLotId,
+            stockLocationId: quarantineLocationId!,
+            disposition: 'QUARANTINE',
+          }
+    )
+  );
   for (const { allocation, units, money } of plan.slices) {
     if (disposition === 'RESTOCK') {
-      // Batch lock shares the recall boundary; never restore unsafe stock as available.
-      await db.$queryRaw(Prisma.sql`SELECT b.id FROM pharmacy_manufacturing_batches b
-        JOIN pharmacy_inventory_lots l ON l."manufacturingBatchId"=b.id AND l."organizationId"=b."organizationId"
-        WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId} FOR UPDATE OF b`);
       const lot = await db.pharmacyInventoryLot.findFirst({
         where: {
           id: allocation.inventoryLotId,
@@ -1389,6 +1484,14 @@ export async function returnSaleLine(
   });
   if (plan.remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-92: a serialized pack returned whole to sellable stock may be sold again.
+  if (
+    disposition === 'RESTOCK' &&
+    line.returnLines.reduce((total, returned) => total + returned.canonicalUnits, 0) >=
+      line.canonicalUnits
+  ) {
+    await releaseSoldPackSerials(db, scope, line.saleId, new Date(), line.id);
+  }
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {
     returnId: saleReturn.id,
     disposition,
@@ -1570,6 +1673,16 @@ export async function demandAggregate(
   };
 }
 
+/** Campaign-key prefixes owned by server lifecycles (refill cycles, customer orders). */
+export const RESERVED_RESTOCK_CAMPAIGN_PREFIXES = ['refill-cycle:', 'order:'] as const;
+
+export function isReservedRestockCampaignKey(campaignKey: string | null | undefined) {
+  const key = campaignKey?.trim().toLowerCase();
+  return Boolean(
+    key && RESERVED_RESTOCK_CAMPAIGN_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
 export async function addRestockInterest(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1584,6 +1697,9 @@ export async function addRestockInterest(
 ) {
   if (!Number.isSafeInteger(input.quantityUnits) || input.quantityUnits <= 0)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-845: refill-cycle and order holds are settled only by their own lifecycle;
+  // a counter interest may not borrow their keys.
+  if (isReservedRestockCampaignKey(input.campaignKey)) throw new PharmacySaleError('INVALID_STATE');
   const demand = await db.unfulfilledDemandEvent.findFirst({
     where: {
       id: input.demandEventId,
@@ -1719,12 +1835,18 @@ export async function captureSafeRestockArrival(
         inventoryLotId: lot.id,
         idempotencyKey: `restock:${interest.id}:${lot.id}`,
       },
+      // DEV-845: `destination` is the customer's phone; the sender reads it on the server.
+      select: { id: true, status: true },
     });
     await db.pharmacyRestockInterest.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
       data: { status: 'NOTIFIED' },
     });
-    captured.push({ interestId: interest.id, reservation, notification });
+    captured.push({
+      interestId: interest.id,
+      reservation,
+      notification: { id: notification.id, status: notification.status, hasContact: true },
+    });
   }
   return captured;
 }

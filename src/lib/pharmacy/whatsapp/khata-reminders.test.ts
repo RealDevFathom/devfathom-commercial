@@ -817,4 +817,13 @@ describe('DEV-76 schedule switch and the DEV-730 owner send', () => {
     expect(sql).toContain('make_interval(days => br."khataReminderCadenceDays")');
     expect(sql).toContain('GREATEST(1, br."khataReminderMinBalanceMinor")');
   });
+
+  it('nets dishonoured cheques out of settled charges and treats an unlinked bounce as overdue', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 1);
+    const sql = (queryRaw.mock.calls[0]![0] as { sql: string }).sql;
+    expect(sql).toContain("'DISHONOURED_CHEQUE'");
+    expect(sql).toContain('CASE WHEN "kind" = \'PAYMENT\' THEN amount ELSE -amount END');
+    expect(sql).toContain('unlinked."id" IS NOT NULL');
+  });
 });

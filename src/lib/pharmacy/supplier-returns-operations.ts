@@ -29,6 +29,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { postSupplierClaimEntry } from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
+import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import {
   assertAllocatable,
   assertClaimable,
@@ -158,18 +159,27 @@ async function lockLotForClaim(
   scope: LedgerScope,
   inventoryLotId: string
 ): Promise<LockedLotRow | null> {
-  const rows = await db.$queryRaw<Array<{ onHandUnits: number; unitsPerPack: number }>>(
-    Prisma.sql`
-      SELECT balance."onHandUnits" AS "onHandUnits", lot."unitsPerPack" AS "unitsPerPack"
+  const lotBalances = Prisma.sql`
       FROM "pharmacy_stock_balances" balance
       JOIN "pharmacy_inventory_lots" lot
         ON lot."id" = balance."inventoryLotId" AND lot."organizationId" = balance."organizationId"
       WHERE balance."organizationId" = ${scope.organizationId}
         AND balance."branchId" = ${scope.branchId}
         AND balance."inventoryLotId" = ${inventoryLotId}
-        AND balance."disposition" = 'AVAILABLE'
-      ORDER BY balance."stockLocationId" ASC
-      FOR UPDATE OF balance`
+        AND balance."disposition" = 'AVAILABLE'`;
+  // DEV-825: lock through the shared helper in the global balance key order,
+  // then read in a fresh statement.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+      balance."disposition"::text AS "disposition" ${lotBalances}`,
+    { balance: true }
+  );
+  const rows = await db.$queryRaw<Array<{ onHandUnits: number; unitsPerPack: number }>>(
+    Prisma.sql`
+      SELECT balance."onHandUnits" AS "onHandUnits", lot."unitsPerPack" AS "unitsPerPack"
+      ${lotBalances}`
   );
   if (rows.length === 0) return null;
   const reserved = await db.pharmacySupplierClaim.aggregate({
@@ -201,6 +211,22 @@ export async function submitPurchaseReturn(
   const found = await loadReturn(db, scope, input.purchaseReturnId);
   assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'SUBMITTED');
 
+  // DEV-825: lock every line's lot balances in the global key order first, so
+  // the per-line claim checks below only re-enter locks this return holds.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+      balance."disposition"::text AS "disposition"
+      FROM "pharmacy_stock_balances" balance
+      WHERE balance."organizationId" = ${scope.organizationId}
+        AND balance."branchId" = ${scope.branchId}
+        AND balance."disposition" = 'AVAILABLE'
+        AND balance."inventoryLotId" IN (${Prisma.join(
+          found.lines.length ? found.lines.map((line) => line.inventoryLotId) : ['']
+        )})`,
+    { balance: true }
+  );
   for (const line of found.lines) {
     assertReturnWindowOpen({ returnWindowEndsAt: line.returnWindowEndsAt, at: input.at });
     const locked = await lockLotForClaim(db, scope, line.inventoryLotId);
@@ -286,6 +312,18 @@ export async function dispatchPurchaseReturn(
   const found = await loadReturn(db, scope, input.purchaseReturnId);
   assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'DISPATCHED');
 
+  // DEV-825: every balance the dispatch writes, locked once in the global key order.
+  await lockStockBalances(
+    db,
+    scope,
+    found.lines.flatMap((line) =>
+      (['AVAILABLE', 'RETURN_TO_SUPPLIER'] as const).map((disposition) => ({
+        inventoryLotId: line.inventoryLotId,
+        stockLocationId: line.stockLocationId,
+        disposition,
+      }))
+    )
+  );
   for (const [index, line] of found.lines.entries()) {
     const lot = await db.pharmacyInventoryLot.findFirst({
       where: {

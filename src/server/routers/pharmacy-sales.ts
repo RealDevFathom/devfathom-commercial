@@ -49,11 +49,13 @@ import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/coun
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
+  actorManagesBranchDrawers,
   counterCapabilityDecision,
   RECEIPT_READ_CAPABILITIES,
 } from '@/lib/pharmacy/counter-capability';
 import {
   appendControlledSaleEntries,
+  lockRegister,
   earlierRegisterEntry,
   emergencyNoRxDecision,
   resolveEmergencySupplyPolicy,
@@ -158,12 +160,15 @@ import {
   quoteSaleLineReturn,
   saleReturnValueMinor,
 } from '@/lib/pharmacy/sales';
+import { PharmacySerializedPackError } from '@/lib/pharmacy/serialized-pack-sale';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
   applyPharmacyTender,
   closePharmacyDrawer,
+  drawerOperatingCashierId,
+  handoverPharmacyDrawer,
   cutPharmacyDailyClose,
   lockOpenPharmacyDrawer,
   openPharmacyDrawer,
@@ -286,6 +291,23 @@ function redactDemandContact<T extends { notifyPhone?: string | null }>(
 ): Omit<T, 'notifyPhone'> & { hasNotifyContact: boolean } {
   const { notifyPhone, ...rest } = row;
   return { ...rest, hasNotifyContact: Boolean(notifyPhone) };
+}
+
+/**
+ * DEV-845: a restock-arrival response names each queued notification by id and
+ * status only. The destination is the customer's phone; the sender reads it on
+ * the server, so no role ever receives it.
+ */
+function redactRestockArrival<
+  T extends { notification: { id: string; status: string; destination?: unknown } | null },
+>(entry: T) {
+  const { notification, ...rest } = entry;
+  return {
+    ...rest,
+    notification: notification
+      ? { id: notification.id, status: notification.status, hasContact: true }
+      : null,
+  };
 }
 
 /**
@@ -473,6 +495,15 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
   });
 }
 
+/**
+ * DEV-825: lock the sale row before a controlled line takes the branch register
+ * lock. The sale row is a document lock, which stock-lock-order.ts puts ahead of
+ * the register; `addSaleLine` would otherwise first touch it after the register.
+ */
+async function lockSaleForControlledLine(db: ScopedDb, scope: LedgerScope, saleId: string) {
+  await db.$queryRaw`SELECT id FROM pharmacy_sales WHERE id=${saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR NO KEY UPDATE`;
+}
+
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
@@ -507,7 +538,13 @@ async function refundTenderInTransaction(
         code: 'FORBIDDEN',
         message: 'You do not have permission for this action.',
       });
-    return refundPharmacyTender(db, scope, refund, { requireCurrentBusinessDate: true });
+    // Both callers (refundTender, returnAndRefund) have already required a manager or
+    // owner with a fresh PIN (DEV-647), so any open till of the branch may pay the
+    // refund out (DEV-821).
+    return refundPharmacyTender(db, scope, refund, {
+      requireCurrentBusinessDate: true,
+      drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+    });
   }
   await khataScope(ctx, scope.branchId, 'write');
   await bindKhataBranch(db, scope);
@@ -632,7 +669,12 @@ function fail(error: unknown): never {
   if (error instanceof PharmacySettlementError) {
     // A drawer that is already open is a state conflict, not a malformed request.
     throw new TRPCError({
-      code: error.reason === 'OPEN_DRAWER' ? 'CONFLICT' : 'BAD_REQUEST',
+      code:
+        error.reason === 'OPEN_DRAWER'
+          ? 'CONFLICT'
+          : error.reason === 'DRAWER_NOT_YOURS'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -649,6 +691,13 @@ function fail(error: unknown): never {
   }
   if (error instanceof PharmacyCounterKeymapError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  }
+  if (error instanceof PharmacySerializedPackError) {
+    // A pack that was already sold is a state conflict the operator must see.
+    throw new TRPCError({
+      code: error.reason === 'SERIAL_ALREADY_SOLD' ? 'CONFLICT' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   }
   if (error instanceof PharmacySaleError) {
     throw new TRPCError({
@@ -904,7 +953,7 @@ const MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;
  * assignment, or the audited organization-administrator exception. A cashier
  * holding only `pharmacy:counter` is refused before any lock or write.
  */
-function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+export function requireDrawerManagerAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   return requireCounterReceiptAccess(
     ctx,
     branch,
@@ -1204,7 +1253,19 @@ export const pharmacySalesRouter = router({
           await bindKhataBranch(db, scope);
           // DEV-630: money taken now books on today, never a client-chosen day.
           await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
-          return recordKhataRepayment(db, scope, input);
+          // DEV-821: cash goes only into a till this user runs, unless a manager or owner.
+          return recordKhataRepayment(db, scope, input, {
+            kind: 'COUNTER',
+            actorIsManager:
+              input.tender === 'CASH' &&
+              (await actorManagesBranchDrawers(
+                db,
+                ctx.session!.user,
+                scope.organizationId,
+                scope.branchId,
+                { source: 'TRPC' }
+              )),
+          });
         });
       } catch (error) {
         fail(error);
@@ -1406,13 +1467,21 @@ export const pharmacySalesRouter = router({
   /** The OPEN drawer for this counter device, so the counter never offers a second open. */
   drawerStatus: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
-    .query(async ({ ctx, input }) => ({
-      openDrawer: await readOpenPharmacyDrawer(
-        ctx.db,
-        await scopeFor(ctx, input.branchId),
-        input.deviceId
-      ),
-    })),
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const openDrawer = await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId);
+      if (!openDrawer) return { openDrawer, operatingCashier: null };
+      // DEV-821: who runs this till, so the counter can say so before a cash payment.
+      const cashierId = drawerOperatingCashierId(openDrawer);
+      const cashier = await ctx.db.user.findFirst({
+        where: { id: cashierId, organizationId: scope.organizationId },
+        select: { name: true },
+      });
+      return {
+        openDrawer,
+        operatingCashier: { name: cashier?.name ?? null, isYou: cashierId === scope.actorId },
+      };
+    }),
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
   // tRPC errors the counter can word, instead of a 500 with the raw reason.
@@ -1424,18 +1493,24 @@ export const pharmacySalesRouter = router({
           deviceId: z.string().min(1),
           businessDate: z.date(),
           openingFloatMinor: z.number().int().nonnegative(),
+          /** DEV-821: who runs the till; naming someone else is a manager's. */
+          operatingCashierId: z.string().trim().min(1).max(128).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const namesAnotherCashier =
+          input.operatingCashierId !== undefined &&
+          input.operatingCashierId !== ctx.session?.user?.id;
         // DEV-279: drawers hold cash, so they take the cash-tender gate before any
         // lock or write: canonical `pharmacy:counter` through `can()`, then the
         // counter family check, then an active branch assignment. Both checks are
         // deny-wins: a role DENY or user DENY beats any ALLOW (DEV-659).
         // DEV-31: a cashier opens an empty drawer; declaring a float is a manager's.
+        // DEV-821: so is handing the till to another cashier at open.
         const scope =
-          input.openingFloatMinor > 0
+          input.openingFloatMinor > 0 || namesAnotherCashier
             ? await requireDrawerManagerAccess(ctx, input.branchId)
             : await requireCounterReceiptAccess(ctx, input.branchId, true);
         // DEV-630: a drawer opens on the branch's current business day only.
@@ -1461,8 +1536,12 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        // A manager's paid-in/out may use any open drawer of the branch (DEV-821).
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), scope, input)
+          recordPharmacyCashMovement(txDb(tx), scope, input, {
+            kind: 'COUNTER',
+            actorIsManager: true,
+          })
         );
       } catch (error) {
         fail(error);
@@ -1483,6 +1562,65 @@ export const pharmacySalesRouter = router({
       try {
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-821: the cashiers a manager or owner may name to run a till on this branch:
+   * active members with an active assignment to it.
+   */
+  drawerCashiers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            active: true,
+            user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+          },
+          select: { user: { select: { id: true, name: true } } },
+        });
+        return rows
+          .map((row) => ({ id: row.user.id, name: row.user.name ?? 'Unnamed member' }))
+          .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-821: a manager or owner hands an open till to another cashier of the
+   * branch. Recorded append-only with the reason; the close reports read it.
+   */
+  handoverDrawer: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          drawerSessionId: z.string().min(1),
+          toCashierId: z.string().trim().min(1).max(128),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const result = await ctx.db.$transaction(async (tx) =>
+          handoverPharmacyDrawer(txDb(tx), scope, input)
+        );
+        // Metadata only: the branch access audit keeps its own target.
+        annotateAudit(ctx, {
+          metadata: {
+            drawerSessionId: input.drawerSessionId,
+            toCashierId: input.toCashierId,
+            handoverId: result.handover?.id ?? null,
+          },
+        });
+        return result;
       } catch (error) {
         fail(error);
       }
@@ -1536,11 +1674,22 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        // DEV-821: cash goes only into a till this user runs, unless a manager or owner.
+        const actorIsManager =
+          input.type === 'CASH' &&
+          (await actorManagesBranchDrawers(
+            ctx.db,
+            ctx.session!.user,
+            scope.organizationId,
+            scope.branchId,
+            { source: 'TRPC' }
+          ));
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
         // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
             requireCurrentBusinessDate: true,
+            drawerOperator: { kind: 'COUNTER', actorIsManager },
           })
         );
       }
@@ -1809,6 +1958,11 @@ export const pharmacySalesRouter = router({
             })
             .strict()
             .optional(),
+          // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
+          scannedPack: z
+            .object({ payload: z.string().trim().min(1).max(256) })
+            .strict()
+            .optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
@@ -2042,7 +2196,10 @@ export const pharmacySalesRouter = router({
             if (!consent?.granted || consent.revokedAt) {
               return { blocked: 'Patient dispensing consent is required.' };
             }
-            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            // DEV-825: the sale row is a document lock, so it precedes the register
+            // lock (stock-lock-order.ts); a concurrent void takes them in that order.
+            await lockSaleForControlledLine(db, scope, input.saleId);
+            await lockRegister(db, scope.organizationId, scope.branchId);
             const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
@@ -2081,7 +2238,8 @@ export const pharmacySalesRouter = router({
           if (!authorization.prescriptionLineId) return blocked;
           // Lock prescription and branch before stock allocation, fill numbering and register numbering.
           await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
-          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+          await lockSaleForControlledLine(db, scope, input.saleId);
+          await lockRegister(db, scope.organizationId, scope.branchId);
           const rx = await db.prescriptionLine.findFirst({
             where: {
               id: authorization.prescriptionLineId,
@@ -3035,9 +3193,10 @@ export const pharmacySalesRouter = router({
       try {
         // DEV-817: restock interests hang off demand events; the counter's gate.
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
+        const captured = await ctx.db.$transaction(async (tx) =>
           captureSafeRestockArrival(txDb(tx), scope, input)
         );
+        return captured.map(redactRestockArrival);
       } catch (error) {
         fail(error);
       }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
   userCreate: vi.fn(),
   userUpdate: vi.fn(),
   userCount: vi.fn(),
@@ -42,6 +43,7 @@ import { organizationAdminRouter } from './organization-admin';
 type MemberDb = {
   user: {
     findFirst: typeof mocks.userFindFirst;
+    findUnique: typeof mocks.userFindUnique;
     create: typeof mocks.userCreate;
     update: typeof mocks.userUpdate;
     count: typeof mocks.userCount;
@@ -57,6 +59,7 @@ type MemberDb = {
 const db: MemberDb = {
   user: {
     findFirst: mocks.userFindFirst,
+    findUnique: mocks.userFindUnique,
     create: mocks.userCreate,
     update: mocks.userUpdate,
     count: mocks.userCount,
@@ -453,5 +456,45 @@ describe('organization member update response (DEV-828)', () => {
     });
     expect(mocks.userUpdate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe('organizationAdmin.resetMemberPassword hierarchy guard', () => {
+  const reset = { id: 'member', password: 'Temporary-123456' };
+  const live = { status: 'ACTIVE', organizationRole: null, permissionOverrides: [] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(can).mockResolvedValue(true);
+    mocks.userFindFirst.mockResolvedValue({ id: 'member', email: 'm@clifton.test' });
+  });
+
+  it.each([
+    ['another admin', { ...live, role: 'ADMIN' }],
+    [
+      'the owner',
+      {
+        ...live,
+        role: 'ADMIN',
+        organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      },
+    ],
+  ])('refuses to reset %s', async (_label, target) => {
+    mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      where.id === 'admin_a' ? { ...live, role: 'ADMIN' } : target
+    );
+    await expect(caller().resetMemberPassword(reset)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin reset an employee', async () => {
+    mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      ...live,
+      role: where.id === 'admin_a' ? 'ADMIN' : 'EMPLOYEE',
+    }));
+    await expect(caller().resetMemberPassword(reset)).resolves.toEqual({ success: true });
+    expect(mocks.userUpdate).toHaveBeenCalledOnce();
   });
 });

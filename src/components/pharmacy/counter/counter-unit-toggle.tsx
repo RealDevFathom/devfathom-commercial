@@ -79,7 +79,7 @@ export function CounterUnitToggle({
   }
 
   return (
-    <div className={inline ? 'grid items-end gap-3 sm:grid-cols-[auto_auto_1fr]' : 'space-y-2'}>
+    <div className={inline ? 'flex flex-wrap items-end gap-x-3 gap-y-2' : 'space-y-2'}>
       <div className="space-y-1">
         {inline ? (
           <span className="block text-xs font-semibold text-text-strong">Sale unit</span>
@@ -194,7 +194,7 @@ export function CounterUnitToggle({
           aria-live="polite"
           className={
             inline
-              ? 'grid grid-cols-3 gap-x-3 gap-y-2 text-xs'
+              ? 'flex min-w-0 flex-wrap gap-x-4 gap-y-2 text-xs'
               : 'grid grid-cols-2 gap-x-3 gap-y-1 text-xs sm:grid-cols-4'
           }
         >
@@ -228,7 +228,7 @@ export function CounterUnitToggle({
               {formatMinor(preview.grossMinor)}
             </dd>
           </div>
-          <div className={inline ? 'col-span-3' : 'col-span-2 sm:col-span-4'}>
+          <div className={inline ? 'basis-full' : 'col-span-2 sm:col-span-4'}>
             {preview.sufficient ? (
               <StatusPill
                 status="in-stock"

@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   archiveDelete: vi.fn(),
   platformAudit: vi.fn(),
   exportJobs: vi.fn(),
+  ownerExport: null as null | ((...args: unknown[]) => Promise<unknown>),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -28,6 +29,16 @@ vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   runCounterEvidenceSnapshotJob: m.snapshot,
   runCameraEvidenceRetentionJob: m.retention,
 }));
+vi.mock('@/lib/pharmacy/owner-data-export', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/owner-data-export')>();
+  return {
+    ...actual,
+    runPharmacyOwnerDataExportJob: (
+      ...args: Parameters<typeof actual.runPharmacyOwnerDataExportJob>
+    ) => (m.ownerExport ? m.ownerExport(...args) : actual.runPharmacyOwnerDataExportJob(...args)),
+  };
+});
+import { OwnerDataExportTimeLimitError } from '@/lib/pharmacy/owner-data-export';
 import { processPlatformJobs } from './jobs';
 
 const db = {
@@ -108,6 +119,7 @@ beforeEach(() => {
   m.platformAudit.mockResolvedValue({ id: 'purge-record-1' });
 });
 afterEach(() => {
+  m.ownerExport = null;
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
@@ -156,6 +168,37 @@ describe('composed platform worker boundaries', () => {
       false
     );
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
+  });
+
+  it('resumes the retention purge where the last successful run stopped (QA-3)', async () => {
+    queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
+    const query = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql: { text?: string; strings?: string[] }) => {
+      const text = sql.text ?? sql.strings?.join('') ?? '';
+      if (text.includes(`"type" = 'pharmacy.record.retention.v1'`)) {
+        return [
+          {
+            result: {
+              resumeAfter: { FISCAL: { anchor: '2014-05-06T07:08:09.000Z', id: 'sale-1000' } },
+            },
+          },
+        ];
+      }
+      return query(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+    const fiscal = purgeScans().find(([sql]) =>
+      String(sql?.text ?? '').includes('"pharmacy_sales" r')
+    );
+    expect(String(fiscal?.[0]?.text ?? '')).toContain('r."id") > (');
+    expect(fiscal?.[0]?.values).toEqual(
+      expect.arrayContaining([new Date('2014-05-06T07:08:09.000Z'), 'sale-1000'])
+    );
+    // Classes with no stored resume point start from the oldest record.
+    const register = purgeScans().find(([sql]) =>
+      String(sql?.text ?? '').includes('"pharmacy_controlled_register_entries" r')
+    );
+    expect(String(register?.[0]?.text ?? '')).not.toContain('r."id") > (');
   });
 
   it('retries a failed retention purge without affecting other work', async () => {
@@ -276,6 +319,22 @@ describe('composed platform worker boundaries', () => {
       timeout: 120_000,
       isolationLevel: 'RepeatableRead',
     });
+  });
+
+  it('fails an owner data export past its build time limit permanently, without a retry', async () => {
+    queue(job('PHARMACY_OWNER_DATA_EXPORT_V1', { payload: { from: null, to: null } }));
+    m.ownerExport = async () => {
+      throw new OwnerDataExportTimeLimitError(90_000);
+    };
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ retried: 0, failed: 1 });
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          error: expect.stringContaining('shorter sales date range'),
+        }),
+      })
+    );
   });
 
   it.each([1, 3])('retains retry/exhaustion accounting at attempt %s', async (attempts) => {

@@ -62,6 +62,7 @@ export class PharmacyReceivingError extends Error {
       | 'PACK_CONVERSION_MISMATCH'
       | 'EXPIRED_PACK'
       | 'SERIALIZED_PACK_QUANTITY'
+      | 'CARTON_PACK_COUNT'
       /** Reversal refused: received units have since been sold, moved or written off. */
       | 'REVERSAL_STOCK_MOVED'
       /** Reversal refused: the units are still here, but sealed packs were opened. */

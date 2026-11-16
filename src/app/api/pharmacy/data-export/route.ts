@@ -1,6 +1,8 @@
 import { hasModule } from '@/lib/entitlements';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import {
+  OWNER_DATA_EXPORT_DOWNLOAD_LIMIT,
+  OWNER_DATA_EXPORT_DOWNLOAD_WINDOW_MS,
   OWNER_DATA_EXPORT_JOB_SELECT as JOB_SELECT,
   OWNER_DATA_EXPORT_JOB_TYPE,
   isLiveOrganizationOwner,
@@ -19,6 +21,7 @@ import {
   verifyOwnerExportPin,
   type OwnerExportPinResult,
 } from '@/lib/pharmacy/owner-data-export-pin';
+import { rateLimit } from '@/lib/rate-limit';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
@@ -35,7 +38,8 @@ import { createTRPCContext, type TRPCContext } from '@/server/trpc';
  * DEV-783 — requesting and downloading also need the owner's own PIN, sent in
  * the POST body (never in a URL, where it would reach logs and history). Wrong
  * PINs strike the shared operator lockout. Each owner may queue a limited number
- * of exports per day. Every list, request and download, refusals and wrong PINs
+ * of exports per day, and download a limited number of archives per hour
+ * (DEV-844). Every list, request and download, refusals and wrong PINs
  * included, is audit-logged, and nothing is released if the audit fails.
  */
 
@@ -213,7 +217,28 @@ export async function POST(request: Request) {
     return audited(ctx, target, PIN_REFUSAL[pinCheck](), { ...jobMetadata, pinCheck });
   }
 
-  if (download) return downloadExport(ctx, organizationId, jobId!);
+  if (download) {
+    // Counted only after the PIN is accepted, so nobody without it can use up
+    // the owner's downloads.
+    const limited = await rateLimit(
+      `owner-data-export-download:${organizationId}:${userId}`,
+      OWNER_DATA_EXPORT_DOWNLOAD_LIMIT,
+      OWNER_DATA_EXPORT_DOWNLOAD_WINDOW_MS
+    );
+    if (!limited.ok) {
+      return audited(
+        ctx,
+        DOWNLOAD,
+        json(
+          429,
+          { error: 'Too many downloads of your data export. Try again later.' },
+          { 'Retry-After': String(Math.max(1, limited.retryAfter)) }
+        ),
+        { ...jobMetadata, pinCheck, rateLimited: true }
+      );
+    }
+    return downloadExport(ctx, organizationId, jobId!);
+  }
 
   const now = new Date();
   const queued = await withPlatformDb((db) =>

@@ -20,7 +20,11 @@ import {
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { officialPriceText } from '@/lib/pharmacy/official-price';
-import { isNonDrugRetail, receivingLotArrived } from '@/lib/pharmacy/product-class';
+import {
+  formatLotExpiry,
+  isNonDrugRetail,
+  receivingLotArrived,
+} from '@/lib/pharmacy/product-class';
 import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
@@ -1069,7 +1073,8 @@ export default async function PharmacyReceivingPage({
                             prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
                             line.canonicalUnitsPerPack > 0
                               ? Math.floor(remaining / line.canonicalUnitsPerPack)
-                              : 0
+                              : 0,
+                            prefillId === line.id && scan?.kind === 'gs1' ? scan.cartonCount : null
                           )}
                           suggestedPriceMinor={line.listPricePerPackMinor}
                           title={line.medicine.productName}
@@ -1293,8 +1298,8 @@ export default async function PharmacyReceivingPage({
                     notice={notice}
                     prefill={slot === 0 ? gs1Prefill(scan, scanTerm) : undefined}
                     suggestedPacks={
-                      slot === 0 && scan?.kind === 'gs1' && scan.serial
-                        ? receivedPacksForScan(scan.serial, 0)
+                      slot === 0 && scan?.kind === 'gs1' && (scan.serial || scan.cartonCount)
+                        ? receivedPacksForScan(scan.serial, 0, scan.cartonCount)
                         : undefined
                     }
                     subtitle="Fill this only if you chose a medicine above. A pack with no 2D code is entered by hand."
@@ -1740,9 +1745,13 @@ function ReceiptDetail({
             <p className="mt-1 text-xs text-text-muted">
               Batch {line.batchNumber}
               {line.serialNumber ? ` · serial ${line.serialNumber}` : ''}
-              {line.gtin ? ` · GTIN ${line.gtin}` : ''} · expires {dateOnly(line.printedExpiry)} (
-              {line.expiryPrecision.toLowerCase()} precision) · MRP {money(line.printedMrpMinor)} ·{' '}
-              {line.receivedPacks} {line.packLevel.level}
+              {line.gtin ? ` · GTIN ${line.gtin}` : ''} ·{' '}
+              {formatLotExpiry(
+                line.printedExpiry,
+                (value) =>
+                  `expires ${dateOnly(value)} (${line.expiryPrecision.toLowerCase()} precision)`
+              )}{' '}
+              · MRP {money(line.printedMrpMinor)} · {line.receivedPacks} {line.packLevel.level}
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
               {line.canonicalUnitsPerPack} ={' '}
               {units(line.receivedCanonicalUnits + line.bonusCanonicalUnits)}

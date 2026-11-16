@@ -224,6 +224,42 @@ describe('DRAP monitoring', () => {
       ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
     });
 
+    it('DEV-825: locks the batches, then every balance sorted, before recalling or quarantining', async () => {
+      quarantinePart.mockClear();
+      const { db } = draftDb(matchedDraft);
+      db.pharmacyStockBalance.findMany.mockResolvedValue([
+        { branchId: 'branch-b', inventoryLotId: 'lot-b', stockLocationId: 'loc-a', onHandUnits: 1 },
+        { branchId: 'branch-a', inventoryLotId: 'lot-a', stockLocationId: 'loc-a', onHandUnits: 1 },
+      ]);
+      await confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1');
+      const statements = (db.$queryRaw.mock.calls as unknown[][]).map(
+        ([sql]) => sql as { strings?: string[]; values: unknown[] }
+      );
+      const at = (kind: string) =>
+        statements.findIndex((sql) => sql.strings?.join('').includes(`stock_lock:${kind}`));
+      const order = db.$queryRaw.mock.invocationCallOrder;
+      expect(at('batch')).toBeGreaterThanOrEqual(0);
+      expect(order[at('batch')]!).toBeLessThan(
+        db.pharmacyManufacturingBatch.updateMany.mock.invocationCallOrder[0]!
+      );
+      expect(at('balance')).toBeGreaterThan(at('batch'));
+      expect(statements[at('balance')]!.values.slice(1)).toEqual([
+        'lot-a',
+        'loc-a',
+        'AVAILABLE',
+        'lot-a',
+        'loc-a',
+        'QUARANTINE',
+        'lot-b',
+        'loc-a',
+        'AVAILABLE',
+        'lot-b',
+        'loc-a',
+        'QUARANTINE',
+      ]);
+      expect(order[at('balance')]!).toBeLessThan(quarantinePart.mock.invocationCallOrder[0]!);
+    });
+
     it('recalls every current batch when an alert that names no batch is confirmed', async () => {
       const { db } = draftDb({
         ...matchedDraft,

@@ -27,6 +27,7 @@ import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import {
   adminPasswordResetData,
+  passwordResetDenial,
   PASSWORD_RESET_TTL_MS,
   unusablePasswordHash,
 } from '@/lib/auth/admin-password-reset';
@@ -1102,6 +1103,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         if (!ACTIVE_STATUSES.has(target.status)) {
           return { error: `${target.name} is not an active member, so they cannot sign in.` };
         }
+        const denial = await passwordResetDenial(h.db, {
+          actorId: ctx.userId,
+          targetId: target.id,
+        });
+        if (denial) return { error: denial };
 
         const { token, tokenHash } = generateInviteToken();
         // Retire the old (possibly compromised) password: an unknown random hash

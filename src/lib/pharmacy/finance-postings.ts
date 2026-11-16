@@ -940,6 +940,52 @@ export async function postTenderEntry(
   });
 }
 
+/**
+ * DEV-764: a points redemption on a sale that is then voided is released, not refunded: no
+ * money leaves. Additive reversal of the part of the redemption's settlement not already
+ * reversed by a refund. One per tender (keyed by it), so a replayed void posts nothing new.
+ */
+export async function postLoyaltyReleaseEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { tenderId: string; amountMinor: number; at: Date }
+) {
+  const tender = await db.pharmacyTender.findFirst({
+    where: { id: input.tenderId, organizationId: scope.organizationId },
+  });
+  if (!tender) throw new PharmacyFinanceError('NOT_FOUND');
+  if (tender.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  if (
+    tender.type !== 'LOYALTY' ||
+    !Number.isSafeInteger(input.amountMinor) ||
+    input.amountMinor <= 0 ||
+    input.amountMinor > tender.amountMinor
+  )
+    throw new PharmacyFinanceError('INVALID_STATE');
+  return postJournalEntry(db, scope, {
+    sourceKind: 'PHARMACY_TENDER',
+    sourceId: tender.id,
+    description: 'Points redemption released · Sale voided',
+    occurredAt: input.at,
+    idempotencyKey: `${postingKey('PHARMACY_TENDER', tender.id)}:void-release`,
+    branchId: tender.branchId,
+    lines: [
+      {
+        accountCode: 'SALES_CLEARING',
+        side: 'DEBIT',
+        amountMinor: input.amountMinor,
+        branchId: tender.branchId,
+      },
+      {
+        accountCode: 'LOYALTY_REDEMPTION',
+        side: 'CREDIT',
+        amountMinor: input.amountMinor,
+        branchId: tender.branchId,
+      },
+    ],
+  });
+}
+
 /** POS-B: additive reversal of the original tender settlement. */
 export async function postTenderRefundEntry(
   db: ScopedDb,

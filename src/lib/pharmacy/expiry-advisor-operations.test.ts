@@ -41,6 +41,35 @@ describe('expiry advisor query scope', () => {
     expect(sql.text).toContain('medicine."productName" AS "medicineName"');
   });
 
+  it('narrows the advised lots to the selected supplier, ingredient and batch (DEV-256)', async () => {
+    const { db, queryRaw } = capture();
+    await readExpiryAdvice(
+      db,
+      {
+        organizationId: 'org_scope_1',
+        branchIds: ['branch_scope_1'],
+        supplierId: 'sup_1',
+        ingredientId: 'ing_1',
+        batchId: 'batch_1',
+      },
+      AT
+    );
+    const sql = queryRaw.mock.calls[0]![0] as Prisma.Sql;
+    expect(sql.text).toMatch(/lot\."manufacturingBatchId"=\$\d+/);
+    expect(sql.text).toContain('dim_ingredient."ingredientId"=');
+    expect(sql.text).toContain('dim_ingredient."medicineId"=dim_batch."medicineId"');
+    expect(sql.text).toContain('dim_receipt."supplierId"=');
+    expect(sql.text).toContain('dim_supplier."name"=lot."supplierName"');
+    expect(sql.values).toContain('batch_1');
+    expect(sql.values).toContain('ing_1');
+    expect(sql.values.filter((value) => value === 'sup_1')).toHaveLength(2);
+
+    queryRaw.mockClear();
+    await readExpiryAdvice(db, { organizationId: 'org_scope_1', branchIds: ['branch_scope_1'] }, AT);
+    const unfiltered = queryRaw.mock.calls[0]![0] as Prisma.Sql;
+    expect(unfiltered.text).not.toContain('dim_');
+  });
+
   it('refuses a missing tenant and reads nothing for an empty branch scope', async () => {
     const { db, queryRaw } = capture();
     await expect(

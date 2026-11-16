@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { can, subjectFromSession } from '@/lib/abac';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { evaluateSopDepth } from '@/lib/module-catalog';
 import { attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
 import { createTRPCContext } from '@/server/trpc';
@@ -126,6 +127,12 @@ export async function POST(request: Request) {
       source: 'TRPC',
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
+    // DEV-837 (F18): the same plan gate as the `attachEvidence` procedure. A plan
+    // with bare SOP execution but no proof capture must not store a blob or an
+    // evidence row through this door either.
+    if (!ctx.entitlements || !evaluateSopDepth(ctx.entitlements, 'sop.evidence').allowed) {
+      throw new Error('SOP proof capture is not included in this plan.');
+    }
 
     // Resolve the uploader against the occurrence's branch so a multi-branch
     // employee uploads as that branch's profile. An unknown occurrence is left to
@@ -150,6 +157,8 @@ export async function POST(request: Request) {
       sizeBytes: bytes.length,
       storageRef: `/api/files/${storedFilename}`,
       uploaderStaffProfileId,
+      // This route stored and hashed the bytes itself.
+      serverCaptured: true,
     });
     if (!evidence.created) {
       stage = 'cleanup';

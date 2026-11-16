@@ -44,6 +44,8 @@ vi.mock('@/server/trpc', () => ({
   }),
 }));
 
+import { clearRateLimit } from '@/lib/rate-limit';
+import { OWNER_DATA_EXPORT_DOWNLOAD_LIMIT } from '@/lib/pharmacy/owner-data-export';
 import { GET, POST } from './route';
 
 const OWNER = {
@@ -95,8 +97,9 @@ const finished = (finishedAt: Date) => ({
   result: { filename: ARCHIVE, rowCounts: { 'customers.csv': 3 } },
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  await clearRateLimit('owner-data-export-download:org-a:u-owner');
   m.session.user = { id: 'u-owner', role: 'ADMIN', isSupportSession: false };
   m.actor.mockResolvedValue({ session: m.session, organization: { id: 'org-a' } });
   m.audit.mockResolvedValue(undefined);
@@ -410,5 +413,40 @@ describe('owner data export PIN, rate limit and list audit (DEV-783)', () => {
       expect.objectContaining({ action: 'pharmacy.dataExport.list', statusCode: 403 }),
       expect.anything()
     );
+  });
+});
+
+describe('owner data export download rate limit (DEV-844)', () => {
+  it('limits archive downloads per owner per hour and audits the refusal', async () => {
+    m.jobFindFirst.mockResolvedValue(finished(new Date(Date.now() - 60_000)));
+    m.getUploadStream.mockImplementation(async () => stream('PK-archive'));
+    for (let index = 0; index < OWNER_DATA_EXPORT_DOWNLOAD_LIMIT; index += 1) {
+      const response = await POST(download());
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    const refused = await POST(download());
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(m.getUploadStream).toHaveBeenCalledTimes(OWNER_DATA_EXPORT_DOWNLOAD_LIMIT);
+    expect(m.audit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: 'pharmacy.dataExport.download',
+        statusCode: 429,
+        metadata: expect.objectContaining({ jobId: 'job-1', rateLimited: true }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('does not count a download refused for a wrong PIN', async () => {
+    m.jobFindFirst.mockResolvedValue(finished(new Date(Date.now() - 60_000)));
+    m.getUploadStream.mockImplementation(async () => stream('PK-archive'));
+    m.verifyPin.mockResolvedValue('REJECTED');
+    for (let index = 0; index <= OWNER_DATA_EXPORT_DOWNLOAD_LIMIT; index += 1) {
+      expect((await POST(download())).status).toBe(401);
+    }
+    m.verifyPin.mockResolvedValue('OK');
+    expect((await POST(download())).status).toBe(200);
   });
 });

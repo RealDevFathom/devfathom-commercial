@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -112,7 +113,7 @@ import {
 } from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
-  formatReceiptDate,
+  formatShortExpiry,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -867,6 +868,21 @@ function ScopedPharmacyCounterConsole({
     { enabled: Boolean(branchId) && canSettlePayments }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
+  // DEV-821: a manager or owner names who runs a till and can hand it over. The
+  // cashier list is a manager read; a cashier's request is refused and shows nothing.
+  const managerAccess = trpc.pharmacySales.refundAccess.useQuery(undefined, {
+    enabled: branchAuthorized && !settlementDenied,
+    retry: false,
+  });
+  const actorIsManager = managerAccess.data?.authorized === true;
+  const drawerCashiers = trpc.pharmacySales.drawerCashiers.useQuery(
+    { branchId },
+    { enabled: actorIsManager && Boolean(branchId), retry: false, staleTime: 60_000 }
+  );
+  const handoverDrawer = trpc.pharmacySales.handoverDrawer.useMutation();
+  const drawerOperatingCashier = settlementDenied
+    ? null
+    : (drawerQuery.data?.operatingCashier ?? null);
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const setDemandOutcome = trpc.pharmacySales.setDemandOutcome.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -1391,7 +1407,7 @@ function ScopedPharmacyCounterConsole({
       const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
       if (!looksLikeGs1) {
         setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
-        return { query: trimmed, revision, blocked: false };
+        return { query: trimmed, revision, blocked: false, serializedPack: null };
       }
       setPending('authenticatePack');
       try {
@@ -1411,6 +1427,10 @@ function ScopedPharmacyCounterConsole({
           query: verdict.parsed?.gtin ?? trimmed,
           revision,
           blocked: verdict.status === 'BLOCKED_RECALL',
+          // DEV-92: a serialized pack is sold as itself, so the server can pin its lot.
+          serializedPack: verdict.parsed?.serial
+            ? { payload: trimmed, serial: verdict.parsed.serial }
+            : null,
         };
       } catch (error) {
         if (revision !== scannerRevision.current) return;
@@ -1447,12 +1467,21 @@ function ScopedPharmacyCounterConsole({
   const ensureSale = useCallback(async () => saleId ?? (await openSale()), [openSale, saleId]);
 
   const addToCart = useCallback(
-    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+    async (
+      scannedRow?: CounterSearchRow,
+      scanRevision?: number,
+      scannedPack?: { payload: string; serial: string } | null
+    ) => {
       const scanIsCurrent = () =>
         scanRevision === undefined || scanRevision === scannerRevision.current;
       if (!scanIsCurrent()) return;
       const row = scannedRow ?? activeRow;
-      const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
+      // One serialized pack is one sealed pack, whatever unit the counter last staged.
+      const option = scannedPack
+        ? (scannedRow?.saleUnits.find((unit) => unit.kind === 'PACK') ?? null)
+        : scannedRow
+          ? (scannedRow.saleUnits[0] ?? null)
+          : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
         setNotice({
@@ -1586,7 +1615,9 @@ function ScopedPharmacyCounterConsole({
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
             // A stable key per (sale, medicine, unit, quantity) so a double-press of
             // the add chord cannot post the same line twice.
-            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
+            // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
+            ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
             ...(overrideLotId && batchOverride
               ? {
                   // #520: the server resolves who approved the override; the counter never names one.
@@ -1716,6 +1747,7 @@ function ScopedPharmacyCounterConsole({
         if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
           return;
         const row = result.rows[0]!;
+        const serialized = search.serializedPack;
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
@@ -1726,7 +1758,10 @@ function ScopedPharmacyCounterConsole({
         const scanPreview = restage
           ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
           : preview;
-        if (scanPreview?.sufficient) {
+        if (serialized) {
+          // The server pins the scanned pack's own lot and refuses a pack already sold.
+          await addToCart(row, revision, serialized);
+        } else if (scanPreview?.sufficient) {
           await addToCart(restage ? row : undefined, revision);
         }
       } catch (error) {
@@ -2985,6 +3020,8 @@ function ScopedPharmacyCounterConsole({
                   deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
                   onRetry={() => void drawerQuery.refetch()}
+                  cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                  currentUserId={accountId}
                   context={{
                     branch: (() => {
                       const branch = branches.find((entry) => entry.id === branchId);
@@ -3000,7 +3037,7 @@ function ScopedPharmacyCounterConsole({
                       timeZone: 'UTC',
                     }),
                   }}
-                  onOpen={(openingFloatMinor) => {
+                  onOpen={(openingFloatMinor, operatingCashierId) => {
                     setPending('drawer');
                     setNotice(null);
                     openDrawer
@@ -3009,6 +3046,7 @@ function ScopedPharmacyCounterConsole({
                         deviceId: counterDeviceId(),
                         businessDate: todayBusinessDate(),
                         openingFloatMinor,
+                        ...(operatingCashierId ? { operatingCashierId } : {}),
                       })
                       .then(() =>
                         setNotice({
@@ -3030,6 +3068,34 @@ function ScopedPharmacyCounterConsole({
                 />
               ) : (
                 <div className="space-y-2">
+                  {openDrawerSession && drawerOperatingCashier ? (
+                    <CounterDrawerOperator
+                      operatingCashier={drawerOperatingCashier}
+                      cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                      pending={handoverDrawer.isPending}
+                      onHandover={(toCashierId, reason) => {
+                        setNotice(null);
+                        return handoverDrawer
+                          .mutateAsync({
+                            branchId,
+                            drawerSessionId: openDrawerSession.id,
+                            toCashierId,
+                            reason,
+                          })
+                          .then(() => {
+                            setNotice({ tone: 'success', message: 'Till handed over.' });
+                            void utils.pharmacySales.drawerStatus.invalidate();
+                          })
+                          .catch((error: unknown) => {
+                            setNotice({
+                              tone: 'warning',
+                              message: counterPaymentErrorMessage(error),
+                            });
+                            throw error;
+                          });
+                      }}
+                    />
+                  ) : null}
                   <div>
                     <div className="space-y-1.5">
                       <Label htmlFor="counter-search" className="sr-only">
@@ -3112,7 +3178,7 @@ function ScopedPharmacyCounterConsole({
                 aria-label="Next line"
                 className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
               >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto]">
+                <div className="grid items-center gap-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_auto]">
                   <div className="min-w-0">
                     <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
                       Next line
@@ -3132,7 +3198,7 @@ function ScopedPharmacyCounterConsole({
                         activeRow.dosageForm,
                         activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
                         activeRow.nearestSafeExpiry
-                          ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
+                          ? formatShortExpiry(activeRow.nearestSafeExpiry)
                           : null,
                         locationLabel,
                       ]
@@ -3140,7 +3206,7 @@ function ScopedPharmacyCounterConsole({
                         .join(' · ')}
                     </p>
                   </div>
-                  <div className="counter-next-controls space-y-3">
+                  <div className="counter-next-controls min-w-0 space-y-3">
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
@@ -3730,7 +3796,7 @@ function ScopedPharmacyCounterConsole({
                       className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
                     >
                       <span>
-                        {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
+                        {entry.kind} · Receipt {entry.sale?.receiptNumber ?? '—'} ·{' '}
                         {new Date(entry.occurredAt).toISOString().slice(0, 10)}
                       </span>
                       <span className="font-mono tabular-nums">

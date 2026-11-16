@@ -101,6 +101,14 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-821: a void releases stock, so it stays with the bill's cashier.
   NOT_BILL_OWNER:
     'Another cashier opened this bill. Only that cashier or a manager or owner can void it.',
+  // DEV-92: a serialized pack (2D code on the bottle, tube or box) is sold once.
+  SERIAL_ALREADY_SOLD:
+    'This pack’s serial is already on a sale. Do not sell it again; set the pack aside and check it with the pharmacist.',
+  SERIAL_MEDICINE_MISMATCH: 'This 2D code is not the barcode of the medicine being sold.',
+  SERIAL_NOT_READABLE:
+    'This 2D code has no readable pack serial. Search the medicine by name instead.',
+  SERIAL_LOT_UNAVAILABLE:
+    'The batch this pack came from cannot be sold from this counter. Check the pack against stock in Inventory.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -119,6 +127,11 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  // DEV-821: cash goes only into a till the signed-in user runs.
+  DRAWER_NOT_YOURS:
+    'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',
+  CASHIER_NOT_ASSIGNED:
+    'That person is not an active member of this branch. Choose a cashier assigned to this branch.',
   SALE_REDEEMED_BY_OTHER_CUSTOMER:
     'Another customer redeemed loyalty points on this bill. Open Khata for that customer or start a new bill.',
   PATIENT_AMBIGUOUS:

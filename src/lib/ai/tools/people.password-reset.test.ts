@@ -13,6 +13,7 @@ import { compare } from 'bcryptjs';
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
+  members: {} as Record<string, Record<string, unknown>>,
   userUpdate: vi.fn(),
   resetTokenCreate: vi.fn(),
   sendEmail: vi.fn(),
@@ -81,14 +82,22 @@ function emailedToken(): string {
   return match![1]!;
 }
 
+const live = {
+  role: 'EMPLOYEE',
+  status: 'ACTIVE',
+  organizationRole: null,
+  permissionOverrides: [],
+};
+
 describe('assistant resetMemberPassword', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.findUnique.mockResolvedValue({
-      id: 'user_aisha',
-      name: 'Aisha Khan',
-      email: 'aisha@company.com',
-      status: 'ACTIVE',
+    mocks.members = {
+      user_admin: { ...live, role: 'ADMIN' },
+      user_aisha: { ...live, id: 'user_aisha', name: 'Aisha Khan', email: 'aisha@company.com' },
+    };
+    mocks.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      return mocks.members[where.id] ?? null;
     });
     mocks.userUpdate.mockResolvedValue({
       id: 'user_aisha',
@@ -177,12 +186,7 @@ describe('assistant resetMemberPassword', () => {
   });
 
   it.each(['INACTIVE', 'INVITED'])('refuses a %s member without side effects', async (status) => {
-    mocks.findUnique.mockResolvedValue({
-      id: 'user_aisha',
-      name: 'Aisha Khan',
-      email: 'aisha@company.com',
-      status,
-    });
+    mocks.members.user_aisha = { ...mocks.members.user_aisha!, status };
     const { tool } = setup();
 
     const result = await tool.execute({ name: 'Aisha Khan' });
@@ -191,5 +195,35 @@ describe('assistant resetMemberPassword', () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
     expect(mocks.resetTokenCreate).not.toHaveBeenCalled();
     expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another admin', { role: 'ADMIN' }],
+    [
+      'the owner',
+      { role: 'ADMIN', organizationRole: { key: 'owner', isSystem: true, permissions: [] } },
+    ],
+  ])('refuses to reset %s without side effects', async (_label, target) => {
+    mocks.members.user_aisha = { ...mocks.members.user_aisha!, ...target };
+    const { tool } = setup();
+
+    const result = await tool.execute({ name: 'Aisha Khan' });
+
+    expect(result.error).toEqual(expect.any(String));
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.resetTokenCreate).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner reset an admin', async () => {
+    mocks.members.user_admin = {
+      ...live,
+      role: 'ADMIN',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+    };
+    mocks.members.user_aisha = { ...mocks.members.user_aisha!, role: 'ADMIN' };
+    const { tool } = setup();
+
+    expect(await tool.execute({ name: 'Aisha Khan' })).toMatchObject({ success: true });
   });
 });

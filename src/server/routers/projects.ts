@@ -13,6 +13,7 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { claimUploadOrThrow } from '../upload-claims';
 import { PROJECT_DATE_ORDER_MESSAGE, projectDatesAreOrdered } from '@/lib/project-dates';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
@@ -1423,14 +1424,22 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
-      return ctx.db.taskAttachment.create({
-        data: {
-          taskId: input.taskId,
-          name: input.name,
-          url: input.url,
-          type: input.type ?? null,
-          size: input.size ?? null,
-        },
+      // DEV-837: only the caller's own upload can become this attachment's file.
+      return ctx.db.$transaction(async (tx) => {
+        const attachment = await tx.taskAttachment.create({
+          data: {
+            taskId: input.taskId,
+            name: input.name,
+            url: input.url,
+            type: input.type ?? null,
+            size: input.size ?? null,
+          },
+        });
+        await claimUploadOrThrow(tx, input.url, ctx.session.user.id, {
+          type: 'TASK_ATTACHMENT',
+          id: attachment.id,
+        });
+        return attachment;
       });
     }),
 
@@ -1714,15 +1723,23 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
-      const file = await ctx.db.projectFile.create({
-        data: {
-          name: input.name,
-          url: input.url,
-          type: input.type,
-          size: input.size,
-          projectId: input.projectId,
-          uploadedById: ctx.session.user.id,
-        },
+      // DEV-837: only the caller's own upload can become this project's file.
+      const file = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.projectFile.create({
+          data: {
+            name: input.name,
+            url: input.url,
+            type: input.type,
+            size: input.size,
+            projectId: input.projectId,
+            uploadedById: ctx.session.user.id,
+          },
+        });
+        await claimUploadOrThrow(tx, input.url, ctx.session.user.id, {
+          type: 'PROJECT_FILE',
+          id: created.id,
+        });
+        return created;
       });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_file_added',

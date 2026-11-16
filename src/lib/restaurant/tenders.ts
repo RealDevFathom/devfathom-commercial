@@ -29,7 +29,12 @@ import {
   ZERO,
 } from './money';
 import { closeOrderAfterSettlement } from './orders';
-import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
+import {
+  appendPaymentEvent,
+  getPaymentProvider,
+  isExplicitApproval,
+  MOCK_IN_PRODUCTION_CODE,
+} from './payment-adapter';
 import {
   quoteTaxSettlement,
   splitFractionalMoney,
@@ -108,6 +113,12 @@ export type CardTenderSpec = {
   type: 'CARD';
   amount: Prisma.Decimal | string;
   tipAmount?: Prisma.Decimal | string;
+  /** The cashier confirms the card machine approved this payment. Recorded as a MANUAL
+   * tender; never goes through the MOCK adapter. */
+  manualConfirmation?: {
+    approvalCode: string;
+    reference: string;
+  };
   /** Trusted, server-created terminal confirmation. Never accepted by the public
    * checkout route; webhook processing constructs it after auth + reconciliation. */
   terminalConfirmation?: {
@@ -299,6 +310,10 @@ export async function applyTenderInTransaction(
             terminalConfirmation:
               input.tender.type === 'CARD'
                 ? (input.tender.terminalConfirmation ?? null)
+                : undefined,
+            manualConfirmation:
+              input.tender.type === 'CARD'
+                ? (input.tender.manualConfirmation ?? null)
                 : undefined,
           },
   });
@@ -1161,6 +1176,34 @@ async function persistCardTender(
   }
 
   const operationRef = `${bill.id}:${actor.deviceId}:${actor.idempotencyKey}`;
+  const manual = tender.terminalConfirmation ? null : (tender.manualConfirmation ?? null);
+  if (manual !== null) {
+    // The cashier-confirmed card tender: a MANUAL payment, never the MOCK. Re-check the
+    // slip fields on the server; a missing approval code or a possible full card number
+    // is refused and nothing is saved.
+    if (
+      !/^[A-Za-z0-9]{2,12}$/.test(manual.approvalCode?.trim() ?? '') ||
+      !/^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/.test(manual.reference?.trim() ?? '')
+    ) {
+      throw new TenderError(
+        'A manually confirmed card tender needs the approval code and the card machine reference.',
+        'INVALID'
+      );
+    }
+  }
+
+  // Environment rule: the MOCK may approve ONLY for demo organizations and in test runs
+  // (NODE_ENV=test). Every real organization is refused whatever NODE_ENV is, and takes
+  // cards through the MANUAL confirmation (or a verified terminal confirmation).
+  let mockAllowed = false;
+  if (!tender.terminalConfirmation && manual === null) {
+    const org = await tx.organization.findUnique({
+      where: { id: bill.organizationId },
+      select: { isDemo: true },
+    });
+    mockAllowed = org?.isDemo === true || process.env.NODE_ENV === 'test';
+  }
+
   const outcome = tender.terminalConfirmation
     ? {
         approved: true,
@@ -1178,8 +1221,41 @@ async function persistCardTender(
           },
         },
       }
-    : getPaymentProvider('MOCK').execute({ capability: 'SALE', amount, tipAmount, operationRef });
-  if (!outcome.approved) {
+    : manual !== null
+      ? {
+          approved: true,
+          status: 'CAPTURED' as const,
+          providerRef: manual.reference.trim(),
+          declineCode: null,
+          event: {
+            capability: 'SALE' as const,
+            eventType: 'MANUAL_CONFIRMED',
+            amount,
+            providerRef: manual.reference.trim(),
+            payload: {
+              provider: 'MANUAL',
+              manuallyConfirmed: true,
+              approvalCode: manual.approvalCode.trim(),
+              confirmedByStaffProfileId: actor.staffProfileId,
+              deviceId: actor.deviceId,
+            },
+          },
+        }
+      : mockAllowed
+        ? getPaymentProvider('MOCK').execute({
+            capability: 'SALE',
+            amount,
+            tipAmount,
+            operationRef,
+            allowMock: true,
+          })
+        : {
+            approved: false,
+            status: 'DECLINED' as const,
+            providerRef: null,
+            declineCode: MOCK_IN_PRODUCTION_CODE,
+          };
+  if (!isExplicitApproval(outcome) || outcome.providerRef === null) {
     // Abort the whole transaction: a decline leaves no tender/movement/payment/receipt.
     throw new TenderError(
       `The card sale was declined (${outcome.declineCode ?? 'DECLINED'}).`,
@@ -1190,7 +1266,7 @@ async function persistCardTender(
   const payment = await tx.restaurantPayment.create({
     data: {
       billId: bill.id,
-      provider: tender.terminalConfirmation ? 'TERMINAL' : 'MOCK',
+      provider: tender.terminalConfirmation ? 'TERMINAL' : manual !== null ? 'MANUAL' : 'MOCK',
       capability: 'SALE',
       status: outcome.status,
       amount,

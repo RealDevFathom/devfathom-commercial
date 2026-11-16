@@ -151,3 +151,72 @@ it('does not read zero returns as an all-clear return-window board (DEV-522)', a
   expect(screen.queryByText('No return window is closing')).toBeNull();
   expect(screen.queryByText(/Every open return and claim/)).toBeNull();
 });
+
+// QA-3: a non-drug lot stocked without an expiry sits on a 9998-12-31 storage
+// marker; the returns screens show "No expiry" instead of that date.
+const NO_EXPIRY_MARKER = new Date('9998-12-31T19:00:00.000Z');
+it('offers a no-expiry lot for return as "No expiry", never 9998-12-31 (QA-3)', async () => {
+  reads.returnableLots.mockResolvedValue([
+    {
+      lot: {
+        id: 'lot-retail',
+        batch: {
+          batchNumber: 'RETAIL-NOEXP',
+          expiresAt: NO_EXPIRY_MARKER,
+          medicine: { productName: 'Baby lotion' },
+        },
+      },
+      location: { id: 'loc-1', name: 'Front shelf' },
+      onHandUnits: 6,
+    },
+  ]);
+  render(await ReturnsPage({ searchParams: params() }));
+  const options = screen.getAllByRole('option', { name: /RETAIL-NOEXP/ });
+  expect(options.length).toBeGreaterThan(0);
+  for (const option of options) {
+    expect(option).toHaveTextContent(
+      'Baby lotion · batch RETAIL-NOEXP · No expiry · 6 available in Front shelf'
+    );
+    expect(option.textContent).not.toContain('9998');
+  }
+});
+it('shows a no-expiry return line as "No expiry", never 9998-12-31 (QA-3)', async () => {
+  reads.purchaseReturns.mockResolvedValue([
+    {
+      id: 'ret-1',
+      reference: 'RET-1',
+      kind: 'PURCHASE_RETURN',
+      status: 'DRAFT',
+      createdAt: new Date('2026-11-10T09:00:00.000Z'),
+      dispatchedAt: null,
+      supplier: { name: 'Karachi Distributors' },
+      debitNotes: [],
+      lines: [
+        {
+          id: 'retl-1',
+          lot: {
+            batch: {
+              batchNumber: 'RETAIL-NOEXP',
+              expiresAt: NO_EXPIRY_MARKER,
+              medicine: { productName: 'Baby lotion' },
+            },
+          },
+          location: { name: 'Front shelf' },
+          quantityUnits: 6,
+          expectedCreditMinor: 1_200,
+          reason: 'Damaged packaging',
+          supplierClaimId: null,
+          returnWindowEndsAt: new Date('2026-12-31T00:00:00.000Z'),
+          windowState: 'OPEN',
+          daysToWindowEnd: 46,
+        },
+      ],
+    },
+  ]);
+  render(
+    await ReturnsPage({ searchParams: Promise.resolve({ branch: 'branch', return: 'ret-1' }) })
+  );
+  const line = screen.getByText(/Batch RETAIL-NOEXP/);
+  expect(line).toHaveTextContent('Batch RETAIL-NOEXP · No expiry ·');
+  expect(line.textContent).not.toContain('9998');
+});

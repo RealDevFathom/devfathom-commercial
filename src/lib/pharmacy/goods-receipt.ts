@@ -31,6 +31,7 @@ import {
   assignedRegisterBranchIds,
   lockRegister,
 } from './controlled-register';
+import { compareBalanceLockKeys, lockStockBalances } from './stock-lock-order';
 import {
   clearLockout,
   isLockedOut,
@@ -441,6 +442,14 @@ export async function postGoodsReceipt(
   const orderCostTerms = purchaseOrder
     ? await orderReceiptCostTerms(db, scope.organizationId, purchaseOrder)
     : null;
+
+  // DEV-825: a controlled receipt writes the register, so it takes the branch
+  // register lock before any batch, lot or balance row (stock-lock-order.ts),
+  // the same order dispensing, voids, returns and reversals use. Taking it only
+  // when the register rows are appended, after the stock writes, inverts it.
+  if (needsRegister && witness.pharmacistId) {
+    await lockRegister(db, scope.organizationId, scope.branchId);
+  }
 
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
@@ -1042,21 +1051,12 @@ async function assertReceiptStockStillOnHand(
         : { ...movement }
     );
   }
-  const buckets = [...needed.entries()]
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([, bucket]) => bucket);
+  const buckets = [...needed.values()].sort(compareBalanceLockKeys);
 
-  // Lock in a deterministic order, then read in a separate statement so the
-  // read sees anything that committed while the lock was waited on.
-  for (const bucket of buckets) {
-    await db.$queryRaw`
-      SELECT "inventoryLotId" FROM "pharmacy_stock_balances"
-      WHERE "organizationId" = ${scope.organizationId}
-        AND "inventoryLotId" = ${bucket.inventoryLotId}
-        AND "stockLocationId" = ${bucket.stockLocationId}
-        AND "disposition"::text = ${bucket.disposition}
-      FOR UPDATE`;
-  }
+  // Lock in the global balance key order (stock-lock-order.ts), then read in a
+  // separate statement so the read sees anything that committed while the lock
+  // was waited on.
+  await lockStockBalances(db, scope, buckets);
   const balances = await db.pharmacyStockBalance.findMany({
     where: {
       organizationId: scope.organizationId,

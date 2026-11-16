@@ -315,7 +315,8 @@ export async function processDueWhatsAppKhataReminders(
           return null;
         // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
         const timeZone = workspaceTimezone(organization.timezone);
-        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone))) return { kind: 'quiet-hours' };
+        if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone)))
+          return { kind: 'quiet-hours' };
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -550,12 +551,36 @@ export async function readDueKhataAccounts(
   // one-account send (DEV-730) still goes out through every other gate.
   const scheduleSwitch = only ? Prisma.empty : Prisma.sql`AND br."khataReminderEnabled" = true`;
   return db.$queryRaw<DueAccount[]>(Prisma.sql`
-    WITH payments AS (
-      SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
-             SUM("amountMinor") AS paid
-      FROM "pharmacy_khata_events"
-      WHERE "organizationId" = ${organizationId} AND "kind" = 'PAYMENT'
-      GROUP BY "organizationId", "branchId", "familyAccountId", "settlesChargeId"
+    WITH settlements AS (
+      -- A dishonoured cheque re-opens what it bounced, as readKhataBalance counts it: linked
+      -- to a payment it re-opens that payment's charge, linked to a charge it re-opens that
+      -- charge, and otherwise it is owed now with no due date of its own.
+      SELECT e."id", e."organizationId", e."branchId", e."familyAccountId", e."kind",
+             e."amountMinor"::bigint AS amount,
+             COALESCE(bounced."settlesChargeId", e."settlesChargeId") AS "chargeId"
+      FROM "pharmacy_khata_events" e
+      LEFT JOIN "pharmacy_khata_events" bounced
+        ON e."kind" = 'DISHONOURED_CHEQUE' AND bounced."kind" = 'PAYMENT'
+       AND bounced."organizationId" = e."organizationId" AND bounced."branchId" = e."branchId"
+       AND bounced."id" = e."settlesChargeId"
+      WHERE e."organizationId" = ${organizationId}
+        AND e."kind" IN ('PAYMENT', 'DISHONOURED_CHEQUE')
+    ),
+    payments AS (
+      SELECT "organizationId", "branchId", "familyAccountId", "chargeId" AS "settlesChargeId",
+             SUM(CASE WHEN "kind" = 'PAYMENT' THEN amount ELSE -amount END) AS paid
+      FROM settlements
+      WHERE "chargeId" IS NOT NULL
+      GROUP BY "organizationId", "branchId", "familyAccountId", "chargeId"
+    ),
+    unlinked AS (
+      SELECT s."id" FROM settlements s
+      WHERE s."kind" = 'DISHONOURED_CHEQUE'
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_khata_events" c
+          WHERE c."organizationId" = s."organizationId" AND c."branchId" = s."branchId"
+            AND c."id" = s."chargeId" AND c."kind" = 'CHARGE'
+        )
     )
     SELECT acct."id" AS "familyAccountId", acct."organizationId", acct."branchId",
            acct."displayName", acct."payerCustomerId",
@@ -563,9 +588,10 @@ export async function readDueKhataAccounts(
            br."khataReminderMinBalanceMinor" AS "minBalanceMinor",
            SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END)::bigint AS "balanceMinor",
-           MIN(ev."dueAt") FILTER (
-             WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
-               AND ev."amountMinor" > COALESCE(payments.paid, 0)
+           MIN(COALESCE(ev."dueAt", ev."occurredAt")) FILTER (
+             WHERE (ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+                    AND ev."amountMinor" > COALESCE(payments.paid, 0))
+                OR unlinked."id" IS NOT NULL
            ) AS "oldestOverdueAt"
     FROM "pharmacy_family_accounts" acct
     JOIN "pharmacy_branches" br
@@ -579,6 +605,7 @@ export async function readDueKhataAccounts(
      AND payments."branchId" = ev."branchId"
      AND payments."familyAccountId" = ev."familyAccountId"
      AND payments."settlesChargeId" = ev."id"
+    LEFT JOIN unlinked ON unlinked."id" = ev."id"
     WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
       ${accountFilter}
       AND NOT EXISTS (
@@ -594,9 +621,10 @@ export async function readDueKhataAccounts(
              br."khataReminderCadenceDays", br."khataReminderMinBalanceMinor"
     HAVING SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END) >= ${floor}
-       AND MIN(ev."dueAt") FILTER (
-         WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
-           AND ev."amountMinor" > COALESCE(payments.paid, 0)
+       AND MIN(COALESCE(ev."dueAt", ev."occurredAt")) FILTER (
+         WHERE (ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+                AND ev."amountMinor" > COALESCE(payments.paid, 0))
+            OR unlinked."id" IS NOT NULL
        ) IS NOT NULL
     ORDER BY "oldestOverdueAt", acct."id"
     LIMIT ${Math.max(1, Math.min(500, Math.floor(limit)))}

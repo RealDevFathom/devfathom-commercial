@@ -4,6 +4,7 @@ import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
+import { uploadNameFromRef } from '@/lib/uploads/registry';
 
 // TRELLO-01: a non-parseable date string in a Trello export (`new Date(...)` →
 // Invalid Date) previously crashed the whole transactional import. Parse safely
@@ -85,6 +86,23 @@ export const trelloImportRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      // DEV-837: an imported attachment is a link, never one of this workspace's
+      // uploads. A `/api/files` reference would bypass the upload registry, so
+      // the whole import is refused before anything (even a new project) is
+      // written.
+      const attachmentCheck = trelloBoardSchema.safeParse(input.trelloJson);
+      if (
+        attachmentCheck.success &&
+        attachmentCheck.data.cards.some((card) =>
+          card.attachments.some((attachment) => uploadNameFromRef(attachment.url) !== null)
+        )
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            'This export links attachments to files uploaded in this workspace. Remove those attachments and try again.',
+        });
+      }
       // IMP-TRELLO-01: resolve the target project. A new project makes the caller
       // its LEAD; importing into an EXISTING one is now lead/admin-only (bulk-
       // mutating a shared board shouldn't be open to every member).
