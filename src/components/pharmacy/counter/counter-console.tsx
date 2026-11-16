@@ -1457,6 +1457,26 @@ function ScopedPharmacyCounterConsole({
     if (activeRow) quantityRef.current?.focus();
   }, [activeRow]);
 
+  const searchAndStage = useCallback(
+    async (text: string) => {
+      const search = await runSearch(text);
+      if (!search || search.blocked) return;
+      try {
+        const result = await utils.pharmacySales.counterSearch.fetch(
+          { branchId, query: search.query },
+          { staleTime: 10_000 }
+        );
+        // A changed query, branch or scanner invalidates the in-flight selection.
+        if (search.revision !== scannerRevision.current) return;
+        if (result.rows[0]) stageRow(result.rows[0]);
+      } catch (error) {
+        if (search.revision === scannerRevision.current)
+          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+      }
+    },
+    [branchId, runSearch, stageRow, utils]
+  );
+
   const openSale = useCallback(async () => {
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
@@ -3148,7 +3168,7 @@ function ScopedPharmacyCounterConsole({
                               ? searchQuery.data?.rows[0]
                               : undefined;
                           if (first) stageRow(first);
-                          else void runSearch();
+                          else void searchAndStage(trimmed);
                         }}
                         className="h-12"
                       />

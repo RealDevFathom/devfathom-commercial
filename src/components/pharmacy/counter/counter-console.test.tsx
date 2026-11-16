@@ -4874,6 +4874,30 @@ describe('DEV-41 cashier actions', () => {
 });
 
 describe('DEV-705 keyboard loose sale', () => {
+  it('stages the first fresh result when Enter beats the search debounce', async () => {
+    mocks.searchFetch.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveFocus());
+    expect(mocks.searchFetch).toHaveBeenCalledWith({ branchId: 'branch-a', query: 'Panadol' }, { staleTime: 10000 });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+  it('discards a late Enter result after the operator changes the query', async () => {
+    let resolveSearch!: (value: unknown) => void;
+    mocks.searchFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.searchFetch).toHaveBeenCalled());
+    fireEvent.change(search, { target: { value: 'Another' } });
+    await act(async () => resolveSearch({ rows: [barcodeRow()], truncated: false }));
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it('stages the current first text result with Enter and moves directly to quantity', async () => {
     mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -4885,6 +4909,7 @@ describe('DEV-705 keyboard loose sale', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
   it('does not stage stale results while the current text search failed', async () => {
+    mocks.searchFetch.mockRejectedValue(new Error('Search failed'));
     mocks.queries.counterSearch = {
       ...query({ rows: [barcodeRow()], truncated: false }),
       isError: true,
@@ -4893,7 +4918,7 @@ describe('DEV-705 keyboard loose sale', () => {
     const search = screen.getByLabelText('Scan or search');
     fireEvent.change(search, { target: { value: 'Panadol' } });
     await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('error'));
-    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
     expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
