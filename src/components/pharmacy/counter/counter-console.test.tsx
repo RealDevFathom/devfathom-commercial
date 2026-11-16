@@ -22,6 +22,7 @@ type Query = {
 };
 
 const mocks = vi.hoisted(() => ({
+  renderSearchResults: false,
   queries: {} as Record<string, Query>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   pausedMutations: new Set<string>(),
@@ -217,12 +218,15 @@ vi.mock('./counter-rx-panel', () => ({
     );
   },
 }));
-vi.mock('./counter-search-results', () => ({
-  CounterSearchResults: (props: ComponentProps<typeof CounterSearchResults>) => {
-    mocks.searchProps(props);
-    return null;
-  },
-}));
+vi.mock('./counter-search-results', async (original) => {
+  const actual = await original<typeof import('./counter-search-results')>();
+  return {
+    CounterSearchResults: (props: ComponentProps<typeof CounterSearchResults>) => {
+      mocks.searchProps(props);
+      return mocks.renderSearchResults ? <actual.CounterSearchResults {...props} /> : null;
+    },
+  };
+});
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 
@@ -441,6 +445,7 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.renderSearchResults = false;
   browserPrint.ready.mockReset();
   mocks.keymapSetData.mockImplementation((_input, saved) => {
     mocks.queries.counterKeymap = query(saved);
@@ -4868,4 +4873,80 @@ describe('DEV-41 cashier actions', () => {
     expect(screen.getByRole('dialog', { name: 'Customer loyalty and khata' })).toBeVisible();
     expect(document.body).not.toHaveTextContent(/\b(?:AI|RX|CRM|POS)-[A-Z]?\d{2}(?!\d)/);
   });
+});
+
+describe('DEV-878 search alternative uses the normal counter line path', () => {
+  it.each(['ordinary', 'controlled', 'server-refusal'])(
+    'preserves %s handling when choosing an alternative',
+    async (kind) => {
+      mocks.renderSearchResults = true;
+      const candidate = barcodeRow({
+        medicineId: 'stock-alternative',
+        displayName: 'Synthetic alternative',
+        matchedOn: 'NAME',
+        saleableUnits: [
+          {
+            kind: 'UNIT',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+            wholeUnits: 10,
+            unitPriceMinor: 10000,
+            proRataCeilingMinor: 10000,
+          },
+        ],
+      });
+      if (kind === 'controlled')
+        candidate.restriction = { ...candidate.restriction, controlled: true, rx: true };
+      const unavailable = barcodeRow({
+        medicineId: 'requested-brand',
+        displayName: 'Requested brand',
+        onHandUnits: 0,
+        saleUnits: [],
+        stockAlternatives: { ingredientRecorded: true, exact: [candidate], other: [] },
+      });
+      mocks.queries.counterSearch = query({ rows: [unavailable], truncated: false });
+      if (kind === 'server-refusal')
+        mocks.mutations.addLine!.mockRejectedValue(
+          refused('FORBIDDEN', 'Pharmacist presence required')
+        );
+      else mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.change(screen.getByLabelText('Scan or search'), {
+        target: { value: 'Requested brand' },
+      });
+      const options = await screen.findByRole('list', {
+        name: 'Same ingredient, strength and form',
+      });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      fireEvent.click(within(options).getByRole('button'));
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      if (kind === 'controlled') {
+        await screen.findByText(/Controlled medicine needs the patient address/);
+        expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() =>
+          expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              branchId: 'branch-a',
+              saleId: 'sale-a',
+              medicineId: 'stock-alternative',
+              presentationId: candidate.presentationId,
+              packLevelId: 'pack-a',
+              saleUnit: 'UNIT',
+              quantity: 1,
+              canonicalUnitsPerSaleUnit: 1,
+              idempotencyKey: expect.stringContaining('counter:sale-a:stock-alternative:'),
+            })
+          )
+        );
+        if (kind === 'server-refusal') {
+          await screen.findByText('Pharmacist presence required');
+          expect(screen.queryByText(/Synthetic alternative added/)).not.toBeInTheDocument();
+        } else await screen.findByText('1 × Synthetic alternative added.');
+      }
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    }
+  );
 });

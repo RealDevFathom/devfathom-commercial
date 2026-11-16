@@ -3364,10 +3364,14 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await searchCounterCatalog(ctx.db, await scopeFor(ctx, input.branchId), {
-          query: input.query,
-          limit: input.limit,
-        });
+        return await searchCounterCatalog(
+          ctx.db,
+          await requireCounterReceiptAccess(ctx, input.branchId),
+          {
+            query: input.query,
+            limit: input.limit,
+          }
+        );
       } catch (error) {
         fail(error);
       }
