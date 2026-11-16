@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,6 +54,12 @@ export function CounterOpenDrawerStep({
   onOpen,
   context,
 }: CounterOpenDrawerStepProps) {
+  const openingCashRef = useRef<HTMLInputElement>(null);
+  // The first render can be disabled while drawer/access reads are pending.
+  // Native autofocus does not retry when the field becomes available.
+  useEffect(() => {
+    if (!disabled) openingCashRef.current?.focus();
+  }, [disabled]);
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
@@ -139,6 +145,7 @@ export function CounterOpenDrawerStep({
         <div className="min-w-0 flex-1 space-y-1.5">
           <Label htmlFor="counter-opening-cash">Opening cash</Label>
           <Input
+            ref={openingCashRef}
             id="counter-opening-cash"
             inputMode="decimal"
             autoComplete="off"

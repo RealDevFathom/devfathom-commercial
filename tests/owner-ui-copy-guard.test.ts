@@ -193,12 +193,18 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// Parse the immutable UI corpus once; every copy rule still checks every text entry.
+const uiText = files.flatMap((file) =>
+  userFacingText(file, readFileSync(file, 'utf8')).map((entry) => ({
+    ...entry,
+    file: path.relative(ROOT, file),
+  }))
+);
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
-      .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+  return uiText
+    .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
+    .map(({ file, line, text }) => `${file}:${line} ${JSON.stringify(text)}`);
 }
 
 describe('owner UI copy guard', () => {

@@ -2047,7 +2047,12 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     mocks.queries.drawerStatus = drawerStatus;
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(drawerStatus.refetch).not.toHaveBeenCalled();
-    // DEV-725: with the drawer closed the opening step replaces the scan field.
+    // The opening field now receives focus after drawer checks. Fields keep
+    // F-keys; tabbing to the button restores the counter's global shortcuts.
+    expect(screen.getByLabelText('Opening cash')).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(drawerStatus.refetch).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'Open drawer' }).focus();
     fireEvent.keyDown(window, { key: 'F9' });
     expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
   });
