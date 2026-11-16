@@ -1,6 +1,7 @@
 'use client';
 
 import { browserUuid } from '@/lib/browser-uuid';
+import { CounterCatalogueCache } from '@/lib/pharmacy/counter-catalogue-cache';
 
 import {
   useCallback,
@@ -50,6 +51,7 @@ import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
+import { CounterScanInput } from './counter-scan-input';
 import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
@@ -486,6 +488,9 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  const [catalogueCache] = useState(() => new CounterCatalogueCache());
+  const completedAdds = useRef(0);
+  const lineAttempts = useRef(new Map<string, string>());
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
@@ -643,8 +648,9 @@ function ScopedPharmacyCounterConsole({
   useEffect(
     () => () => {
       scannerRevision.current += 1;
+      catalogueCache.clear();
     },
-    [branchAuthorized, branchId]
+    [branchAuthorized, branchId, catalogueCache]
   );
 
   const discardReceiptIntent = useCallback(() => {
@@ -744,14 +750,6 @@ function ScopedPharmacyCounterConsole({
     trimmedQuery.length >= 2 &&
     submittedSearch.text === trimmedQuery &&
     submittedSearch.branchId === branchId;
-
-  useEffect(() => {
-    if (!branchAuthorized || trimmedQuery.length < 2 || scannerQuery || searchCurrent) return;
-    const timer = window.setTimeout(() => {
-      setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
-    }, COUNTER_SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [branchAuthorized, branchId, scannerQuery, searchCurrent, trimmedQuery]);
 
   const searchQuery = trpc.pharmacySales.counterSearch.useQuery(
     { branchId, query: submittedQuery },
@@ -1580,8 +1578,24 @@ function ScopedPharmacyCounterConsole({
               )
           : undefined;
         const refSerial = Number(billAuth.refSerial);
-        const postLine = (lineSaleId: string) =>
-          addLine.mutateAsync({
+        const attemptKeys: string[] = [];
+        const postLine = (lineSaleId: string) => {
+          const selection = JSON.stringify([
+            lineSaleId,
+            row.medicineId,
+            option.packLevelId,
+            option.kind,
+            units,
+            overrideLotId,
+            scannedPack?.serial.toUpperCase(),
+          ]);
+          let key = lineAttempts.current.get(selection);
+          if (!key) {
+            key = `counter-add:${browserUuid()}`;
+            lineAttempts.current.set(selection, key);
+          }
+          attemptKeys.push(selection);
+          return addLine.mutateAsync({
             ...(patient && prescriptionLine
               ? {
                   prescription: {
@@ -1613,9 +1627,9 @@ function ScopedPharmacyCounterConsole({
             saleUnit: option.kind,
             quantity: units,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            // A stable key per (sale, medicine, unit, quantity) so a double-press of
-            // the add chord cannot post the same line twice.
-            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
+            // Retries keep the key until a confirmed add; the next completed
+            // scanner gesture must allocate another item, even for the same code.
+            idempotencyKey: key,
             // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
             ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
             ...(overrideLotId && batchOverride
@@ -1628,6 +1642,7 @@ function ScopedPharmacyCounterConsole({
                 }
               : {}),
           });
+        };
         let startedNextBill = replaceClosedBill;
         let added: Awaited<ReturnType<typeof postLine>>;
         try {
@@ -1657,9 +1672,13 @@ function ScopedPharmacyCounterConsole({
           added = await postLine(activeSaleId);
         }
         if ('blocked' in added) {
+          catalogueCache.clear();
           setNotice({ tone: 'warning', message: added.blocked });
           return;
         }
+        for (const selection of attemptKeys) lineAttempts.current.delete(selection);
+        completedAdds.current += 1;
+        catalogueCache.sold(row.medicineId, units * option.canonicalUnitsPerSaleUnit);
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
@@ -1672,6 +1691,7 @@ function ScopedPharmacyCounterConsole({
         setQuery('');
         focusSearch();
       } catch (error) {
+        catalogueCache.clear();
         const message = messageFrom(error);
         setNotice({
           tone: counterErrorTone(error),
@@ -1688,6 +1708,7 @@ function ScopedPharmacyCounterConsole({
     [
       activeRow,
       addLine,
+      catalogueCache,
       cartQuery,
       clearBill,
       controlledAuth,
@@ -1740,29 +1761,28 @@ function ScopedPharmacyCounterConsole({
         const search = await searching;
         if (!search || search.blocked) return;
         revision = search.revision;
-        const result = await utils.pharmacySales.counterSearch.fetch(
-          { branchId, query: search.query },
-          { staleTime: 10_000 }
-        );
+        const cached = search.serializedPack ? undefined : catalogueCache.get(search.query);
+        const result = cached
+          ? { rows: [cached], truncated: false }
+          : await utils.pharmacySales.counterSearch.fetch(
+              { branchId, query: search.query },
+              { staleTime: 10_000 }
+            );
         if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
           return;
         const row = result.rows[0]!;
+        if (!cached && !search.serializedPack) catalogueCache.put(search.query, row);
         const serialized = search.serializedPack;
-        const restage =
-          activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
-        if (restage) {
-          stageRow(row);
-          // Barcode entry keeps its one-item default; manual selection starts empty.
-          setQuantityText('1');
-        }
-        const scanPreview = restage
-          ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
-          : preview;
+        // Use this lookup's restrictions/availability even when the medicine ID
+        // matches the previous selection. A server refusal can refresh its rules.
+        stageRow(row);
+        setQuantityText('1');
+        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
         if (serialized) {
           // The server pins the scanned pack's own lot and refuses a pack already sold.
           await addToCart(row, revision, serialized);
         } else if (scanPreview?.sufficient) {
-          await addToCart(restage ? row : undefined, revision);
+          await addToCart(row, revision);
         }
       } catch (error) {
         if (revision === scannerRevision.current)
@@ -1771,7 +1791,7 @@ function ScopedPharmacyCounterConsole({
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+    [addToCart, branchId, busy, catalogueCache, query, runSearch, stageRow, utils]
   );
 
   const runTransition = useCallback(
@@ -3101,7 +3121,7 @@ function ScopedPharmacyCounterConsole({
                       <Label htmlFor="counter-search" className="sr-only">
                         Scan or search
                       </Label>
-                      <Input
+                      <CounterScanInput
                         id="counter-search"
                         ref={searchRef}
                         // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
@@ -3109,12 +3129,21 @@ function ScopedPharmacyCounterConsole({
                         autoFocus
                         autoComplete="off"
                         value={query}
+                        resetVersion={completedAdds.current}
+                        debounceMs={COUNTER_SEARCH_DEBOUNCE_MS}
+                        isScan={looksLikeScannedCode}
+                        onSearch={(text) => {
+                          setQuery(text);
+                          setSubmittedSearch({ text: text.trim(), query: text.trim(), branchId });
+                        }}
                         disabled={busy}
                         placeholder="Brand, generic or barcode"
                         aria-describedby="counter-search-help"
-                        onChange={(event) => {
+                        onDraftChange={() => {
                           scannerRevision.current += 1;
-                          setQuery(event.target.value);
+                          setSubmittedSearch((current) =>
+                            current.text ? { text: '', query: '', branchId: '' } : current
+                          );
                           setActiveRow(null);
                           setSaleUnit(null);
                           setQuantityText('1');
@@ -3123,6 +3152,7 @@ function ScopedPharmacyCounterConsole({
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
+                          setQuery(trimmed);
                           if (looksLikeScannedCode(trimmed)) {
                             void addBarcode(trimmed);
                             return;
@@ -3131,7 +3161,7 @@ function ScopedPharmacyCounterConsole({
                             void addToCart();
                             return;
                           }
-                          void runSearch();
+                          void runSearch(trimmed);
                         }}
                         className="h-12"
                       />

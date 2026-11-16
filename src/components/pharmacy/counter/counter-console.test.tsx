@@ -3517,6 +3517,88 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it('adds 50 consecutive digit bursts as distinct operations with one warm catalogue lookup', async () => {
+    const row = barcodeRow({ onHandUnits: 100 });
+    mocks.searchQuery.mockResolvedValue({ rows: [row], truncated: false });
+    const keys = new Set<string>();
+    mocks.mutations.addLine!.mockImplementation(async ({ idempotencyKey }) => {
+      keys.add(idempotencyKey);
+      return {};
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const code = '8964000123456';
+    const timings: number[] = [];
+    for (let scan = 0; scan < 50; scan += 1) {
+      const start = performance.now();
+      for (let length = 1; length <= code.length; length += 1) {
+        expect(search).toBeEnabled();
+        fireEvent.change(search, { target: { value: code.slice(0, length) } });
+      }
+      expect(search).toHaveValue(code);
+      await act(async () => {
+        fireEvent.keyDown(search, { key: 'Enter' });
+      });
+      expect(search).toHaveValue('');
+      expect(mocks.mutations.addLine).toHaveBeenCalledTimes(scan + 1);
+      timings.push(performance.now() - start);
+    }
+    console.info(
+      'DEV-575 local component fixture:',
+      JSON.stringify({
+        scans: timings.length,
+        uniqueWrites: keys.size,
+        lookups: mocks.searchQuery.mock.calls.length,
+        p95Ms: [...timings].sort((a, b) => a - b)[47],
+        maxMs: Math.max(...timings),
+      })
+    );
+    expect(keys.size).toBe(50);
+    expect(mocks.searchQuery).toHaveBeenCalledExactlyOnceWith(
+      { branchId: 'branch-a', query: code },
+      { staleTime: 10_000 }
+    );
+  }, 30_000);
+
+  it('keeps a failed allocation key for an explicit retry, then rotates it after success', async () => {
+    mocks.mutations
+      .addLine!.mockRejectedValueOnce(new Error('Response lost.'))
+      .mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    for (let index = 0; index < 3; index += 1) {
+      fireEvent.change(search, { target: { value: '8964000123456' } });
+      await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    }
+    const keys = mocks.mutations.addLine!.mock.calls.map(([input]) => input.idempotencyKey);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[1]);
+  });
+
+  it('drops warm catalogue hints after a refused write and reads current restrictions on retry', async () => {
+    mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations
+      .addLine!.mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ blocked: 'Stock changed.' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    for (let index = 0; index < 2; index += 1) {
+      fireEvent.change(search, { target: { value: '8964000123456' } });
+      await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    }
+    expect(mocks.searchQuery).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Stock changed.')).toBeInTheDocument();
+    const restricted = barcodeRow();
+    restricted.restriction.controlled = true;
+    mocks.searchQuery.mockResolvedValue({ rows: [restricted], truncated: false });
+    fireEvent.change(search, { target: { value: '8964000123456' } });
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    expect(mocks.searchQuery).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Controlled medicine needs the patient address/)).toBeInTheDocument();
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2);
+  });
+
   it('submits a typed search 150 ms after the last keystroke and aborts superseded ones', () => {
     vi.useFakeTimers();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
