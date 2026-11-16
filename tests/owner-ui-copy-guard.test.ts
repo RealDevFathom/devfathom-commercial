@@ -41,7 +41,13 @@ function uiFiles(dir: string): string[] {
   return out;
 }
 
-function userFacingText(file: string, content: string): { line: number; text: string }[] {
+// Parse each real UI file once for this fixture. Repeated parsing in individual
+// assertions can exceed their time budget under a full-suite load; the scanned
+// files, matching rules and assertions remain identical.
+const parsedUi = new Map<string, { content: string; source: ts.SourceFile }>();
+function parseUi(file: string, content: string) {
+  const cached = parsedUi.get(file);
+  if (cached?.content === content) return cached.source;
   const source = ts.createSourceFile(
     file,
     content,
@@ -49,6 +55,12 @@ function userFacingText(file: string, content: string): { line: number; text: st
     true,
     file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
+  parsedUi.set(file, { content, source });
+  return source;
+}
+
+function userFacingText(file: string, content: string): { line: number; text: string }[] {
+  const source = parseUi(file, content);
   const found: { line: number; text: string }[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
@@ -79,13 +91,7 @@ const files = [
  * attribute such as `dateTime`, `value` or `href`) shows owners a raw ISO stamp.
  */
 function rawIsoInJsx(file: string, content: string): number[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+  const source = parseUi(file, content);
   const lines: number[] = [];
   // A date-only slice (`.toISOString().slice(0, 10)`) is a calendar date, not a timestamp.
   // Nested JSX is checked on its own visit, so it is not descended into here.
@@ -141,13 +147,7 @@ const sourceCarriesTables = (file: string) =>
  * straight from data (`{contract.permission}`) instead of through a plain-words helper.
  */
 function rawKeysInJsx(file: string, content: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+  const source = parseUi(file, content);
   const found: string[] = [];
   const at = (node: ts.Node) =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
@@ -193,9 +193,16 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// Build the shared input before timed assertions instead of rescanning the tree
+// separately for every category. Synthetic detector tests still parse their own text.
+const fixtureText = new Map(
+  files.map((file) => [file, userFacingText(file, readFileSync(file, 'utf8'))])
+);
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
   return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+    fixtureText
+      .get(file)!
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
       .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
   );
