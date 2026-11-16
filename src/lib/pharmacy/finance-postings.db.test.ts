@@ -1576,15 +1576,18 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         `count-${tag('leakage')}`,
         'Shelf recount'
       );
-      await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
+      const adjustment = await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,
       });
+      if (!adjustment) throw new Error('Expected shrinkage posting');
 
+      // approveCount already posts at its approval timestamp; this call replays
+      // it. Include that actual entry, as the return-margin fixture does above.
       return deps.reports.leakageReport(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        WINDOW
+        { from: WINDOW.from, to: new Date(Math.max(WINDOW.to.getTime(), adjustment.occurredAt.getTime() + 1)) }
       );
     });
 
@@ -1621,5 +1624,42 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
     const credits = rows.reduce((sum, row) => sum + row.creditMinor, 0);
     expect(debits).toBe(credits);
     expect(debits).toBeGreaterThan(0);
+  });
+});
+
+describeIfDatabase('DEV-877 counter period regression', () => {
+  it('[DEF-05] refuses a counter sale inside a closed accounting period', async () => {
+    const f = await fixture(ORG_A, branch('closed-counter'), 'closed-counter');
+    const { applyPharmacyTender, openPharmacyDrawer } = await import('./settlement');
+    const { closeAccountingPeriod } = await import('./bookkeeping');
+    const deviceId = tag('closed-counter-device');
+    const businessDate = new Date(new Date().toISOString().slice(0, 10));
+    const scope = scopeOf(f);
+    const prepared = await inOrg(ORG_A, async (db) => {
+      await stockLot(db, f, { label: 'closed-counter', units: 10, unitCostMinor: 1000, expiresAt: EXPIRY_LATER, unitsPerPack: 1 });
+      await openPharmacyDrawer(db, scope, { deviceId, businessDate, openingFloatMinor: 0 });
+      const sale = await deps.sales.createSale(db, scope);
+      const { line } = await deps.sales.addSaleLine(db, scope, {
+        saleId: sale.id, medicineId: f.medicineId, presentationId: f.presentationId,
+        packLevelId: f.packLevelId, saleUnit: 'UNIT', quantity: 1,
+        canonicalUnitsPerSaleUnit: 1, idempotencyKey: tag('closed-counter-line'),
+      });
+      await closeAccountingPeriod(db, scope, { startsAt: businessDate, endsAt: new Date(businessDate.getTime() + 86400000) });
+      return { sale, line };
+    });
+    const payment = () => inOrg(ORG_A, (db) => applyPharmacyTender(db, scope, {
+      saleId: prepared.sale.id, deviceId, businessDate, type: 'CASH',
+      amountMinor: prepared.line.unitPriceMinor, cashReceivedMinor: prepared.line.unitPriceMinor,
+      idempotencyKey: tag('closed-counter-payment'),
+    }));
+    await expect(payment()).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+    await inOrg(ORG_A, async (db) => {
+      expect(await db.pharmacyTender.count({ where: { saleId: prepared.sale.id } })).toBe(0);
+      expect(await db.financeJournalEntry.count({ where: { branchId: f.branchId } })).toBe(0);
+      expect(await db.pharmacyDrawerMovement.count({ where: { drawerSession: { branchId: f.branchId }, kind: 'CASH_SALE' } })).toBe(0);
+      const sale = await db.pharmacySale.findUniqueOrThrow({ where: { id: prepared.sale.id } });
+      expect(sale.status).toBe('OPEN');
+      expect(sale.receiptNumber).toBeNull();
+    });
   });
 });

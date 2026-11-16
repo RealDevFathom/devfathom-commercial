@@ -21,10 +21,40 @@
  */
 import type { Currency, FinanceAccountCode, FinanceSourceKind } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { lockPharmacyLedgerScope } from './period-lock';
+
+/** Lock every affected branch before checking the actual posting date. Replays
+ * return before this guard because they do not mutate the closed ledger. The
+ * database repeats the guard for writes that bypass this shared primitive. */
+async function assertPostingPeriodOpen(
+  db: ScopedDb,
+  scope: JournalScope,
+  at: Date,
+  branchIds: readonly (string | null | undefined)[]
+) {
+  const branches = [...new Set(branchIds.filter((id): id is string => Boolean(id)))].sort();
+  for (const branchId of branches) {
+    await lockPharmacyLedgerScope(db, { organizationId: scope.organizationId, branchId });
+  }
+  for (const branchId of branches) {
+    const closed = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId,
+        status: 'CLOSED',
+        startsAt: { lte: at },
+        endsAt: { gt: at },
+      },
+      select: { id: true },
+    });
+    if (closed) throw new FinancePostingError('PERIOD_CLOSED');
+  }
+}
 
 export type JournalSide = 'DEBIT' | 'CREDIT';
 
 export type FinancePostingErrorReason =
+  | 'PERIOD_CLOSED'
   | 'EMPTY_ENTRY'
   | 'UNBALANCED'
   | 'INVALID_AMOUNT'
@@ -174,6 +204,11 @@ export async function postJournalEntry(
     return existing;
   }
 
+  await assertPostingPeriodOpen(db, scope, input.occurredAt, [
+    input.branchId,
+    ...input.lines.map((line) => line.branchId),
+  ]);
+
   const entry = await db.financeJournalEntry.create({
     data: {
       organizationId: scope.organizationId,
@@ -251,6 +286,11 @@ export async function reverseJournalEntry(
     include: { lines: true },
   });
   if (existing) return existing;
+
+  await assertPostingPeriodOpen(db, scope, input.at, [
+    original.branchId,
+    ...original.lines.map((line) => line.branchId),
+  ]);
 
   const reversal = await db.financeJournalEntry.create({
     data: {
