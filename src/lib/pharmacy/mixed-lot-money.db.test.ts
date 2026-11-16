@@ -374,6 +374,7 @@ test.each([undefined, '   '])('DEV-875 rolls back a transfer without a reference
   expect(await tenant((db) => db.pharmacyTender.count({ where: { saleId: f.sale.id } }))).toBe(0);
   expect(await tenant((db) => db.pharmacyMoneyIdempotencyKey.count({ where: { key: input.idempotencyKey } }))).toBe(0);
   const result = await tenant((db) => applyPharmacyTender(db, scope, { ...input, providerRef: ' BANK/2026-001 ' }));
+  if (!('settled' in result)) throw new Error('Expected a newly created bank transfer');
   expect(result.settled).toBe(true);
   expect(await tenant((db) => db.pharmacyTender.findFirst({ where: { id: result.tenderId } }))).toMatchObject({
     providerRef: 'BANK/2026-001', confirmedById: scope.actorId, type: 'BANK_TRANSFER', amountMinor: 300,

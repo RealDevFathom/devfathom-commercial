@@ -193,12 +193,19 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// The source tree is fixed during this suite; reuse extraction across all copy assertions.
+const textByFile = new Map<string, ReturnType<typeof userFacingText>>();
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+  return files.flatMap((file) => {
+    let texts = textByFile.get(file);
+    if (!texts) {
+      texts = userFacingText(file, readFileSync(file, 'utf8'));
+      textByFile.set(file, texts);
+    }
+    return texts
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`);
+  });
 }
 
 describe('owner UI copy guard', () => {
