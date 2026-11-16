@@ -281,13 +281,15 @@ export function counterChordTargetIsField(target: EventTarget | null | undefined
 
 /**
  * Whether `target` keeps `key` for itself. Every field does, except that the
- * marked scan field hands its F-keys to the counter. Enter and the editing keys
+ * marked scan and next-line quantity fields hand their F-keys to the counter. Enter and the editing keys
  * stay with the scan field, which handles Enter itself.
  */
 function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boolean {
   if (!counterChordTargetIsField(target)) return false;
   const scanField =
-    target instanceof HTMLElement && target.hasAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE);
+    target instanceof HTMLElement &&
+    (target.hasAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE) ||
+      target.hasAttribute('data-counter-quantity'));
   return !(scanField && /^F\d+$/.test(key));
 }
 
@@ -298,8 +300,8 @@ function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boo
  * with the field while focus is in an input, textarea, or select, and they stay
  * silent while a dialog is open so a void or tender step cannot be skipped.
  *
- * The one exception is the counter's scan field: it keeps focus for the whole
- * bill (POS-01), so F-keys stay live inside it. A dialog still silences them.
+ * The scan and next-line quantity fields keep F-keys live for the keyboard sale
+ * workflow (POS-01 / DEV-705). A dialog still silences them.
  */
 export function shouldHandleCounterKey(event: CounterKeyEvent, dialogOpen = false): boolean {
   const active = typeof document !== 'undefined' ? document.activeElement : null;

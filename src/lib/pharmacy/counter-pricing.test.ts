@@ -807,3 +807,54 @@ describe('packLevelCanonicalUnits (DEV-830 server-derived multiplier)', () => {
     }
   });
 });
+
+describe('DEV-705 legacy box sale units', () => {
+  const input = {
+    packLevels: [{ id: 'legacy-box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 100 }],
+    lotPackLevelId: 'legacy-box',
+    lotPackLevelLabel: 'BOX',
+    lotUnitsPerPack: 100,
+    dosageForm: 'Tablet',
+    presentation: '10x10',
+    at: new Date('2026-01-01'),
+  };
+  it('offers a priced strip and loose tablet without changing a legacy receiving pack', () => {
+    const { saleUnits } = resolveCounterSaleUnits(input);
+    expect(saleUnits.map((unit) => [unit.kind, unit.canonicalUnitsPerSaleUnit])).toEqual([
+      ['PACK', 100],
+      ['STRIP', 10],
+      ['UNIT', 1],
+    ]);
+    expect(
+      saleUnits.map(
+        (option) =>
+          previewSaleLine({
+            option,
+            quantity: 1,
+            printedMrpMinor: 25000,
+            unitsPerPack: 100,
+            availableUnits: 113,
+          }).unitPriceMinor
+      )
+    ).toEqual([25000, 2500, 250]);
+    expect(input.packLevels[0]!.unitsPerParent).toBe(100);
+  });
+  it.each(['100 tablets', '5x2x10', '1x10x10', '10x10 ml vials', 'Carton 10x10', '2x10'])(
+    'does not invent a strip for %s',
+    (presentation) => {
+      expect(
+        resolveCounterSaleUnits({ ...input, presentation }).saleUnits.map((u) => u.kind)
+      ).toEqual(['PACK', 'UNIT']);
+    }
+  );
+  it('does not infer strips for non-tablet containers or incompatible FEFO lots', () => {
+    expect(
+      resolveCounterSaleUnits({ ...input, dosageForm: 'Injection' }).saleUnits.map((u) => u.kind)
+    ).toEqual(['PACK', 'UNIT']);
+    expect(
+      resolveCounterSaleUnits({ ...input, otherLotUnitsPerPack: [15] }).saleUnits.some(
+        (u) => u.kind === 'STRIP'
+      )
+    ).toBe(false);
+  });
+});

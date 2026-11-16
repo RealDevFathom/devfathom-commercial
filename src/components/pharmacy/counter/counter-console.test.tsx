@@ -1367,35 +1367,38 @@ describe('PharmacyCounterConsole tender recovery', () => {
   it.each([
     ['without a prescription', null, false],
     ['with a prescription no pharmacist has signed for this line', 'rx-line-a', false],
-  ])('DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one', (_label, prescriptionLineId, prescriptionSigned) => {
-    const bill = cart();
-    bill.lines[0]!.rx = true;
-    bill.lines[0]!.prescriptionLineId = prescriptionLineId;
-    bill.lines[0]!.prescriptionSigned = prescriptionSigned;
-    mocks.queries.counterCart!.data = bill;
-    mocks.queries.counterPatientPanel = query({
-      prescriptions: [
-        {
-          validFrom: '2020-01-01T00:00:00.000Z',
-          validUntil: '2999-12-31T00:00:00.000Z',
-          lines: [
-            {
-              prescriptionLineId: 'rx-line-a',
-              medicineId: bill.lines[0]!.medicineId,
-              verified: true,
-              remainingAuthorizedUnits: 10,
-            },
-          ],
-        },
-      ],
-    });
-    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    expect(
-      screen.getAllByText(/This bill carries an unresolved safety block/)[0]
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
-    expect(mocks.mutations.tender).not.toHaveBeenCalled();
-  });
+  ])(
+    'DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one',
+    (_label, prescriptionLineId, prescriptionSigned) => {
+      const bill = cart();
+      bill.lines[0]!.rx = true;
+      bill.lines[0]!.prescriptionLineId = prescriptionLineId;
+      bill.lines[0]!.prescriptionSigned = prescriptionSigned;
+      mocks.queries.counterCart!.data = bill;
+      mocks.queries.counterPatientPanel = query({
+        prescriptions: [
+          {
+            validFrom: '2020-01-01T00:00:00.000Z',
+            validUntil: '2999-12-31T00:00:00.000Z',
+            lines: [
+              {
+                prescriptionLineId: 'rx-line-a',
+                medicineId: bill.lines[0]!.medicineId,
+                verified: true,
+                remainingAuthorizedUnits: 10,
+              },
+            ],
+          },
+        ],
+      });
+      renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(
+        screen.getAllByText(/This bill carries an unresolved safety block/)[0]
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    }
+  );
 
   it('preserves unresolved prescription safety blocks', () => {
     const bill = cart();
@@ -3803,7 +3806,7 @@ describe('DEV-618 counter composition', () => {
     expect(quantity).toHaveValue('1');
     expect(within(next).getByText('Covered · 100 units on hand')).toBeInTheDocument();
     for (const [key, name] of [
-      ['F5', /^Unit/],
+      ['F5', /^Tablet/],
       ['F4', /^Strip/],
       ['F3', /^Pack/],
     ] as const) {
@@ -4867,5 +4870,73 @@ describe('DEV-41 cashier actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Loyalty and khata · not linked' }));
     expect(screen.getByRole('dialog', { name: 'Customer loyalty and khata' })).toBeVisible();
     expect(document.body).not.toHaveTextContent(/\b(?:AI|RX|CRM|POS)-[A-Z]?\d{2}(?!\d)/);
+  });
+});
+
+describe('DEV-705 keyboard loose sale', () => {
+  function looseRow(overrides: Partial<CounterSearchRow> = {}) {
+    return barcodeRow({
+      unitsPerPack: 10,
+      printedMrpMinor: 1000,
+      onHandUnits: 30,
+      saleUnits: [
+        { kind: 'PACK', packLevelId: 'pack-a', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+        { kind: 'UNIT', packLevelId: 'pack-a', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+      ],
+      ...overrides,
+    });
+  }
+  it('defaults to a tablet, focuses quantity and adds one tablet with Enter', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    const quantity = screen.getByLabelText('Quantity');
+    expect(screen.getByRole('radio', { name: /Tablet/ })).toHaveAttribute('aria-checked', 'true');
+    expect(quantity).toHaveFocus();
+    fireEvent.change(quantity, { target: { value: '1' } });
+    fireEvent.keyDown(quantity, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ saleUnit: 'UNIT', canonicalUnitsPerSaleUnit: 1, quantity: 1 })
+      )
+    );
+  });
+  it('honours the branch preferred unit and shows prices before entering quantity', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow({ preferredSaleUnit: 'PACK' }))
+    );
+    expect(screen.getByRole('radio', { name: /Strip of 10.*PKR 10.00/ })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(screen.getByRole('radio', { name: /Tablet.*PKR 1.00/ })).toBeVisible();
+  });
+  it('explains a single-unit pack without offering a second loose choice', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
+    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    expect(screen.getByText(/Already sold as one tablet/)).toBeVisible();
+  });
+  it('keeps controlled loose tablets behind prescription authorization on Enter', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        looseRow({
+          restriction: {
+            rx: true,
+            otc: false,
+            controlled: true,
+            restricted: true,
+            highAlert: false,
+            lasa: false,
+          },
+        })
+      )
+    );
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/patient|prescription/i);
   });
 });

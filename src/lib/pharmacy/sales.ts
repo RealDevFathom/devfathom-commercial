@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { packLevelCanonicalUnits } from './counter-pricing';
+import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -349,6 +349,7 @@ export async function assertSaleUnitConversion(
       effectiveFrom: true,
       effectiveTo: true,
       versionGroupId: true,
+      presentation: { select: { presentation: true, dosageForm: true } },
     },
   });
   if (!packLevels.some((level) => level.id === input.packLevelId))
@@ -361,6 +362,19 @@ export async function assertSaleUnitConversion(
     packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
       input.canonicalUnitsPerSaleUnit
     )
+  )
+    return;
+  // Legacy strips are accepted only at the multiplier derived from this tenant's
+  // stored, reviewed box wording. PACK and UNIT retain their existing checks.
+  const pack = packLevels.find((level) => level.id === input.packLevelId)!;
+  if (
+    input.saleUnit === 'STRIP' &&
+    legacyStripOption({
+      packLevels,
+      packLevelId: input.packLevelId,
+      presentation: pack.presentation?.presentation,
+      dosageForm: pack.presentation?.dosageForm ?? null,
+    })?.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
   )
     return;
   const received = await db.pharmacyInventoryLot.findFirst({

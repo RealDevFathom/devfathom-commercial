@@ -108,6 +108,7 @@ import {
   counterUnitNoun,
   plural,
   looseSaleUnitOption,
+  preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
 } from '@/lib/pharmacy/counter-pricing';
@@ -576,6 +577,7 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const quantityRef = useRef<HTMLInputElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1445,9 +1447,15 @@ function ScopedPharmacyCounterConsole({
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
     setQuantityText('');
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setSaleUnit(
+      preferredSaleUnitOption(row.saleUnits, row.dosageForm, row.preferredSaleUnit)?.kind ?? null
+    );
     setLotOverride(null);
   }, []);
+
+  useEffect(() => {
+    if (activeRow) quantityRef.current?.focus();
+  }, [activeRow]);
 
   const openSale = useCallback(async () => {
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
@@ -1752,6 +1760,7 @@ function ScopedPharmacyCounterConsole({
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
           stageRow(row);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
         }
@@ -3131,7 +3140,14 @@ function ScopedPharmacyCounterConsole({
                             void addToCart();
                             return;
                           }
-                          void runSearch();
+                          const first =
+                            searchCurrent &&
+                            !searchQuery.isPlaceholderData &&
+                            !searchQuery.isFetching
+                              ? searchQuery.data?.rows[0]
+                              : undefined;
+                          if (first) stageRow(first);
+                          else void runSearch();
                         }}
                         className="h-12"
                       />
@@ -3210,6 +3226,12 @@ function ScopedPharmacyCounterConsole({
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
+                      dosageForm={activeRow.dosageForm}
+                      quantityRef={quantityRef}
+                      priceFor={(option) =>
+                        counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
+                      }
+                      onAdd={() => void addToCart()}
                       onHandUnits={activeRow.onHandUnits}
                       selected={saleUnit}
                       quantity={quantityText}

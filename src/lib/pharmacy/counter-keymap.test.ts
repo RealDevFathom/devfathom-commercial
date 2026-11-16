@@ -243,3 +243,18 @@ describe('formatBinding', () => {
     );
   });
 });
+
+it('DEV-705 keeps unit and pay F-keys live in quantity while preserving typing and modal guards', () => {
+  const quantity = document.createElement('input');
+  quantity.setAttribute('data-counter-quantity', '');
+  document.body.append(quantity);
+  quantity.focus();
+  for (const key of ['F3', 'F4', 'F5', 'F6', 'F9']) {
+    expect(shouldHandleCounterKey({ key, target: quantity })).toBe(true);
+    expect(shouldHandleCounterKey({ key, target: quantity }, true)).toBe(false);
+  }
+  for (const key of ['1', 'Enter', 'Backspace']) {
+    expect(shouldHandleCounterKey({ key, target: quantity })).toBe(false);
+  }
+  quantity.remove();
+});
