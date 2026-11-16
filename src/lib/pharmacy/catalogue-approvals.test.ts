@@ -38,9 +38,10 @@ function fixture(editorId = 'editor') {
     medicine: {
       findFirst: vi.fn(async () => medicine),
       updateMany: vi.fn(
-        async (_args: { where: unknown; data: { productName?: string; updatedAt: Date } }) => ({
-          count: 1,
-        })
+        async (args: { where: unknown; data: { productName?: string; updatedAt: Date } }) => {
+          Object.assign(medicine, args.data);
+          return { count: 1 };
+        }
       ),
     },
     pharmacyCatalogueEdit: {

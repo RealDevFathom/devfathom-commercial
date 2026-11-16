@@ -271,7 +271,7 @@ export async function runManualReferenceConnector(
   const end = Math.min(start + MAX_CONNECTOR_ROWS_PER_CALL, input.rows.length);
   const chunk = input.rows.slice(start, end);
   const seenKeys = new Set(input.rows.slice(0, start).map((row) => row.rowSourceKey));
-  let rowsApplied = 0;
+  const rowsApplied = 0;
   let rowsSkipped = 0;
   let rowsRejected = 0;
   const directFieldsApplied = 0;
