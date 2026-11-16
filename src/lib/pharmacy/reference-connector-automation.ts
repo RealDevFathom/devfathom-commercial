@@ -274,7 +274,7 @@ export async function runManualReferenceConnector(
   let rowsApplied = 0;
   let rowsSkipped = 0;
   let rowsRejected = 0;
-  let directFieldsApplied = 0;
+  const directFieldsApplied = 0;
   let regulatedFieldsProposed = 0;
   let proposalRows = 0;
   const rejections = priorRejections(run.rejectionReasons);
@@ -327,26 +327,12 @@ export async function runManualReferenceConnector(
       target = matches[0] ?? null;
     }
 
-    const directChanges: { brandName?: string; manufacturer?: string } = {};
-    if (target && !descriptor.official) {
-      for (const field of DIRECT_REFERENCE_FIELDS) {
-        const value = row.values[field];
-        if (value !== undefined && target[field] !== value) directChanges[field] = value;
-      }
-      if (Object.keys(directChanges).length) {
-        await db.medicine.update({ where: { id: target.id }, data: directChanges });
-        rowsApplied += 1;
-        directFieldsApplied += Object.keys(directChanges).length;
-      }
-    }
-
     const proposed = regulatedChanges(row, target);
     for (const field of DIRECT_REFERENCE_FIELDS) {
       const value = row.values[field];
       if (value === undefined) continue;
-      // An official source proposes descriptive changes too: nothing it supplies is written
-      // until a person confirms it.
-      if (!target || (descriptor.official && target[field] !== value)) proposed[field] = value;
+      // Descriptive edits also wait for an independent catalogue review (DEV-766).
+      if (!target || target[field] !== value) proposed[field] = value;
     }
     if (Object.keys(proposed).length) {
       await db.pharmacyReferenceConnectorProposal.create({

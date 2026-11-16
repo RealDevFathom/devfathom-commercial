@@ -98,7 +98,14 @@ describe('Owner / Operator catalogue review', () => {
         medicineProvenance: {
           findMany: vi
             .fn()
-            .mockResolvedValue([{ id: 'assertion-1', medicineId: 'med-1', status: 'UNREVIEWED' }]),
+            .mockResolvedValue([
+              {
+                id: 'assertion-1',
+                medicineId: 'med-1',
+                editorId: 'editor-1',
+                status: 'UNREVIEWED',
+              },
+            ]),
           updateMany,
         },
         medicineReviewDecision: { create },

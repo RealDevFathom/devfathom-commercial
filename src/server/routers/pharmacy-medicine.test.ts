@@ -38,7 +38,11 @@ function makeDb() {
       findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
     },
     ingredient: model(),
-    medicine: model(),
+    medicine: {
+      ...model(),
+      findFirst: vi.fn().mockResolvedValue({ id: 'medicine_a', saleable: false }),
+    },
+    pharmacyCatalogueEdit: model(),
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
@@ -474,7 +478,10 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('refuses a non-admin printed MRP rounding rule, since it lowers posted prices', async () => {
-    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    db.packLevel.findFirst.mockResolvedValue({
+      id: 'pack_a',
+      presentation: { medicineId: 'medicine_a' },
+    });
     await expect(
       caller(['pharmacy-core'], 'EMPLOYEE').recordPrintedMrp({
         packLevelId: 'pack_a',
@@ -487,7 +494,10 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('lets an admin record a printed MRP rounding rule', async () => {
-    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    db.packLevel.findFirst.mockResolvedValue({
+      id: 'pack_a',
+      presentation: { medicineId: 'medicine_a' },
+    });
     await expect(
       caller().recordPrintedMrp({
         packLevelId: 'pack_a',
@@ -554,12 +564,14 @@ describe('non-drug retail catalogue fields (#718)', () => {
       retailPriceMinor: 12_000,
       retailCategory: 'FMCG',
     });
-    expect(db.medicine.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'soap' },
-        data: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
-      })
-    );
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        medicineId: 'soap',
+        editorId: 'user_a',
+        changes: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
+      }),
+    });
+    expect(db.medicine.update).not.toHaveBeenCalled();
 
     db.medicine.findFirst.mockResolvedValueOnce({ id: 'syrup', productFamily: 'PHARMACEUTICAL' });
     await expect(
@@ -569,6 +581,7 @@ describe('non-drug retail catalogue fields (#718)', () => {
         retailCategory: null,
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.medicine.update).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledTimes(1);
+    expect(db.medicine.update).not.toHaveBeenCalled();
   });
 });

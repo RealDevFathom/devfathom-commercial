@@ -251,6 +251,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const reviewing = usePendingKeys();
   const publishing = usePendingKeys();
   const utils = trpc.useUtils();
+  const [soloReviewPin, setSoloReviewPin] = useState('');
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -259,6 +260,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   });
   const decideProposal = trpc.pharmacyMedicine.decideReferenceConnectorProposal.useMutation({
     onSuccess: async () => {
+      setSoloReviewPin('');
       toast.success('Reference proposal confirmed. Review its assertions before publication.');
       await refreshQueues();
     },
@@ -267,6 +269,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation();
   const review = trpc.pharmacyMedicine.recordReviewDecision.useMutation({
     onSuccess: async () => {
+      setSoloReviewPin('');
       toast.success('Review decision recorded.');
       await utils.pharmacyMedicine.referenceCandidates.invalidate();
     },
@@ -410,6 +413,18 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
 
   return (
     <div className="space-y-6">
+      <label className="block max-w-sm space-y-2 text-sm text-text-body">
+        <span>Solo owner PIN for reference self-approval</span>
+        <input
+          className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={64}
+          value={soloReviewPin}
+          onChange={(event) => setSoloReviewPin(event.target.value)}
+        />
+      </label>
       <section aria-label="Connector health" className="grid gap-3 md:grid-cols-3">
         {health.map((connector) => (
           <SectionCard key={connector.id} title={connector.label} titleLevel={2}>
@@ -716,7 +731,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   disabled={isConfirming}
                   onClick={() =>
                     void confirming.run(proposal.id, () =>
-                      decideProposal.mutateAsync({ proposalId: proposal.id, decision: 'CONFIRM' })
+                      decideProposal.mutateAsync({
+                        proposalId: proposal.id,
+                        decision: 'CONFIRM',
+                        soloPin: soloReviewPin || undefined,
+                      })
                     )
                   }
                 >
@@ -825,6 +844,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                           review.mutateAsync({
                             duplicateKey: `reference:${candidate.id}`,
                             action,
+                            soloPin: soloReviewPin || undefined,
                             medicineIds: [candidate.id],
                             payload: { assertionIds: reviewAssertionIds },
                           })

@@ -35,8 +35,12 @@ export function MedicinePackSetup() {
   );
   const presentation = medicine.data?.presentations.find((item) => item.id === presentationId);
   const create = trpc.pharmacyMedicine.createPackLevel.useMutation({
-    onSuccess: async () => {
-      setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
+    onSuccess: async (result) => {
+      setMessage(
+        'status' in result
+          ? 'Pack submitted for catalogue approval.'
+          : 'Pack created. Return to Pharmacy setup to continue with opening stock.'
+      );
       setLevel('');
       setUnits('');
       await utils.pharmacyMedicine.get.invalidate({ id: medicineId });

@@ -1,0 +1,177 @@
+'use client';
+
+import { useState } from 'react';
+import { trpc } from '@/lib/trpc';
+import { Button } from '@/components/ui/button';
+import { SectionCard } from '@/components/ui/section-card';
+import { Input } from '@/components/ui/input';
+import { StatusPill } from '@/components/ui/status-pill';
+
+export function CatalogueApprovalQueue() {
+  const [pin, setPin] = useState('');
+  const [query, setQuery] = useState('');
+  const [medicineId, setMedicineId] = useState('');
+  const [productName, setProductName] = useState('');
+  const search = trpc.pharmacyMedicine.search.useQuery(
+    { query: query || ' ', limit: 25 },
+    { enabled: query.trim().length > 1, retry: false }
+  );
+  const utils = trpc.useUtils();
+  const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, { retry: false });
+  const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
+    onSuccess: async () => {
+      setPin('');
+      await utils.pharmacyMedicine.catalogueEdits.invalidate();
+    },
+    onError: () => setPin(''),
+  });
+  const propose = trpc.pharmacyMedicine.proposeCatalogueEdit.useMutation({
+    onSuccess: async () => {
+      setProductName('');
+      await utils.pharmacyMedicine.catalogueEdits.invalidate();
+    },
+  });
+  return (
+    <SectionCard title="Catalogue edits awaiting approval" titleLevel={2}>
+      <p className="mb-4 text-sm text-text-muted">
+        Edits stay pending until another catalogue administrator approves them. A solo owner may
+        approve their own edit by entering their own fresh PIN. Every approval is audited.
+      </p>
+      <form
+        className="mb-6 space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          propose.mutate({ medicineId, changes: { productName } });
+        }}
+      >
+        <label className="block max-w-sm space-y-2 text-sm">
+          <span>Find catalogue item to edit</span>
+          <Input
+            value={query}
+            maxLength={200}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setMedicineId('');
+            }}
+          />
+        </label>
+        {search.isFetching ? <p role="status">Finding items…</p> : null}
+        {search.error ? (
+          <p role="alert" className="text-destructive">
+            {search.error.message}
+          </p>
+        ) : null}
+        {search.data?.length === 0 ? <p>No matching catalogue items.</p> : null}
+        {search.data?.length ? (
+          <label className="block max-w-sm space-y-2 text-sm">
+            <span>Catalogue item</span>
+            <select
+              className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+              required
+              value={medicineId}
+              onChange={(event) => setMedicineId(event.target.value)}
+            >
+              <option value="">Choose an item</option>
+              {search.data.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.productName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label className="block max-w-sm space-y-2 text-sm">
+          <span>Proposed product name</span>
+          <Input
+            required
+            maxLength={300}
+            value={productName}
+            onChange={(event) => setProductName(event.target.value)}
+          />
+        </label>
+        <Button disabled={!medicineId || !productName.trim() || propose.isPending} type="submit">
+          {propose.isPending ? 'Submitting…' : 'Submit edit for review'}
+        </Button>
+        {propose.error ? (
+          <p role="alert" className="text-destructive">
+            {propose.error.message}
+          </p>
+        ) : null}
+        {propose.isSuccess ? (
+          <p role="status">Edit submitted for review. The published item changes after approval.</p>
+        ) : null}
+      </form>
+      <label className="mb-4 block max-w-sm space-y-2 text-sm">
+        <span>Solo owner PIN (for self-approval)</span>
+        <Input
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={64}
+          value={pin}
+          onChange={(event) => setPin(event.target.value)}
+        />
+      </label>
+      {queue.isPending ? <p role="status">Loading catalogue edits…</p> : null}
+      {queue.error ? (
+        <p role="alert" className="text-destructive">
+          {queue.error.message}
+        </p>
+      ) : null}
+      {decide.error ? (
+        <p role="alert" className="mb-4 text-destructive">
+          {decide.error.message}
+        </p>
+      ) : null}
+      {queue.data?.length === 0 ? (
+        <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
+      ) : null}
+      <div className="space-y-4">
+        {queue.data?.map((edit) => (
+          <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
+            <h3 className="mb-2 font-semibold">{edit.medicine.productName}</h3>
+            <p className="mb-2 text-sm text-text-muted">
+              {edit.operation === 'UPDATE_MEDICINE' ? 'Product details' : edit.operation}
+            </p>
+            <StatusPill tone="warning">Pending review</StatusPill>
+            <dl className="my-4 grid gap-2 text-sm">
+              {Object.entries(
+                (edit.operation === 'UPDATE_MEDICINE'
+                  ? edit.changes
+                  : (edit.changes as { json: unknown }).json) as Record<string, unknown>
+              ).map(([field, value]) => (
+                <div key={field} className="flex min-w-0 flex-wrap gap-2">
+                  <dt className="font-semibold">{field}</dt>
+                  <dd className="break-all">
+                    {value === null
+                      ? 'Clear value'
+                      : typeof value === 'object'
+                        ? JSON.stringify(value)
+                        : String(value)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                disabled={decide.isPending}
+                onClick={() =>
+                  decide.mutate({ editId: edit.id, decision: 'APPROVE', soloPin: pin || undefined })
+                }
+              >
+                {decide.isPending ? 'Saving…' : 'Approve edit'}
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={decide.isPending}
+                onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
+              >
+                Reject edit
+              </Button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}

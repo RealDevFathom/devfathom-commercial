@@ -163,6 +163,7 @@ describe('MED-06 connector router boundary', () => {
       pharmacyReferenceConnectorProposal: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'proposal-d',
+          run: { triggeredBy: 'editor-1' },
           status: 'PENDING',
           targetMedicineId: null,
           inputDigest: 'digest',
