@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * DEV-39: owners must never read internal requirement codes, release jargon or
@@ -58,7 +58,13 @@ function parsedSource(file: string, content: string) {
   return source;
 }
 
+const extractedText = new Map<
+  string,
+  { content: string; text: { line: number; text: string }[] }
+>();
 function userFacingText(file: string, content: string): { line: number; text: string }[] {
+  const cached = extractedText.get(file);
+  if (cached?.content === content) return cached.text;
   const source = parsedSource(file, content);
   const found: { line: number; text: string }[] = [];
   const visit = (node: ts.Node) => {
@@ -77,6 +83,7 @@ function userFacingText(file: string, content: string): { line: number; text: st
     ts.forEachChild(node, visit);
   };
   visit(source);
+  extractedText.set(file, { content, text: found });
   return found;
 }
 
@@ -201,6 +208,11 @@ function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => f
 }
 
 describe('owner UI copy guard', () => {
+  beforeAll(() => {
+    // Prepare the shared source fixture once; each guard still checks every file.
+    for (const file of files) userFacingText(file, readFileSync(file, 'utf8'));
+  });
+
   it('scans the tenant UI', () => {
     expect(files.length).toBeGreaterThan(100);
   });
