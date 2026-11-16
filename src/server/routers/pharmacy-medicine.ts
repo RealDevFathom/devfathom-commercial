@@ -72,21 +72,30 @@ const assertedValueBudget = z.unknown().superRefine((value, ctx) => {
     nodes += 1;
 
     if (nodes > MAX_ASSERTED_VALUE_NODES) {
-      ctx.addIssue({ code: 'custom', message: 'Must contain at most 1000 values' });
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Must contain at most 1000 values',
+      });
       return z.NEVER;
     }
 
     if (typeof current === 'string') characters += current.length;
     else if (Array.isArray(current)) {
       if (current.length > 20) {
-        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 items' });
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Must contain at most 20 items',
+        });
         return z.NEVER;
       }
       for (const child of current) pending.push(child);
     } else if (current !== null && typeof current === 'object') {
       const entries = Object.entries(current);
       if (entries.length > 20) {
-        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 properties' });
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Must contain at most 20 properties',
+        });
         return z.NEVER;
       }
       for (const [key, child] of entries) {
@@ -96,7 +105,10 @@ const assertedValueBudget = z.unknown().superRefine((value, ctx) => {
     }
 
     if (characters > MAX_ASSERTED_VALUE_CHARACTERS) {
-      ctx.addIssue({ code: 'custom', message: 'Must contain at most 20000 characters' });
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Must contain at most 20000 characters',
+      });
       return z.NEVER;
     }
   }
@@ -345,8 +357,14 @@ async function queueLiveCatalogueCommand(
   input: unknown
 ) {
   if ((ctx as TRPCContext & { [catalogueReplay]?: boolean })[catalogueReplay]) return;
-  const medicine = await ctx.db.medicine.findFirst({ where: { id: medicineId } });
-  if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Catalogue item not found.' });
+  const medicine = await ctx.db.medicine.findFirst({
+    where: { id: medicineId },
+  });
+  if (!medicine)
+    throw new TRPCError({
+      code: 'NOT_FOUND',
+      message: 'Catalogue item not found.',
+    });
   if (!medicine.saleable) return;
   return ctx.db.pharmacyCatalogueEdit.create({
     data: {
@@ -365,7 +383,10 @@ async function applyCatalogueCommand(
   payload: Prisma.JsonValue
 ): Promise<unknown> {
   if (!catalogueCommands.includes(operation as CatalogueCommand))
-    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported catalogue edit.' });
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Unsupported catalogue edit.',
+    });
   const replayContext = { ...ctx, db: tx, [catalogueReplay]: true };
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
@@ -380,7 +401,10 @@ export const pharmacyMedicineRouter = router({
   catalogueEdits: adminProcedure.query(({ ctx }) =>
     ctx.db.pharmacyCatalogueEdit.findMany({
       where: { status: 'PENDING' },
-      include: { medicine: { select: { productName: true } } },
+      include: {
+        medicine: { select: { productName: true } },
+        editor: { select: { name: true } },
+      },
       orderBy: { createdAt: 'asc' },
       take: 250,
     })
@@ -427,11 +451,20 @@ export const pharmacyMedicineRouter = router({
     })
   ),
   confirmPrices: capabilityProcedure('pharmacy:safety')
-    .input(z.object({ proposalIds: z.array(z.string().min(1).max(200)).min(1).max(100) }).strict())
+    .input(
+      z
+        .object({
+          proposalIds: z.array(z.string().min(1).max(200)).min(1).max(100),
+        })
+        .strict()
+    )
     .mutation(({ ctx, input }) =>
       confirmPriceChanges(
         ctx.db,
-        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        {
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+        },
         input.proposalIds
       )
     ),
@@ -459,11 +492,17 @@ export const pharmacyMedicineRouter = router({
         throw error;
       }
       if (!notices.length || notices.length > 100 || notices.some((n) => n.kind !== 'PRICE'))
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Supply 1–100 PRICE notices' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Supply 1–100 PRICE notices',
+        });
       return ctx.db.$transaction((tx) =>
         ingestDrapSource(
           tx as typeof ctx.db,
-          { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+          {
+            organizationId: ctx.entitlements.organizationId,
+            actorId: ctx.session.user.id,
+          },
           source
         )
       );
@@ -472,14 +511,19 @@ export const pharmacyMedicineRouter = router({
   drapPriceAlerts: capabilityProcedure('pharmacy:safety')
     .input(
       z
-        .object({ medicineIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional() })
+        .object({
+          medicineIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
+        })
         .strict()
         .optional()
     )
     .query(({ ctx, input }) =>
       listDrapPriceAlerts(
         ctx.db,
-        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        {
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+        },
         input?.medicineIds
       )
     ),
@@ -489,7 +533,10 @@ export const pharmacyMedicineRouter = router({
       try {
         return await dismissDrapPriceAlert(
           ctx.db,
-          { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+          {
+            organizationId: ctx.entitlements.organizationId,
+            actorId: ctx.session.user.id,
+          },
           input.alertId
         );
       } catch (error) {
@@ -516,7 +563,10 @@ export const pharmacyMedicineRouter = router({
     .mutation(({ ctx, input }) =>
       setManualPackPrice(
         ctx.db,
-        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        {
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+        },
         input
       )
     ),
@@ -525,7 +575,10 @@ export const pharmacyMedicineRouter = router({
     .query(({ ctx, input }) =>
       priceOverrides(
         ctx.db,
-        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        {
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session.user.id,
+        },
         input.branchId
       )
     ),
@@ -699,7 +752,10 @@ export const pharmacyMedicineRouter = router({
           include: { run: { select: { triggeredBy: true } } },
         });
         if (!proposal) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Connector proposal not found.' });
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Connector proposal not found.',
+          });
         }
         if (proposal.status !== 'PENDING') {
           throw new TRPCError({
@@ -711,7 +767,11 @@ export const pharmacyMedicineRouter = router({
         if (input.decision === 'REJECT') {
           return tx.pharmacyReferenceConnectorProposal.update({
             where: { id: proposal.id },
-            data: { status: 'REJECTED', decidedBy: ctx.session.user.id, decidedAt },
+            data: {
+              status: 'REJECTED',
+              decidedBy: ctx.session.user.id,
+              decidedAt,
+            },
           });
         }
 
@@ -731,16 +791,28 @@ export const pharmacyMedicineRouter = router({
           [proposal.run.triggeredBy],
           input.soloPin
         );
-        if (solo) await recordCatalogueApproval(tx as typeof ctx.db, scope, proposal.id, true);
+        if (solo)
+          await recordCatalogueApproval(
+            tx as typeof ctx.db,
+            scope,
+            proposal.id,
+            true,
+            'PharmacyReferenceConnectorProposal'
+          );
 
         const payload = connectorProposalPayload.parse(proposal.payload);
         const values = payload.values;
         const source = REFERENCE_CONNECTORS[payload.source.connectorId];
         let medicine = proposal.targetMedicineId
-          ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
+          ? await tx.medicine.findFirst({
+              where: { id: proposal.targetMedicineId },
+            })
           : null;
         if (proposal.targetMedicineId && !medicine) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Target medicine not found.',
+          });
         }
         if (!medicine) {
           if (!values.productName) {
@@ -808,7 +880,9 @@ export const pharmacyMedicineRouter = router({
             duplicateKey: `connector:${proposal.id}`,
             action: 'ACCEPT',
             medicineIds: [medicine.id],
-            payload: { assertionIds: assertions.map((assertion) => assertion.id) },
+            payload: {
+              assertionIds: assertions.map((assertion) => assertion.id),
+            },
             reviewerId: ctx.session.user.id,
           },
         });
@@ -830,18 +904,24 @@ export const pharmacyMedicineRouter = router({
         saleable: false,
         provenance: {
           some: {
+            supersededBy: { none: {} },
             OR: [
               { status: 'UNREVIEWED' },
               {
                 status: { in: ['ACCEPTED', 'CORRECTED'] },
-                publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+                publicationEntries: {
+                  none: { batch: { status: 'PUBLISHED' } },
+                },
               },
             ],
           },
         },
       },
       include: {
-        provenance: { orderBy: { createdAt: 'asc' } },
+        provenance: {
+          where: { supersededBy: { none: {} } },
+          orderBy: { createdAt: 'asc' },
+        },
         presentations: true,
         aliases: true,
         strengths: { include: { ingredient: true } },
@@ -916,7 +996,11 @@ export const pharmacyMedicineRouter = router({
           ean13: input.ean13,
         });
         for (const component of input.strengths) {
-          if (!(await ctx.db.ingredient.findFirst({ where: { id: component.ingredientId } }))) {
+          if (
+            !(await ctx.db.ingredient.findFirst({
+              where: { id: component.ingredientId },
+            }))
+          ) {
             throw new PharmacyMedicineError('CROSS_TENANT_REFERENCE');
           }
         }
@@ -979,24 +1063,17 @@ export const pharmacyMedicineRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const item = await ctx.db.medicine.findFirst({
-          where: { id: input.medicineId },
-          select: { id: true, productFamily: true },
-        });
-        if (!item) throw new PharmacyMedicineError('NOT_FOUND');
-        const retail = validateRetailFields({
-          productFamily: item.productFamily,
-          retailPriceMinor: input.retailPriceMinor,
-          retailCategory: input.retailCategory,
-        });
         return await submitCatalogueEdit(
           ctx.db,
           {
             organizationId: ctx.entitlements.organizationId,
             actorId: ctx.session.user.id,
           },
-          item.id,
-          { retailPriceMinor: retail.retailPriceMinor, retailCategory: retail.retailCategory }
+          input.medicineId,
+          {
+            retailPriceMinor: input.retailPriceMinor,
+            retailCategory: input.retailCategory,
+          }
         );
       } catch (error) {
         domainError(error);
@@ -1010,11 +1087,17 @@ export const pharmacyMedicineRouter = router({
         where: { id: input.id, saleable: true },
         include: {
           strengths: { include: { ingredient: true } },
-          presentations: { include: { packLevels: { include: { barcodes: true } } } },
+          presentations: {
+            include: { packLevels: { include: { barcodes: true } } },
+          },
           provenance: true,
         },
       });
-      if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Medicine not found.' });
+      if (!medicine)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Medicine not found.',
+        });
       return medicine;
     }),
 
@@ -1043,7 +1126,10 @@ export const pharmacyMedicineRouter = router({
       if (
         input.parentPackLevelId &&
         !(await ctx.db.packLevel.findFirst({
-          where: { id: input.parentPackLevelId, presentationId: input.presentationId },
+          where: {
+            id: input.parentPackLevelId,
+            presentationId: input.presentationId,
+          },
         }))
       )
         throw new TRPCError({
@@ -1072,13 +1158,22 @@ export const pharmacyMedicineRouter = router({
     )
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
-        const current = await tx.packLevel.findFirst({ where: { id: input.id } });
-        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+        const current = await tx.packLevel.findFirst({
+          where: { id: input.id },
+        });
+        if (!current)
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Pack level not found.',
+          });
         const presentation = await tx.presentation.findFirst({
           where: { id: current.presentationId },
         });
         if (!presentation)
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Presentation not found.' });
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Presentation not found.',
+          });
         const queued = await queueLiveCatalogueCommand(
           ctx,
           presentation.medicineId,
@@ -1150,8 +1245,14 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const mrp = await ctx.db.medicinePackMrp.findFirst({ where: { id: input.mrpId } });
-      if (!mrp) throw new TRPCError({ code: 'NOT_FOUND', message: 'Printed MRP not found.' });
+      const mrp = await ctx.db.medicinePackMrp.findFirst({
+        where: { id: input.mrpId },
+      });
+      if (!mrp)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Printed MRP not found.',
+        });
       return deriveLooseUnitPrice({
         printedMrpMinor: mrp.printedMrpMinor,
         canonicalUnitsInPack: input.canonicalUnitsInPack,
@@ -1175,7 +1276,10 @@ export const pharmacyMedicineRouter = router({
         where: { id: input.presentationId },
       });
       if (!presentation)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Presentation not found.' });
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Presentation not found.',
+        });
       const queued = await queueLiveCatalogueCommand(
         ctx,
         presentation.medicineId,
@@ -1207,9 +1311,16 @@ export const pharmacyMedicineRouter = router({
       ctx.db.$transaction(async (tx) => {
         const pack = await tx.packLevel.findFirst({
           where: { id: input.packLevelId },
-          include: { presentation: { select: { medicineId: true } }, barcodes: true },
+          include: {
+            presentation: { select: { medicineId: true } },
+            barcodes: true,
+          },
         });
-        if (!pack) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack size not found.' });
+        if (!pack)
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Pack size not found.',
+          });
         if (!isEffective(pack, new Date()))
           throw new TRPCError({
             code: 'BAD_REQUEST',
@@ -1282,7 +1393,10 @@ export const pharmacyMedicineRouter = router({
         },
         include: { presentation: true, packLevel: true },
       });
-      const targets = matches.map(({ presentation, packLevel }) => ({ presentation, packLevel }));
+      const targets = matches.map(({ presentation, packLevel }) => ({
+        presentation,
+        packLevel,
+      }));
       if (targets.length === 0) {
         const legacyMatches = await ctx.db.medicineAlias.findMany({
           where: {
@@ -1290,7 +1404,11 @@ export const pharmacyMedicineRouter = router({
             normalizedValue: normalizeMedicineText(input.code),
             medicine: { saleable: true },
           },
-          include: { medicine: { include: { presentations: { include: { packLevels: true } } } } },
+          include: {
+            medicine: {
+              include: { presentations: { include: { packLevels: true } } },
+            },
+          },
         });
         for (const alias of legacyMatches) {
           for (const presentation of alias.medicine.presentations) {
@@ -1309,7 +1427,10 @@ export const pharmacyMedicineRouter = router({
         }
       }
       if (targets.length === 0)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Scan code not found.' });
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Scan code not found.',
+        });
       return targets.length === 1
         ? { kind: 'resolved' as const, target: targets[0] }
         : { kind: 'disambiguation' as const, targets };
@@ -1357,7 +1478,12 @@ export const pharmacyMedicineRouter = router({
 
   duplicateGroups: adminProcedure.query(async ({ ctx }) => {
     const medicines = await ctx.db.medicine.findMany({
-      include: { strengths: true, presentations: true, aliases: true, provenance: true },
+      include: {
+        strengths: true,
+        presentations: true,
+        aliases: true,
+        provenance: true,
+      },
     });
     const groups = new Map<string, typeof medicines>();
     for (const medicine of medicines) {
@@ -1384,11 +1510,22 @@ export const pharmacyMedicineRouter = router({
         medicineIds.length !== input.medicineIds.length ||
         assertionIds.length !== input.payload.assertionIds.length
       ) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Review references must be unique.' });
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Review references must be unique.',
+        });
       }
+      // Provenance is append-only in PostgreSQL. Serialize on the original
+      // assertions, then append the review evidence instead of updating history.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pharmacy_medicine_provenance WHERE id IN (${Prisma.join(assertionIds)}) ORDER BY id FOR UPDATE`
+      );
       const [medicineCount, assertions] = await Promise.all([
         tx.medicine.count({ where: { id: { in: medicineIds } } }),
-        tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
+        tx.medicineProvenance.findMany({
+          where: { id: { in: assertionIds } },
+          include: { supersededBy: { select: { id: true } } },
+        }),
       ]);
       if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
         throw new TRPCError({
@@ -1399,15 +1536,17 @@ export const pharmacyMedicineRouter = router({
       if (
         assertions.some(
           (assertion) =>
-            !medicineIds.includes(assertion.medicineId) || assertion.status !== 'UNREVIEWED'
+            !medicineIds.includes(assertion.medicineId) ||
+            assertion.status !== 'UNREVIEWED' ||
+            assertion.supersededBy.length > 0
         )
       ) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Review assertions must be unreviewed and belong to the referenced candidates.',
+          message:
+            'Review assertions must be current, unreviewed and belong to the referenced candidates.',
         });
       }
-
       const scope = {
         organizationId: ctx.entitlements.organizationId,
         actorId: ctx.session.user.id,
@@ -1429,77 +1568,62 @@ export const pharmacyMedicineRouter = router({
           assertions.map((assertion) => assertion.editorId),
           input.soloPin
         ));
-      if (solo) await recordCatalogueApproval(tx as typeof ctx.db, scope, assertions[0]!.id, true);
-
+      if (solo)
+        await recordCatalogueApproval(
+          tx as typeof ctx.db,
+          scope,
+          assertions[0]!.id,
+          true,
+          'MedicineProvenance'
+        );
       let reviewedAssertionIds = assertionIds;
-      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
-        const transitioned = await tx.medicineProvenance.updateMany({
-          where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
-          data: {
-            status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
-            reviewer: ctx.session.user.id,
-          },
-        });
-        if (transitioned.count !== assertionIds.length) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-      } else if (input.action === 'CORRECT') {
+      if (input.action !== 'DEFER') {
         const corrections = new Map(
-          input.payload.corrections.map((item) => [item.assertionId, item.value])
+          input.action === 'CORRECT'
+            ? input.payload.corrections.map((item) => [item.assertionId, item.value])
+            : []
         );
         if (
-          corrections.size !== input.payload.corrections.length ||
-          [...corrections.keys()].some((id) => !assertionIds.includes(id))
-        ) {
+          input.action === 'CORRECT' &&
+          (corrections.size !== input.payload.corrections.length ||
+            [...corrections.keys()].some((id) => !assertionIds.includes(id)))
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Corrections must reference selected assertions once.',
           });
-        }
         const created = [];
         for (const assertion of assertions) {
-          const value = corrections.get(assertion.id);
-          if (!value) continue;
-          const envelope = assertedEnvelope.parse(assertion.assertedValue);
+          const correction = corrections.get(assertion.id);
           created.push(
             await tx.medicineProvenance.create({
               data: {
                 medicineId: assertion.medicineId,
-                editorId: ctx.session.user.id,
                 field: assertion.field,
-                source: assertion.source,
-                sourceType: assertion.sourceType,
-                retrievedAt: new Date(),
-                confidence: assertion.confidence,
-                reviewer: ctx.session.user.id,
-                status: 'CORRECTED',
+                source: correction ? 'Reviewer correction' : assertion.source,
+                sourceType: correction ? 'USER' : assertion.sourceType,
+                retrievedAt: correction ? new Date() : assertion.retrievedAt,
+                confidence: correction ? null : assertion.confidence,
+                editorId: correction ? ctx.session.user.id : assertion.editorId,
+                // A reviewer's correction is a new edit, requiring its own review.
+                reviewer: correction ? null : ctx.session.user.id,
+                status: correction
+                  ? 'UNREVIEWED'
+                  : input.action === 'REJECT'
+                    ? 'REJECTED'
+                    : 'ACCEPTED',
                 supersedesId: assertion.id,
-                assertedValue: { ...envelope, value },
+                assertedValue: correction
+                  ? {
+                      ...assertedEnvelope.parse(assertion.assertedValue),
+                      value: correction,
+                    }
+                  : (assertion.assertedValue ?? undefined),
               },
             })
           );
         }
-        const corrected = await tx.medicineProvenance.updateMany({
-          where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
-          data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
-        });
-        if (corrected.count !== corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-        reviewedAssertionIds = [
-          ...assertionIds.filter((id) => !corrections.has(id)),
-          ...created.map((assertion) => assertion.id),
-        ];
-        const accepted = await tx.medicineProvenance.updateMany({
-          where: {
-            id: { in: assertionIds.filter((id) => !corrections.has(id)) },
-            status: 'UNREVIEWED',
-          },
-          data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
-        });
-        if (accepted.count !== assertionIds.length - corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
+        reviewedAssertionIds = created.map((assertion) => assertion.id);
       }
 
       return tx.medicineReviewDecision.create({
@@ -1507,7 +1631,9 @@ export const pharmacyMedicineRouter = router({
           duplicateKey: input.duplicateKey,
           action: input.action,
           medicineIds,
-          payload: { assertionIds: reviewedAssertionIds } as Prisma.InputJsonValue,
+          payload: {
+            assertionIds: reviewedAssertionIds,
+          } as Prisma.InputJsonValue,
           reviewerId: ctx.session.user.id,
         },
       });
@@ -1521,7 +1647,10 @@ export const pharmacyMedicineRouter = router({
         where: { id: { in: assertionIds } },
       });
       if (assertions.length !== assertionIds.length)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Assertion not found.' });
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Assertion not found.',
+        });
       if (
         assertions.some(
           (assertion) =>
@@ -1534,15 +1663,23 @@ export const pharmacyMedicineRouter = router({
         });
       }
       const existingEntry = await tx.medicinePublicationEntry.findFirst({
-        where: { assertionId: { in: assertionIds }, batch: { status: 'PUBLISHED' } },
+        where: {
+          assertionId: { in: assertionIds },
+          batch: { status: 'PUBLISHED' },
+        },
       });
       if (existingEntry)
-        throw new TRPCError({ code: 'CONFLICT', message: 'Assertion was already published.' });
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Assertion was already published.',
+        });
 
       const decisions = await tx.medicineReviewDecision.findMany({
         where: {
           action: { in: ['ACCEPT', 'CORRECT'] },
-          medicineIds: { hasSome: [...new Set(assertions.map((item) => item.medicineId))] },
+          medicineIds: {
+            hasSome: [...new Set(assertions.map((item) => item.medicineId))],
+          },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -1575,7 +1712,9 @@ export const pharmacyMedicineRouter = router({
             assertedEnvelope.parse(assertion.assertedValue).value,
           ])
         );
-        const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
+        const medicine = await tx.medicine.findUniqueOrThrow({
+          where: { id: medicineId },
+        });
         const required =
           medicine.productFamily === 'FRONT_SHOP'
             ? ['productName', 'dosageForm', 'pack']
@@ -1612,7 +1751,10 @@ export const pharmacyMedicineRouter = router({
                   name: ingredientName,
                 },
               },
-              create: { organizationId: medicine.organizationId, name: ingredientName },
+              create: {
+                organizationId: medicine.organizationId,
+                name: ingredientName,
+              },
               update: {},
             })
           : null;
@@ -1625,7 +1767,11 @@ export const pharmacyMedicineRouter = router({
         });
         if (ingredient && parsedStrength)
           await tx.medicineStrengthComponent.create({
-            data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
+            data: {
+              medicineId,
+              ingredientId: ingredient.id,
+              ...parsedStrength,
+            },
           });
         const packLevel = await tx.packLevel.create({
           data: {
@@ -1665,10 +1811,21 @@ export const pharmacyMedicineRouter = router({
           ),
           provenanceFields: new Set(selected.map((assertion) => assertion.field)),
         });
+        for (const field of ['rx', 'restricted', 'controlled'] as const) {
+          const value = values.get(field);
+          if (value !== undefined && !['true', 'false'].includes(value.trim().toLowerCase()))
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Schedule flags must be true or false.',
+            });
+        }
         await tx.medicine.update({
           where: { id: medicineId },
           data: {
             productName: values.get('productName')!,
+            rx: proposedBoolean(values.get('rx')),
+            restricted: proposedBoolean(values.get('restricted')),
+            controlled: proposedBoolean(values.get('controlled')),
             brandName: values.get('brandName'),
             manufacturer: values.get('manufacturer'),
             drapRegistrationNumber: values.get('drapRegistrationNumber'),
@@ -1685,7 +1842,11 @@ export const pharmacyMedicineRouter = router({
       });
       return tx.medicinePublicationBatch.update({
         where: { id: batch.id },
-        data: { status: 'PUBLISHED', publishedBy: ctx.session.user.id, publishedAt: new Date() },
+        data: {
+          status: 'PUBLISHED',
+          publishedBy: ctx.session.user.id,
+          publishedAt: new Date(),
+        },
       });
     })
   ),
@@ -1699,7 +1860,10 @@ export const pharmacyMedicineRouter = router({
           include: { entries: true },
         });
         if (!published)
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Published batch not found.' });
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Published batch not found.',
+          });
         const reversal = await tx.medicinePublicationBatch.create({
           data: {
             status: 'SUPERSEDED',
@@ -1711,8 +1875,12 @@ export const pharmacyMedicineRouter = router({
         for (const entry of published.entries) {
           if (!entry.priorAssertionId) continue;
           const [current, prior] = await Promise.all([
-            tx.medicineProvenance.findUniqueOrThrow({ where: { id: entry.assertionId } }),
-            tx.medicineProvenance.findUniqueOrThrow({ where: { id: entry.priorAssertionId } }),
+            tx.medicineProvenance.findUniqueOrThrow({
+              where: { id: entry.assertionId },
+            }),
+            tx.medicineProvenance.findUniqueOrThrow({
+              where: { id: entry.priorAssertionId },
+            }),
           ]);
           const restored = await tx.medicineProvenance.create({
             data: {
@@ -1729,7 +1897,11 @@ export const pharmacyMedicineRouter = router({
             },
           });
           await tx.medicinePublicationEntry.create({
-            data: { batchId: reversal.id, assertionId: restored.id, priorAssertionId: current.id },
+            data: {
+              batchId: reversal.id,
+              assertionId: restored.id,
+              priorAssertionId: current.id,
+            },
           });
         }
         return reversal;

@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ hasModule: vi.fn(() => true) }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -24,7 +26,10 @@ import { pharmacyMedicineRouter } from './pharmacy-medicine';
 function rolePermissions(key: string) {
   return roleTemplatesForVertical('PHARMACY')
     .find((role) => role.key === key)!
-    .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+    .capabilities.map((capability) => ({
+      capability,
+      effect: 'ALLOW' as const,
+    }));
 }
 
 function caller(roleKey: string, models: Record<string, unknown>) {
@@ -78,12 +83,18 @@ describe('Owner / Operator catalogue review', () => {
 
     await expect(owner.referenceConnectorProposals()).resolves.toEqual([]);
     await expect(
-      owner.decideReferenceConnectorProposal({ proposalId: 'proposal-1', decision: 'REJECT' })
+      owner.decideReferenceConnectorProposal({
+        proposalId: 'proposal-1',
+        decision: 'REJECT',
+      })
     ).resolves.toMatchObject({ status: 'REJECTED' });
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'proposal-1' },
-        data: expect.objectContaining({ status: 'REJECTED', decidedBy: 'owner-1' }),
+        data: expect.objectContaining({
+          status: 'REJECTED',
+          decidedBy: 'owner-1',
+        }),
       })
     );
   });
@@ -92,21 +103,23 @@ describe('Owner / Operator catalogue review', () => {
     'records a %s review decision on an unreviewed assertion',
     async (action) => {
       const create = vi.fn().mockResolvedValue({ id: 'decision-1', action });
-      const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+      const updateMany = vi.fn();
+      const append = vi.fn().mockResolvedValue({ id: 'reviewed-1' });
       const owner = caller('owner-operator', {
+        $queryRaw: vi.fn().mockResolvedValue([{ id: 'assertion-1' }]),
         medicine: { count: vi.fn().mockResolvedValue(1) },
         medicineProvenance: {
-          findMany: vi
-            .fn()
-            .mockResolvedValue([
-              {
-                id: 'assertion-1',
-                medicineId: 'med-1',
-                editorId: 'editor-1',
-                status: 'UNREVIEWED',
-              },
-            ]),
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'assertion-1',
+              medicineId: 'med-1',
+              editorId: 'editor-1',
+              supersededBy: [],
+              status: 'UNREVIEWED',
+            },
+          ]),
           updateMany,
+          create: append,
         },
         medicineReviewDecision: { create },
       });
@@ -122,13 +135,24 @@ describe('Owner / Operator catalogue review', () => {
       expect(create).toHaveBeenCalledWith({
         data: expect.objectContaining({ action, reviewerId: 'owner-1' }),
       });
-      expect(updateMany).toHaveBeenCalledTimes(action === 'DEFER' ? 0 : 1);
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(append).toHaveBeenCalledTimes(action === 'DEFER' ? 0 : 1);
+      if (action !== 'DEFER')
+        expect(append).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            supersedesId: 'assertion-1',
+            reviewer: 'owner-1',
+            status: action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+          }),
+        });
     }
   );
 
   it('keeps the wildcard-only Owner template out of catalogue review', async () => {
     const findMany = vi.fn();
-    const owner = caller('owner', { pharmacyReferenceConnectorProposal: { findMany } });
+    const owner = caller('owner', {
+      pharmacyReferenceConnectorProposal: { findMany },
+    });
     await expect(owner.referenceConnectorProposals()).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });

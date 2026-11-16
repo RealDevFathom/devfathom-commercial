@@ -1,0 +1,128 @@
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const m = vi.hoisted(() => ({
+  queue: {
+    data: [] as unknown[],
+    isPending: false,
+    error: null as null | { message: string },
+  },
+  search: {
+    data: [{ id: 'medicine', productName: 'Fixture lotion' }],
+    isFetching: false,
+    error: null,
+  },
+  decide: { mutate: vi.fn(), isPending: false, error: null },
+  propose: { mutate: vi.fn(), isPending: false, error: null, isSuccess: false },
+  onSuccess: undefined as undefined | (() => Promise<void>),
+  onError: undefined as undefined | (() => void),
+  invalidate: vi.fn(),
+}));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    useUtils: () => ({
+      pharmacyMedicine: { catalogueEdits: { invalidate: m.invalidate } },
+    }),
+    pharmacyMedicine: {
+      catalogueEdits: { useQuery: () => m.queue },
+      search: { useQuery: () => m.search },
+      decideCatalogueEdit: {
+        useMutation: (options: { onSuccess: () => Promise<void>; onError: () => void }) => {
+          m.onSuccess = options.onSuccess;
+          m.onError = options.onError;
+          return m.decide;
+        },
+      },
+      proposeCatalogueEdit: { useMutation: () => m.propose },
+    },
+  },
+}));
+import { CatalogueApprovalQueue } from './catalogue-approval-queue';
+afterEach(cleanup);
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.queue.isPending = false;
+  m.queue.error = null;
+  m.decide.isPending = false;
+  m.queue.data = [
+    {
+      id: 'edit',
+      operation: 'UPDATE_MEDICINE',
+      medicine: { productName: 'Fixture lotion' },
+      editor: { name: 'Editor' },
+      changes: { productName: 'Reviewed lotion' },
+    },
+  ];
+});
+describe('DEV-766 catalogue approval queue', () => {
+  it('shows the item, editor and proposed changes with a visible pending status', () => {
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('heading', { name: 'Fixture lotion' })).toBeVisible();
+    expect(screen.getByText('Submitted by Editor')).toBeVisible();
+    expect(screen.getByText('Product name')).toBeVisible();
+    expect(screen.getByText('Reviewed lotion')).toBeVisible();
+    expect(screen.getByText('Pending review')).toBeVisible();
+  });
+  it('submits a selected item name for review without publishing it', () => {
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Catalogue item'), {
+      target: { value: 'medicine' },
+    });
+    fireEvent.change(screen.getByLabelText('Proposed product name'), {
+      target: { value: 'New name' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit edit for review' }));
+    expect(m.propose.mutate).toHaveBeenCalledWith({
+      medicineId: 'medicine',
+      changes: { productName: 'New name' },
+    });
+    expect(m.decide.mutate).not.toHaveBeenCalled();
+  });
+  it('uses the freshly entered PIN for one decision and clears it after success', async () => {
+    render(<CatalogueApprovalQueue />);
+    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
+    fireEvent.change(pin, { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve edit' }));
+    expect(m.decide.mutate).toHaveBeenCalledWith({
+      editId: 'edit',
+      decision: 'APPROVE',
+      soloPin: '2468',
+    });
+    await act(async () => {
+      await m.onSuccess?.();
+    });
+    expect(pin).toHaveValue('');
+    expect(m.invalidate).toHaveBeenCalledOnce();
+  });
+  it('clears a refused PIN and disables duplicate decisions while pending', () => {
+    const view = render(<CatalogueApprovalQueue />);
+    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
+    fireEvent.change(pin, { target: { value: '9999' } });
+    act(() => {
+      m.onError?.();
+    });
+    expect(pin).toHaveValue('');
+    m.decide.isPending = true;
+    view.rerender(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject edit' })).toBeDisabled();
+  });
+  it('distinguishes loading, empty and permission-denied states', () => {
+    m.queue.data = [];
+    m.queue.isPending = true;
+    const view = render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading catalogue edits');
+    expect(screen.queryByText('No catalogue edits are awaiting review.')).not.toBeInTheDocument();
+    m.queue.isPending = false;
+    view.rerender(<CatalogueApprovalQueue />);
+    expect(screen.getByText('No catalogue edits are awaiting review.')).toBeVisible();
+    m.queue.error = {
+      message: 'Catalogue administration permission required.',
+    };
+    view.rerender(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Catalogue administration permission required.'
+    );
+    expect(screen.queryByText('No catalogue edits are awaiting review.')).not.toBeInTheDocument();
+  });
+});

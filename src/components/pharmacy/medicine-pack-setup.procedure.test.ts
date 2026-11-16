@@ -20,14 +20,24 @@ import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
 // The catalogue administrator's capability lookup (no role overrides).
 const adminActor = {
-  findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+  findUnique: vi.fn(async () => ({
+    organizationRole: null,
+    permissionOverrides: [],
+  })),
 };
 
-function caller(db: { user?: object; [delegate: string]: unknown }) {
+function caller(db: { user?: object; [delegate: string]: unknown }, actorId = 'admin-a') {
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
     db: { ...db, user: { ...adminActor, ...db.user } },
-    entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
-    session: { expires: 'later', user: { id: 'admin-a', role: 'ADMIN', status: 'ACTIVE' } },
+    entitlements: {
+      organizationId: 'org-a',
+      enabledModules: ['pharmacy-core'],
+      modules: [],
+    },
+    session: {
+      expires: 'later',
+      user: { id: actorId, role: 'ADMIN', status: 'ACTIVE' },
+    },
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext).pharmacyMedicine;
@@ -46,11 +56,30 @@ beforeEach(() => {
 describe('existing pack procedure to receiving options (in-memory delegates, no DB)', () => {
   it('makes the created effective pack selectable with the derived unit count', async () => {
     const packs: Array<object> = [];
+    const medicine = {
+      id: 'published-medicine',
+      saleable: true,
+      updatedAt: new Date('2026-09-01'),
+    };
+    const edit: Record<string, unknown> = {
+      id: 'pending-edit',
+      status: 'PENDING',
+    };
     const db = {
-      presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
+      presentation: {
+        findFirst: vi.fn(async () => ({
+          id: input.presentationId,
+          medicineId: medicine.id,
+        })),
+      },
       packLevel: {
         create: vi.fn(async ({ data }: { data: object }) => {
-          const pack = { id: 'new-pack', parentPackLevelId: null, effectiveTo: null, ...data };
+          const pack = {
+            id: 'new-pack',
+            parentPackLevelId: null,
+            effectiveTo: null,
+            ...data,
+          };
           packs.push(pack);
           return pack;
         }),
@@ -58,8 +87,13 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       pharmacyBranch: { findMany: vi.fn(async () => []) },
       pharmacyStockLocation: { findMany: vi.fn(async () => []) },
       pharmacySupplier: { findMany: vi.fn(async () => []) },
-      user: { findMany: vi.fn(async () => []) },
+      user: { ...adminActor, findMany: vi.fn(async () => []) },
       medicine: {
+        findFirst: vi.fn(async () => medicine),
+        updateMany: vi.fn(async ({ data }: { data: object }) => {
+          Object.assign(medicine, data);
+          return { count: 1 };
+        }),
         findMany: vi.fn(async () => [
           {
             id: 'published-medicine',
@@ -68,13 +102,35 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
             coldChain: false,
             controlled: false,
             presentations: [
-              { id: input.presentationId, presentation: '10 tablets', packLevels: packs },
+              {
+                id: input.presentationId,
+                presentation: '10 tablets',
+                packLevels: packs,
+              },
             ],
           },
         ]),
       },
     };
-    await caller(db).createPackLevel(input);
+    Object.assign(db, {
+      auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
+      pharmacyCatalogueEdit: {
+        create: vi.fn(async ({ data }: { data: object }) => Object.assign(edit, data)),
+        findFirst: vi.fn(async () => edit),
+        updateMany: vi.fn(async ({ data }: { data: object }) => {
+          Object.assign(edit, data);
+          return { count: 1 };
+        }),
+      },
+      $transaction: async (run: (tx: unknown) => unknown) => run(db),
+    });
+    const proposed = await caller(db).createPackLevel(input);
+    expect(proposed).toMatchObject({ status: 'PENDING' });
+    expect(packs).toEqual([]);
+    await caller(db, 'reviewer-a').decideCatalogueEdit({
+      editId: proposed.id,
+      decision: 'APPROVE',
+    });
     const workspace = await purchasingWorkspace(
       db as unknown as Parameters<typeof purchasingWorkspace>[0],
       { organizationId: 'org-a', actorId: 'admin-a' },
@@ -99,7 +155,10 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
   it.each([0, -1, 1.5])('rejects invalid units %s before persistence', async (unitsPerParent) => {
     const create = vi.fn();
     await expect(
-      caller({ packLevel: { create } }).createPackLevel({ ...input, unitsPerParent })
+      caller({ packLevel: { create } }).createPackLevel({
+        ...input,
+        unitsPerParent,
+      })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(create).not.toHaveBeenCalled();
   });

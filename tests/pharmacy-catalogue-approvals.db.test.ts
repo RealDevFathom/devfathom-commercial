@@ -108,6 +108,7 @@ async function refused(code: string, sql: string, values: unknown[] = []) {
     );
   });
   it('retains proposals and refuses editing their payload or self approving without verified evidence', async () => {
+    await refused('23514', `INSERT INTO pharmacy_catalogue_edits (id,"medicineId","editorId",changes,"expectedUpdatedAt",status,"reviewerId","reviewedAt") VALUES ($1,$2,$3,'{}',now(),'APPROVED',$4,now())`, [id('preapproved'),id('medicine_a'),id('editor_a'),id('reviewer_a')]);
     await refused('23514', `DELETE FROM pharmacy_catalogue_edits WHERE id=$1`, [id('edit')]);
     await refused('23514', `UPDATE pharmacy_catalogue_edits SET changes='{}' WHERE id=$1`, [
       id('edit'),

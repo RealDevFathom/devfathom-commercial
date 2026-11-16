@@ -67,6 +67,7 @@ function makeStore(values: Record<string, string>) {
       saleable: false,
       coldChain: false,
       drapRegistrationNumber: null,
+      updatedAt: new Date('2026-01-01'),
     },
   ];
   const provenance: Row[] = Object.entries(values).map(([field, value]) => ({

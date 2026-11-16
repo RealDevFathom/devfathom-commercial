@@ -311,7 +311,10 @@ export function MedicinePackSetup() {
         </div>
       ) : null}
       <Link
-        className={buttonVariants({ variant: 'outline', className: 'mt-5 min-h-11' })}
+        className={buttonVariants({
+          variant: 'outline',
+          className: 'mt-5 min-h-11',
+        })}
         href="/pharmacy"
       >
         Return to Pharmacy setup
@@ -339,8 +342,11 @@ function PackBarcodeEditor({
   const [message, setMessage] = useState('');
   const save = trpc.pharmacyMedicine.setPackBarcode.useMutation({
     onSuccess: async (row) => {
-      setCode(row.code);
-      setMessage(`Barcode ${row.code} saved on this pack.`);
+      if ('status' in row) setMessage('Barcode submitted for catalogue approval.');
+      else {
+        setCode(row.code);
+        setMessage(`Barcode ${row.code} saved on this pack.`);
+      }
       await onSaved();
     },
   });

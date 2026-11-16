@@ -357,7 +357,7 @@ export async function runManualReferenceConnector(
       });
       proposalRows += 1;
       regulatedFieldsProposed += Object.keys(proposed).length;
-    } else if (!Object.keys(directChanges).length) {
+    } else {
       rowsSkipped += 1;
     }
   }

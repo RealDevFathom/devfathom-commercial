@@ -193,9 +193,19 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+const facingTextCache = new Map<string, ReturnType<typeof userFacingText>>();
+function cachedUserFacingText(file: string) {
+  let found = facingTextCache.get(file);
+  if (!found) {
+    found = userFacingText(file, readFileSync(file, 'utf8'));
+    facingTextCache.set(file, found);
+  }
+  return found;
+}
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
   return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+    cachedUserFacingText(file)
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
       .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
   );

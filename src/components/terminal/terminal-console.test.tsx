@@ -113,7 +113,9 @@ async function enroll() {
   fireEvent.change(screen.getByLabelText('One-time enrollment secret'), {
     target: { value: 'rde_test' },
   });
-  fireEvent.click(submit);
+  await act(async () => {
+    fireEvent.click(submit);
+  });
   await screen.findByRole('heading', { name: 'Unlock terminal' });
   await waitFor(() => expect(screen.getByLabelText('Operator')).toBeEnabled());
 }
@@ -123,7 +125,9 @@ async function unlock(operator = 'staff-a') {
     target: { value: operator },
   });
   fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Verify and unlock' }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and unlock' }));
+  });
   await screen.findByRole('button', { name: 'Lock terminal' });
 }
 

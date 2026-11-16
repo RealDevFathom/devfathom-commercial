@@ -7,6 +7,55 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
 import { StatusPill } from '@/components/ui/status-pill';
 
+const editLabels: Record<string, string> = {
+  productName: 'Product name',
+  brandName: 'Brand',
+  manufacturer: 'Manufacturer',
+  retailPriceMinor: 'Retail price (minor units)',
+  retailCategory: 'Retail category',
+  marketingAuthorizationHolder: 'Marketing authorization holder',
+  drapRegistrationNumber: 'Registration number',
+  drapRegistrationStatus: 'Registration status',
+  rx: 'Prescription required',
+  otc: 'Over the counter',
+  restricted: 'Restricted',
+  controlled: 'Controlled',
+  highAlert: 'High alert',
+  lasa: 'Look alike / sound alike',
+  coldChain: 'Cold chain',
+  code: 'Barcode',
+  type: 'Type',
+  level: 'Pack type',
+  unitsPerParent: 'Individual units per pack',
+  effectiveFrom: 'Effective from',
+  batchReference: 'Batch reference',
+  printedMrpMinor: 'Printed MRP (minor units)',
+  roundingIncrementMinor: 'Rounding increment (minor units)',
+  value: 'Alias',
+};
+const operationLabels: Record<string, string> = {
+  UPDATE_MEDICINE: 'Product details',
+  createPackLevel: 'Add pack',
+  revisePackLevel: 'Revise pack',
+  recordPrintedMrp: 'Record printed MRP',
+  addBarcode: 'Add barcode',
+  setPackBarcode: 'Attach pack barcode',
+  addAlias: 'Add alias',
+};
+
+function displayChange(field: string, value: unknown): string {
+  if (value === null) return 'Clear value';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (field === 'effectiveFrom' && typeof value === 'string') {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime()))
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+        date
+      );
+  }
+  return typeof value === 'object' ? JSON.stringify(value) ?? '—' : String(value);
+}
+
 export function CatalogueApprovalQueue() {
   const [pin, setPin] = useState('');
   const [query, setQuery] = useState('');
@@ -17,7 +66,9 @@ export function CatalogueApprovalQueue() {
     { enabled: query.trim().length > 1, retry: false }
   );
   const utils = trpc.useUtils();
-  const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, { retry: false });
+  const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, {
+    retry: false,
+  });
   const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
     onSuccess: async () => {
       setPin('');
@@ -47,6 +98,7 @@ export function CatalogueApprovalQueue() {
         <label className="block max-w-sm space-y-2 text-sm">
           <span>Find catalogue item to edit</span>
           <Input
+            className="min-h-11"
             value={query}
             maxLength={200}
             onChange={(event) => {
@@ -83,13 +135,18 @@ export function CatalogueApprovalQueue() {
         <label className="block max-w-sm space-y-2 text-sm">
           <span>Proposed product name</span>
           <Input
+            className="min-h-11"
             required
             maxLength={300}
             value={productName}
             onChange={(event) => setProductName(event.target.value)}
           />
         </label>
-        <Button disabled={!medicineId || !productName.trim() || propose.isPending} type="submit">
+        <Button
+          size="touch"
+          disabled={!medicineId || !productName.trim() || propose.isPending}
+          type="submit"
+        >
           {propose.isPending ? 'Submitting…' : 'Submit edit for review'}
         </Button>
         {propose.error ? (
@@ -104,6 +161,7 @@ export function CatalogueApprovalQueue() {
       <label className="mb-4 block max-w-sm space-y-2 text-sm">
         <span>Solo owner PIN (for self-approval)</span>
         <Input
+          className="min-h-11"
           type="password"
           inputMode="numeric"
           autoComplete="off"
@@ -123,45 +181,48 @@ export function CatalogueApprovalQueue() {
           {decide.error.message}
         </p>
       ) : null}
-      {queue.data?.length === 0 ? (
+      {!queue.isPending && !queue.error && queue.data?.length === 0 ? (
         <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
       ) : null}
       <div className="space-y-4">
         {queue.data?.map((edit) => (
           <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
-            <h3 className="mb-2 font-semibold">{edit.medicine.productName}</h3>
+            <h3 className="mb-2 break-words font-semibold">{edit.medicine.productName}</h3>
             <p className="mb-2 text-sm text-text-muted">
-              {edit.operation === 'UPDATE_MEDICINE' ? 'Product details' : edit.operation}
+              {operationLabels[edit.operation] ?? 'Catalogue edit'}
             </p>
-            <StatusPill tone="warning">Pending review</StatusPill>
+            <StatusPill status="pending" label="Pending review" />
+            <p className="mb-2 break-words text-sm text-text-muted">Submitted by {edit.editor.name}</p>
             <dl className="my-4 grid gap-2 text-sm">
               {Object.entries(
                 (edit.operation === 'UPDATE_MEDICINE'
                   ? edit.changes
                   : (edit.changes as { json: unknown }).json) as Record<string, unknown>
-              ).map(([field, value]) => (
-                <div key={field} className="flex min-w-0 flex-wrap gap-2">
-                  <dt className="font-semibold">{field}</dt>
-                  <dd className="break-all">
-                    {value === null
-                      ? 'Clear value'
-                      : typeof value === 'object'
-                        ? JSON.stringify(value)
-                        : String(value)}
-                  </dd>
-                </div>
-              ))}
+              )
+                .filter(([field]) => field !== 'id' && !field.endsWith('Id'))
+                .map(([field, value]) => (
+                  <div key={field} className="flex min-w-0 flex-wrap gap-2">
+                    <dt className="font-semibold">{editLabels[field] ?? field}</dt>
+                    <dd className="break-all">{displayChange(field, value)}</dd>
+                  </div>
+                ))}
             </dl>
             <div className="flex flex-wrap gap-2">
               <Button
+                size="touch"
                 disabled={decide.isPending}
                 onClick={() =>
-                  decide.mutate({ editId: edit.id, decision: 'APPROVE', soloPin: pin || undefined })
+                  decide.mutate({
+                    editId: edit.id,
+                    decision: 'APPROVE',
+                    soloPin: pin || undefined,
+                  })
                 }
               >
                 {decide.isPending ? 'Saving…' : 'Approve edit'}
               </Button>
               <Button
+                size="touch"
                 variant="destructive"
                 disabled={decide.isPending}
                 onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}

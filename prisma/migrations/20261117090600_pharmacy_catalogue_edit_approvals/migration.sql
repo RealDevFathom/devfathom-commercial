@@ -35,6 +35,12 @@ ALTER TABLE "pharmacy_medicine_provenance" ADD COLUMN IF NOT EXISTS "editorId" T
 CREATE OR REPLACE FUNCTION public.pharmacy_catalogue_edit_transition() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."status" <> 'PENDING' THEN
+      RAISE EXCEPTION 'catalogue proposals must begin pending' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'catalogue proposals are retained' USING ERRCODE = 'check_violation';
   END IF;
@@ -50,7 +56,7 @@ BEGIN
   RETURN NEW;
 END $$;
 DROP TRIGGER IF EXISTS pharmacy_catalogue_edit_transition ON "pharmacy_catalogue_edits";
-CREATE TRIGGER pharmacy_catalogue_edit_transition BEFORE UPDATE OR DELETE ON "pharmacy_catalogue_edits"
+CREATE TRIGGER pharmacy_catalogue_edit_transition BEFORE INSERT OR UPDATE OR DELETE ON "pharmacy_catalogue_edits"
   FOR EACH ROW EXECUTE FUNCTION public.pharmacy_catalogue_edit_transition();
 
 COMMIT;

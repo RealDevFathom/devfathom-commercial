@@ -682,6 +682,7 @@ model PharmacyCatalogueEdit {
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   medicineId        String
   editorId          String
+  editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
   operation         String   @default("UPDATE_MEDICINE")
   medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
   changes           Json
@@ -3658,6 +3659,7 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  catalogueEdits                PharmacyCatalogueEdit[] @relation("CatalogueEditEditor")
   pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
   pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
   id                 String     @id @default(cuid())

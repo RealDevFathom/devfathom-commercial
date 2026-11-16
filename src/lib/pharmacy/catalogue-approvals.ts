@@ -30,9 +30,16 @@ export const catalogueChanges = z
     retailCategory: nullableText(200),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, 'Supply at least one catalogue edit.');
+  .refine(
+    (value) => Object.values(value).some((field) => field !== undefined),
+    'Supply at least one catalogue edit.'
+  );
 
-type Scope = { organizationId: string; actorId: string; actorOrganizationId?: string | null };
+type Scope = {
+  organizationId: string;
+  actorId: string;
+  actorOrganizationId?: string | null;
+};
 
 export async function requireIndependentCatalogueReviewer(
   db: ScopedDb,
@@ -63,7 +70,10 @@ export async function requireIndependentCatalogueReviewer(
       pin: soloPin,
     })) !== 'OK'
   ) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Fresh owner PIN verification failed.' });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Fresh owner PIN verification failed.',
+    });
   }
   return true;
 }
@@ -72,7 +82,8 @@ export async function recordCatalogueApproval(
   db: ScopedDb,
   scope: Scope,
   targetId: string,
-  solo: boolean
+  solo: boolean,
+  targetType = 'PharmacyCatalogueEdit'
 ) {
   await db.auditLog.create({
     data: {
@@ -83,7 +94,7 @@ export async function recordCatalogueApproval(
       category: 'PHARMACY_CATALOGUE',
       operation: 'UPDATE',
       action: solo ? 'pharmacy.catalogueSoloOwnerApproval' : 'pharmacy.catalogueApproval',
-      targetType: 'PharmacyCatalogueEdit',
+      targetType,
       targetId,
       metadata: { soloOwner: solo, pinVerified: solo },
     },
@@ -91,7 +102,11 @@ export async function recordCatalogueApproval(
 }
 
 function validatedChanges(
-  medicine: { productFamily: string; saleable: boolean; drapRegistrationNumber: string | null },
+  medicine: {
+    productFamily: string;
+    saleable: boolean;
+    drapRegistrationNumber: string | null;
+  },
   raw: unknown
 ) {
   const changes = catalogueChanges.parse(raw);
@@ -130,7 +145,11 @@ export async function submitCatalogueEdit(
   rawChanges: unknown
 ) {
   const medicine = await db.medicine.findFirst({ where: { id: medicineId } });
-  if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Catalogue item not found.' });
+  if (!medicine)
+    throw new TRPCError({
+      code: 'NOT_FOUND',
+      message: 'Catalogue item not found.',
+    });
   const changes = validatedChanges(medicine, rawChanges);
   return db.pharmacyCatalogueEdit.create({
     data: {
@@ -150,10 +169,19 @@ export async function decideCatalogueEdit(
 ) {
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
-    const proposal = await tx.pharmacyCatalogueEdit.findFirst({ where: { id: input.editId } });
-    if (!proposal) throw new TRPCError({ code: 'NOT_FOUND', message: 'Catalogue edit not found.' });
+    const proposal = await tx.pharmacyCatalogueEdit.findFirst({
+      where: { id: input.editId },
+    });
+    if (!proposal)
+      throw new TRPCError({
+        code: 'NOT_FOUND',
+        message: 'Catalogue edit not found.',
+      });
     if (proposal.status !== 'PENDING')
-      throw new TRPCError({ code: 'CONFLICT', message: 'Catalogue edit already reviewed.' });
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'Catalogue edit already reviewed.',
+      });
     const solo =
       input.decision === 'APPROVE' &&
       (await requireIndependentCatalogueReviewer(
@@ -177,18 +205,27 @@ export async function decideCatalogueEdit(
       },
     });
     if (claimed.count !== 1)
-      throw new TRPCError({ code: 'CONFLICT', message: 'Catalogue edit already reviewed.' });
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'Catalogue edit already reviewed.',
+      });
     if (input.decision === 'APPROVE') {
-      const medicine = await tx.medicine.findFirst({ where: { id: proposal.medicineId } });
+      const medicine = await tx.medicine.findFirst({
+        where: { id: proposal.medicineId },
+      });
       if (!medicine)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Catalogue item not found.' });
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Catalogue item not found.',
+        });
       const changes =
         proposal.operation === 'UPDATE_MEDICINE'
           ? validatedChanges(medicine, proposal.changes)
-          : { updatedAt: at };
+          : {};
+      const updatedAt = new Date(Math.max(at.getTime(), proposal.expectedUpdatedAt.getTime() + 1));
       const updated = await tx.medicine.updateMany({
         where: { id: medicine.id, updatedAt: proposal.expectedUpdatedAt },
-        data: changes,
+        data: { ...changes, updatedAt },
       });
       if (updated.count !== 1)
         throw new TRPCError({
@@ -197,11 +234,17 @@ export async function decideCatalogueEdit(
         });
       if (proposal.operation !== 'UPDATE_MEDICINE') {
         if (!applyCommand)
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported catalogue edit.' });
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Unsupported catalogue edit.',
+          });
         await applyCommand(scoped, proposal.operation, proposal.changes);
       }
       await recordCatalogueApproval(scoped, scope, proposal.id, solo);
     }
-    return { id: proposal.id, status: input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED' };
+    return {
+      id: proposal.id,
+      status: input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+    };
   });
 }

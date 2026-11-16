@@ -23,7 +23,7 @@ describe('DEV-766 durable catalogue queue migration', () => {
     expect(sql).toContain('FOREIGN KEY ("organizationId", "reviewerId")');
   });
   it('retains immutable proposals and requires PIN evidence for self approval', () => {
-    expect(sql).toContain('BEFORE UPDATE OR DELETE');
+    expect(sql).toContain('BEFORE INSERT OR UPDATE OR DELETE');
     expect(sql).toContain('catalogue proposal is immutable');
     expect(sql).toContain('app.pharmacy_catalogue_solo_pin_user_id');
     expect(sql).toContain('"soloPinVerifiedAt" IS NOT NULL');

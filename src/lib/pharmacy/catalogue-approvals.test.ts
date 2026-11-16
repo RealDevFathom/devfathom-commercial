@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const guards = vi.hoisted(() => ({ solo: vi.fn(), pin: vi.fn() }));
 vi.mock('./solo-owner', () => ({ isSoloPharmacyOwner: guards.solo }));
-vi.mock('./owner-data-export-pin', () => ({ verifyOwnerExportPin: guards.pin }));
+vi.mock('./owner-data-export-pin', () => ({
+  verifyOwnerExportPin: guards.pin,
+}));
 import {
   decideCatalogueEdit,
   requireIndependentCatalogueReviewer,
@@ -9,7 +11,11 @@ import {
 } from './catalogue-approvals';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const scope = { organizationId: 'org_a', actorId: 'reviewer', actorOrganizationId: 'org_a' };
+const scope = {
+  organizationId: 'org_a',
+  actorId: 'reviewer',
+  actorOrganizationId: 'org_a',
+};
 const timestamp = new Date('2026-11-01T00:00:00Z');
 function fixture(editorId = 'editor') {
   const medicine = {
@@ -31,10 +37,17 @@ function fixture(editorId = 'editor') {
   const raw = {
     medicine: {
       findFirst: vi.fn(async () => medicine),
-      updateMany: vi.fn(async () => ({ count: 1 })),
+      updateMany: vi.fn(
+        async (_args: { where: unknown; data: { productName?: string; updatedAt: Date } }) => ({
+          count: 1,
+        })
+      ),
     },
     pharmacyCatalogueEdit: {
-      create: vi.fn(async ({ data }: { data: unknown }) => ({ id: 'edit', ...(data as object) })),
+      create: vi.fn(async ({ data }: { data: unknown }) => ({
+        id: 'edit',
+        ...(data as object),
+      })),
       findFirst: vi.fn(async () => proposal),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
@@ -56,7 +69,9 @@ beforeEach(() => {
 describe('DEV-766 durable catalogue approvals', () => {
   it('holds a validated edit with editor and version evidence without changing the catalogue', async () => {
     const f = fixture();
-    await submitCatalogueEdit(f.db, scope, 'medicine', { productName: 'New name' });
+    await submitCatalogueEdit(f.db, scope, 'medicine', {
+      productName: 'New name',
+    });
     expect(f.raw.pharmacyCatalogueEdit.create).toHaveBeenCalledWith({
       data: {
         medicineId: 'medicine',
@@ -74,8 +89,11 @@ describe('DEV-766 durable catalogue approvals', () => {
     ).resolves.toEqual({ id: 'edit', status: 'APPROVED' });
     expect(f.raw.medicine.updateMany).toHaveBeenCalledWith({
       where: { id: 'medicine', updatedAt: timestamp },
-      data: { productName: 'New name' },
+      data: { productName: 'New name', updatedAt: expect.any(Date) },
     });
+    expect(f.raw.medicine.updateMany.mock.calls[0]![0].data.updatedAt.getTime()).toBeGreaterThan(
+      timestamp.getTime()
+    );
     expect(f.raw.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         actorId: 'reviewer',
@@ -90,7 +108,11 @@ describe('DEV-766 durable catalogue approvals', () => {
     async (soloPin) => {
       const f = fixture('reviewer');
       await expect(
-        decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin })
+        decideCatalogueEdit(f.db, scope, {
+          editId: 'edit',
+          decision: 'APPROVE',
+          soloPin,
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(f.raw.pharmacyCatalogueEdit.updateMany).not.toHaveBeenCalled();
       expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
@@ -100,7 +122,11 @@ describe('DEV-766 durable catalogue approvals', () => {
   it('requires a new PIN verification on every solo-owner approval and audits the exception', async () => {
     guards.solo.mockResolvedValue(true);
     const f = fixture('reviewer');
-    const input = { editId: 'edit', decision: 'APPROVE' as const, soloPin: '2468' };
+    const input = {
+      editId: 'edit',
+      decision: 'APPROVE' as const,
+      soloPin: '2468',
+    };
     await decideCatalogueEdit(f.db, scope, input);
     expect(guards.pin).toHaveBeenCalledWith({
       organizationId: 'org_a',
@@ -136,7 +162,11 @@ describe('DEV-766 durable catalogue approvals', () => {
       guards.pin.mockResolvedValue(result);
       const f = fixture('reviewer');
       await expect(
-        decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+        decideCatalogueEdit(f.db, scope, {
+          editId: 'edit',
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
     }
@@ -163,10 +193,16 @@ describe('DEV-766 durable catalogue approvals', () => {
   });
   it('rejects a proposal without publishing it', async () => {
     const f = fixture('reviewer');
-    await decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'REJECT' });
+    await decideCatalogueEdit(f.db, scope, {
+      editId: 'edit',
+      decision: 'REJECT',
+    });
     expect(f.raw.pharmacyCatalogueEdit.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: 'REJECTED', soloPinVerifiedAt: null }),
+        data: expect.objectContaining({
+          status: 'REJECTED',
+          soloPinVerifiedAt: null,
+        }),
       })
     );
     expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
@@ -181,7 +217,9 @@ describe('DEV-766 durable catalogue approvals', () => {
       submitCatalogueEdit(f.db, scope, 'medicine', { saleable: true })
     ).rejects.toThrow();
     await expect(
-      submitCatalogueEdit(f.db, scope, 'medicine', { productFamily: 'FRONT_SHOP' })
+      submitCatalogueEdit(f.db, scope, 'medicine', {
+        productFamily: 'FRONT_SHOP',
+      })
     ).rejects.toThrow();
     expect(f.raw.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
   });
