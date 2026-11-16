@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
 import {
+  refundBody,
   buildReceiptForBranch,
   getOrderSettlementForBranch,
   moneyErrorResponse,
@@ -408,5 +409,31 @@ describe('tenderBody manual card confirmation', () => {
       tender: { ...base.tender, manualConfirmation: { reference: '4242' } },
     });
     expect(noCode.success).toBe(false);
+  });
+});
+
+describe('manual card refund reference validation', () => {
+  const body = {
+    originalTenderId: 'tender-1',
+    amount: '1.00',
+    reason: 'Return',
+    approving: { staffProfileId: 'manager', type: 'PIN', secret: '1234' },
+  };
+  it('accepts absent, empty and length-limited references and trims them', () => {
+    expect(refundBody.parse(body).cardMachineRefundReference).toBeUndefined();
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: '' }).cardMachineRefundReference
+    ).toBe('');
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: ' REF-42 ' })
+        .cardMachineRefundReference
+    ).toBe('REF-42');
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: 'x'.repeat(120) })
+        .cardMachineRefundReference
+    ).toHaveLength(120);
+    expect(
+      refundBody.safeParse({ ...body, cardMachineRefundReference: 'x'.repeat(121) }).success
+    ).toBe(false);
   });
 });

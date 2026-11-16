@@ -93,6 +93,7 @@ export type RefundTenderInput = {
   /** Defaults to REFUND. VOID_REVERSAL is only valid for a same-day FULL reversal. */
   kind?: RefundKind;
   reason: string;
+  cardMachineRefundReference?: string;
   /** Authenticated device branch; direct engine callers fall back to actor device lookup. */
   branchId?: string;
   /** The manager co-authorizing the refund (must differ from the actor, C6). */
@@ -162,6 +163,13 @@ export async function refundTender(
   const kind: RefundKind = input.kind ?? 'REFUND';
   return runMoneyTransaction(db, async (tx) => {
     const reason = requireReason(input.reason);
+    const cardMachineRefundReference = input.cardMachineRefundReference?.trim() || null;
+    if (cardMachineRefundReference && cardMachineRefundReference.length > 120) {
+      throw new RefundError(
+        'The card machine refund reference must be at most 120 characters.',
+        'INVALID'
+      );
+    }
     const amount = money(input.amount);
     const tipRefundAmount =
       input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
@@ -190,7 +198,14 @@ export async function refundTender(
     // callers and test doubles free of misleading residue.
     const cardPayment =
       tender.type === 'CARD' ? await requireRefundableCardPayment(tx, tender.paymentId) : null;
+    if (cardMachineRefundReference && cardPayment?.provider !== 'MANUAL') {
+      throw new RefundError(
+        'A card machine refund reference requires a MANUAL card payment.',
+        'INVALID'
+      );
+    }
     const canonicalBytes = JSON.stringify({
+      ...(cardMachineRefundReference ? { cardMachineRefundReference } : {}),
       originalTenderId: tender.id,
       amount: amount.toString(),
       tipRefundAmount: tipRefundAmount.toString(),
@@ -367,6 +382,7 @@ export async function refundTender(
 
     const refund = await tx.restaurantRefund.create({
       data: {
+        cardMachineRefundReference,
         originalTenderId: tender.id,
         billId: tender.billId,
         amount,
@@ -420,6 +436,7 @@ export async function refundTender(
     if (cardPayment) {
       paymentStatus = await applyCardRefund(tx, {
         payment: cardPayment,
+        cardMachineRefundReference,
         kind,
         amount,
         tipRefundAmount,
@@ -556,6 +573,7 @@ async function applyCardRefund(
   tx: ScopedDb,
   input: {
     payment: RefundableCardPayment;
+    cardMachineRefundReference: string | null;
     kind: RefundKind;
     amount: Prisma.Decimal;
     tipRefundAmount: Prisma.Decimal;
@@ -582,6 +600,7 @@ async function applyCardRefund(
             providerRef: input.payment.providerRef,
             payload: {
               provider: 'MANUAL',
+              cardMachineRefundReference: input.cardMachineRefundReference,
               manuallyConfirmed: true,
               capability,
               amount: input.amount.toString(),

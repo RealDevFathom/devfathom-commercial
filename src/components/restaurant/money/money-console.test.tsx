@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => {
           tipRefundAmount: '0',
           businessDate: '2026-08-19',
           reason: 'Item issue',
+          cardMachineRefundReference: 'BANK-REF-42',
           coAuthorizationId: 'coauth_1',
           drawerSessionId: null,
           paymentId: 'payment_1',
@@ -634,4 +635,10 @@ describe('MoneyConsole', () => {
     expect(screen.queryByRole('link', { name: 'Purchasing' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Advanced Insights' })).not.toBeInTheDocument();
   });
+});
+
+it('shows the stored card machine refund reference in the refunds ledger', async () => {
+  renderConsole(true, 'payments');
+  setBranchAndDate();
+  expect(await screen.findByText('Card machine refund reference: BANK-REF-42')).toBeVisible();
 });

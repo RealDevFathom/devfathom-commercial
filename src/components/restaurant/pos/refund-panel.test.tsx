@@ -279,3 +279,37 @@ describe('RefundPanel', () => {
     expect(await screen.findByText('receipt replayed')).toBeVisible();
   });
 });
+
+it('submits the optional MANUAL machine reference with the refund and its retry intent', async () => {
+  const request = mockRequest(async (_path, options) =>
+    options?.method === 'POST'
+      ? {
+          amount: '20.00',
+          tipRefundAmount: '2.00',
+          businessDate: '2026-08-30',
+          paymentStatus: 'REFUNDED',
+          taxRefundAmount: '0.00',
+          serviceChargeRefundAmount: '0.00',
+          replayed: false,
+        }
+      : { tenders: [{ ...tender, paymentProvider: 'MANUAL' }] }
+  );
+  await open(request);
+  fireEvent.change(screen.getByLabelText('Settled receipt'), {
+    target: { value: tender.tenderId },
+  });
+  const reference = screen.getByLabelText('Card machine refund reference (optional)');
+  expect(reference).toHaveAttribute('maxlength', '120');
+  fireEvent.change(reference, { target: { value: '  BANK-REFUND-123  ' } });
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Returned meal' } });
+  fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+  fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+  await screen.findByText('refund recorded');
+  const options = vi
+    .mocked(request)
+    .mock.calls.find(([, options]) => options?.method === 'POST')?.[1];
+  expect(options?.body).toMatchObject({ cardMachineRefundReference: 'BANK-REFUND-123' });
+  expect(options?.intent).toContain('BANK-REFUND-123');
+});
