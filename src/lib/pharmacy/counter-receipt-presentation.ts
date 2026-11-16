@@ -18,13 +18,13 @@ import {
 
 const labels = {
   en: {
-    unavailable: 'Historical identity unavailable',
+    unavailable: 'Original item details unavailable',
     unknown: 'Unavailable',
     units: 'Tablets/units',
     payments: 'Payment details unavailable',
   },
   ur: {
-    unavailable: 'تاریخی شناخت دستیاب نہیں',
+    unavailable: 'اصل آئٹم کی تفصیل دستیاب نہیں',
     unknown: 'دستیاب نہیں',
     units: 'گولیاں/یونٹس',
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',

@@ -129,7 +129,10 @@ describe('daily Pharmacy work pack source composition', () => {
     }
     expect(
       pack.sources.every((source) =>
-        source.missingInputs.some((reason) => reason.includes('not an all-clear'))
+        source.missingInputs.some(
+          (reason) =>
+            reason === 'No items were returned by this check; other items may still need attention.'
+        )
       )
     ).toBe(true);
   });

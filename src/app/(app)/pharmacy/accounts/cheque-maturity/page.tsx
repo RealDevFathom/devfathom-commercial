@@ -1,3 +1,5 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -23,7 +25,9 @@ import { tenantContext } from '../../purchasing/_lib/console';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { ExportCsv } from './export-csv';
 
-export const metadata: Metadata = { title: 'Recorded cheque maturity · Pharmacy accounts' };
+export const metadata: Metadata = {
+  title: screenCopy.cheques.recordedChequeMaturityPharmacyAccounts,
+};
 type Query = { branch?: string | string[] };
 
 function Notice({ title, children }: { title: string; children: React.ReactNode }) {
@@ -78,13 +82,12 @@ export default async function ChequeMaturityPage({
     return (
       <div className="space-y-6">
         <PageHeader
-          eyebrow="Pharmacy accounts"
-          heading="Recorded cheque maturity"
-          description="Current-state evidence from recorded cheque due dates and statuses."
+          eyebrow={screenCopy.cheques.pharmacyAccounts}
+          heading={screenCopy.cheques.recordedChequeMaturity}
+          description={screenCopy.cheques.seeWhenYourRecordedChequesAreDue}
         />
-        <Notice title="Financial report access required">
-          Owner financial-report capability, Pharmacy Reports, and existing Finance workspace
-          authorization are required. No cheque evidence was read.
+        <Notice title={screenCopy.cheques.financialReportAccessRequired}>
+          {screenCopy.cheques.ownerFinancialReportCapabilityPharmacyReportsAndExisting}
         </Notice>
       </div>
     );
@@ -120,22 +123,22 @@ export default async function ChequeMaturityPage({
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy accounts"
-        heading="Recorded cheque maturity"
-        description="A current-state evidence calendar using only actual recorded due dates and statuses."
+        eyebrow={screenCopy.cheques.pharmacyAccounts}
+        heading={screenCopy.cheques.recordedChequeMaturity}
+        description={screenCopy.cheques.seeWhenYourRecordedChequesAreDue}
         actions={rows.length ? <ExportCsv csv={chequeMaturityCsv(rows, observedAt)} /> : undefined}
       />
-      <SectionCard title="Branch" titleLevel={2}>
+      <SectionCard title={screenCopy.cheques.branch} titleLevel={2}>
         <form action="/pharmacy/accounts/cheque-maturity">
           <label className="text-sm text-text-body">
-            Authorized active branch
+            {screenCopy.cheques.authorizedActiveBranch}
             <select
               name="branch"
               defaultValue={branch?.id ?? ''}
               className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3"
               required
             >
-              <option value="">Select a branch</option>
+              <option value="">{screenCopy.cheques.selectABranch}</option>
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
@@ -147,43 +150,44 @@ export default async function ChequeMaturityPage({
             className="mt-4 min-h-11 rounded-[3px] bg-primary px-3 text-sm font-semibold text-primary-foreground"
             type="submit"
           >
-            Load evidence
+            {screenCopy.cheques.showCheques}
           </button>
         </form>
       </SectionCard>
       {!branch && requested ? (
-        <Notice title="Branch unavailable">
-          Select an authorized active branch. No out-of-scope evidence was read.
+        <Notice title={screenCopy.cheques.branchUnavailable}>
+          {screenCopy.cheques.selectAnAuthorizedActiveBranchNoOutOf}
         </Notice>
       ) : null}
       {!branch && !requested ? (
-        <Notice title="Choose a branch">
-          This isolated read never combines branch cheque records.
+        <Notice title={screenCopy.cheques.chooseABranch}>
+          {screenCopy.cheques.thisIsolatedReadNeverCombinesBranchChequeRecords}
         </Notice>
       ) : null}
       {failed ? (
-        <Notice title="Cheque evidence unavailable">
-          The live Finance workspace read failed. No cached data is shown and no financial record
-          was changed.
+        <Notice title={screenCopy.cheques.chequeEvidenceUnavailable}>
+          {screenCopy.cheques.theLiveFinanceWorkspaceReadFailedNoCached}
         </Notice>
       ) : null}
       {branch && !failed ? (
         <>
-          <SectionCard title="Evidence limits" titleLevel={2}>
-            <p role="status" className="text-sm font-medium text-text-strong">
-              {CHEQUE_MATURITY_COVERAGE}
+          <SectionCard title={screenCopy.cheques.aboutThisList} titleLevel={2}>
+            <p className="text-sm text-text-muted">
+              {screenCopy.cheques.latestRecordedChequesTheListMayBeIncomplete}
             </p>
-            <p className="mt-2 text-sm text-text-muted">
-              {rows.length} recorded cheques retained from the latest workspace response. Empty does
-              not prove no cheques; exactly 50 means the read cap was reached. Dates use UTC. This
-              does not infer contractual AP maturity, perform BANK deductions, repair postings, or
-              establish historical currency.
-            </p>
+            <ReportDetails>
+              <p role="status" className="text-sm font-medium text-text-strong">
+                {CHEQUE_MATURITY_COVERAGE}
+              </p>
+              <p className="mt-2 text-sm text-text-muted">
+                {rows.length}
+                {screenCopy.cheques.recordedChequesRetainedFromTheLatestWorkspaceResponse}
+              </p>
+            </ReportDetails>
           </SectionCard>
           {rows.length === 0 ? (
-            <Notice title="No recorded cheques in this read">
-              The recent capped live response contained no safe cheque evidence. Full branch
-              coverage remains unknown.
+            <Notice title={screenCopy.cheques.noRecordedChequesInThisRead}>
+              {screenCopy.cheques.theRecentCappedLiveResponseContainedNoSafe}
             </Notice>
           ) : null}
           {chequeMaturityMonths(rows).map(({ month, entries }) => (
@@ -200,9 +204,9 @@ export default async function ChequeMaturityPage({
             </SectionCard>
           ))}
           {unknownDate.length ? (
-            <SectionCard title="Unknown recorded due date" titleLevel={2}>
+            <SectionCard title={screenCopy.cheques.unknownRecordedDueDate} titleLevel={2}>
               <p className="mb-3 text-sm text-text-muted">
-                These cheque records have no usable recorded maturity date; no date was inferred.
+                {screenCopy.cheques.theseChequeRecordsHaveNoUsableRecordedMaturity}
               </p>
               <EvidenceTable rows={unknownDate} />
             </SectionCard>
@@ -218,11 +222,11 @@ function EvidenceTable({ rows }: { rows: ReturnType<typeof chequeMaturityEvidenc
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Due date (UTC)</TableHead>
-          <TableHead>Reference</TableHead>
-          <TableHead>Cheque</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead numeric>Recorded amount</TableHead>
+          <TableHead>{screenCopy.cheques.dueDateUtc}</TableHead>
+          <TableHead>{screenCopy.cheques.reference}</TableHead>
+          <TableHead>{screenCopy.cheques.cheque}</TableHead>
+          <TableHead>{screenCopy.cheques.status}</TableHead>
+          <TableHead numeric>{screenCopy.cheques.recordedAmount}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

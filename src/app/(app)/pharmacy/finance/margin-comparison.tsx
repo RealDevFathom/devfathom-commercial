@@ -1,3 +1,5 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -15,7 +17,7 @@ import { formatUtcInstant } from '@/lib/utc-instant';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
-  `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency unknown)`;
+  `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency not confirmed)`;
 
 export function MarginComparisonLedger({ report }: { report: Comparison }) {
   const rows = [
@@ -32,7 +34,7 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
       -report.discountDeltaMinor,
     ],
     [
-      'COGS (subtracted)',
+      'Cost of goods (subtracted)',
       report.previous.cogsMinor,
       report.current.cogsMinor,
       -report.cogsDeltaMinor,
@@ -46,35 +48,42 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
   ] as const;
   return (
     <div className="min-w-0 space-y-3">
-      <p className="break-words text-sm text-text-muted">
-        Previous: {formatUtcInstant(report.periods.previous.from)} to{' '}
-        {formatUtcInstant(report.periods.previous.to)}. Current:{' '}
-        {formatUtcInstant(report.periods.current.from)} to{' '}
-        {formatUtcInstant(report.periods.current.to)}. Periods are start inclusive, end exclusive.
-        Same branch, equal elapsed duration.
-      </p>
+      <ReportDetails>
+        <p className="break-words text-sm text-text-muted">
+          {screenCopy.marginComparison.previous}
+          {formatUtcInstant(report.periods.previous.from)}
+          {screenCopy.marginComparison.to} {formatUtcInstant(report.periods.previous.to)}
+          {screenCopy.marginComparison.current} {formatUtcInstant(report.periods.current.from)}
+          {screenCopy.marginComparison.to} {formatUtcInstant(report.periods.current.to)}
+          {screenCopy.marginComparison.periodsAreStartInclusiveEndExclusiveSameBranch}
+        </p>
+      </ReportDetails>
       {!report.previous.hasEntries || !report.current.hasEntries ? (
         <p role="status" className="text-sm text-text-muted">
-          No matching posted journal groups in{' '}
+          {screenCopy.marginComparison.noMatchingPostedJournalGroupsIn}{' '}
           {!report.previous.hasEntries && !report.current.hasEntries
             ? 'either period'
             : !report.previous.hasEntries
               ? 'the previous period'
               : 'the current period'}
-          . Ledger totals are zero for that period; this does not prove complete source data.
+          {screenCopy.marginComparison.ledgerTotalsAreZeroForThatPeriodThis}
         </p>
       ) : null}
       <Table>
         <caption className="text-left text-sm text-text-muted">
-          Accounting decomposition · currency unknown · posted revenue, discounts and COGS,
-          including reversals and returns recorded in the journal.
+          {
+            screenCopy.marginComparison
+              .accountingDecompositionCurrencyNotConfirmedPostedRevenueDiscounts
+          }
         </caption>
         <TableHeader>
           <TableRow>
-            <TableHead>Ledger account</TableHead>
-            <TableHead className="text-right">Previous</TableHead>
-            <TableHead className="text-right">Current</TableHead>
-            <TableHead className="text-right">Effect on gross margin</TableHead>
+            <TableHead>{screenCopy.marginComparison.account}</TableHead>
+            <TableHead className="text-right">{screenCopy.marginComparison.previous2}</TableHead>
+            <TableHead className="text-right">{screenCopy.marginComparison.current2}</TableHead>
+            <TableHead className="text-right">
+              {screenCopy.marginComparison.effectOnGrossMargin}
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -91,16 +100,18 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
         </TableBody>
       </Table>
       <p className="text-sm text-text-body">
-        Revenue delta {money(report.revenueDeltaMinor)} minus discount delta{' '}
-        {money(report.discountDeltaMinor)} minus COGS delta {money(report.cogsDeltaMinor)} ={' '}
-        {money(report.reconciledMinor)} gross-margin change.
+        {screenCopy.marginComparison.revenueDelta}
+        {money(report.revenueDeltaMinor)}
+        {screenCopy.marginComparison.minusDiscountDelta} {money(report.discountDeltaMinor)}
+        {screenCopy.marginComparison.minusCogsDelta}
+        {money(report.cogsDeltaMinor)} = {money(report.reconciledMinor)}
+        {screenCopy.marginComparison.grossMarginChange}
       </p>
-      <p className="text-sm text-text-muted">
-        Accounting decomposition, not a causal price/volume/mix explanation. Quantity, unit-price,
-        unit-cost and expense evidence is not provided here; missing evidence is not zero. Gross
-        margin is not net profit or contribution. Percentage change is omitted, including when the
-        previous margin is zero or negative.
-      </p>
+      <ReportDetails>
+        <p className="text-sm text-text-muted">
+          {screenCopy.marginComparison.accountingDecompositionNotACausalPriceVolumeMix}
+        </p>
+      </ReportDetails>
     </div>
   );
 }
@@ -147,10 +158,15 @@ export async function MarginComparisonSection({
       (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED');
   }
   return (
-    <SectionCard title="Gross-margin comparison" titleLevel={2} eyebrow="Accounting drivers">
+    <SectionCard
+      title={screenCopy.marginComparison.grossMarginComparison}
+      titleLevel={2}
+      eyebrow={screenCopy.marginComparison.marginChanges}
+    >
       <p className="mb-4 text-sm text-text-muted">
-        Branch: {branch.name}. Compare up to 92 days with the immediately preceding equal-length
-        period.
+        {screenCopy.marginComparison.branch}
+        {branch.name}
+        {screenCopy.marginComparison.compareUpTo92DaysWithTheImmediately}
       </p>
       <form action="/pharmacy/finance" method="get" className="mb-5 flex flex-wrap items-end gap-3">
         <input type="hidden" name="branch" value={branch.id} />
@@ -162,7 +178,7 @@ export async function MarginComparisonSection({
             ) : null
         )}
         <label className="text-sm">
-          Current start (UTC)
+          {screenCopy.marginComparison.from500AmPkt}
           <Input
             className="mt-1 min-h-11"
             name="marginFrom"
@@ -172,7 +188,7 @@ export async function MarginComparisonSection({
           />
         </label>
         <label className="text-sm">
-          Current end (UTC, exclusive)
+          {screenCopy.marginComparison.until500AmPktNotIncluded}
           <Input
             className="mt-1 min-h-11"
             name="marginTo"
@@ -182,7 +198,7 @@ export async function MarginComparisonSection({
           />
         </label>
         <Button type="submit" variant="secondary">
-          Compare periods
+          {screenCopy.marginComparison.comparePeriods}
         </Button>
       </form>
       {report ? (

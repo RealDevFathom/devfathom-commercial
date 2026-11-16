@@ -456,7 +456,7 @@ describe('isolated Pharmacy browser receipt', () => {
       };
       const html = buildCounterBrowserReceipt(source, locale, 'A4');
       expect(html).toContain(
-        locale === 'en' ? 'Historical identity unavailable' : 'تاریخی شناخت دستیاب نہیں'
+        locale === 'en' ? 'Original item details unavailable' : 'اصل آئٹم کی تفصیل دستیاب نہیں'
       );
       expect(html).not.toContain('LIVE_CATALOG');
       expect(html).not.toContain('Batch 1');
@@ -466,7 +466,7 @@ describe('isolated Pharmacy browser receipt', () => {
 
   it('treats missing legacy identity status honestly and rejects shared-schema control input', () => {
     expect(buildCounterBrowserReceipt(receipt, 'en', 'A4')).toContain(
-      'Historical identity unavailable'
+      'Original item details unavailable'
     );
     expect(() =>
       buildCounterBrowserReceipt({ ...receipt, branchName: 'Bad\u001b' }, 'en', 'A4')

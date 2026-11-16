@@ -249,7 +249,7 @@ it.each(['UNAVAILABLE', undefined] as const)(
     };
     render(<CounterReceiptView {...input} />);
     const region = within(screen.getByRole('region', { name: 'رسید 12' }));
-    expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
+    expect(region.getByText('اصل آئٹم کی تفصیل دستیاب نہیں')).toBeTruthy();
     expect(
       region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7')
     ).toBeTruthy();
@@ -272,50 +272,53 @@ it('keeps Rx printing disabled when receipt has no sourced directions or licence
   expect(screen.getByText(/sourced Rx directions/)).toBeTruthy();
 });
 
-it.each([false, true])('opens isolated Rx labels with reprint=%s and exposes popup failure with retry available', (reprint) => {
-  const input = props({ reprint });
-  input.receipt!.lines[0]!.identityStatus = 'ISSUED';
-  input.receipt!.lines[0]!.allocations = [
-    {
-      allocationId: 'a',
-      inventoryLotId: 'a',
-      batchNumber: 'TEST',
-      expiresAt: '2027-01-01',
-      canonicalUnits: 1,
-    },
-  ];
-  input.dispensingLabelSources = [
-    {
-      saleId: 'sale-1',
-      saleLineId: 'line-1',
-      rx: true,
-      pharmacistRegistration: 'REG',
-      licenceNumber: 'TEST',
-      directionsEnglish: 'English fixture',
-      directionsUrdu: 'اردو',
-    },
-  ];
-  const open = vi.spyOn(window, 'open').mockReturnValue(null);
-  render(<CounterReceiptView {...input} />);
-  const button = screen.getByRole('button', { name: /Print Rx labels/ });
-  expect(button).toBeEnabled();
-  fireEvent.click(button);
-  expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
-  const popup = {
-    opener: window,
-    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  open.mockReturnValue(popup as unknown as Window);
-  fireEvent.click(button);
-  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
-  expect(popup.print).toHaveBeenCalledOnce();
-  expect(input.onPrint).not.toHaveBeenCalled();
-  expect(screen.queryByRole('alert')).toBeNull();
-  open.mockRestore();
-});
+it.each([false, true])(
+  'opens isolated Rx labels with reprint=%s and exposes popup failure with retry available',
+  (reprint) => {
+    const input = props({ reprint });
+    input.receipt!.lines[0]!.identityStatus = 'ISSUED';
+    input.receipt!.lines[0]!.allocations = [
+      {
+        allocationId: 'a',
+        inventoryLotId: 'a',
+        batchNumber: 'TEST',
+        expiresAt: '2027-01-01',
+        canonicalUnits: 1,
+      },
+    ];
+    input.dispensingLabelSources = [
+      {
+        saleId: 'sale-1',
+        saleLineId: 'line-1',
+        rx: true,
+        pharmacistRegistration: 'REG',
+        licenceNumber: 'TEST',
+        directionsEnglish: 'English fixture',
+        directionsUrdu: 'اردو',
+      },
+    ];
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<CounterReceiptView {...input} />);
+    const button = screen.getByRole('button', { name: /Print Rx labels/ });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+    const popup = {
+      opener: window,
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
+      focus: vi.fn(),
+      print: vi.fn(),
+      close: vi.fn(),
+    };
+    open.mockReturnValue(popup as unknown as Window);
+    fireEvent.click(button);
+    expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
+    expect(popup.print).toHaveBeenCalledOnce();
+    expect(input.onPrint).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    open.mockRestore();
+  }
+);
 
 it('selects only the clicked line source from the production receipt payload', () => {
   const input = props();
@@ -483,7 +486,6 @@ it('states quantity and gross when historical per-lot pricing is unavailable', (
   expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });
 
-
 it.each([true, false])(
   'routes automatic printing through the copy allocation handler and reports success=%s once',
   async (printed) => {
@@ -494,14 +496,18 @@ it.each([true, false])(
       onPrint,
       onSettlementPresented,
       settlement: {
-        status: 'confirmed', saleId: 'sale-1', receiptNumber: 12,
-        autoPrint: true, printReservation: reservation,
+        status: 'confirmed',
+        saleId: 'sale-1',
+        receiptNumber: 12,
+        autoPrint: true,
+        printReservation: reservation,
       },
     });
     const view = render(<CounterReceiptView {...input} />);
     await waitFor(() =>
       expect(onSettlementPresented).toHaveBeenCalledExactlyOnceWith({
-        saleId: 'sale-1', receiptNumber: 12,
+        saleId: 'sale-1',
+        receiptNumber: 12,
         printStatus: printed ? 'dialog-requested' : 'manual-required',
       })
     );
@@ -510,10 +516,13 @@ it.each([true, false])(
     view.rerender(<CounterReceiptView {...input} />);
     expect(onPrint).toHaveBeenCalledTimes(1);
     expect(onSettlementPresented).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(printed
-      ? 'Browser print dialog requested. Physical printing is not confirmed.'
-      : 'The browser print dialog could not open. Retry Print receipt.'
-    )).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        printed
+          ? 'Browser print dialog requested. Physical printing is not confirmed.'
+          : 'The browser print dialog could not open. Retry Print receipt.'
+      )
+    ).toBeInTheDocument();
   }
 );
 
@@ -535,7 +544,9 @@ it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the custome
   fireEvent.click(send);
 
   expect(onSendWhatsApp).toHaveBeenCalledExactlyOnceWith('sale-1');
-  expect(await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')).toBeTruthy();
+  expect(
+    await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')
+  ).toBeTruthy();
 });
 
 it('DEV-16: surfaces a refused WhatsApp receipt and hides the control on an unsettled bill', async () => {

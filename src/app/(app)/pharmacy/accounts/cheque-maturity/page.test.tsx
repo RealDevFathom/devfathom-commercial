@@ -65,12 +65,20 @@ describe('cheque maturity accounts page', () => {
   it('labels empty and exact-cap live reads without claiming completeness', async () => {
     const view = await show();
     expect(screen.getByText(/contained no safe cheque evidence/i)).toBeVisible();
-    expect(screen.getByText(/full branch coverage unknown/i)).toBeVisible();
+    const coverage = screen.getByText(/full branch coverage unknown/i);
+    expect(coverage.closest('details')).not.toHaveAttribute('open');
+    coverage.closest('details')!.open = true;
+    expect(coverage).toBeVisible();
     view.unmount();
     mocks.workspace.mockResolvedValue({
       transactions: Array.from({ length: 50 }, (_, index) => cheque(index)),
     });
     await show();
+    const limits = screen
+      .getByText(/exactly 50 means the read cap was reached/i)
+      .closest('details')!;
+    expect(limits).not.toHaveAttribute('open');
+    limits.open = true;
     expect(screen.getByText(/exactly 50 means the read cap was reached/i)).toBeVisible();
     expect(screen.getAllByText('PDC')).toHaveLength(50);
     expect(screen.getAllByText('PKR 1.00')).toHaveLength(50);

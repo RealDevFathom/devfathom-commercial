@@ -98,9 +98,9 @@ describe('journal evidence export page', () => {
       to: '2026-10-26T00:00:00.000Z',
       page: 1,
     });
-    expect(html).toContain('Partial page coverage');
+    expect(html).toContain('Some entries are missing');
     expect(html).toContain('25 entries returned · page cap 25 · 26 entries counted');
-    expect(html).toContain('Coverage unknown');
+    expect(html).toContain('Other activity may not be included');
     expect(html).toContain('Export this page (CSV)');
   });
 
