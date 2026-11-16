@@ -122,6 +122,13 @@ beforeEach(() => {
 });
 
 describe('sale-unit multiplier derived from the stored pack setup (DEV-830 F05)', () => {
+  it('passes the shelf-label lot constraint to the locked stock allocator', async () => {
+    await addSaleLine(saleDb() as never, scope, { ...line, shelfLabelLotId: 'lot-a' });
+    expect(vi.mocked(allocateForSale).mock.calls[0]?.[2]).toMatchObject({
+      expectedInventoryLotId: 'lot-a',
+    });
+  });
+
   it('refuses a full pack with a single-unit multiplier before any stock or price', async () => {
     const db = saleDb();
     await expect(

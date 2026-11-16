@@ -64,6 +64,8 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
+import { PharmacyCounterError } from '@/lib/pharmacy/counter';
+import { readShelfLabelSheet, ShelfLabelSourceError } from '@/lib/pharmacy/shelf-label-source';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
   expiryRiskBuckets,
@@ -1803,6 +1805,58 @@ export const pharmacyInventoryRouter = router({
         );
       } catch (error) {
         domainError(error);
+      }
+    }),
+
+  /**
+   * DEV-90: shelf and price sticker content for one branch, from a posted goods
+   * receipt, a medicine list, or a search. Prices and lot codes come only from
+   * here; the operator chooses how many to print.
+   */
+  shelfLabels: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          source: z.discriminatedUnion('kind', [
+            z
+              .object({ kind: z.literal('RECEIPT'), goodsReceiptId: z.string().min(1).max(128) })
+              .strict(),
+            z
+              .object({
+                kind: z.literal('MEDICINES'),
+                medicineIds: z.array(z.string().min(1).max(128)).min(1).max(100),
+              })
+              .strict(),
+            z
+              .object({ kind: z.literal('SEARCH'), query: z.string().trim().min(2).max(120) })
+              .strict(),
+          ]),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await readShelfLabelSheet(
+          ctx.db,
+          { organizationId: scope.organizationId, branchId: scope.branchId },
+          input.source
+        );
+      } catch (error) {
+        if (error instanceof ShelfLabelSourceError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message:
+              error.reason === 'NOT_FOUND'
+                ? 'Goods receipt not found in this branch.'
+                : 'Only a posted goods receipt has lots to label.',
+          });
+        }
+        if (error instanceof PharmacyCounterError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Type at least two characters.' });
+        }
+        throw error;
       }
     }),
 

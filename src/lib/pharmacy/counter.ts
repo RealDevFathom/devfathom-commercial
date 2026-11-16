@@ -31,6 +31,7 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -101,6 +102,23 @@ export type CounterSearchRow = {
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
+  /**
+   * DEV-90: the exact lot a scanned shelf sticker names. Set only when the query
+   * was a shelf-label code of this branch. When it differs from
+   * `recommendedLotId`, selling it is a FEFO override like any other.
+   */
+  labelLot?: CounterLabelLot | null;
+};
+
+export type CounterLabelLot = {
+  inventoryLotId: string;
+  batchNumber: string;
+  expiresAt: string;
+  printedMrpMinor: number;
+  /** Safe canonical units of this lot alone. */
+  sellableUnits: number;
+  /** Why the lot cannot be sold; null when it can. */
+  blockedBy: BlockReason | null;
 };
 
 type LotRow = {
@@ -134,7 +152,9 @@ export function renderStrengthValue(value: unknown): string {
   return raw.includes('.') ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : raw;
 }
 
-function renderStrength(components: readonly { value: unknown; unit: string }[]): string | null {
+export function renderStrength(
+  components: readonly { value: unknown; unit: string }[]
+): string | null {
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
@@ -154,7 +174,7 @@ async function matchMedicineIds(
   scope: CounterScope,
   query: string,
   limit: number
-): Promise<Map<string, CounterMatchKind>> {
+): Promise<{ matches: Map<string, CounterMatchKind>; labelLotId: string | null }> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
   const normalized = normalizeMedicineText(trimmed);
@@ -178,7 +198,26 @@ async function matchMedicineIds(
     // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
     // the scanner path add it without a pick list.
     remember(barcode.presentation.medicineId, 'BARCODE');
-    return matches;
+    return { matches, labelLotId: null };
+  }
+
+  // A shelf code resolves only inside this organization and branch. Invalid
+  // internal codes also fail closed instead of entering fuzzy catalogue search.
+  if (/^71\d{14}$/.test(trimmed)) {
+    const labelNumber = parseShelfLabelCode(trimmed);
+    const lot =
+      labelNumber === null
+        ? null
+        : await db.pharmacyInventoryLot.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              shelfLabelNumber: labelNumber,
+            },
+            select: { id: true, batch: { select: { medicineId: true } } },
+          });
+    if (lot) matches.set(lot.batch.medicineId, 'BARCODE');
+    return { matches, labelLotId: lot?.id ?? null };
   }
 
   // The fuzzy lookups are independent, so they run together; matches are still
@@ -242,7 +281,7 @@ async function matchMedicineIds(
   for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT');
   for (const presentation of byPresentation) remember(presentation.medicineId, 'PRESENTATION');
 
-  return matches;
+  return { matches, labelLotId: null };
 }
 
 function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): AllocationCandidate {
@@ -274,7 +313,7 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
+  const { matches, labelLotId } = await matchMedicineIds(db, scope, input.query, limit);
   const medicineIds = [...matches.keys()].slice(0, limit);
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
@@ -385,17 +424,33 @@ export async function searchCounterCatalog(
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
+    let labelLot: CounterLabelLot | null = null;
+    let labelLotRow: LotRow | null = null;
     const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
+      if (lot.id === labelLotId) {
+        labelLotRow = lot;
+        labelLot = {
+          inventoryLotId: lot.id,
+          batchNumber: lot.batch.batchNumber,
+          expiresAt: lot.batch.expiresAt.toISOString(),
+          printedMrpMinor: lot.printedMrpMinor,
+          sellableUnits: 0,
+          blockedBy: null,
+        };
+      }
+      let lotBlockedBy: BlockReason | null = null;
       for (const balance of balancesByLot.get(lot.id) ?? []) {
         const candidate = candidateFrom(scope, lot, balance);
         const reason = blockReasonFor(candidate, scope_);
         if (reason !== null) {
+          if (lotBlockedBy === null || lotBlockedBy === 'EMPTY') lotBlockedBy = reason;
           // EMPTY is an exhausted bucket, not a condition an operator acts on.
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
         }
+        if (labelLot?.inventoryLotId === lot.id) labelLot.sellableUnits += balance.onHandUnits;
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
         const better =
@@ -405,10 +460,23 @@ export async function searchCounterCatalog(
             lot.id.localeCompare(best.lot.id) < 0);
         if (better) best = { lot, locationId: balance.stockLocationId };
       }
+      if (labelLot?.inventoryLotId === lot.id && labelLot.sellableUnits === 0) {
+        labelLot.blockedBy = lotBlockedBy ?? 'EMPTY';
+      }
     }
 
+    // A lot disappearing between the exact lookup and catalogue read is not a
+    // licence to return an ordinary medicine row and bill a different lot.
+    if (labelLotId && !labelLot) continue;
+    const availableUnits = labelLot ? labelLot.sellableUnits : onHandUnits;
+
+    // DEV-90: a sellable shelf-label lot is the one being sold, so its own pack
+    // conversion and price drive the sale units, even when it is not FEFO's lot.
+    const priced: LotRow | null =
+      labelLotRow && labelLot?.blockedBy === null ? labelLotRow : (best?.lot ?? null);
+
     const presentationId =
-      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
+      (priced && presentationByPackLevel.get(priced.packLevelId)) ??
       medicine.presentations[0]?.id ??
       null;
     if (!presentationId) continue;
@@ -418,17 +486,17 @@ export async function searchCounterCatalog(
 
     let saleUnits: SaleUnitOption[] = [];
     let packMismatch: CounterPackMismatch | null = null;
-    if (best) {
+    if (priced) {
       // A lot whose received pack disagrees with the medicine's pack setup is
       // still sold through that setup, priced from the same lot exactly as the
       // server prices the line; only a setup that cannot price it reports why.
       ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
         packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-        lotPackLevelId: best.lot.packLevelId,
-        lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
-        lotUnitsPerPack: best.lot.unitsPerPack,
-        otherLotUnitsPerPack: [...sellableLots.values()]
-          .filter((lot) => lot.id !== best!.lot.id)
+        lotPackLevelId: priced.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(priced.packLevelId) ?? null,
+        lotUnitsPerPack: priced.unitsPerPack,
+        otherLotUnitsPerPack: (labelLotId ? [] : [...sellableLots.values()])
+          .filter((lot) => lot.id !== priced!.id)
           .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
         at,
@@ -437,28 +505,28 @@ export async function searchCounterCatalog(
 
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
-    const roundingIncrementMinor = best
+    const roundingIncrementMinor = priced
       ? mrpRoundingIncrementForLot(mrps, {
-          packLevelId: best.lot.packLevelId,
-          batchNumber: best.lot.batch.batchNumber,
+          packLevelId: priced.packLevelId,
+          batchNumber: priced.batch.batchNumber,
         })
       : 1;
 
-    const saleableUnits = best
+    const saleableUnits = priced
       ? saleUnits.map((option) => {
           const preview = previewSaleLine({
             option,
             quantity: 1,
-            printedMrpMinor: best!.lot.printedMrpMinor,
-            unitsPerPack: best!.lot.unitsPerPack,
+            printedMrpMinor: priced!.printedMrpMinor,
+            unitsPerPack: priced!.unitsPerPack,
             roundingIncrementMinor,
-            availableUnits: onHandUnits,
+            availableUnits,
           });
           return {
             kind: option.kind,
             levelLabel: option.levelLabel,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
+            wholeUnits: Math.floor(availableUnits / option.canonicalUnitsPerSaleUnit),
             unitPriceMinor: preview.unitPriceMinor,
             proRataCeilingMinor: preview.proRataCeilingMinor,
           };
@@ -478,13 +546,13 @@ export async function searchCounterCatalog(
       route: presentation.route,
       matchedOn: matches.get(medicine.id) ?? 'NAME',
       recommendedLotId: best?.lot.id ?? null,
-      packLevelId: best?.lot.packLevelId ?? null,
-      unitsPerPack: best?.lot.unitsPerPack ?? null,
-      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
+      packLevelId: priced?.packLevelId ?? null,
+      unitsPerPack: priced?.unitsPerPack ?? null,
+      printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
       batchNumber: best?.lot.batch.batchNumber ?? null,
       nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
-      onHandUnits,
+      onHandUnits: availableUnits,
       saleableUnits,
       saleUnits,
       packMismatch,
@@ -503,6 +571,7 @@ export async function searchCounterCatalog(
         locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
+      ...(labelLotId ? { labelLot } : {}),
     });
   }
 

@@ -2645,6 +2645,57 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  // DEV-90: shelf stickers name one lot; a scan never bills a different batch silently.
+  const labelLot = (overrides: Partial<NonNullable<CounterSearchRow['labelLot']>> = {}) => ({
+    inventoryLotId: 'lot-label',
+    batchNumber: 'B-LABEL',
+    expiresAt: '2027-01-01T00:00:00.000Z',
+    printedMrpMinor: 10000,
+    sellableUnits: 10,
+    blockedBy: null,
+    ...overrides,
+  });
+
+  it('clears the selection and adds nothing when the shelf-label batch cannot be sold', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ sellableUnits: 0, blockedBy: 'RECALLED' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Batch B-LABEL on this shelf label cannot be sold: it is recalled/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Add to cart/ })).not.toBeInTheDocument();
+  });
+
+  it('stages a non-FEFO shelf-label batch as an override and waits for a reason', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeInTheDocument();
+  });
+
+  it('adds a shelf-label scan straight away when its batch is the FEFO batch', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ inventoryLotId: 'lot-a', batchNumber: 'B-1' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+      expect.objectContaining({ shelfLabelLotId: 'lot-a' })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
+    );
+  });
+
   it.each(['complete', 'missing reason'])(
     'does not reuse a previous batch override with a %s reason',
     async (reason) => {
