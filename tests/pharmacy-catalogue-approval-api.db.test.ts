@@ -247,6 +247,22 @@ vi.mock('@/server/audit', async () => {
           'FORBIDDEN'
         );
         checks.push('prior PIN verification does not authorize another edit');
+        await c.query(
+          `INSERT INTO users (id,"organizationId",name,email,department,title,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff',now())`,
+          [id('member_solo'), id('solo')]
+        );
+        await refusal(
+          solo.decideCatalogueEdit({ editId: se2.id, decision: 'APPROVE', soloPin: '2468' }),
+          'FORBIDDEN'
+        );
+        assert.equal(
+          await solodb.auditLog.count({
+            where: { action: 'pharmacy.catalogueSoloOwnerApproval', targetId: se2.id },
+          }),
+          0
+        );
+        checks.push('a true owner with another active member cannot self approve');
+
         const values = {
           productName: 'Fixture soap',
           dosageForm: 'Bottle',
@@ -310,7 +326,7 @@ vi.mock('@/server/audit', async () => {
           0
         );
         checks.push('front-shop publication has reviewed provenance and no invented strength');
-        assert.equal(checks.length, 9);
+        assert.equal(checks.length, 10);
       } finally {
         await c.end();
       }

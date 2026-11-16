@@ -350,7 +350,7 @@ const catalogueCommands = [
   'addAlias',
 ] as const;
 type CatalogueCommand = (typeof catalogueCommands)[number];
-async function queueLiveCatalogueCommand(
+async function queueCatalogueCommand(
   ctx: TRPCContext,
   medicineId: string,
   operation: CatalogueCommand,
@@ -365,7 +365,6 @@ async function queueLiveCatalogueCommand(
       code: 'NOT_FOUND',
       message: 'Catalogue item not found.',
     });
-  if (!medicine.saleable) return;
   return ctx.db.pharmacyCatalogueEdit.create({
     data: {
       medicineId,
@@ -1136,7 +1135,7 @@ export const pharmacyMedicineRouter = router({
           code: 'FORBIDDEN',
           message: 'Parent pack is outside this presentation.',
         });
-      const queued = await queueLiveCatalogueCommand(
+      const queued = await queueCatalogueCommand(
         ctx,
         presentation.medicineId,
         'createPackLevel',
@@ -1174,7 +1173,7 @@ export const pharmacyMedicineRouter = router({
             code: 'NOT_FOUND',
             message: 'Presentation not found.',
           });
-        const queued = await queueLiveCatalogueCommand(
+        const queued = await queueCatalogueCommand(
           ctx,
           presentation.medicineId,
           'revisePackLevel',
@@ -1225,7 +1224,7 @@ export const pharmacyMedicineRouter = router({
           code: 'FORBIDDEN',
           message: 'Pack level is outside this workspace.',
         });
-      const queued = await queueLiveCatalogueCommand(
+      const queued = await queueCatalogueCommand(
         ctx,
         pack.presentation.medicineId,
         'recordPrintedMrp',
@@ -1280,12 +1279,7 @@ export const pharmacyMedicineRouter = router({
           code: 'NOT_FOUND',
           message: 'Presentation not found.',
         });
-      const queued = await queueLiveCatalogueCommand(
-        ctx,
-        presentation.medicineId,
-        'addBarcode',
-        input
-      );
+      const queued = await queueCatalogueCommand(ctx, presentation.medicineId, 'addBarcode', input);
       if (queued) return queued;
       return ctx.db.medicineBarcode.create({
         data: { ...input, normalizedCode: normalizeMedicineText(input.code) },
@@ -1342,7 +1336,7 @@ export const pharmacyMedicineRouter = router({
             code: 'CONFLICT',
             message: `This pack already carries barcode ${before.join(', ')}. Pack barcodes are permanent and cannot be replaced.`,
           });
-        const queued = await queueLiveCatalogueCommand(
+        const queued = await queueCatalogueCommand(
           ctx,
           pack.presentation.medicineId,
           'setPackBarcode',
@@ -1376,7 +1370,7 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const queued = await queueLiveCatalogueCommand(ctx, input.medicineId, 'addAlias', input);
+      const queued = await queueCatalogueCommand(ctx, input.medicineId, 'addAlias', input);
       if (queued) return queued;
       return ctx.db.medicineAlias.create({
         data: { ...input, normalizedValue: normalizeMedicineText(input.value) },

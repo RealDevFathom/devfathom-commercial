@@ -44,10 +44,13 @@ function makeDb() {
     medicine: {
       ...model(),
       count: vi.fn().mockResolvedValue(1),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findFirst: vi.fn().mockResolvedValue({ id: 'medicine_a', saleable: false }),
     },
+    auditLog: model(),
     pharmacyCatalogueEdit: {
       ...model(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       create: vi.fn(async ({ data }: { data: object }) => ({
         id: 'edit',
         status: 'PENDING',
@@ -73,7 +76,7 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
+function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'user_a') {
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
@@ -86,7 +89,7 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_a', role, status: 'ACTIVE' },
+      user: { id: actorId, role, status: 'ACTIVE' },
     },
     organization: null,
     support: null,
@@ -183,17 +186,32 @@ describe('catalogue edits require catalogue administration (DEV-19)', () => {
     expect(db.medicineAlias.create).not.toHaveBeenCalled();
   });
 
-  it('lets a catalogue administrator add an alias', async () => {
-    await expect(
-      caller().addAlias({
-        medicineId: 'medicine_a',
-        type: 'BRAND',
-        value: 'Panadol',
-      })
-    ).resolves.toMatchObject({
-      id: 'new',
-      normalizedValue: expect.any(String),
+  it('queues a draft alias, refuses its editor, then lets another administrator approve the normalized write', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: false,
+      updatedAt: new Date('2026-01-01'),
     });
+    const proposal = await caller().addAlias({
+      medicineId: 'medicine_a',
+      type: 'BRAND',
+      value: 'Panadol',
+    });
+    expect(proposal).toMatchObject({ status: 'PENDING' });
+    expect(db.medicineAlias.create).not.toHaveBeenCalled();
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+    await expect(
+      caller().decideCatalogueEdit({ editId: proposal.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+      editId: proposal.id,
+      decision: 'APPROVE',
+    });
+    await expect(db.medicineAlias.create.mock.results[0]!.value).resolves.toMatchObject({
+      id: 'new',
+      normalizedValue: 'panadol',
+    });
+    expect(db.medicineAlias.create).toHaveBeenCalledOnce();
   });
 
   it.each(['ACCEPTED', 'CORRECTED', 'REJECTED'])(
@@ -536,19 +554,30 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicinePackMrp.create).not.toHaveBeenCalled();
   });
 
-  it('lets an admin record a printed MRP rounding rule', async () => {
+  it('holds a draft printed MRP rounding rule until another administrator approves it', async () => {
     db.packLevel.findFirst.mockResolvedValue({
       id: 'pack_a',
       presentation: { medicineId: 'medicine_a' },
     });
-    await expect(
-      caller().recordPrintedMrp({
-        packLevelId: 'pack_a',
-        batchReference: 'B-1',
-        printedMrpMinor: 1000,
-        roundingIncrementMinor: 5,
-      })
-    ).resolves.toMatchObject({
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: false,
+      updatedAt: new Date('2026-01-01'),
+    });
+    const proposal = await caller().recordPrintedMrp({
+      packLevelId: 'pack_a',
+      batchReference: 'B-1',
+      printedMrpMinor: 1000,
+      roundingIncrementMinor: 5,
+    });
+    expect(proposal).toMatchObject({ status: 'PENDING' });
+    expect(db.medicinePackMrp.create).not.toHaveBeenCalled();
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+    await caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+      editId: proposal.id,
+      decision: 'APPROVE',
+    });
+    await expect(db.medicinePackMrp.create.mock.results[0]!.value).resolves.toMatchObject({
       packLevelId: 'pack_a',
       roundingIncrementMinor: 5,
     });
