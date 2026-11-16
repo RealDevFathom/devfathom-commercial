@@ -2489,18 +2489,15 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
-  it('does not run F9 while an unrelated field is focused or another dialog is open', async () => {
+  it('does not run F9 while a field is focused or another dialog is open', async () => {
     openTheDrawer();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
-    // Scan and next-line quantity explicitly own counter chords; unrelated fields do not.
-    const field = document.createElement('input');
-    document.body.append(field);
-    field.focus();
-    fireEvent.keyDown(field, { key: 'F9' });
-    expect(document.activeElement).toBe(field);
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    fireEvent.keyDown(quantity, { key: 'F9' });
+    expect(document.activeElement).toBe(quantity);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    field.remove();
 
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
@@ -4881,12 +4878,20 @@ describe('DEV-705 keyboard loose sale', () => {
     fireEvent.change(search, { target: { value: 'Panadol' } });
     fireEvent.keyDown(search, { key: 'Enter' });
     await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveFocus());
-    expect(mocks.searchFetch).toHaveBeenCalledWith({ branchId: 'branch-a', query: 'Panadol' }, { staleTime: 10000 });
+    expect(mocks.searchFetch).toHaveBeenCalledWith(
+      { branchId: 'branch-a', query: 'Panadol' },
+      { staleTime: 10000 }
+    );
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
   it('discards a late Enter result after the operator changes the query', async () => {
     let resolveSearch!: (value: unknown) => void;
-    mocks.searchFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
+    mocks.searchFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        })
+    );
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const search = screen.getByLabelText('Scan or search');
     fireEvent.change(search, { target: { value: 'Panadol' } });
@@ -4950,6 +4955,9 @@ describe('DEV-705 keyboard loose sale', () => {
         expect.objectContaining({ saleUnit: 'UNIT', canonicalUnitsPerSaleUnit: 1, quantity: 1 })
       )
     );
+    await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
   });
   it('honours the branch preferred unit and shows prices before entering quantity', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

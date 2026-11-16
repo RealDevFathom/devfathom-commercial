@@ -281,15 +281,19 @@ export function counterChordTargetIsField(target: EventTarget | null | undefined
 
 /**
  * Whether `target` keeps `key` for itself. Every field does, except that the
- * marked scan and next-line quantity fields hand their F-keys to the counter.
- * Enter and editing keys stay with those fields, which handle Enter themselves.
+ * scan field hands its F-keys to the counter. Quantity may hand off only an
+ * explicitly matched unit-selection or add action. Enter remains field-owned.
  */
-function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boolean {
+function fieldKeepsKey(
+  target: EventTarget | null | undefined,
+  key: string,
+  quantityAction: boolean
+): boolean {
   if (!counterChordTargetIsField(target)) return false;
   const scanField =
     target instanceof HTMLElement &&
     (target.hasAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE) ||
-      target.hasAttribute('data-counter-quantity'));
+      (quantityAction && target.hasAttribute('data-counter-quantity')));
   return !(scanField && /^F\d+$/.test(key));
 }
 
@@ -300,12 +304,25 @@ function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boo
  * with the field while focus is in an input, textarea, or select, and they stay
  * silent while a dialog is open so a void or tender step cannot be skipped.
  *
- * The scan and next-line quantity fields keep F-keys live for the keyboard sale
- * workflow (POS-01 / DEV-705). A dialog still silences them.
+ * Quantity supports unit selection and add only (DEV-705); tender, hold and
+ * destructive actions retain the original field guard. Dialogs silence all chords.
  */
-export function shouldHandleCounterKey(event: CounterKeyEvent, dialogOpen = false): boolean {
+export function shouldHandleCounterKey(
+  event: CounterKeyEvent,
+  dialogOpen = false,
+  action: CounterAction | null = null
+): boolean {
+  const quantityAction =
+    action === 'selectPackUnit' ||
+    action === 'selectStripUnit' ||
+    action === 'selectLooseUnit' ||
+    action === 'addToCart';
   const active = typeof document !== 'undefined' ? document.activeElement : null;
-  if (dialogOpen || fieldKeepsKey(active, event.key) || fieldKeepsKey(event.target, event.key)) {
+  if (
+    dialogOpen ||
+    fieldKeepsKey(active, event.key, quantityAction) ||
+    fieldKeepsKey(event.target, event.key, quantityAction)
+  ) {
     return false;
   }
   return event.key.length > 1;

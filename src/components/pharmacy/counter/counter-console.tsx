@@ -491,6 +491,7 @@ function ScopedPharmacyCounterConsole({
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantityText, setQuantityText] = useState('1');
+  const [focusSearchAfterAdd, setFocusSearchAfterAdd] = useState(false);
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
@@ -1698,7 +1699,8 @@ function ScopedPharmacyCounterConsole({
           message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
         setQuery('');
-        focusSearch();
+        // Focus after the pending state clears; disabled inputs cannot receive focus.
+        setFocusSearchAfterAdd(true);
       } catch (error) {
         const message = messageFrom(error);
         setNotice({
@@ -1724,7 +1726,6 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       ensureSale,
-      focusSearch,
       lotOverride,
       openChecks,
       openSale,
@@ -2641,14 +2642,15 @@ function ScopedPharmacyCounterConsole({
         (tenderRef.current?.contains(event.target) || event.target === autoPrintRef.current)
       )
         return;
+      const action = matchCounterAction(keymap.bindings, event);
       if (
         !shouldHandleCounterKey(
           event,
-          document.querySelector('[role="dialog"]:not([hidden])') !== null
+          document.querySelector('[role="dialog"]:not([hidden])') !== null,
+          action
         )
       )
         return;
-      const action = matchCounterAction(keymap.bindings, event);
       if (!action) return;
       // Claim the chord before the browser or a focused control can act on it,
       // so F9 reaches the tender panel rather than a browser default.
@@ -2665,8 +2667,11 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && document.activeElement === document.body) focusSearch();
-  }, [busy, focusSearch]);
+    if (!busy && (focusSearchAfterAdd || document.activeElement === document.body)) {
+      focusSearch();
+      setFocusSearchAfterAdd(false);
+    }
+  }, [busy, focusSearch, focusSearchAfterAdd]);
 
   const chordFor = useCallback(
     (kind: SaleUnitKind) =>
