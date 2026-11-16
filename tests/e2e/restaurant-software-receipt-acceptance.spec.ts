@@ -635,7 +635,14 @@ test('a receipt dispatch persists the settled snapshot and dedupes on the docume
     request,
     pos,
     '/api/restaurant/checkout/tender',
-    { billId, tender: { type: 'CARD', amount: summary.derivedOrderTotal } },
+    {
+      billId,
+      tender: {
+        type: 'CARD',
+        amount: summary.derivedOrderTotal,
+        manualConfirmation: { approvalCode: 'E2E739', reference: '4242' },
+      },
+    },
     e2eIdempotencyKey('software-receipt-tender', orderNumber)
   );
 
@@ -757,7 +764,14 @@ test('a receipt dispatch persists the settled snapshot and dedupes on the docume
     request,
     asciiPos,
     '/api/restaurant/checkout/tender',
-    { billId: asciiBillId, tender: { type: 'CARD', amount: asciiSummary.derivedOrderTotal } },
+    {
+      billId: asciiBillId,
+      tender: {
+        type: 'CARD',
+        amount: asciiSummary.derivedOrderTotal,
+        manualConfirmation: { approvalCode: 'E2E739', reference: '4242' },
+      },
+    },
     e2eIdempotencyKey('software-receipt-ascii-tender', asciiOrderNumber)
   );
 

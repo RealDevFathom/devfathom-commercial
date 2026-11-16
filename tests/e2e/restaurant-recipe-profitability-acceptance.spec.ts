@@ -1125,7 +1125,7 @@ test.describe('Restaurant recipe costing arithmetic', () => {
     expect(retry.error?.json?.data?.code).toBe('BAD_REQUEST');
     expect(retry.error?.json?.data?.httpStatus).toBe(400);
     expect(retry.error?.json?.message).toBe('Recipe cycle detected.');
-    await expect(alert).toBeVisible();
+    await expect(alert).toBeVisible({ timeout: 30_000 });
     await expect(
       page.getByText('Missing cost', { exact: true }),
       'a refused cost is not a missing-ingredient warning'

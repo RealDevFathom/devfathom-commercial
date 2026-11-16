@@ -195,6 +195,9 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
         await expect(checkout.getByLabel('Amount', { exact: true })).toHaveValue('13.90');
       }
       await checkout.getByLabel('Tender type').selectOption('CARD');
+      // Synthetic slip facts exercise the current manual-confirmation guard.
+      await checkout.getByLabel('Approval code').fill('E2E739');
+      await checkout.getByLabel('Last 4 digits or reference').fill('4242');
       const payment = responseFor('checkout/tender');
       await checkout.getByRole('button', { name: 'Apply tender', exact: true }).click();
       const paidResponse = await payment;

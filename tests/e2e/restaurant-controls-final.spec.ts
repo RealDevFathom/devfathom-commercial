@@ -415,6 +415,10 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   await checkout.getByLabel('Tender type').selectOption(tender);
   await checkout.getByLabel('Amount').fill(DAY_CLOSE_BRANCH.saleTotal);
   if (tender === 'CASH') await checkout.getByLabel('Cash received').fill('20.00');
+  if (tender === 'CARD') {
+    await checkout.getByLabel('Approval code').fill('E2E739');
+    await checkout.getByLabel('Last 4 digits or reference').fill('4242');
+  }
   const tenderResponse = pos.waitForResponse(
     (response) =>
       response.url().endsWith('/api/restaurant/checkout/tender') &&
