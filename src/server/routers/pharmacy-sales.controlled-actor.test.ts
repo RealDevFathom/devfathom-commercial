@@ -72,6 +72,9 @@ function callerFor(
   const register = vi.fn();
   const lock = vi.fn();
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
     pharmacyBranch: {

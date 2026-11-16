@@ -782,6 +782,10 @@ function ScopedPharmacyCounterConsole({
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
   const deviceUnavailable = useHydrated() && deviceId === null;
+  const tradingDayQuery = trpc.pharmacySales.tradingDayStatus.useQuery(
+    { branchId },
+    { enabled: branchAuthorized, staleTime: 30_000, refetchInterval: 30_000 }
+  );
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
@@ -797,11 +801,17 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-631: the business day is closed, so the counter says so before a bill is
+  // built rather than only when payment is refused. The server still refuses it.
+  const dayClosed =
+    branchAuthorized && !tradingDayQuery.isError && tradingDayQuery.data?.dayClosed === true;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
+  const dayClosedRef = useRef(dayClosed);
   useEffect(() => {
     drawerRequiredRef.current = drawerRequired;
-  }, [drawerRequired]);
+    dayClosedRef.current = dayClosed;
+  }, [drawerRequired, dayClosed]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1450,10 +1460,13 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const openSale = useCallback(async () => {
+    if (dayClosedRef.current) throw new Error('DAY_CLOSED');
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
       .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
       .catch((error: unknown) => {
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         // The drawer was closed elsewhere: re-read it so the opening step returns.
         if (error instanceof Error && error.message === 'DRAWER_NOT_OPEN')
           void utils.pharmacySales.drawerStatus.invalidate();
@@ -1535,7 +1548,8 @@ function ScopedPharmacyCounterConsole({
         }
       }
       try {
-        // No line is added while the drawer is closed, to a new bill or an open one.
+        // No line is added while the day or the drawer is closed, to a new bill or an open one.
+        if (dayClosedRef.current) throw new Error('DAY_CLOSED');
         if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
         let activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
         const freshBill = replaceClosedBill || activeSaleId !== saleId;
@@ -1672,6 +1686,8 @@ function ScopedPharmacyCounterConsole({
         setQuery('');
         focusSearch();
       } catch (error) {
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         const message = messageFrom(error);
         setNotice({
           tone: counterErrorTone(error),
@@ -2110,6 +2126,9 @@ function ScopedPharmacyCounterConsole({
       } catch (error) {
         discardReceiptIntent();
         if (!dispatched) setStorageError(true);
+        // DEV-631: the day was closed under this bill: re-read it so the counter says so.
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         outcome =
           !dispatched || tenderRejected(error)
             ? {
@@ -2149,6 +2168,7 @@ function ScopedPharmacyCounterConsole({
       saleId,
       tender,
       todayBusinessDate,
+      utils,
     ]
   );
 
@@ -2841,6 +2861,9 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+              {dayClosed ? (
+                <StatusPill status="day-closed" tone="warning" label="Day closed" />
+              ) : null}
               {drawerOpen ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : drawerRequired && drawerQuery.isSuccess ? (
@@ -3013,7 +3036,31 @@ function ScopedPharmacyCounterConsole({
                 />
               ) : null}
 
-              {drawerRequired ? (
+              {dayClosed ? (
+                <div
+                  role="status"
+                  aria-label="Business day closed"
+                  className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+                >
+                  <p className="font-medium text-text-strong">
+                    Today&apos;s business day is closed.
+                  </p>
+                  <p className="text-text-body">
+                    New bills, payments and drawer changes are blocked. The owner or a manager can
+                    reopen today for trading on Day close, with a reason; selling resumes here once
+                    they do.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={tradingDayQuery.isFetching}
+                    onClick={() => void tradingDayQuery.refetch()}
+                  >
+                    {tradingDayQuery.isFetching ? 'Checking…' : 'Check again'}
+                  </Button>
+                </div>
+              ) : drawerRequired ? (
                 <CounterOpenDrawerStep
                   disabled={busy || !drawerStatusKnown || !canSettlePayments}
                   statusError={drawerQuery.isError}
@@ -3173,7 +3220,7 @@ function ScopedPharmacyCounterConsole({
                 </div>
               )}
             </div>
-            {activeRow && !drawerRequired ? (
+            {activeRow && !drawerRequired && !dayClosed ? (
               <section
                 aria-label="Next line"
                 className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"

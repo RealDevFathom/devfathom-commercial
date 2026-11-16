@@ -1,5 +1,5 @@
 import { renderToString } from 'react-dom/server';
-import { fireEvent, render, screen, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => ({
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
+  reopenMutate: vi.fn(),
+  /** Whether the server says this actor may reopen a day (owner or manager). */
+  reopenAuthorized: true,
+  /** Whether the recorded close superseded an owner's reopen for trading. */
+  closeFollowsReopen: false,
   previewInput: vi.fn(),
   printZReport: vi.fn(),
   /** The zone the workspace has stored. */
@@ -111,6 +116,7 @@ vi.mock('@/lib/trpc', () => ({
               branchName: 'Main',
               timezone: mocks.zone,
               close: mocks.close,
+              closeFollowsReopen: mocks.closeFollowsReopen,
               totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
               tenderTotals: [
                 { type: 'CASH', amountMinor: 13000, refundMinor: 500, netMinor: 12500 },
@@ -139,6 +145,12 @@ vi.mock('@/lib/trpc', () => ({
           data: mocks.mutationClose,
           error: mocks.mutationError,
         }),
+      },
+      dayReopenAccess: {
+        useQuery: () => ({ data: { authorized: mocks.reopenAuthorized }, isSuccess: true }),
+      },
+      reopenDay: {
+        useMutation: () => ({ mutate: mocks.reopenMutate, reset: vi.fn(), isPending: false }),
       },
       closeAnomalyCheck: {
         useQuery: () => ({
@@ -192,6 +204,7 @@ beforeEach(() => {
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
+  mocks.closeFollowsReopen = false;
   mocks.checkFindings = [];
   mocks.checkError = null;
   mocks.extraDrawers = [];
@@ -204,6 +217,8 @@ beforeEach(() => {
   mocks.accessError = null;
   mocks.accessOptions.mockReset();
   mocks.mutate.mockReset();
+  mocks.reopenMutate.mockReset();
+  mocks.reopenAuthorized = true;
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
 });
@@ -816,16 +831,18 @@ describe('day-close console', () => {
       })
     );
   });
-  it('warns that locking the day is permanent and cannot be reopened, before and after the close', () => {
+  it('warns that locking stops trading and only the owner or a manager can reopen today, before and after the close', () => {
     const view = render(<PharmacyDayCloseConsole />);
-    const warning = screen.getByRole('note', { name: 'Locking is permanent' });
-    expect(warning).toHaveTextContent('Locking this day cannot be undone.');
-    expect(warning).toHaveTextContent(/nobody, including the owner, can reopen/);
+    const warning = screen.getByRole('note', { name: 'Locking stops trading' });
+    expect(warning).toHaveTextContent('Locking this day stops trading on it.');
+    expect(warning).toHaveTextContent(
+      /Only the owner or a manager can reopen today.s business day for trading, with a reason and their PIN; earlier days stay locked/
+    );
     // A superseding close report is a correction, not a reopen: the day stays locked.
     expect(warning).toHaveTextContent(
-      /re-record the close report with a reason, but that never reopens the day/
+      /re-record the close report with a reason, but that alone never reopens the day/
     );
-    expect(screen.getByLabelText(/locking this day is permanent/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/locking this day stops trading on it/)).toBeInTheDocument();
     mocks.close = {
       id: 'c1',
       sequence: 1,
@@ -837,10 +854,147 @@ describe('day-close console', () => {
     };
     view.rerender(<PharmacyDayCloseConsole />);
     expect(
-      screen.getByText(/The lock is permanent: nobody, including the owner, can reopen/)
+      screen.getByText(/The owner or a manager can reopen today for trading with a reason/)
     ).toHaveTextContent(
-      /re-record this close report with a reason, but that never reopens the day/
+      /re-record this close report with a reason, but that alone never reopens the day/
     );
+  });
+  it('lets the owner reopen today for trading with a reason and their PIN (DEV-631)', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    const form = screen.getByRole('form', { name: 'Reopen today for trading' });
+    const submit = within(form).getByRole('button', { name: 'Reopen day for trading' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(form).getByLabelText('Reason for reopening'), {
+      target: { value: 'Closed early by mistake' },
+    });
+    // A reason alone is not enough: the owner re-enters their own PIN for this action.
+    expect(submit).toBeDisabled();
+    const pin = within(form).getByLabelText('Your staff PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    fireEvent.change(pin, { target: { value: '12' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(pin, { target: { value: '4321' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    const today = workspaceToday(WORKSPACE_ZONE);
+    expect(mocks.reopenMutate).toHaveBeenCalledWith(
+      {
+        branchId: 'b',
+        businessDate: new Date(`${today}T00:00:00.000Z`),
+        closeId: 'c1',
+        reason: 'Closed early by mistake',
+        ownerPin: '4321',
+      },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onSettled: expect.any(Function),
+      })
+    );
+    const callbacks = mocks.reopenMutate.mock.calls[0]![1] as { onSettled: () => void };
+    act(() => callbacks.onSettled());
+    expect(pin).toHaveValue('');
+    expect(within(form).getByLabelText('Reason for reopening')).toHaveValue('Closed early by mistake');
+  });
+  it('offers the reopen to a manager who closes the day (DEV-631)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.reopenAuthorized = true;
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    const form = screen.getByRole('form', { name: 'Reopen today for trading' });
+    expect(within(form).getByLabelText('Your staff PIN')).toBeInTheDocument();
+  });
+  it('offers no reopen to a closer who is neither the owner nor a manager (DEV-631)', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.accessCapabilities = ['pharmacy:close'];
+    mocks.reopenAuthorized = false;
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/The owner or a manager can reopen today for trading/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Reopen today for trading' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reopen day for trading' })).toBeNull();
+  });
+  it('offers no reopen for a past business day', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: null,
+    };
+    render(<PharmacyDayCloseConsole initial={{ date: '2026-09-20' }} />);
+    expect(
+      screen.getByText(/Only today.s business day can be reopened for trading/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reopen day for trading' })).toBeNull();
+  });
+  it('offers the next close once the day is reopened for trading', () => {
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      reopen: { reason: 'Closed early by mistake', actorId: 'owner', createdAt: new Date() },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Reopened for trading')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Reopened for trading at .*: Closed early by mistake/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Day closed\./)).not.toBeInTheDocument();
+  });
+  it('labels the reason of a close that followed a reopen as the variance note', () => {
+    mocks.close = {
+      id: 'c2',
+      sequence: 2,
+      supersedesCloseId: 'c1',
+      reason: 'Short by one',
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12400,
+      isFinal: true,
+      reopen: null,
+    };
+    mocks.closeFollowsReopen = true;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Variance note: Short by one')).toBeInTheDocument();
+    expect(screen.queryByText(/^Reopen reason:/)).not.toBeInTheDocument();
   });
   // DEV-821: the close names cash moved by anyone but the cashier running the till.
   it("lists cash moved by someone other than the till's cashier, with who ran it", () => {
@@ -959,7 +1113,10 @@ describe('day-close console', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
     // Read-only: the panel offers no action beyond the existing close controls.
-    expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+    const panel = screen.getByText('Cash-close check').closest('[data-slot="section-card"]');
+    expect(
+      within(panel as HTMLElement).queryByRole('button', { name: /acknowledge|resolve|reopen/i })
+    ).toBeNull();
   });
   it('says a refused cash-close check is not permitted instead of offering a retry', () => {
     mocks.close = {
