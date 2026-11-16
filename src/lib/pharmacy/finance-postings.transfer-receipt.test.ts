@@ -49,6 +49,8 @@ function transferDb(
     lines: Array<Record<string, unknown>>;
   }> = [];
   const db = {
+    pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+    $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyInterbranchTransferLine: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'tline_1',

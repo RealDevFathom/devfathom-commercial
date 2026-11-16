@@ -2,11 +2,11 @@
  * FIN-01 / §8A invariant 15 — the shared double-entry journal primitive.
  *
  * This is the ONE write path into `finance_journal_entries` /
- * `finance_journal_lines`, and it is deliberately vertical-agnostic: it knows
- * about debits, credits, source references and reversals, and nothing about
- * pharmacies, restaurants or agencies. A vertical composes it through an
- * adapter (see `src/lib/pharmacy/finance-postings.ts`) rather than growing its
- * own ledger, so "balanced" means the same thing everywhere.
+ * `finance_journal_lines`: it enforces debits, credits, source references,
+ * reversals and branch accounting-period locks. A vertical supplies the
+ * operational meaning through an adapter (see
+ * `src/lib/pharmacy/finance-postings.ts`) rather than growing its own ledger,
+ * so "balanced" and "closed" mean the same thing on every posting path.
  *
  * WHAT THIS MODULE DOES NOT DECIDE. Balance, append-only, at-most-one-reversal
  * and the shape of a reversal are all enforced by the migration — a deferred
@@ -21,10 +21,40 @@
  */
 import type { Currency, FinanceAccountCode, FinanceSourceKind } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { lockPharmacyLedgerScope } from './period-lock';
+
+/** Lock every affected branch before checking the actual posting date. Replays
+ * return before this guard because they do not mutate the closed ledger. The
+ * database repeats the guard for writes that bypass this shared primitive. */
+async function assertPostingPeriodOpen(
+  db: ScopedDb,
+  scope: JournalScope,
+  at: Date,
+  branchIds: readonly (string | null | undefined)[]
+) {
+  const branches = [...new Set(branchIds.filter((id): id is string => Boolean(id)))].sort();
+  for (const branchId of branches) {
+    await lockPharmacyLedgerScope(db, { organizationId: scope.organizationId, branchId });
+  }
+  for (const branchId of branches) {
+    const closed = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId,
+        status: 'CLOSED',
+        startsAt: { lte: at },
+        endsAt: { gt: at },
+      },
+      select: { id: true },
+    });
+    if (closed) throw new FinancePostingError('PERIOD_CLOSED');
+  }
+}
 
 export type JournalSide = 'DEBIT' | 'CREDIT';
 
 export type FinancePostingErrorReason =
+  | 'PERIOD_CLOSED'
   | 'EMPTY_ENTRY'
   | 'UNBALANCED'
   | 'INVALID_AMOUNT'
@@ -174,6 +204,11 @@ export async function postJournalEntry(
     return existing;
   }
 
+  await assertPostingPeriodOpen(db, scope, input.occurredAt, [
+    input.branchId,
+    ...input.lines.map((line) => line.branchId),
+  ]);
+
   const entry = await db.financeJournalEntry.create({
     data: {
       organizationId: scope.organizationId,
@@ -251,6 +286,11 @@ export async function reverseJournalEntry(
     include: { lines: true },
   });
   if (existing) return existing;
+
+  await assertPostingPeriodOpen(db, scope, input.at, [
+    original.branchId,
+    ...original.lines.map((line) => line.branchId),
+  ]);
 
   const reversal = await db.financeJournalEntry.create({
     data: {

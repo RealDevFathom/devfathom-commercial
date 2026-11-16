@@ -1,4 +1,5 @@
 import { initTRPC, TRPCError } from '@trpc/server';
+import { FinancePostingError } from '@/lib/finance/journal';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
@@ -165,6 +166,13 @@ export const router = t.router;
 const mapDatabaseErrors = t.middleware(async ({ next }) => {
   const result = await next();
   if (result.ok) return result;
+  if (
+    result.error.code === 'INTERNAL_SERVER_ERROR' &&
+    result.error.cause instanceof FinancePostingError &&
+    result.error.cause.reason === 'PERIOD_CLOSED'
+  ) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
+  }
   const mapped = mapPrismaError(result.error);
   if (mapped) throw mapped;
   return result;

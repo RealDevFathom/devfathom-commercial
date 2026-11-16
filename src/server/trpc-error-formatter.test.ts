@@ -40,6 +40,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { publicProcedure, router } from './trpc';
+import { FinancePostingError } from '@/lib/finance/journal';
 
 const internalSchema = z.object({ internalOnlyField: z.string() });
 /** What an unmapped database error says about the schema behind it. */
@@ -60,6 +61,7 @@ function prismaKnown(code: string) {
 }
 
 const testRouter = router({
+  periodClosed: publicProcedure.query(() => { throw new FinancePostingError('PERIOD_CLOSED'); }),
   // Input validation: tRPC rejects before the resolver runs.
   validated: publicProcedure
     .input(z.object({ key: z.string().regex(/^[a-z]+$/, 'Use lowercase letters only.') }))
@@ -138,6 +140,19 @@ async function call(path: string, input?: unknown) {
 }
 
 describe('trpc errorFormatter', () => {
+  it('returns a safe accounting-period refusal for every posting procedure', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const error = await call('periodClosed');
+      expect(error.message).toBe('PERIOD_CLOSED');
+      expect(error.data.code).toBe('BAD_REQUEST');
+      expect(error.data.httpStatus).toBe(400);
+      expect(error.data.stack).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('reformats input-validation failures', async () => {
     const error = await call('validated', { key: 'NOPE' });
 
