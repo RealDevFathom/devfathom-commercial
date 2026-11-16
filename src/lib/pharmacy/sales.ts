@@ -1021,6 +1021,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
+    provider: tender.provider,
     amountMinor: tender.amountMinor,
     refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({

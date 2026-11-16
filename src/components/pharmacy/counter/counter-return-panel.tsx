@@ -301,7 +301,10 @@ export function ReturnForm({
       : /^\d+(\.\d{1,2})?$/.test(returnAmount.trim())
         ? Math.round(Number(returnAmount.trim()) * 100)
         : 0;
-  const returnManualRequired = returnTender?.type === 'CARD' || returnTender?.type === 'WALLET';
+  // Prepaid tenders refund to the customer's prepaid balance on the server, not as cash.
+  const returnPrepaid = returnTender?.provider === 'CUSTOMER_PREPAID';
+  const returnManualRequired =
+    !returnPrepaid && (returnTender?.type === 'CARD' || returnTender?.type === 'WALLET');
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
   const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
@@ -985,6 +988,11 @@ export function ReturnForm({
                       <Button type="button" variant="outline" onClick={() => void quote.refetch()}>
                         Reprice refund
                       </Button>
+                    )}
+                    {returnPrepaid && (
+                      <p className="text-sm text-text-muted">
+                        Refunds to the customer&apos;s prepaid balance. No cash is handed over.
+                      </p>
                     )}
                     {returnManualRequired && (
                       <label className="flex min-h-11 items-start gap-2">
