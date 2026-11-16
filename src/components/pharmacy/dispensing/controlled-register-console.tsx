@@ -13,7 +13,7 @@ import { AccessDeniedState, WorkspaceState, isAccessDenied } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head =
-  'px-2 py-1.5 text-left font-mono text-[0.65rem] tracking-wide text-text-muted uppercase';
+  'px-2 py-1.5 text-left font-mono text-xs tracking-wide text-text-muted uppercase';
 
 export function ControlledRegisterConsole() {
   const page = useRef<HTMLDivElement>(null);

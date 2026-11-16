@@ -42,7 +42,7 @@ export function CounterVoidDialog({
 }: CounterVoidDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 sm:max-w-md">
         {/* Mounted only while open, so every void starts with no reason chosen. */}
         <CounterVoidForm busy={busy} onCancel={() => onOpenChange(false)} onConfirm={onConfirm} />
       </DialogContent>

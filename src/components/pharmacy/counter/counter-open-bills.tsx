@@ -76,7 +76,7 @@ export function CounterOpenBills({
         Open bills{count ? ` (${count})` : ''}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
+        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-xl">
           <DialogTitle>Open and held bills</DialogTitle>
           <DialogDescription>
             Unpaid bills keep their stock off the shelf until they are paid or voided. Resume a bill
