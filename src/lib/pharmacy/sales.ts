@@ -346,7 +346,10 @@ export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: Ad
     previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
     previous.voucherId !== (input.voucherId ?? null) ||
     (input.discountKind !== undefined && previous.discountKind !== input.discountKind) ||
-    (input.discountMinor !== undefined && previous.discountMinor !== input.discountMinor)
+    (input.discountMinor !== undefined &&
+      previous.discountMinor !== input.discountMinor &&
+      // An explicit zero, like an omitted discount, opts into automatic promotions.
+      !(previous.promotionId && input.discountMinor === 0 && input.discountKind === undefined))
   )
     throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
   const { allocations, ...line } = previous;

@@ -359,43 +359,47 @@ describe('addSaleLine counter promotion hook (#727)', () => {
 });
 
 describe('[DEF-10] add-line retry (DEV-874)', () => {
-  it('returns the original line without allocating, repricing or auditing twice', async () => {
-    const db = counterDb();
-    const first = await addSaleLine(db as never, scope, lineInput, {
-      applyCounterPromotions: true,
-    });
-    db.pharmacySaleLine.findFirst.mockResolvedValue({
-      ...first.line,
-      allocations: [
-        {
-          inventoryLotId: 'lot-a',
-          stockLocationId: 'location-a',
-          canonicalUnits: 10,
-          stockMovementId: 'movement-a',
+  it.each([undefined, 0])(
+    'returns the original promoted line with requested discount %s without dispensing twice',
+    async (discountMinor) => {
+      const db = counterDb();
+      const request = { ...lineInput, discountMinor };
+      const first = await addSaleLine(db as never, scope, request, {
+        applyCounterPromotions: true,
+      });
+      db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...first.line,
+        allocations: [
+          {
+            inventoryLotId: 'lot-a',
+            stockLocationId: 'location-a',
+            canonicalUnits: 10,
+            stockMovementId: 'movement-a',
+          },
+        ],
+      });
+      db.pharmacySaleLine.create.mockRejectedValue(new Error('P2002 duplicate key'));
+      const allocationCalls = vi.mocked(allocateForSale).mock.calls.length;
+
+      const replay = await addSaleLine(db as never, scope, request, {
+        applyCounterPromotions: true,
+      });
+
+      expect(replay).toMatchObject({
+        line: first.line,
+        replayed: true,
+        allocation: {
+          movementIds: ['movement-a'],
+          allocations: [{ inventoryLotId: 'lot-a', stockLocationId: 'location-a', units: 10 }],
         },
-      ],
-    });
-    db.pharmacySaleLine.create.mockRejectedValue(new Error('P2002 duplicate key'));
-    const allocationCalls = vi.mocked(allocateForSale).mock.calls.length;
-
-    const replay = await addSaleLine(db as never, scope, lineInput, {
-      applyCounterPromotions: true,
-    });
-
-    expect(replay).toMatchObject({
-      line: first.line,
-      replayed: true,
-      allocation: {
-        movementIds: ['movement-a'],
-        allocations: [{ inventoryLotId: 'lot-a', stockLocationId: 'location-a', units: 10 }],
-      },
-    });
-    expect(db.pharmacySaleLine.create).toHaveBeenCalledOnce();
-    expect(vi.mocked(allocateForSale).mock.calls.length).toBe(allocationCalls);
-    expect(db.pharmacyPromotion.findMany).toHaveBeenCalledOnce();
-    expect(db.pharmacySaleEvent.create).toHaveBeenCalledOnce();
-    expect(db.pharmacySaleLineAllocation.create).toHaveBeenCalledOnce();
-  });
+      });
+      expect(db.pharmacySaleLine.create).toHaveBeenCalledOnce();
+      expect(vi.mocked(allocateForSale).mock.calls.length).toBe(allocationCalls);
+      expect(db.pharmacyPromotion.findMany).toHaveBeenCalledOnce();
+      expect(db.pharmacySaleEvent.create).toHaveBeenCalledOnce();
+      expect(db.pharmacySaleLineAllocation.create).toHaveBeenCalledOnce();
+    }
+  );
 
   it('refuses a reused key for a different quantity before stock changes', async () => {
     const db = counterDb();
