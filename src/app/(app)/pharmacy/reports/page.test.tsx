@@ -265,6 +265,13 @@ describe('pharmacy report catalog filters', () => {
   ])(
     'drills expiry value 180 days into the expiry board in the report branch scope (%o)',
     async (searchParams, href) => {
+      // This case exercises all-branch drill-through; a sole branch now auto-selects.
+      reportBranches.mockResolvedValueOnce({
+        branches: [
+          { id: 'b1', name: 'Main' },
+          { id: 'b2', name: 'Second' },
+        ],
+      });
       extraCatalog.reports = [
         {
           key: 'stock-expiry',
