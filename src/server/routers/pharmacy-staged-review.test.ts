@@ -10,6 +10,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 import { pharmacyStagedReviewRouter } from './pharmacy-staged-review';
 import type { TRPCContext } from '../trpc';
@@ -27,6 +28,13 @@ function makeDb() {
     exceptions: [],
   };
   return {
+    $transaction: vi.fn(async (run) => run(db)),
+    pharmacyMigrationSource: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi
+        .fn()
+        .mockResolvedValue({ id: 'source_a', kind: 'EXCEL_CSV', contentHash: 'a'.repeat(64) }),
+    },
     user: {
       findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
     },
@@ -35,6 +43,8 @@ function makeDb() {
       findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Branch' }]),
     },
     pharmacyMigrationBatch: {
+      create: vi.fn().mockResolvedValue({ id: 'batch_new' }),
+      update: vi.fn().mockResolvedValue({}),
       findFirst: vi.fn().mockResolvedValue({
         id: 'batch_a',
         label: 'Example',
@@ -46,11 +56,15 @@ function makeDb() {
       findMany: vi.fn().mockResolvedValue([]),
     },
     pharmacyMigrationRow: {
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
       findMany: vi.fn().mockResolvedValue([row]),
       findFirst: vi.fn().mockResolvedValue(row),
       count: vi.fn().mockResolvedValue(26),
     },
-    pharmacyMigrationException: { groupBy: vi.fn().mockResolvedValue([]) },
+    pharmacyMigrationException: {
+      createMany: vi.fn().mockResolvedValue({}),
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
   };
 }
 let db = makeDb();
@@ -196,5 +210,82 @@ describe('staged review authorization and reads', () => {
     const [one, two] = await Promise.all([caller().stagedRows(scope), caller().stagedRows(scope)]);
     expect(one).toEqual(two);
     expect(one.rows[0].sellable).toBe(false);
+  });
+});
+
+const staging = {
+  branchId: 'branch_a',
+  fileName: 'legacy.csv',
+  content: Buffer.from('Product,Pack,Qty\nExample,30,29').toString('base64'),
+  mapping: { product: 0, pack: 1, quantity: 2 },
+  quantityUnit: 'PACKS' as const,
+};
+describe('production batch staging', () => {
+  it.each(['PACKS', 'UNITS'] as const)(
+    'persists the explicit %s choice on the batch and rows',
+    async (quantityUnit) => {
+      const saved = await caller().stageBatch({ ...staging, quantityUnit });
+      expect(saved.batchId).toBe('batch_new');
+      expect(db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ quantityUnit }),
+      });
+      expect(db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            quantityCanonical: BigInt(quantityUnit === 'PACKS' ? 870 : 29),
+            rawPayload: expect.objectContaining({ __quantity_unit: quantityUnit, Qty: '29' }),
+          }),
+        ],
+      });
+      expect(db.$transaction).toHaveBeenCalledOnce();
+      expect(db.pharmacyMigrationBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'batch_new' } })
+      );
+    }
+  );
+  it.each([undefined, '', 'boxes'])(
+    'rejects missing/invalid quantity choice %s before any writes',
+    async (quantityUnit) => {
+      await expect(
+        caller().stageBatch({ ...staging, quantityUnit } as never)
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
+      expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+    }
+  );
+  it('never invents a pack factor', async () => {
+    await caller().stageBatch({
+      ...staging,
+      content: Buffer.from('Product,Pack,Qty\nExample,,29').toString('base64'),
+    });
+    expect(db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ quantityCanonical: null })],
+    });
+    expect(db.pharmacyMigrationException.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ bucket: 'UNIT_AMBIGUOUS', severity: 'BLOCKING' }),
+      ]),
+    });
+  });
+  it.each([{ role: 'EMPLOYEE' }, { enabled: false }, { tenant: 'org_b' }, { status: 'INACTIVE' }])(
+    'denies staging for %j',
+    async (options) => {
+      await expect(caller(options).stageBatch(staging)).rejects.toBeDefined();
+      expect(db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
+    }
+  );
+  it('rejects a foreign branch before any writes', async () => {
+    db.pharmacyBranch.findFirst.mockResolvedValue(null);
+    await expect(caller().stageBatch(staging)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+  });
+  it.each([
+    { product: 0, pack: 1, quantity: 1 },
+    { product: 0, quantity: 39 },
+  ])('rejects invalid column mapping %j', async (mapping) => {
+    await expect(caller().stageBatch({ ...staging, mapping })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
   });
 });

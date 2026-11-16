@@ -140,10 +140,33 @@ describe('staged medicine evidence', () => {
   });
   it('shows base units without inventing packs', () => {
     const view = stagedReference(
-      { ...fixture(), quantityCanonical: BigInt(29), rawPayload: { QTY: '29' } },
+      {
+        ...fixture(),
+        quantityCanonical: BigInt(29),
+        rawPayload: { QTY: '29', __quantity_unit: 'UNITS' },
+      },
       source,
       'batch_1'
     );
     expect(view.quantityReview).toMatchObject({ unit: 'UNITS', packs: null, units: '29' });
   });
 });
+
+it.each([undefined, 'unknown'])(
+  'preserves legacy raw counts without claiming a recorded choice (%s)',
+  (unit) => {
+    const row: ReviewRow = {
+      ...fixture(),
+      packFactor: BigInt(30),
+      quantityCanonical: BigInt(29),
+      rawPayload: { QTY: '29', ...(unit ? { __quantity_unit: unit } : {}) },
+    };
+    const before = structuredClone(row);
+    const view = stagedReference(row, source, 'batch_legacy');
+    expect(view.quantityReview.unit).toBeNull();
+    expect(view.quantityReview.choiceLabel).toBe('not recorded (staged as raw count)');
+    expect(view.quantityReview.label).toBe('29 (staged as raw count)');
+    expect(view.canonicalQuantity).toBe('29');
+    expect(row).toEqual(before);
+  }
+);

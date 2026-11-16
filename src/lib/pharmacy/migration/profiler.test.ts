@@ -47,7 +47,7 @@ function bucketCounts(result: ProfileResult): Partial<Record<ExceptionBucket, nu
 }
 
 function profileFixture(name: string, profiler = excelCsvProfiler): ProfileResult {
-  return profileTable(profiler, parseDelimitedText(fixture(name)));
+  return profileTable(profiler, parseDelimitedText(fixture(name)), { quantityUnit: 'UNITS' });
 }
 
 describe('Excel/CSV profiling — the three PRD fixtures', () => {
@@ -324,8 +324,8 @@ describe('Delimited text parsing', () => {
 
 describe('Quantity column meaning is chosen in the column mapping', () => {
   const table = () => parseDelimitedText('Product,Pack,Qty\nExample Tablet,30,29\nNo Pack,,5\n');
-  it('defaults to base units', () => {
-    const { rows } = profileTable(excelCsvProfiler, table());
+  it('keeps base units when explicitly chosen', () => {
+    const { rows } = profileTable(excelCsvProfiler, table(), { quantityUnit: 'UNITS' });
     expect(rows[0]!.quantityCanonical).toBe(BigInt(29));
     expect(rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
   });
@@ -338,5 +338,32 @@ describe('Quantity column meaning is chosen in the column mapping', () => {
     // No pack factor: never assume 1; flagged instead.
     expect(rows[1]!.quantityCanonical).toBeNull();
     expect(exceptions.some((e) => e.rowIndex === 1 && e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
+  });
+});
+
+describe('unrecorded quantity mapping', () => {
+  it('does not stage a raw count as units without a choice', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty\nExample,30,29')
+    );
+    expect(result.quantityUnit).toBeNull();
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBeUndefined();
+    expect(result.exceptions).toContainEqual(
+      expect.objectContaining({
+        bucket: 'UNIT_AMBIGUOUS',
+        severity: 'BLOCKING',
+        detail: expect.stringContaining('Choose whether quantity counts'),
+      })
+    );
+  });
+  it('does not accept quantity metadata supplied as a source column', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty,__quantity_unit\nExample,30,29,UNITS')
+    );
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBeUndefined();
   });
 });

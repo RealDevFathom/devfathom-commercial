@@ -12656,6 +12656,8 @@ model PharmacyMigrationBatch {
   rowCount        Int                          @default(0)
   exceptionCount  Int                          @default(0)
   profilerVersion String
+  /// Null means the legacy batch did not record a quantity mapping choice.
+  quantityUnit    String?
   profiledAt      DateTime?
   createdAt       DateTime                     @default(now())
   updatedAt       DateTime                     @updatedAt

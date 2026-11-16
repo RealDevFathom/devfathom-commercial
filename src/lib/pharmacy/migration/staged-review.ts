@@ -55,11 +55,18 @@ export function stagedReference(
   ) as Record<(typeof SOURCE_REFERENCE_COLUMNS)[number], string | null>;
   const sourceHash = cell('__source_sha256');
   const sourceRow = cell('__source_row');
-  const quantityUnit: 'PACKS' | 'UNITS' = cell('__quantity_unit') === 'PACKS' ? 'PACKS' : 'UNITS';
+  const recordedUnit = cell('__quantity_unit');
+  const quantityUnit = recordedUnit === 'PACKS' || recordedUnit === 'UNITS' ? recordedUnit : null;
   const canonical = row.quantityCanonical;
   const packFactor = row.packFactor;
   const quantityReview = {
     unit: quantityUnit,
+    choiceLabel:
+      quantityUnit === 'PACKS'
+        ? 'Packs'
+        : quantityUnit === 'UNITS'
+          ? 'Units'
+          : 'not recorded (staged as raw count)',
     // Packs are only claimed when the mapping says so and the factor is known.
     packs:
       quantityUnit === 'PACKS' && canonical !== null && packFactor
@@ -70,9 +77,11 @@ export function stagedReference(
     label:
       canonical === null
         ? null
-        : quantityUnit === 'PACKS' && packFactor
-          ? `${canonical / packFactor} packs × ${packFactor} = ${canonical} units`
-          : `${canonical} units`,
+        : quantityUnit === null
+          ? `${canonical} (staged as raw count)`
+          : quantityUnit === 'PACKS' && packFactor
+            ? `${canonical / packFactor} packs × ${packFactor} = ${canonical} units`
+            : `${canonical} units`,
   };
   const flags = cell('__review_flags')?.split(';').filter(Boolean) ?? [];
   const lineage =
