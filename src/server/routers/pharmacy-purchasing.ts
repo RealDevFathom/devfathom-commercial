@@ -1,4 +1,5 @@
 import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
+import { Prisma } from '@/generated/prisma/client';
 import {
   SOLO_OWNER_POLICY,
   APPROVAL_BLOCKED,
@@ -32,7 +33,7 @@ import {
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
-import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { blockReasonFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
 import {
   allocateCentralReceipt,
@@ -121,6 +122,15 @@ import {
 } from '@/lib/pharmacy/reorder-drafts';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { loadStockCandidatesForRead } from '@/lib/pharmacy/stock-ledger';
+import {
+  lostDemandTriggerConfigSchema,
+  type LostDemandAdvice,
+} from '@/lib/pharmacy/lost-demand-advice';
+import {
+  loadLostDemandTriggerConfig,
+  readLostDemandAdvice,
+} from '@/lib/pharmacy/lost-demand-advice-reader';
 import { denyByDefaultProcedure, router } from '../trpc';
 import type { ProcedureMeta, TRPCContext } from '../trpc';
 import {
@@ -546,6 +556,20 @@ const PROCUREMENT_AND_FINANCE = {
 const FINANCIAL_FOLLOW_UP = {
   capabilities: ['reports:financial'],
 } as const satisfies ProcedureMeta;
+
+const demandKey = z.string().trim().min(1).max(300);
+
+/** DEV-80: advice is always recomputed on the server; a client never supplies it. */
+async function currentLostDemandAdvice(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string; actorId: string },
+  key: string
+): Promise<LostDemandAdvice> {
+  const { advice } = await readLostDemandAdvice(db, scope);
+  const match = advice.find((row) => row.demandKey === key);
+  if (!match) throw new TRPCError({ code: 'NOT_FOUND', message: 'LOST_DEMAND_ADVICE_NOT_FOUND' });
+  return match;
+}
 
 /** Recorded on a purchase-order approval the solo owner gave their own order. */
 export const SOLO_OWNER_APPROVAL_POLICY = SOLO_OWNER_POLICY;
@@ -977,6 +1001,8 @@ const purchasingRouter = router({
           freightMinor: z.number().int().nonnegative().default(0),
           otherChargesMinor: z.number().int().nonnegative().default(0),
           note: z.string().trim().max(2000).optional(),
+          /** DEV-80: the lost-demand advice card this DRAFT answers, recorded with it. */
+          lostDemandKey: demandKey.optional(),
           lines: z
             .array(
               z
@@ -1003,6 +1029,8 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.lostDemandKey && !input.branchId)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NEEDS_BRANCH' });
       await purchasingRecordScope(ctx, input.branchId);
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
@@ -1097,7 +1125,7 @@ const purchasingRouter = router({
           }
         }
 
-        const { lines, ...purchaseOrder } = input;
+        const { lines, lostDemandKey, ...purchaseOrder } = input;
         // DEV-753: one transaction. The owner policy is share-locked while the order is
         // written, and an order raised past the unchecked gate commits with its evidence,
         // named by its own id, or not at all.
@@ -1114,6 +1142,36 @@ const purchasingRouter = router({
             { operation: 'PURCHASE_ORDER_CREATE', reference: input.reference },
             { record: false }
           );
+          if (lostDemandKey && input.branchId) {
+            const scope = await assertProcurementBranch(ctx, input.branchId, db);
+            await db.$queryRaw(
+              Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR UPDATE`
+            );
+            const advice = await currentLostDemandAdvice(db, scope, lostDemandKey);
+            const option = advice.distributors.find((row) => row.supplierId === input.supplierId);
+            const line = lines[0];
+            if (
+              !option ||
+              !line ||
+              lines.length !== 1 ||
+              !advice.actions.includes('DRAFT_PURCHASE_ORDER') ||
+              line.medicineId !== advice.medicineId ||
+              line.packLevelId !== option.packLevelId ||
+              line.orderedPacks !== option.quantity.orderedPacks ||
+              line.bonusPacks !== option.quantity.bonusPacks ||
+              line.canonicalUnitsPerPack !== option.canonicalUnitsPerPack ||
+              line.listPricePerPackMinor !== option.lastListPricePerPackMinor ||
+              line.discountBps !== option.lastDiscountBps ||
+              line.rebateBps !== (option.lastRebateBps ?? 0) ||
+              line.taxBps !== (option.lastTaxBps ?? 0) ||
+              line.taxCreditable !== (option.lastTaxCreditable ?? false) ||
+              input.freightMinor !== 0 ||
+              input.otherChargesMinor !== 0 ||
+              input.quoteId ||
+              input.requisitionId
+            )
+              throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_MISMATCH' });
+          }
           const created = await db.pharmacyPurchaseOrder.create({
             data: {
               ...purchaseOrder,
@@ -1133,6 +1191,19 @@ const purchasingRouter = router({
             },
             include: { lines: true },
           });
+          if (lostDemandKey && input.branchId) {
+            // DEV-80: the order stays a DRAFT; this only records which advice it answers.
+            await db.pharmacyLostDemandAdviceDecision.create({
+              data: {
+                organizationId: tenantScope(ctx).organizationId,
+                branchId: input.branchId,
+                demandKey: lostDemandKey,
+                decision: 'DRAFT_PURCHASE_ORDER',
+                purchaseOrderId: created.id,
+                actorUserId: ctx.session.user.id,
+              },
+            });
+          }
           if (!supplierGate.checked) {
             await recordSupplierComplianceSkip(
               db,
@@ -2791,6 +2862,242 @@ const purchasingRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  /**
+   * DEV-80 — lost-demand procurement advice for one branch. Read-only: triggers,
+   * suggested quantity per distributor, same-salt alternates and transfer surplus.
+   */
+  lostDemandAdvice: purchasing
+    .meta(PROCUREMENT)
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return readLostDemandAdvice(ctx.db, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: ctx.session.user.id,
+      });
+    }),
+
+  lostDemandTriggerSettings: purchasing
+    .meta(PROCUREMENT)
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return loadLostDemandTriggerConfig(ctx.db, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: ctx.session.user.id,
+      });
+    }),
+
+  /** Thresholds and planning assumptions are a manager/owner decision per branch. */
+  setLostDemandTriggerSettings: purchasing
+    .meta(APPROVAL)
+    .input(z.object({ branchId, settings: lostDemandTriggerConfigSchema }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return ctx.db.pharmacyLostDemandTriggerSetting.upsert({
+        where: {
+          organizationId_branchId: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+          },
+        },
+        create: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          ...input.settings,
+          updatedByUserId: ctx.session.user.id,
+        },
+        update: { ...input.settings, updatedByUserId: ctx.session.user.id },
+      });
+    }),
+
+  /** Hides one advice card until a newer lost request arrives. Nothing else changes. */
+  ignoreLostDemandAdvice: purchasing
+    .meta(PROCUREMENT)
+    .input(
+      z.object({ branchId, demandKey, reason: z.string().trim().max(500).optional() }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      return ctx.db.pharmacyLostDemandAdviceDecision.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          demandKey: input.demandKey,
+          decision: 'IGNORED',
+          reason: input.reason || null,
+          actorUserId: ctx.session.user.id,
+        },
+      });
+    }),
+
+  /**
+   * Creates a DRAFT inter-branch transfer request from the branch with surplus. A
+   * DRAFT holds no stock and cannot be approved or dispatched. Continuation of an
+   * existing request is a separate workflow decision; quantities come from advice.
+   */
+  requestLostDemandTransfer: purchasing
+    .meta(PROCUREMENT)
+    .input(z.object({ branchId, demandKey, fromBranchId: branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await receivingScope(ctx, input.branchId);
+      if (input.fromBranchId === scope.branchId)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_SAME_BRANCH' });
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        const at = new Date();
+        await assertProcurementBranch(ctx, input.fromBranchId, db);
+        await db.$queryRaw(
+          Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR UPDATE`
+        );
+        const advice = await currentLostDemandAdvice(
+          db,
+          {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            actorId: ctx.session.user.id,
+          },
+          input.demandKey
+        );
+        const transfer = advice.transfer;
+        if (
+          !advice.medicineId ||
+          !transfer ||
+          transfer.fromBranchId !== input.fromBranchId ||
+          !advice.actions.includes('TRANSFER_REQUEST')
+        )
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_TRANSFER' });
+        const medicine = await db.medicine.findFirst({
+          where: { id: advice.medicineId, organizationId: scope.organizationId },
+          select: { coldChain: true },
+        });
+        const destinationBranch = await db.pharmacyBranch.findFirst({
+          where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
+          select: { defaultStockLocationId: true },
+        });
+        const destination = await db.pharmacyStockLocation.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            active: true,
+            ...(medicine?.coldChain ? { coldChain: true } : {}),
+            ...(destinationBranch?.defaultStockLocationId && !medicine?.coldChain
+              ? { id: destinationBranch.defaultStockLocationId }
+              : {}),
+          },
+          select: { id: true },
+        });
+        if (!medicine || !destination)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_DESTINATION' });
+        // The ledger's own read: net of supplier claims and restock reservations, in
+        // FEFO order, with every INV-03 block (expiry, recall, quarantine) applied.
+        const candidates = (
+          await loadStockCandidatesForRead(
+            db,
+            { organizationId: scope.organizationId, branchId: input.fromBranchId },
+            advice.medicineId
+          )
+        ).filter(
+          (candidate) =>
+            blockReasonFor(candidate, {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              at,
+            }) === null
+        );
+        const [lots, locations] = await Promise.all([
+          db.pharmacyInventoryLot.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              id: { in: candidates.map((candidate) => candidate.inventoryLotId) },
+            },
+            select: { id: true, manufacturingBatchId: true },
+          }),
+          db.pharmacyStockLocation.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: input.fromBranchId,
+              active: true,
+              ...(medicine.coldChain ? { coldChain: true } : {}),
+              id: { in: candidates.map((candidate) => candidate.stockLocationId) },
+            },
+            select: { id: true },
+          }),
+        ]);
+        const batchOfLot = new Map(lots.map((lot) => [lot.id, lot.manufacturingBatchId]));
+        const usableLocations = new Set(locations.map((location) => location.id));
+        const recalls = await db.pharmacyRecallNotice.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            status: 'OPEN',
+            OR: [{ medicineId: advice.medicineId }, { batchId: { in: [...batchOfLot.values()] } }],
+          },
+          select: { medicineId: true, batchId: true },
+        });
+        if (recalls.some((recall) => recall.medicineId === advice.medicineId))
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_RECALLED' });
+        const recalledBatches = new Set(recalls.map((recall) => recall.batchId));
+        const balances = candidates.filter(
+          (candidate) =>
+            usableLocations.has(candidate.stockLocationId) &&
+            batchOfLot.has(candidate.inventoryLotId) &&
+            !recalledBatches.has(batchOfLot.get(candidate.inventoryLotId)!)
+        );
+        let remaining = transfer.quantityUnits;
+        const lines: Array<{
+          sourceLotId: string;
+          sourceStockLocationId: string;
+          destinationStockLocationId: string;
+          quantityUnits: number;
+        }> = [];
+        for (const balance of balances) {
+          if (remaining <= 0) break;
+          const units = Math.min(remaining, balance.availableUnits);
+          lines.push({
+            sourceLotId: balance.inventoryLotId,
+            sourceStockLocationId: balance.stockLocationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: units,
+          });
+          remaining -= units;
+        }
+        if (!lines.length)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_TRANSFER' });
+        const draft = await db.pharmacyInterbranchTransfer.create({
+          data: {
+            organizationId: scope.organizationId,
+            fromBranchId: input.fromBranchId,
+            toBranchId: scope.branchId,
+            // A request only: holds no stock, cannot be approved or dispatched as is.
+            status: 'DRAFT',
+            allocatedById: ctx.session.user.id,
+          },
+        });
+        await db.pharmacyInterbranchTransferLine.createMany({
+          data: lines.map((line) => ({
+            organizationId: scope.organizationId,
+            transferId: draft.id,
+            sourceBranchId: input.fromBranchId,
+            ...line,
+          })),
+        });
+        await db.pharmacyLostDemandAdviceDecision.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            demandKey: input.demandKey,
+            decision: 'TRANSFER_REQUEST',
+            transferId: draft.id,
+            actorUserId: ctx.session.user.id,
+          },
+        });
+        return { ...draft, lines };
+      });
     }),
 });
 

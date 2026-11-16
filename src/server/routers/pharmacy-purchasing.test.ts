@@ -1337,9 +1337,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         message: 'Branch is outside your scope.',
       });
       const locked = db.$queryRaw.mock.calls.some(([sql]) =>
-        String((sql as TemplateStringsArray).join?.('?') ?? '').includes(
-          'pharmacy_purchase_orders'
-        )
+        String((sql as TemplateStringsArray).join?.('?') ?? '').includes('pharmacy_purchase_orders')
       );
       expect(locked).toBe(false);
       expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
@@ -3396,6 +3394,8 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  lostDemandAdvice: () => caller().lostDemandAdvice({ branchId: 'branch_a' }),
+  lostDemandTriggerSettings: () => caller().lostDemandTriggerSettings({ branchId: 'branch_a' }),
   reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {
