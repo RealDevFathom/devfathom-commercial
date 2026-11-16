@@ -1,3 +1,4 @@
+import { FinancePostingError } from '@/lib/finance/journal';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput, promotionCreatorMayManage } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
@@ -606,6 +607,8 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
 };
 
 function fail(error: unknown): never {
+  if (error instanceof FinancePostingError && error.reason === 'PERIOD_CLOSED')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof LostSalesError)
     throw new TRPCError({
       code:

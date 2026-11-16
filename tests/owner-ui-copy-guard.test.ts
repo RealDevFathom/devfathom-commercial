@@ -193,9 +193,17 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// The UI sources are immutable fixtures for this suite. Parse them once so
+// each prose rule checks the same text without repeatedly rebuilding every AST
+// while the full suite's other workers compete for CPU and garbage collection.
+const sourceTexts = files.map((file) => ({
+  file,
+  texts: userFacingText(file, readFileSync(file, 'utf8')),
+}));
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+  return sourceTexts.flatMap(({ file, texts }) =>
+    texts
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
       .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
   );
