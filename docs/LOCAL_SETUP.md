@@ -1,6 +1,6 @@
 # Running DevFathom Locally
 
-Last reviewed: 2026-10-21
+Last reviewed: 2026-11-17
 
 ## Prerequisites
 
@@ -54,6 +54,18 @@ openssl rand -base64 32
 ```
 
 Keep `.env.local` private. It is ignored by Git.
+
+An exported `DATABASE_URL` in your shell takes precedence over `.env.local`, even after you edit
+that file. The same applies to `MIGRATION_DATABASE_URL`, which Prisma and the base seed prefer
+over `DATABASE_URL`. To use the database URLs from `.env.local`, clear stale shell overrides
+before starting the server or running Prisma/seed commands:
+
+```bash
+unset DATABASE_URL MIGRATION_DATABASE_URL
+```
+
+Restart an already running dev server after changing its environment. Do not print database URLs
+to diagnose this; they can contain passwords.
 
 ## 2. Create the databases
 
@@ -157,6 +169,29 @@ Open:
 
 - Tenant workspace: [http://devfathom.localhost:3000](http://devfathom.localhost:3000)
 - Admin panel: [http://admin.localhost:3000/platform](http://admin.localhost:3000/platform)
+
+### Each workspace has its own sign-in hostname
+
+Plain `http://localhost:3000` resolves to `DEFAULT_ORGANIZATION_ID` (`org_devfathom`, the agency
+workspace, by default). It is not a sign-in address for every tenant. A pharmacy owner must use
+`http://<workspace-slug>.localhost:3000/login`, with the pharmacy's actual organization slug.
+For the pharmacy counter fixture, that is
+[http://pharmacy-counter-e2e.localhost:3000/login](http://pharmacy-counter-e2e.localhost:3000/login).
+`bun run db:seed` creates the agency workspace; it does not create the pharmacy fixture.
+The agency and pharmacy seeds print their workspace sign-in addresses, including the local port
+from `NEXT_PUBLIC_APP_URL` (or `AUTH_URL`).
+
+If you run on port **3100**, set `AUTH_URL` and `NEXT_PUBLIC_APP_URL` to
+`http://devfathom.localhost:3100`, start with `bun run dev --port 3100`, and use:
+
+- Agency: [http://devfathom.localhost:3100/login](http://devfathom.localhost:3100/login)
+- Pharmacy fixture: [http://pharmacy-counter-e2e.localhost:3100/login](http://pharmacy-counter-e2e.localhost:3100/login)
+- Other pharmacy workspaces: `http://<workspace-slug>.localhost:3100/login`
+
+On `http://localhost:3100`, pharmacy credentials fail with **Invalid email or password** because
+that host selects the agency workspace by default. Check the workspace address as well as the
+credentials. The error stays generic so sign-in does not reveal whether an account exists in
+another workspace.
 
 Stop the server with `Ctrl+C`. Start it again with `bun run dev`.
 

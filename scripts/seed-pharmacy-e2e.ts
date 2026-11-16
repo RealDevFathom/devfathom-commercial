@@ -32,6 +32,9 @@ import { breakPack, receiveLot } from '../src/lib/pharmacy/stock-ledger.js';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db.js';
 import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture.js';
 import { resolvePharmacyE2eDatabaseUrl } from './pharmacy-e2e-environment.js';
+import { seedWorkspaceLoginUrl } from '../prisma/seed-workspace-login.js';
+
+const PHARMACY_WORKSPACE_SLUG = 'pharmacy-counter-e2e';
 
 const PHARMACY_E2E_ADMIN_CAPABILITIES = [
   // #518: POS-09 adds a prescription-only line, which now needs the exact dispense grant.
@@ -168,7 +171,7 @@ async function seedWorkspace(email: string, passwordHash: string) {
       PHARMACY_E2E.organizationId
     );
     const organization = {
-      slug: 'pharmacy-counter-e2e',
+      slug: PHARMACY_WORKSPACE_SLUG,
       legalName: 'Fathom Pharmacy E2E',
       displayName: 'Fathom Pharmacy E2E',
       vertical: 'PHARMACY' as const,
@@ -1030,6 +1033,10 @@ async function main() {
     if (stagingDemo) await seedStagingDemoSensitiveGrants();
 
     console.log('Pharmacy counter E2E seed complete.');
+    console.log(`Pharmacy workspace sign-in: ${seedWorkspaceLoginUrl(PHARMACY_WORKSPACE_SLUG)}`);
+    console.log(
+      'Use this workspace hostname with the seeded pharmacy account; plain localhost uses the default workspace.'
+    );
   } finally {
     await prisma.$disconnect();
     await pool.end();
