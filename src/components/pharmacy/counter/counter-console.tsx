@@ -101,6 +101,7 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterDrawerErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
@@ -3016,6 +3017,7 @@ function ScopedPharmacyCounterConsole({
               {drawerRequired ? (
                 <CounterOpenDrawerStep
                   disabled={busy || !drawerStatusKnown || !canSettlePayments}
+                  canDeclareFloat={actorIsManager}
                   statusError={drawerQuery.isError}
                   deviceUnavailable={deviceUnavailable}
                   checking={drawerQuery.isFetching}
@@ -3055,7 +3057,17 @@ function ScopedPharmacyCounterConsole({
                         })
                       )
                       .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
+                        setNotice({
+                          tone: 'warning',
+                          message: counterDrawerErrorMessage(
+                            error,
+                            openingFloatMinor > 0
+                              ? 'OPEN_WITH_FLOAT'
+                              : operatingCashierId
+                                ? 'ASSIGN_CASHIER'
+                                : 'OPEN_EMPTY'
+                          ),
+                        })
                       )
                       // Either way the server now holds the truth about this device's drawer;
                       // stay busy until it is read back, so the step cannot be sent twice.
@@ -3089,7 +3101,7 @@ function ScopedPharmacyCounterConsole({
                           .catch((error: unknown) => {
                             setNotice({
                               tone: 'warning',
-                              message: counterPaymentErrorMessage(error),
+                              message: counterDrawerErrorMessage(error, 'ASSIGN_CASHIER'),
                             });
                             throw error;
                           });

@@ -11,6 +11,8 @@ import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-draw
 export type CounterOpenDrawerStepProps = {
   /** Status not yet known, a write in flight, or no authorized branch. */
   disabled: boolean;
+  /** The server's manager-access decision; only managers may declare a float. */
+  canDeclareFloat?: boolean;
   /** The drawer status read failed: the drawer may or may not be open. */
   statusError?: boolean;
   /** Site storage is blocked, so this browser has no counter device id. */
@@ -42,6 +44,7 @@ export const OPENING_FLOAT_QUICK_AMOUNTS = ['0', '1000', '2000', '5000'] as cons
  */
 export function CounterOpenDrawerStep({
   disabled,
+  canDeclareFloat = false,
   statusError = false,
   deviceUnavailable = false,
   checking = false,
@@ -77,8 +80,9 @@ export function CounterOpenDrawerStep({
           Open the cash drawer to start the shift
         </h3>
         <p className="text-sm text-text-body">
-          Count the cash in the drawer and enter it below. Bills can be started once the drawer is
-          open.
+          {canDeclareFloat
+            ? 'Count the cash in the drawer and enter it below. Bills can be started once the drawer is open.'
+            : 'Only a manager or owner can open with a float. If the drawer is empty, enter 0 to start the shift; otherwise ask a manager or owner.'}
         </p>
       </div>
       {context ? (
@@ -143,7 +147,7 @@ export function CounterOpenDrawerStep({
             value={openingCash}
             disabled={disabled}
             aria-invalid={invalid}
-            aria-describedby={invalid ? 'counter-opening-cash-error' : undefined}
+            aria-describedby={invalid ? 'counter-opening-cash-error' : 'counter-opening-cash-help'}
             onChange={(event) => setOpeningCash(event.target.value)}
             className="h-11 font-mono tabular-nums"
           />
@@ -174,21 +178,23 @@ export function CounterOpenDrawerStep({
         </Button>
       </div>
       <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
-        {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
-          <Button
-            key={amount}
-            type="button"
-            variant="outline"
-            className="h-11 font-mono tabular-nums"
-            aria-pressed={openingCash === amount}
-            disabled={disabled}
-            onClick={() => setOpeningCash(amount)}
-          >
-            {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
-          </Button>
-        ))}
+        {OPENING_FLOAT_QUICK_AMOUNTS.filter((amount) => canDeclareFloat || amount === '0').map(
+          (amount) => (
+            <Button
+              key={amount}
+              type="button"
+              variant="outline"
+              className="h-11 font-mono tabular-nums"
+              aria-pressed={openingCash === amount}
+              disabled={disabled}
+              onClick={() => setOpeningCash(amount)}
+            >
+              {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
+            </Button>
+          )
+        )}
       </div>
-      <p className="text-xs text-text-muted">
+      <p id="counter-opening-cash-help" className="text-xs text-text-muted">
         An opening cash above 0 needs a manager or owner. Enter 0 when the drawer is empty.
       </p>
       {chooseCashier ? (

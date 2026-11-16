@@ -193,12 +193,17 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// The source fixture is immutable during this suite. Parse it once rather than
+// rebuilding every syntax tree for each pattern assertion (which can time out
+// under load as the tenant UI grows).
+const uiText = files.flatMap((file) =>
+  userFacingText(file, readFileSync(file, 'utf8')).map(({ line, text }) => ({ file, line, text }))
+);
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
-      .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+  return uiText
+    .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
+    .map(({ file, line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`);
 }
 
 describe('owner UI copy guard', () => {

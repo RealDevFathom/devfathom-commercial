@@ -8,6 +8,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterBillMovedOn,
   counterErrorMessage,
+  counterDrawerErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
   RX_SALE_COMPLETING_ROLE_NAMES,
@@ -249,4 +250,38 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
     expect(counterErrorTone(new Error('SALE_BATCH_RECALLED'))).toBe('warning');
     expect(counterErrorTone(new Error('REFUND_EXCEEDS_TENDER'))).toBe('warning');
   });
+});
+
+describe('DEV-873: drawer refusals describe the requested action', () => {
+  const noPermission = 'You do not have permission for this action.';
+
+  it('keeps the payment-access refusal for opening an empty drawer', () => {
+    expect(counterDrawerErrorMessage(trpcFailure(noPermission, 'FORBIDDEN'), 'OPEN_EMPTY')).toBe(
+      COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE
+    );
+  });
+
+  it.each(['OPEN_WITH_FLOAT', 'ASSIGN_CASHIER'] as const)(
+    'explains manager access for %s',
+    (action) => {
+      const message = counterDrawerErrorMessage(trpcFailure(noPermission, 'FORBIDDEN'), action);
+      expect(message).toMatch(/Only a manager or owner/);
+      expect(message).not.toMatch(/Your role does not take payments|complete this sale/);
+      expect(message).toMatch(action === 'OPEN_WITH_FLOAT' ? /enter 0/ : /hand over/);
+    }
+  );
+
+  it.each(['OPEN_EMPTY', 'OPEN_WITH_FLOAT', 'ASSIGN_CASHIER'] as const)(
+    'preserves other refusals for %s',
+    (action) => {
+      const outside = trpcFailure('Branch is outside your scope.', 'FORBIDDEN');
+      expect(counterDrawerErrorMessage(outside, action)).toBe(outside.message);
+      expect(counterDrawerErrorMessage(trpcFailure(noPermission, 'BAD_REQUEST'), action)).toBe(
+        noPermission
+      );
+      expect(counterDrawerErrorMessage(new PharmacySettlementError('OPEN_DRAWER'), action)).toBe(
+        counterErrorMessage(new PharmacySettlementError('OPEN_DRAWER'))
+      );
+    }
+  );
 });
