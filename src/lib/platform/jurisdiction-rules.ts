@@ -47,12 +47,7 @@ const rule = <T extends z.ZodType>(values: T) =>
 export const jurisdictionRulesSchema = z
   .object({
     licenceCategories: rule(names),
-    permittedSchedules: rule(
-      z
-        .array(z.enum(['OTC', 'RX', 'CONTROLLED']))
-        .max(3)
-        .refine((values) => new Set(values).size === values.length, 'Remove duplicate schedules.')
-    ),
+    permittedSchedules: rule(names),
     prescriptionOnlyClasses: rule(names),
     prescriptionRetentionDays: rule(z.union([days, z.record(name, days)])),
     controlledRegisterFlags: rule(
@@ -82,8 +77,8 @@ export const jurisdictionRulesSchema = z
                   z
                     .object({
                       days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-                      start: time,
-                      end: time,
+                      start: windowStart,
+                      end: windowEnd,
                     })
                     .strict()
                     .refine(
@@ -123,6 +118,21 @@ export const publishJurisdictionRulesSchema = jurisdictionRulesSchema.extend({
   reviewerName: z.string().trim().min(1).max(200),
   reviewerRole: z.string().trim().min(1).max(200),
   evidenceRef: z.string().trim().min(1).max(500).optional(),
+  authenticationCode: z.string(),
+});
+
+export function allRulesConfirmed(rules: Record<(typeof RULE_FIELDS)[number], unknown>): boolean {
+  return RULE_FIELDS.every((key) => {
+    const field = rules[key];
+    return (
+      field !== null &&
+      typeof field === 'object' &&
+      'provisional' in field &&
+      field.provisional === false
+    );
+  });
+}
+),
   authenticationCode: z.string(),
 });
 

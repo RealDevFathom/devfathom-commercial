@@ -17,14 +17,15 @@ const effectiveDate = new Intl.DateTimeFormat('en-GB', {
 
 const help: Record<(typeof RULE_FIELDS)[number], string> = {
   licenceCategories: 'values: an array of licence category names. Wildcards are not allowed.',
-  permittedSchedules: 'values: an array containing OTC, RX or CONTROLLED, without duplicates.',
+  permittedSchedules:
+    'values: an array of schedule names (for example OTC, RX, CONTROLLED or G), without duplicates or wildcards.',
   prescriptionOnlyClasses: 'values: an array of class names. Wildcards are not allowed.',
   prescriptionRetentionDays:
     'values: a positive whole number of days or an object mapping class names to days (maximum 36525).',
   controlledRegisterFlags:
     'values: an object with optional recordEverySale (boolean) and emergencySupply: { maxUnits, repeatWindowHours, source: "JURISDICTION_RULE_SET" }.',
   pharmacistCoverageRule:
-    'values: an object with optional dispenseGrantRequired (boolean) and presenceHours: { timeZone, windows: [{ days: [0–6], start: "HH:MM", end: "HH:MM" }] }. Split overnight shifts into two windows.',
+    'values: an object with optional dispenseGrantRequired (boolean) and presenceHours: { timeZone, windows: [{ days: [0–6], start: "HH:MM", end: "HH:MM" }] }. End may be "24:00" for a window running to midnight. Split overnight shifts into two windows, e.g. 20:00–24:00 plus 00:00–08:00.',
   recordRetentionByClass:
     'values: an object mapping PRESCRIPTION, CONTROLLED_REGISTER, FISCAL or AUDIT to positive whole days (maximum 36525).',
 };
