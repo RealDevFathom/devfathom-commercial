@@ -54,6 +54,12 @@ export async function verifyReportPrint(markup: string) {
             await page.screenshot({ path: `${artifactDir}/${width}-${theme}.png` });
           }
           await page.emulateMedia({ media: 'print' });
+          expect(
+            await page.locator('[data-report-print]').evaluate((el) => ({
+              color: getComputedStyle(el).color,
+              background: getComputedStyle(el).backgroundColor,
+            }))
+          ).toEqual({ color: 'rgb(0, 0, 0)', background: 'rgb(255, 255, 255)' });
           const pdf = await page.pdf({
             format: 'A4',
             path: `${artifactDir}/${width}-${theme}-${reducedMotion}.pdf`,

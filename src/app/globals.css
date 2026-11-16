@@ -1781,6 +1781,7 @@
 
   [data-report-print],
   [data-report-print] * {
+    color-scheme: light !important;
     color: CanvasText !important;
     background-color: Canvas !important;
     box-shadow: none !important;
