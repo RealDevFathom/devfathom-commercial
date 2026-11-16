@@ -577,7 +577,7 @@ it('#727: shows the issued promotion name and saving under its line', () => {
 
 it('isolates Urdu receipt dates and amounts and translates the tender label', () => {
   const input = props({ locale: 'ur' });
-  input.receipt!.tenders = [{ tenderId: 'cash', type: 'CASH', amountMinor: 100 }];
+  input.receipt!.tenders = [{ tenderId: 'cash', type: 'CASH', amountMinor: 100, changeGivenMinor: 0 }];
   render(<CounterReceiptView {...input} />);
   const region = screen.getByRole('region', { name: 'رسید 12' });
   expect(region).toHaveClass('receipt-urdu');

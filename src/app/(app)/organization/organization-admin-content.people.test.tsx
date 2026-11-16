@@ -370,7 +370,7 @@ it('names the domain host and kind inputs for assistive technology (#1233)', () 
 
 it('saves the workspace profile without offering the ineffective Locale control', () => {
   render(<OrganizationAdminContent />);
-  expect(screen.queryByRole('textbox', { name: 'Locale', exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: 'Locale' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
   expect(mutationFor('updateProfile').mutate).toHaveBeenCalledOnce();
   expect(mutationFor('updateProfile').mutate.mock.calls[0]![0]).not.toHaveProperty('locale');
