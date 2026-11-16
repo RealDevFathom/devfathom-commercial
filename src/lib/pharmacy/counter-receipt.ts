@@ -474,8 +474,17 @@ export function formatReceiptIssuedAt(value: string | null): string {
 }
 
 /** Separate informational savings lines; already included in total discounts. */
-export function receiptTierLines(receipt: Pick<CounterReceipt, 'lines'>, locale: CounterReceiptLocale) {
+export function receiptTierLines(
+  receipt: Pick<CounterReceipt, 'lines'>,
+  locale: CounterReceiptLocale
+) {
   const tiers = new Map<string, number>();
-  for (const line of receipt.lines) if (line.tierName && line.tierDiscountMinor) tiers.set(line.tierName, (tiers.get(line.tierName) ?? 0) + line.tierDiscountMinor);
-  return [...tiers].map(([name, minor]) => `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`);
+  for (const line of receipt.lines) {
+    if (line.tierName && line.tierDiscountMinor)
+      tiers.set(line.tierName, (tiers.get(line.tierName) ?? 0) + line.tierDiscountMinor);
+  }
+  return [...tiers].map(
+    ([name, minor]) =>
+      `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`
+  );
 }

@@ -595,7 +595,14 @@ export async function applyPharmacyTender(
       deviceId: input.deviceId,
     },
   });
-  if (provider === PREPAID_PROVIDER) await movePrepaid(db, scope, {customerId: sale.customerId!, kind:'SPEND', amountMinor:input.amountMinor, tenderId:tender.id, idempotencyKey:`prepaid:spend:${tender.id}`});
+  if (provider === PREPAID_PROVIDER)
+    await movePrepaid(db, scope, {
+      customerId: sale.customerId!,
+      kind: 'SPEND',
+      amountMinor: input.amountMinor,
+      tenderId: tender.id,
+      idempotencyKey: `prepaid:spend:${tender.id}`,
+    });
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
