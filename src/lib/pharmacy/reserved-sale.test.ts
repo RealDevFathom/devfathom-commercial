@@ -72,7 +72,10 @@ function fixture() {
       ),
     },
     medicinePackMrp: { findMany: vi.fn().mockResolvedValue([]) },
-    pharmacySaleLine: { create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })) },
+    pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })),
+    },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
   };

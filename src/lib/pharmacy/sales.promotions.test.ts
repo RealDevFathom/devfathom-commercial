@@ -105,6 +105,7 @@ function counterDb(
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'line-a',
         ...data,

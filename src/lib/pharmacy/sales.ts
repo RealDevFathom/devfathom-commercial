@@ -319,6 +319,54 @@ type AddSaleLineInput = {
 };
 
 /**
+ * Read a committed line only after the caller holds its sale row lock, inside
+ * the same transaction as the add. A retry sees the first request's committed
+ * line before touching stock, vouchers or prescription limits.
+ */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  const previous = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      idempotencyKey: input.idempotencyKey,
+    },
+    include: { allocations: { orderBy: { id: 'asc' } } },
+  });
+  if (!previous) return null;
+  if (
+    previous.medicineId !== input.medicineId ||
+    previous.presentationId !== input.presentationId ||
+    previous.packLevelId !== input.packLevelId ||
+    previous.saleUnit !== input.saleUnit ||
+    previous.quantity !== input.quantity ||
+    previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
+    (previous.voucherId ?? null) !== (input.voucherId ?? null) ||
+    (input.discountKind !== undefined && previous.discountKind !== input.discountKind) ||
+    (input.discountMinor !== undefined && previous.discountMinor !== input.discountMinor)
+  )
+    throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { allocations, ...line } = previous;
+  return {
+    line,
+    allocation: {
+      allocations: allocations.map((part) => ({
+        inventoryLotId: part.inventoryLotId,
+        stockLocationId: part.stockLocationId,
+        units: part.canonicalUnits,
+      })),
+      movementIds: allocations.map((part) => part.stockMovementId),
+      // A replay makes no new FEFO recommendation or override decision.
+      recommendedLotId: null,
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+    },
+    replayed: true,
+  };
+}
+
+/**
  * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
  * presentation and pack hierarchy, never from the request. The pack level must belong
  * to the line's presentation and that presentation to its medicine. A loose UNIT is one
@@ -536,6 +584,8 @@ async function addSaleLineWithAllocation(
     data: { status: 'OPEN' },
   });
   if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+  const replay = await replaySaleLine(db, scope, input);
+  if (replay) return replay;
   if (
     !Number.isSafeInteger(input.quantity) ||
     input.quantity <= 0 ||
@@ -757,7 +807,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation };
+  return { line, allocation, replayed: false };
 }
 
 /**

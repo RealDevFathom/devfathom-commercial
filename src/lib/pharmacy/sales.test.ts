@@ -580,6 +580,7 @@ describe('DEV-27 voucher scoping at the POS', () => {
     const issuerRow = options.issuer === undefined ? issuer : options.issuer;
     return {
       state,
+      pharmacySaleLine: { findFirst: async () => null },
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
         updateMany: async () => ({ count: 1 }),

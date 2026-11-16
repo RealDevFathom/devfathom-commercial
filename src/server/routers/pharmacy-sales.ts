@@ -143,6 +143,7 @@ import {
 } from '@/lib/pharmacy/duplicate-salt-acknowledgement';
 import {
   addSaleLine,
+  replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
   captureDemand,
@@ -2029,6 +2030,9 @@ export const pharmacySalesRouter = router({
               }))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            await lockSaleForControlledLine(db, scope, input.saleId);
+            const replay = await replaySaleLine(db, scope, lineInput);
+            if (replay) return replay;
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const reference = await resolvePrescriptionReference(db, scope, {
               ...prescription,
@@ -2116,6 +2120,11 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // Keep permission and fresh PIN checks, but replay before the first
+          // dispense's fill, emergency limit or follow-up can reject its retry.
+          await lockSaleForControlledLine(db, scope, input.saleId);
+          const replay = await replaySaleLine(db, scope, lineInput);
+          if (replay) return replay;
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -2270,19 +2279,6 @@ export const pharmacySalesRouter = router({
           )
             return blocked;
           const units = input.quantity * input.canonicalUnitsPerSaleUnit;
-          const previous = await db.pharmacySaleLine.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-              saleId: input.saleId,
-              idempotencyKey: input.idempotencyKey,
-            },
-          });
-          if (previous)
-            return {
-              blocked:
-                'This request was already recorded. Refresh the cart before adding another line.',
-            };
           if (
             !Number.isSafeInteger(units) ||
             rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
@@ -2350,7 +2346,7 @@ export const pharmacySalesRouter = router({
           });
           return result;
         });
-        if (input.override && 'line' in outcome) {
+        if (input.override && 'line' in outcome && !outcome.replayed) {
           annotateAudit(ctx, {
             metadata: {
               saleLineId: outcome.line.id,

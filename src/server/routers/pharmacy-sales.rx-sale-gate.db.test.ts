@@ -133,7 +133,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
 /**
  * A sale holding one Rx line the pharmacist added against the patient's prescription, optionally
  * linked to the loyalty customer. DEV-629: unless `signed` is false, the pharmacist then signs the
- * RX-03 review addLine queued for the line (a sole pharmacist may sign their own).
+ * RX-03 review addLine queued for the line using the independent template pharmacist.
  */
 function pharmacistSale({ customer = false, quantity = 1, signed = true } = {}) {
   return act(ids.pharmacist, async (api, db) => {
@@ -147,7 +147,7 @@ function pharmacistSale({ customer = false, quantity = 1, signed = true } = {}) 
         data: {
           reviewItemId: review.id,
           kind: 'SIGN',
-          actorUserId: ids.pharmacist,
+          actorUserId: ids.templatePharmacist,
           signedAt: new Date(),
         },
       });
@@ -460,6 +460,47 @@ afterAll(async () => {
 });
 
 describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fix)', () => {
+  it.each([false, true])(
+    '[DEF-10] replays a line once under concurrent retries (prescription=%s)',
+    async (prescribed) => {
+      const sale = await act(ids.pharmacist, (api) =>
+        api.create({ branchId: ids.branch, deviceId: counterDevice() })
+      );
+      const request = { ...rxLine(sale.id), ...(prescribed ? {} : { prescription: undefined }) };
+      const results = await Promise.all([
+        act(ids.pharmacist, (api) => api.addLine(request)),
+        act(ids.pharmacist, (api) => api.addLine(request)),
+      ]);
+      expect(results[0].line.id).toBe(results[1].line.id);
+      expect(results).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ replayed: false }),
+          expect.objectContaining({ replayed: true }),
+        ])
+      );
+      expect(await act(ids.pharmacist, (api) => api.addLine(request))).toMatchObject({
+        line: { id: results[0].line.id },
+        replayed: true,
+      });
+      const evidence = await act(ids.pharmacist, async (_api, db) => ({
+        lines: await db.pharmacySaleLine.count({ where: { saleId: sale.id } }),
+        events: await db.pharmacySaleEvent.count({
+          where: { saleId: sale.id, kind: 'LINE_ADDED' },
+        }),
+        allocations: await db.pharmacySaleLineAllocation.findMany({
+          where: { saleLineId: results[0].line.id },
+        }),
+        reviews: await db.pharmacyPharmacistReviewItem.count({
+          where: { saleLineId: results[0].line.id },
+        }),
+      }));
+      expect(evidence.lines).toBe(1);
+      expect(evidence.events).toBe(1);
+      expect(evidence.allocations.reduce((sum, part) => sum + part.canonicalUnits, 0)).toBe(10);
+      expect(evidence.reviews).toBe(prescribed ? 1 : 0);
+    }
+  );
+
   it('refuses a cashier at addLine, tender and completion', async () => {
     await expectRefusedEverywhere(ids.cashier);
   });

@@ -89,6 +89,7 @@ function saleDb(options: { receivedUnitsPerPack?: number[] } = {}) {
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'line-a',
         ...data,

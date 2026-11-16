@@ -74,6 +74,7 @@ function callerFor(
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
+    pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyBranch: {
       findMany: async () => [{ id: 'branch-1' }],
       findFirst: async () => ({ id: 'branch-1' }),
@@ -179,6 +180,63 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine controlled actor', () => {
+  it.each([true, false])(
+    'replays a controlled line before consumed eligibility (emergency=%s)',
+    async (emergency) => {
+      const { caller, db, register, recentSupplies, openFollowUp } = emergencyCallerFor(null);
+      const request = {
+        ...line,
+        controlledAuthorization: {
+          ...line.controlledAuthorization,
+          emergency,
+          prescriptionLineId: emergency ? undefined : 'rx-line-1',
+        },
+      };
+      const stored = {
+        id: 'existing-line',
+        organizationId: 'org-1',
+        branchId: line.branchId,
+        saleId: line.saleId,
+        medicineId: line.medicineId,
+        presentationId: line.presentationId,
+        packLevelId: line.packLevelId,
+        saleUnit: line.saleUnit,
+        quantity: line.quantity,
+        canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
+        idempotencyKey: line.idempotencyKey,
+        voucherId: null,
+        allocations: [],
+      };
+      db.pharmacySaleLine.findFirst.mockResolvedValue(stored);
+      recentSupplies.mockResolvedValue(1);
+      openFollowUp.mockResolvedValue({ id: 'already-created' });
+      const result = await caller.addLine(request);
+      expect(result).toMatchObject({ line: { id: 'existing-line' }, replayed: true });
+      expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+      expect(recentSupplies).not.toHaveBeenCalled();
+      expect(openFollowUp).not.toHaveBeenCalled();
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(db.pharmacySaleLine.findFirst).toHaveBeenCalledExactlyOnceWith({
+        where: {
+          organizationId: 'org-1',
+          branchId: line.branchId,
+          saleId: line.saleId,
+          idempotencyKey: line.idempotencyKey,
+        },
+        include: { allocations: { orderBy: { id: 'asc' } } },
+      });
+    }
+  );
+
+  it('still rejects an invalid witness PIN on a retry', async () => {
+    const { caller, db } = emergencyCallerFor(null);
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(false);
+    expect(await caller.addLine(line)).toHaveProperty('blocked');
+    expect(db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
   it('denies a cashier before the witness PIN and writes no register row', async () => {
     const { caller, credential, register, lock } = callerFor([
       { capability: 'pharmacy:counter', effect: 'ALLOW' },
@@ -461,6 +519,32 @@ describe('emergency supply rules on a profile start day (DEV-298)', () => {
 });
 
 describe('pharmacySales.addLine prescription reference (DEV-629)', () => {
+  it('replays an attached prescription without consuming another fill or review', async () => {
+    const { caller, db } = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    db.medicine.findFirst = async () =>
+      ({ id: 'medicine-1', controlled: false, rx: true }) as never;
+    const request = {
+      ...line,
+      controlledAuthorization: undefined,
+      prescription: { prescriptionLineId: 'rx-line-1', patientId: 'patient-1' },
+    };
+    db.pharmacySaleLine.findFirst.mockResolvedValue({
+      ...line,
+      id: 'existing-rx-line',
+      allocations: [],
+      prescriptionLineId: 'rx-line-1',
+      prescriptionPatientId: 'patient-1',
+    });
+    const review = vi.fn();
+    Object.assign(db, { pharmacyPharmacistReviewItem: { create: review } });
+    expect(await caller.addLine(request)).toMatchObject({
+      line: { id: 'existing-rx-line' },
+      replayed: true,
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+  });
+
   it('queues the pharmacist review that settlement waits on when a pharmacist attaches a prescription', async () => {
     const { caller, db } = callerFor([
       { capability: 'pharmacy:counter', effect: 'ALLOW' },
