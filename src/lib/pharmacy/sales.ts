@@ -318,14 +318,20 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
-/**
- * Must run in the line transaction, before prescription, register or stock writes.
- * The organization-wide key lock also covers concurrent requests before a line exists.
- * A replay reads committed evidence only; it must never dispense or consume a voucher again.
- */
-export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+/** Take the organization-wide request lock before any prescription, register or stock lock.
+ * Multi-line offline commands hold all their line keys before preparing stock. */
+export async function lockSaleLineKey(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  idempotencyKey: string
+) {
   await db.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(
-    hashtextextended(${scope.organizationId + ':sale-line:' + input.idempotencyKey}, 0))`;
+    hashtextextended(${scope.organizationId + ':sale-line:' + idempotencyKey}, 0))`;
+}
+
+/** Read committed line evidence without dispensing or consuming a voucher again. */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
   const previous = await db.pharmacySaleLine.findFirst({
     where: {
       organizationId: scope.organizationId,
