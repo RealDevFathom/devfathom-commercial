@@ -144,6 +144,15 @@ type RefundableCardPayment = {
   providerRef: string | null;
 };
 
+/**
+ * Shared server-side guard: a machine refund reference must never carry card data. A run of
+ * 13+ digits (ignoring spaces and dashes) is treated as a possible full card number.
+ * Used by both the route schema and the refund engine so direct callers are covered too.
+ */
+export function isCardNumberLikeReference(value: string): boolean {
+  return /\d{13,}/.test(value.replace(/[\s-]/g, ''));
+}
+
 function requireReason(reason: string | null | undefined): string {
   const trimmed = (reason ?? '').trim();
   if (trimmed.length === 0) {
@@ -167,6 +176,12 @@ export async function refundTender(
     if (cardMachineRefundReference && cardMachineRefundReference.length > 120) {
       throw new RefundError(
         'The card machine refund reference must be at most 120 characters.',
+        'INVALID'
+      );
+    }
+    if (cardMachineRefundReference && isCardNumberLikeReference(cardMachineRefundReference)) {
+      throw new RefundError(
+        'The card machine refund reference must not contain card numbers.',
         'INVALID'
       );
     }

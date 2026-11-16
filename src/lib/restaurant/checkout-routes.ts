@@ -30,7 +30,7 @@ import {
   type OpenDrawerSessionResult,
 } from './drawer-sessions';
 import { PaymentAdapterError } from './payment-adapter';
-import { RefundError, type RefundTenderResult } from './refunds';
+import { isCardNumberLikeReference, RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
 import { OrderCommandError } from './orders';
@@ -187,7 +187,14 @@ export const tenderBody = z
 export const refundBody = z
   .object({
     originalTenderId: ID,
-    cardMachineRefundReference: z.string().trim().max(120).optional(),
+    cardMachineRefundReference: z
+      .string()
+      .trim()
+      .max(120)
+      .refine((value) => !isCardNumberLikeReference(value), {
+        message: 'The card machine refund reference must not contain card numbers.',
+      })
+      .optional(),
     amount: MONEY,
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
