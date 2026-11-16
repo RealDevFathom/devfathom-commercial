@@ -25,6 +25,7 @@ const input = {
   deviceId: 'device-1',
   businessDate: new Date('2026-09-29'),
   type: 'BANK_TRANSFER' as const,
+  providerRef: 'BANK-TEST-123',
   amountMinor: 100,
   idempotencyKey: 'tender-attempt',
 };

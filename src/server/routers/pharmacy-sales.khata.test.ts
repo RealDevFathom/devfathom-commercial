@@ -1554,3 +1554,44 @@ describe('DEV-821 the drawer operator decision', () => {
     expect(recordKhataRepayment).not.toHaveBeenCalled();
   });
 });
+
+
+describe('DEV-875 bank reference transport', () => {
+  const transfer = {
+    branchId: input.branchId,
+    saleId: input.saleId,
+    deviceId: input.deviceId,
+    businessDate: input.businessDate,
+    type: 'BANK_TRANSFER' as const,
+    amountMinor: 100,
+    idempotencyKey: 'bank-attempt',
+    providerRef: 'BANK/2026-11/1234567890123456',
+  };
+  it('passes the bank reference unchanged to settlement and outcome recovery', async () => {
+    const f = fixture();
+    await f.caller().tender(transfer);
+    expect(applyPharmacyTender).toHaveBeenCalledWith(
+      f.db,
+      expect.any(Object),
+      transfer,
+      undefined,
+      expect.any(Object)
+    );
+    await f.caller().tenderOutcome(transfer);
+    expect(readPharmacyTenderOutcome).toHaveBeenCalledWith(f.db, expect.any(Object), transfer);
+  });
+  it('still rejects a full card number on the card transport', async () => {
+    const f = fixture();
+    await expect(
+      f
+        .caller()
+        .tender({
+          ...transfer,
+          type: 'CARD',
+          providerRef: '4242424242424242',
+          approvalCode: 'AB12',
+        })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+});

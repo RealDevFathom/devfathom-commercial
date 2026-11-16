@@ -4,7 +4,8 @@ import type { AppRouter } from '@/server/routers/_app';
 import {
   isManualTender,
   MANUAL_CARD_APPROVAL_CODE,
-  MANUAL_CARD_REFERENCE,
+  validTenderReference,
+  bankTransferCaptureSchema,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
 } from '@/lib/pharmacy/manual-payments';
@@ -43,12 +44,13 @@ const storedSchema = z
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
         overrideReason: z.string().trim().min(1).max(500).optional(),
-        providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
+        providerRef: z.string().max(128).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
         approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
       })
-      .strict(),
+      .strict()
+      .refine(validTenderReference, { path: ['providerRef'], message: 'Invalid payment reference.' }),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
   })
   .strict();
@@ -95,6 +97,12 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined)
       throw new Error(TENDER_STORAGE_MESSAGE);
     manualCardCaptureSchema.parse({ providerRef: input.providerRef, approvalCode: input.approvalCode });
+  } else if (input.type === 'BANK_TRANSFER') {
+    if (input.approvalCode !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined)
+      throw new Error(TENDER_STORAGE_MESSAGE);
+    // Old uncertain attempts may have no reference; retain them for read-only recovery.
+    if (input.providerRef !== undefined)
+      bankTransferCaptureSchema.parse({ providerRef: input.providerRef });
   } else if (input.approvalCode !== undefined || input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
