@@ -1,3 +1,4 @@
+import { FinancePostingError } from '@/lib/finance/journal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 // DEV-647: the manager/owner refund gate has its own suite (pharmacy-sales.refund-pin.test.ts).
@@ -1552,5 +1553,16 @@ describe('DEV-821 the drawer operator decision', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(recordKhataRepayment).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('DEV-877 counter period refusal', () => {
+  it('returns a typed PERIOD_CLOSED refusal for a new tender', async () => {
+    const f = fixture();
+    vi.mocked(applyPharmacyTender).mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
+    await expect(f.caller().tender({ ...input, type: 'CASH', familyAccountId: undefined })).rejects.toMatchObject({
+      code: 'BAD_REQUEST', message: 'PERIOD_CLOSED',
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { FinancePostingError } from '@/lib/finance/journal';
 /**
  * PH-INV / INV-01..04 — the minimal procedures behind the `pharmacy-inventory`
  * entitlement (module-catalog).
@@ -161,6 +162,8 @@ function txDb(tx: unknown): ScopedDb {
 }
 
 function domainError(error: unknown): never {
+  if (error instanceof FinancePostingError && error.reason === 'PERIOD_CLOSED')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof CounterApprovalDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyInventoryError) {

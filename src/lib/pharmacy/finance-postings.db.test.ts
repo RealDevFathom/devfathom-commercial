@@ -22,7 +22,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { FinanceSourceKind } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -30,6 +30,8 @@ import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
+
+afterEach(() => vi.useRealTimers());
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -1526,6 +1528,9 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
   });
 
   it('reports discount, write-off and shrinkage as separate leakage', async () => {
+    // approveCount now posts automatically at approval time; keep that event in WINDOW.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(LATER);
     const f = await fixture(ORG_A, branch('leakage'), 'leakage');
     const rows = await inOrg(ORG_A, async (db) => {
       await assignWriteOffWitness(db, f);
@@ -1621,5 +1626,53 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
     const credits = rows.reduce((sum, row) => sum + row.creditMinor, 0);
     expect(debits).toBe(credits);
     expect(debits).toBeGreaterThan(0);
+  });
+});
+
+
+describeIfDatabase('DEV-877 counter period acceptance', () => {
+  it('[DEF-05] refuses a counter sale inside a closed accounting period', async () => {
+    const { openPharmacyDrawer, applyPharmacyTender } = await import('./settlement');
+    const { closeAccountingPeriod, reopenAccountingPeriod } = await import('./bookkeeping');
+    const f = await fixture(ORG_A, branch('closed_period'), 'closed_period');
+    const scope = scopeOf(f);
+    const businessDate = new Date(new Date().toISOString().slice(0, 10));
+    const deviceId = tag('counter');
+    const prepared = await inOrg(ORG_A, async (db) => {
+      await stockLot(db, f, { label: 'closed_period', units: 20, unitCostMinor: 1000, expiresAt: EXPIRY_LATER, unitsPerPack: 1 });
+      const sale = await deps.sales.createSale(db, scope);
+      const { line } = await deps.sales.addSaleLine(db, scope, {
+        saleId: sale.id, medicineId: f.medicineId, presentationId: f.presentationId,
+        packLevelId: f.packLevelId, saleUnit: 'UNIT', quantity: 1, canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: tag('closed_period_line'),
+      });
+      await openPharmacyDrawer(db, scope, { deviceId, businessDate, openingFloatMinor: 0 });
+      const period = await closeAccountingPeriod(db, scope, {
+        startsAt: new Date(Date.now() - 60_000), endsAt: new Date(Date.now() + 60_000),
+      });
+      return { sale, line, period };
+    });
+    const payment = {
+      saleId: prepared.sale.id, deviceId, businessDate, type: 'CASH' as const,
+      amountMinor: prepared.line.unitPriceMinor, idempotencyKey: tag('closed_period_payment'),
+    };
+    await expect(inOrg(ORG_A, (db) => applyPharmacyTender(db, scope, payment)))
+      .rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+    await inOrg(ORG_A, async (db) => {
+      expect(await db.pharmacyTender.count({ where: { branchId: f.branchId } })).toBe(0);
+      expect(await db.financeJournalEntry.count({ where: { branchId: f.branchId } })).toBe(0);
+      expect(await db.pharmacyMoneyIdempotencyKey.count({ where: { deviceId } })).toBe(0);
+      expect(await db.pharmacySaleEvent.count({ where: { saleId: prepared.sale.id, kind: 'COMPLETED' } })).toBe(0);
+      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: prepared.sale.id } });
+      expect(sale.status).toBe('OPEN');
+      expect(sale.receiptNumber).toBeNull();
+      await reopenAccountingPeriod(db, scope, { periodId: prepared.period.id, reason: 'Acceptance fixture reopen' });
+    });
+    await expect(inOrg(ORG_A, (db) => applyPharmacyTender(db, scope, payment)))
+      .resolves.toMatchObject({ settled: true, replayed: false });
+    await inOrg(ORG_A, async (db) => {
+      expect(await db.financeJournalEntry.count({ where: { branchId: f.branchId } })).toBe(2);
+      expect(await db.pharmacyTender.count({ where: { branchId: f.branchId } })).toBe(1);
+    });
   });
 });
