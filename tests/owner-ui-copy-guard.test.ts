@@ -74,6 +74,12 @@ const files = [
   ...EXTRA_FILES.map((file) => path.join(ROOT, file)),
 ];
 
+// Every assertion checks the same source snapshot. Parse each file once so the
+// full-suite CPU load does not multiply the cost of this shared fixture.
+const textFixture = files.flatMap((file) =>
+  userFacingText(file, readFileSync(file, 'utf8')).map((entry) => ({ file, ...entry }))
+);
+
 /**
  * `.toISOString()` rendered as visible JSX content (a child expression, not an
  * attribute such as `dateTime`, `value` or `href`) shows owners a raw ISO stamp.
@@ -194,11 +200,9 @@ function rawKeysInJsx(file: string, content: string): string[] {
 }
 
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
-      .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+  return textFixture
+    .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
+    .map(({ file, line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`);
 }
 
 describe('owner UI copy guard', () => {

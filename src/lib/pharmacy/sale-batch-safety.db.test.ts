@@ -261,7 +261,7 @@ describeDatabase('#659 batch safety is rechecked at tender and completion', () =
     );
     expect(result).toMatchObject({ settled: true, remainingMinor: 0 });
     expect(
-      await tenant((db) => db.pharmacyTender.findFirst({ where: { id: result.tenderId } }))
+      await tenant((db) => db.pharmacyTender.findFirst({ where: { saleId: f.saleId } }))
     ).toMatchObject({ providerRef: 'BANK-TEST-123', confirmedById: scope.actorId });
     const after = await moneyAndStock(f.saleId, f.lotId);
     expect(after.sale.status).toBe('COMPLETED');

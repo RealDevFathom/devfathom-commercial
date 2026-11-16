@@ -1334,6 +1334,7 @@ describeIfDatabase('leased receipt settlement', () => {
           {
             ...f.input,
             type: 'CASH',
+            providerRef: undefined,
           },
           {
             deviceSecret: f.fixture.deviceSecret,
