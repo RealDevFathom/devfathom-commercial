@@ -682,7 +682,7 @@ describe('pharmacy report catalog filters', () => {
     );
     const owner = screen
       .getByRole('heading', { name: 'Selected period at a glance' })
-      .closest('[data-slot="section-card"]')!;
+      .closest<HTMLDivElement>('[data-slot="section-card"]')!;
     expect(within(owner).getByText('28 Oct – 3 Nov · All branches')).toBeVisible();
     expect(
       within(owner)
