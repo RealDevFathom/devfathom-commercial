@@ -1,10 +1,45 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveRestaurantE2eDatabaseUrl } from '../../../scripts/restaurant-e2e-database';
 import { expect, type Page } from '@playwright/test';
 
-// Only keys returned by the real enrollment UI are retained, in this worker's memory.
-// A fresh disposable database is expected for each spec; no database auth state is rewritten.
+// Retain only keys returned by the real enrollment UI. A private temporary cache
+// survives Playwright worker restarts, scoped to the disposable database and actor.
+// No database authentication state is rewritten, and no key enters test artifacts.
 const authenticators = new Map<string, string>();
 const identityKey = (origin: string, email: string) => `${origin}:${email.toLowerCase()}`;
+
+function authenticatorFile(origin: string, email: string) {
+  if (!process.env.RESTAURANT_E2E_DATABASE_URL) return null;
+  const database = resolveRestaurantE2eDatabaseUrl();
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(database).hostname)) {
+    throw new Error('Authenticator cache requires a loopback disposable database.');
+  }
+  const digest = createHash('sha256')
+    .update(`${database}:${identityKey(origin, email)}`)
+    .digest('hex');
+  const directory = join(tmpdir(), `restaurant-e2e-auth-${digest}`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const info = lstatSync(directory);
+  if (!info.isDirectory() || (info.mode & 0o777) !== 0o700) {
+    throw new Error('Authenticator cache directory must be private.');
+  }
+  return join(directory, 'authenticator');
+}
+
+function readAuthenticator(origin: string, email: string) {
+  const cached = authenticators.get(identityKey(origin, email));
+  if (cached) return cached;
+  const file = authenticatorFile(origin, email);
+  if (!file || !existsSync(file)) return undefined;
+  const info = lstatSync(file);
+  if (!info.isFile() || (info.mode & 0o777) !== 0o600) {
+    throw new Error('Authenticator cache file must be private.');
+  }
+  return readFileSync(file, 'utf8');
+}
 
 export function fixtureTotp(secret: string, now = Date.now()) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -24,7 +59,7 @@ export function fixtureTotp(secret: string, now = Date.now()) {
 }
 
 export function platformActorCode(origin: string, email: string) {
-  const secret = authenticators.get(identityKey(origin, email));
+  const secret = readAuthenticator(origin, email);
   if (!secret) throw new Error('Sign in through the fixture enrollment UI before requesting OTP.');
   return fixtureTotp(secret);
 }
@@ -33,7 +68,7 @@ export function platformActorCode(origin: string, email: string) {
 export async function signInPlatformActor(page: Page, email: string) {
   const origin = new URL(page.url()).origin;
   const key = identityKey(origin, email);
-  const secret = authenticators.get(key);
+  const secret = readAuthenticator(origin, email);
   if (secret)
     await page.getByLabel('Authentication code', { exact: true }).fill(fixtureTotp(secret));
   const session = page.waitForResponse(
@@ -67,6 +102,8 @@ export async function signInPlatformActor(page: Page, email: string) {
   await enrollment.getByRole('button', { name: 'Verify authenticator' }).click();
   expect((await confirmed).status(), 'Authenticator enrollment must succeed').toBe(200);
   await expect(enrollment.getByRole('heading', { name: 'Save your recovery codes' })).toBeVisible();
+  const file = authenticatorFile(origin, email);
+  if (file) writeFileSync(file, enrolledSecret, { mode: 0o600, flag: 'wx' });
   authenticators.set(key, enrolledSecret);
   await enrollment.getByRole('button', { name: 'I saved my codes — continue' }).click();
 }
