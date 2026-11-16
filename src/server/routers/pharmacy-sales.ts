@@ -2091,8 +2091,6 @@ export const pharmacySalesRouter = router({
         );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          // DEV-631: no line reserves stock while today's business day is closed.
-          await requirePharmacyTodayOpenForTrading(db, scope);
           for (const { kind, approval } of approvals)
             await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({
@@ -2105,6 +2103,8 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            // No stock is reserved while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             const { prescription } = input;
             if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
@@ -2201,6 +2201,9 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // Check the actor and witness before taking the day lock. The day lock
+          // still precedes document/register locks and every stock allocation.
+          await requirePharmacyTodayOpenForTrading(db, scope);
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };

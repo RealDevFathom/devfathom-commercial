@@ -416,6 +416,19 @@ describe('pharmacySales.addLine controlled actor', () => {
     }
   );
 
+  it('refuses an authorized controlled line on a closed day before stock or register writes', async () => {
+    const { caller, db, register } = emergencyCallerFor(null);
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'DAY_CLOSED',
+    });
+    expect(verifyOperatorCredential).toHaveBeenCalledOnce();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it('locks the sale row before the register lock, then dispenses (DEV-825)', async () => {
     const { caller, lock, consent } = emergencyCallerFor(null);
     consent.mockResolvedValue({ granted: true, revokedAt: null });
