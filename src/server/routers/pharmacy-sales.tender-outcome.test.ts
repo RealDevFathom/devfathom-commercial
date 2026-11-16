@@ -403,3 +403,35 @@ describe('pharmacySales.tenderOutcome', () => {
     );
   });
 });
+
+
+describe('DEV-875 bank transfer reference recovery', () => {
+  it('accepts bank statement references through the router and verifies the saved evidence', async () => {
+    const legacy = { ...input, type: 'BANK_TRANSFER' as const, cashReceivedMinor: undefined };
+    const f = fixture(legacy);
+    const transfer = { ...f.parsed, providerRef: 'BANK/2026-001' };
+    f.keyRead.mockResolvedValue({ ...f.prior, payloadHash: digest(transfer) });
+    f.tenderRead.mockResolvedValue({
+      ...(await f.tenderRead()), providerRef: 'BANK/2026-001', confirmedById: 'actor-1',
+    });
+    expect(await f.caller().tenderOutcome(transfer)).toMatchObject({ status: 'ACCEPTED' });
+    f.tenderRead.mockResolvedValue({ ...(await f.tenderRead()), providerRef: 'OTHER-TRANSFER' });
+    expect(await f.caller().tenderOutcome(transfer)).toMatchObject({ status: 'UNKNOWN' });
+    f.noWrites();
+  });
+  it('preserves recovery and idempotent retry of an old transfer without a reference', async () => {
+    const f = fixture({ ...input, type: 'BANK_TRANSFER', cashReceivedMinor: undefined });
+    expect(await f.caller().tenderOutcome(f.parsed)).toMatchObject({ status: 'ACCEPTED' });
+    expect(await f.caller().tender(f.parsed)).toMatchObject({ ...stored, replayed: true });
+  });
+  it.each(['', '   ', 'x'.repeat(121)])('rejects an invalid bank reference at the API boundary %j', async (providerRef) => {
+    const f = fixture();
+    await expect(f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+  it('keeps full card numbers blocked at the API boundary', async () => {
+    const f = fixture();
+    await expect(f.caller().tender({ ...input, type: 'CARD', providerRef: '4242424242424242', approvalCode: 'A1B2' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+});

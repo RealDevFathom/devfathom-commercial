@@ -80,6 +80,20 @@ export const manualCardCaptureSchema = z.object({
   approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
 }).strict();
 
+/** Bank statement reference, required for every new bank transfer. */
+export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
+export const bankTransferCaptureSchema = z.object({
+  providerRef: z.string().trim().min(1).max(BANK_TRANSFER_REFERENCE_MAX_LENGTH),
+}).strict();
+
+/** Keep card-number protection on all existing wire paths; bank references have their own format. */
+export function hasValidTenderProviderReference(input: { type: string; providerRef?: string }) {
+  if (input.providerRef === undefined) return true; // Historical attempts must remain recoverable.
+  return input.type === 'BANK_TRANSFER'
+    ? bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef }).success
+    : MANUAL_CARD_REFERENCE.test(input.providerRef);
+}
+
 const confirmerSchema = z.object({
   /** The confirming user's id; absent on reports saved before it was recorded. */
   id: z.string().min(1).optional(),
