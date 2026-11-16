@@ -106,3 +106,25 @@ describe('organizationAdmin.updateProfile time zone', () => {
     });
   });
 });
+
+it('saves the workspace profile without the unused locale setting, preserving stored locale', async () => {
+  const input = {
+    displayName: profile.displayName,
+    timezone: profile.timezone,
+    primaryContactName: null,
+    primaryContactEmail: '',
+  };
+  const { error } = await save(input);
+  expect(error).toBeUndefined();
+  expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+    where: { id: 'org_a' },
+    data: { ...input, primaryContactEmail: null },
+  });
+  expect(mocks.update.mock.calls[0]![0].data).not.toHaveProperty('locale');
+});
+
+it('ignores the retired locale setting from an older profile form', async () => {
+  const { error } = await save({ ...profile, locale: 'ur' });
+  expect(error).toBeUndefined();
+  expect(mocks.update.mock.calls[0]![0].data).not.toHaveProperty('locale');
+});

@@ -1,5 +1,7 @@
 'use client';
 
+import { splitReceiptBidiText } from '@/lib/pharmacy/counter-receipt-bidi';
+
 import { useEffect, useRef, useState } from 'react';
 
 import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
@@ -276,6 +278,20 @@ function CounterReceiptEvidence({
   );
 }
 
+/** Inert mixed-language receipt text with isolated LTR numeric runs. */
+function ReceiptText({ value, locale }: { value: string; locale: CounterReceiptLocale }) {
+  if (locale === 'en') return value;
+  return splitReceiptBidiText(value).map((part, index) =>
+    index % 2 ? (
+      <bdi dir="ltr" key={index}>
+        {part}
+      </bdi>
+    ) : (
+      part
+    )
+  );
+}
+
 /** Receipt browser preview; requesting a print never confirms paper delivery. */
 export function CounterReceiptView({
   receipt,
@@ -427,7 +443,7 @@ export function CounterReceiptView({
           role="status"
           lang={language}
           dir={direction}
-          className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border-subtle bg-success/10 p-4"
+          className={`flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border-subtle bg-success/10 p-4 ${locale === 'ur' ? 'receipt-urdu' : ''}`}
         >
           <div className="space-y-2">
             <StatusPill status="settled" tone="success" label={receiptTitle(receipt, locale)} />
@@ -436,20 +452,29 @@ export function CounterReceiptView({
             </h3>
             <p className="text-sm text-text-muted">
               {receipt.branchName} ·{' '}
-              {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+              <ReceiptText
+                locale={locale}
+                value={receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+              />
             </p>
           </div>
           <dl className="flex flex-wrap gap-x-8 gap-y-3">
             <div>
               <dt className="font-mono text-xs text-text-muted">{strings.net}</dt>
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
-                {receipt.currency} {formatMinor(receipt.totals.netMinor, locale)}
+                <ReceiptText
+                  locale={locale}
+                  value={`${receipt.currency} ${formatMinor(receipt.totals.netMinor, locale)}`}
+                />
               </dd>
             </div>
             <div>
               <dt className="font-mono text-xs text-text-muted">{strings.change}</dt>
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
-                {receipt.currency} {formatMinor(receipt.totals.changeMinor, locale)}
+                <ReceiptText
+                  locale={locale}
+                  value={`${receipt.currency} ${formatMinor(receipt.totals.changeMinor, locale)}`}
+                />
               </dd>
             </div>
           </dl>
@@ -588,7 +613,7 @@ export function CounterReceiptView({
         aria-label={receiptTitle(receipt, locale)}
         lang={language}
         dir={direction}
-        className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+        className={`${locale === 'ur' ? 'receipt-urdu' : ''} space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
           format === 'THERMAL_58'
             ? 'max-w-[16rem] font-mono text-xs'
             : format === 'THERMAL'
@@ -604,7 +629,11 @@ export function CounterReceiptView({
             {strings.branch}: {receipt.branchName}
           </p>
           <p className="text-text-muted">
-            {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            {strings.date}:{' '}
+            <ReceiptText
+              locale={locale}
+              value={receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            />
           </p>
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
@@ -631,13 +660,15 @@ export function CounterReceiptView({
                     {counterLinePresentation(line, locale).identity}
                   </span>
                   <span className="shrink-0 tabular-nums text-text-strong">
-                    {formatMinor(line.lineTotalMinor, locale)}
+                    <ReceiptText locale={locale} value={formatMinor(line.lineTotalMinor, locale)} />
                   </span>
                 </div>
-                <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
+                <p className="text-text-muted">
+                  <ReceiptText locale={locale} value={counterLinePricing(line, locale)} />
+                </p>
                 {receiptPromotionLabel(line, locale) ? (
                   <p className="break-words tabular-nums text-text-muted">
-                    {receiptPromotionLabel(line, locale)}
+                    <ReceiptText locale={locale} value={receiptPromotionLabel(line, locale)!} />
                   </p>
                 ) : null}
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
@@ -645,7 +676,7 @@ export function CounterReceiptView({
                     key={line.allocations![index]!.allocationId}
                     className="whitespace-pre-wrap break-words tabular-nums text-text-muted"
                   >
-                    {allocation}
+                    <ReceiptText locale={locale} value={allocation} />
                   </p>
                 ))}
                 <Button
@@ -654,10 +685,10 @@ export function CounterReceiptView({
                   className="h-auto min-h-11 max-w-full whitespace-normal py-2"
                   disabled={printing || document === null || labelUnavailable !== null}
                   aria-describedby={`rx-label-${line.saleLineId}`}
-                  onClick={() => {
+                  onClick={async () => {
                     setLabelError(null);
                     try {
-                      printCounterBrowserReceipt(
+                      await printCounterBrowserReceipt(
                         receipt,
                         locale,
                         'LABEL_50x30',
@@ -700,7 +731,9 @@ export function CounterReceiptView({
           ).map(([label, value]) => (
             <div key={label} className="flex justify-between gap-3">
               <dt className="text-text-muted">{label}</dt>
-              <dd className="tabular-nums text-text-strong">{formatMinor(value, locale)}</dd>
+              <dd className="tabular-nums text-text-strong">
+                <ReceiptText locale={locale} value={formatMinor(value, locale)} />
+              </dd>
             </div>
           ))}
         </dl>
@@ -710,9 +743,11 @@ export function CounterReceiptView({
             <p className="text-text-muted">{strings.tenders}</p>
             {receipt.tenders.map((tender) => (
               <div key={tender.tenderId} className="flex justify-between gap-3">
-                <span className="text-text-strong">{tender.type}</span>
+                <span className="text-text-strong">
+                  {locale === 'ur' ? (strings.tenderName[tender.type] ?? tender.type) : tender.type}
+                </span>
                 <span className="tabular-nums text-text-strong">
-                  {formatMinor(tender.amountMinor, locale)}
+                  <ReceiptText locale={locale} value={formatMinor(tender.amountMinor, locale)} />
                 </span>
               </div>
             ))}

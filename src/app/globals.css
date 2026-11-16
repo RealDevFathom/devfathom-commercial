@@ -1753,3 +1753,23 @@
     outline-color: Highlight;
   }
 }
+
+/* Receipt-only language typography; preserve Studio geometry and English faces. */
+.receipt-urdu {
+  font-family: 'Noto Nastaliq Urdu', serif;
+  line-height: 2.5;
+  letter-spacing: normal;
+}
+
+.receipt-urdu .font-mono {
+  font-family: 'Noto Nastaliq Urdu', serif;
+  letter-spacing: normal;
+}
+
+@font-face {
+  font-family: 'Noto Nastaliq Urdu';
+  src: url('/fonts/noto-nastaliq-urdu.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}

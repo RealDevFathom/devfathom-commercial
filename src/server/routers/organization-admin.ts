@@ -379,7 +379,6 @@ export const organizationAdminRouter = router({
         // Every screen that shows a workspace time formats in this zone, and
         // Intl throws on one it does not know: the platform's IANA check.
         timezone: ianaTimezone,
-        locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
         // Printed on client-facing invoices as the seller's address and tax ID.

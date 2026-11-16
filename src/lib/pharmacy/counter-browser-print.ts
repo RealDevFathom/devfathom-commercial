@@ -1,3 +1,4 @@
+import { splitReceiptBidiText } from './counter-receipt-bidi';
 import type { ReceiptLayout } from '@/lib/receipts/configuration';
 
 import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
@@ -108,8 +109,7 @@ function escapeHtml(value: string | number): string {
  * stays escaped; bidi controls from source data remain subject to validation. */
 function receiptHtmlText(preview: string, locale: CounterReceiptLocale): string {
   if (locale !== 'ur') return escapeHtml(preview);
-  return preview
-    .split(/([A-Za-z0-9][\x20-\x7e]*)/g)
+  return splitReceiptBidiText(preview)
     .map((part, index) =>
       index % 2 ? `<bdi dir="ltr">${escapeHtml(part)}</bdi>` : escapeHtml(part)
     )
@@ -146,12 +146,17 @@ export function buildCounterBrowserReceipt(
     format === 'THERMAL_58' ? 58 : 80,
     reprint
   );
+  const urduFont =
+    locale === 'ur'
+      ? `@font-face { font-family: 'Noto Nastaliq Urdu'; src: url('/fonts/noto-nastaliq-urdu.ttf') format('truetype'); font-weight: 400 700; font-display: swap; }
+body { font-family: 'Noto Nastaliq Urdu', serif; line-height: 2.5; }`
+      : '';
   // All receipt content is escaped inert text. Physical print styles only.
   return `<!doctype html><html lang="${locale}" dir="${COUNTER_RECEIPT_DIRECTION[locale]}"><head>
 <meta charset="utf-8"><title>${escapeHtml(receiptTitle(receipt, locale))}</title>
 <style>@page { size: ${format === 'A4' ? 'A4' : 'auto'}; margin: ${format === 'A4' ? '10mm' : '0'}; }
 * { box-sizing: border-box; } body { margin: 0; width: ${width}; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }${urduFont}</style>
 </head><body><pre>${receiptHtmlText(preview, locale)}</pre></body></html>`;
 }
 
@@ -163,7 +168,7 @@ export function printCounterBrowserReceipt(
   reprint = false,
   reservation?: CounterBrowserPrintReservation,
   labelSources: readonly DispensingLabelSource[] = []
-): void {
+): void | Promise<void> {
   const html = buildCounterBrowserReceipt(receipt, locale, format, reprint, labelSources);
   const printReservation = reservation ?? reserveCounterBrowserPrint();
   assertCounterBrowserPrintReady(printReservation);
@@ -187,6 +192,21 @@ export function printCounterBrowserReceipt(
           'Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.'
         );
       }
+    }
+    if (locale === 'ur' && format !== 'LABEL_50x30') {
+      return popup.document.fonts
+        .load('12px "Noto Nastaliq Urdu"')
+        .then((faces) => {
+          if (faces.length === 0) throw new Error('Urdu receipt font unavailable.');
+          popup.focus();
+          popup.print();
+        })
+        .catch(() => {
+          closePopup(popup);
+          throw new Error(
+            'The Urdu receipt font or print dialog could not load. Retry Print receipt.'
+          );
+        });
     }
     popup.focus();
     popup.print();

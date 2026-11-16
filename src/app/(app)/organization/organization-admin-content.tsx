@@ -320,7 +320,6 @@ export function OrganizationAdminContent() {
     profile.mutate({
       displayName: formValue(values, 'displayName'),
       timezone: formValue(values, 'timezone'),
-      locale: formValue(values, 'locale'),
       primaryContactName: formValue(values, 'primaryContactName') || null,
       primaryContactEmail: formValue(values, 'primaryContactEmail'),
       invoiceAddress: formValue(values, 'invoiceAddress') || null,
@@ -427,10 +426,6 @@ export function OrganizationAdminContent() {
             <label>
               <span className={labelClass}>Timezone</span>
               <Input name="timezone" defaultValue={organization.timezone} required />
-            </label>
-            <label>
-              <span className={labelClass}>Locale</span>
-              <Input name="locale" defaultValue={organization.locale} required />
             </label>
             <label>
               <span className={labelClass}>Primary contact</span>
