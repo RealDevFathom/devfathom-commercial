@@ -1,3 +1,4 @@
+import { PrepaidError } from '@/lib/pharmacy/prepaid-tiers';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput, promotionCreatorMayManage } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
@@ -606,6 +607,7 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
 };
 
 function fail(error: unknown): never {
+  if(error instanceof PrepaidError) throw new TRPCError({code:'BAD_REQUEST',message:error.message});
   if (error instanceof LostSalesError)
     throw new TRPCError({
       code:

@@ -14,6 +14,7 @@ export function apportionDiscount(totalMinor: number, weights: readonly number[]
 type Money = { grossMinor?: number | null; discountMinor?: number | null };
 type ReturnMoney = Money & { canonicalUnits: number };
 type SoldMoney = {
+  tierAllocationDiscounts?: unknown;
   grossMinor?: number;
   quantity: number;
   unitPriceMinor: number;
@@ -34,7 +35,7 @@ export function saleAllocationMoney<T extends Money & { id: string; canonicalUni
   return line.allocations.map((row, i) => ({
     ...row,
     grossMinor: row.grossMinor ?? historicalGross[i]!,
-    discountMinor: row.discountMinor ?? historicalDiscount[i]!,
+    discountMinor: (row.discountMinor ?? historicalDiscount[i]!) + tierAllocationDiscount(line.tierAllocationDiscounts, row.id),
   }));
 }
 
@@ -89,4 +90,11 @@ export function priceReturn(
     : Math.min(remainingDiscount, charged ? charged.discountMinor : delta(line.discountMinor));
   if (netMinor < 0 || discountMinor < 0) throw new Error('Invalid return money');
   return { grossMinor: netMinor + discountMinor, discountMinor };
+}
+
+/** Checkout's separate tier snapshot leaves the original stock allocation evidence immutable. */
+function tierAllocationDiscount(snapshot: unknown, allocationId: string): number {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return 0;
+  const value = (snapshot as Record<string, unknown>)[allocationId];
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }

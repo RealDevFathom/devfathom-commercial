@@ -58,6 +58,8 @@ export type CounterReceiptLine = {
   canonicalUnits: number;
   unitPriceMinor: number;
   discountMinor: number;
+  tierDiscountMinor?: number;
+  tierName?: string | null;
   /** #727: the promotion name frozen on the line when it was priced; never the live rule. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -114,6 +116,7 @@ type Strings = {
   lineTotal: string;
   gross: string;
   discount: string;
+  tierDiscount: string;
   promotion: string;
   net: string;
   tendered: string;
@@ -150,6 +153,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     lineTotal: 'Amount',
     gross: 'Gross',
     discount: 'Discount',
+    tierDiscount: 'Prepaid tier discount',
     promotion: 'Promotion',
     net: 'Total',
     tendered: 'Tendered',
@@ -190,6 +194,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     lineTotal: 'رقم',
     gross: 'کل رقم',
     discount: 'رعایت',
+    tierDiscount: 'پری پیڈ درجے کی رعایت',
     promotion: 'پروموشن',
     net: 'قابلِ ادائیگی',
     tendered: 'ادا شدہ',
@@ -331,11 +336,11 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
 
 /** #727: descriptive savings only; the discount is already inside the line total. */
 export function receiptPromotionLabel(
-  line: Pick<CounterReceiptLine, 'promotionName' | 'discountMinor'>,
+  line: Pick<CounterReceiptLine, 'promotionName' | 'discountMinor' | 'tierDiscountMinor'>,
   locale: CounterReceiptLocale
 ): string | null {
   if (!line.promotionName || line.discountMinor <= 0) return null;
-  const label = `${COUNTER_RECEIPT_STRINGS[locale].promotion}: ${line.promotionName} (-${formatMinor(line.discountMinor, locale)})`;
+  const label = `${COUNTER_RECEIPT_STRINGS[locale].promotion}: ${line.promotionName} (-${formatMinor(line.discountMinor - (line.tierDiscountMinor ?? 0), locale)})`;
   return label.length <= 160 ? label : label.slice(0, 160);
 }
 
@@ -348,6 +353,7 @@ function footerFor(
   const parts = [
     `${strings.gross} ${formatMinor(receipt.totals.grossMinor, locale)}`,
     `${strings.discount} ${formatMinor(receipt.totals.discountMinor, locale)}`,
+    ...receiptTierLines(receipt, locale),
     `${strings.net} ${formatMinor(receipt.totals.netMinor, locale)}`,
     `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
     `${strings.change} ${formatMinor(receipt.totals.changeMinor, locale)}`,
@@ -465,4 +471,11 @@ export function formatReceiptIssuedAt(value: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '—' : formatKarachiDateTime(date);
+}
+
+/** Separate informational savings lines; already included in total discounts. */
+export function receiptTierLines(receipt: Pick<CounterReceipt, 'lines'>, locale: CounterReceiptLocale) {
+  const tiers = new Map<string, number>();
+  for (const line of receipt.lines) if (line.tierName && line.tierDiscountMinor) tiers.set(line.tierName, (tiers.get(line.tierName) ?? 0) + line.tierDiscountMinor);
+  return [...tiers].map(([name, minor]) => `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`);
 }

@@ -3581,6 +3581,7 @@ function ScopedPharmacyCounterConsole({
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
+          prepaidBalanceMinor={currentBill ? cart.prepaidBalanceMinor : undefined}
           confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
           drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
