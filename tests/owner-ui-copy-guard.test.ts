@@ -41,7 +41,12 @@ function uiFiles(dir: string): string[] {
   return out;
 }
 
-function userFacingText(file: string, content: string): { line: number; text: string }[] {
+// The guards inspect the same immutable files repeatedly. Reuse their parsed
+// trees, but invalidate on content changes so synthetic cases remain independent.
+const parsedFiles = new Map<string, { content: string; source: ts.SourceFile }>();
+function parsedSource(file: string, content: string) {
+  const cached = parsedFiles.get(file);
+  if (cached?.content === content) return cached.source;
   const source = ts.createSourceFile(
     file,
     content,
@@ -49,6 +54,12 @@ function userFacingText(file: string, content: string): { line: number; text: st
     true,
     file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
+  parsedFiles.set(file, { content, source });
+  return source;
+}
+
+function userFacingText(file: string, content: string): { line: number; text: string }[] {
+  const source = parsedSource(file, content);
   const found: { line: number; text: string }[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
@@ -79,13 +90,7 @@ const files = [
  * attribute such as `dateTime`, `value` or `href`) shows owners a raw ISO stamp.
  */
 function rawIsoInJsx(file: string, content: string): number[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+  const source = parsedSource(file, content);
   const lines: number[] = [];
   // A date-only slice (`.toISOString().slice(0, 10)`) is a calendar date, not a timestamp.
   // Nested JSX is checked on its own visit, so it is not descended into here.
@@ -141,13 +146,7 @@ const sourceCarriesTables = (file: string) =>
  * straight from data (`{contract.permission}`) instead of through a plain-words helper.
  */
 function rawKeysInJsx(file: string, content: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+  const source = parsedSource(file, content);
   const found: string[] = [];
   const at = (node: ts.Node) =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;

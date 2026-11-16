@@ -138,7 +138,7 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     pharmacySale: { findFirst: vi.fn(), updateMany: vi.fn() },
     medicine: { findFirst: vi.fn() },
     pharmacyInventoryLot: { findMany: vi.fn() },
-    pharmacySaleLine: { create: vi.fn() },
+    pharmacySaleLine: { findFirst: vi.fn(async () => null), create: vi.fn() },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
   });
