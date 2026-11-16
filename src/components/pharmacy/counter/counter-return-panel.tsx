@@ -123,6 +123,44 @@ type Props = {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
+/** Explicit, mutually exclusive choices using the shared touch-sized controls. */
+function ChoiceGroup<T extends string>({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: T | '';
+  options: ReadonlyArray<{ value: T; label: string; disabled?: boolean }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div role="group" aria-labelledby={id} className="space-y-2">
+      <p id={id} className="text-sm font-medium text-text-strong">
+        {label}
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {options.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant={value === option.value ? 'default' : 'outline'}
+            className="h-auto min-h-11 w-full whitespace-normal"
+            aria-pressed={value === option.value}
+            disabled={option.disabled}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
   const [open, setOpen] = useState(false);
   // DEV-647 / DEV-621: returns and refunds stay with managers and owners.
@@ -203,8 +241,10 @@ export function ReturnForm({
   // DEV-501: quantity is typed in the unit the line was sold in, plus any loose units.
   // null keeps the default for the selected line and lot.
   const [quantity, setQuantity] = useState<{ sold: string; loose: string } | null>(null);
-  const [reason, setReason] = useState('WRONG_ITEM');
-  const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
+  const [reason, setReason] = useState('');
+  // Keep the existing later-refund reason independent of fresh return choices.
+  const [refundReason, setRefundReason] = useState('WRONG_ITEM');
+  const [disposition, setDisposition] = useState<'' | 'RESTOCK' | 'QUARANTINE'>('');
   const [chosenLocation, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
   // The tender refunded with the return: '' (choose), 'none' (record only) or a tender id.
@@ -327,6 +367,8 @@ export function ReturnForm({
   const managerPinReady = witnessPinPattern.test(managerPin);
   const returnReady =
     !!line &&
+    !!reason &&
+    !!disposition &&
     unitsValid &&
     !(disposition === 'RESTOCK' && !selectedLot?.restockAllowed) &&
     !(disposition === 'QUARANTINE' && !location) &&
@@ -344,7 +386,8 @@ export function ReturnForm({
     setLineId('');
     setLotId('');
     setQuantity(null);
-    setDisposition('QUARANTINE');
+    setReason('');
+    setDisposition('');
     setIntegrity('');
     setReturnTender('');
     setReturnAmount(null);
@@ -458,7 +501,7 @@ export function ReturnForm({
   }
 
   function confirmReturn() {
-    if (!returnReady || !line) return;
+    if (!returnReady || !line || !reason || !disposition) return;
     const input = {
       branchId,
       saleLineId: line.id,
@@ -759,6 +802,9 @@ export function ReturnForm({
                 className="space-y-3 rounded-lg border border-border-subtle p-4"
               >
                 <legend className="px-1 font-semibold">Return and refund</legend>
+                <p className="text-sm text-text-muted">
+                  Choose a reason and what happens to the stock before confirming.
+                </p>
                 <Label htmlFor="return-line">Sold line</Label>
                 <select
                   id="return-line"
@@ -770,7 +816,8 @@ export function ReturnForm({
                     setWitnessPin('');
                     setLotId('');
                     setQuantity(null);
-                    setDisposition('QUARANTINE');
+                    setReason('');
+                    setDisposition('');
                     setReturnAmount(null);
                   }}
                 >
@@ -838,19 +885,6 @@ export function ReturnForm({
                     perSold > 1 &&
                     `One sold ${soldNoun} contains ${line.canonicalUnitsPerSaleUnit} base units.`}
                 </p>
-                <Label htmlFor="return-reason">Reason</Label>
-                <select
-                  id="return-reason"
-                  className={selectClass}
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                >
-                  {REASONS.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
                 <Label htmlFor="return-lot">Returned lot / batch</Label>
                 <select
                   id="return-lot"
@@ -859,11 +893,14 @@ export function ReturnForm({
                   onChange={(event) => {
                     setLotId(event.target.value);
                     setQuantity(null);
-                    setDisposition('QUARANTINE');
+                    setReason('');
+                    setDisposition('');
                     setReturnAmount(null);
                   }}
                 >
-                  <option value="">Lot cannot be verified — quarantine</option>
+                  <option value="">
+                    Can&apos;t tell which batch → keep aside (don&apos;t resell)
+                  </option>
                   {line?.lots.map((lot) => (
                     <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
                       Batch {lot.batchNumber}
@@ -871,31 +908,48 @@ export function ReturnForm({
                         ? ` · ${formatLotExpiry(lot.expiresAt, (value) => `expires ${value.toISOString().slice(0, 10)}`)}`
                         : ''}{' '}
                       · {lot.returnableUnits} units remaining
-                      {lot.restockAllowed ? '' : ' · quarantine only'}
+                      {lot.restockAllowed ? '' : ' · keep aside only'}
                     </option>
                   ))}
                 </select>
                 {!lotId && (
                   <p className="text-sm text-text-muted">
-                    Unidentified stock stays in quarantine with a pharmacist-verification task. No
-                    lot receives available stock.
+                    Stock from an unknown batch must be kept aside for pharmacist review. Don’t
+                    resell it; no batch receives available stock.
                   </p>
                 )}
-                <Label htmlFor="return-disposition">Stock disposition</Label>
-                <select
+                <ChoiceGroup
+                  id="return-reason"
+                  label="Reason"
+                  value={reason}
+                  options={REASONS.map(([value, label]) => ({ value, label }))}
+                  onChange={(next) => {
+                    setReason(next);
+                    setRefundReason(next);
+                  }}
+                />
+                <ChoiceGroup<'RESTOCK' | 'QUARANTINE'>
                   id="return-disposition"
-                  className={selectClass}
+                  label="What happens to the stock?"
                   value={disposition}
-                  onChange={(event) => setDisposition(event.target.value as typeof disposition)}
-                >
-                  <option value="QUARANTINE">Quarantine for review</option>
-                  <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
-                    Restock to verified lot and original shelf
-                  </option>
-                </select>
+                  options={[
+                    {
+                      value: 'RESTOCK',
+                      label: 'Restock — back on the shelf for sale',
+                      disabled: !selectedLot?.restockAllowed,
+                    },
+                    { value: 'QUARANTINE', label: "Keep aside — don't resell" },
+                  ]}
+                  onChange={setDisposition}
+                />
+                {lotId && !selectedLot?.restockAllowed && (
+                  <p className="text-sm text-text-muted">
+                    This batch cannot be restocked. Keep it aside for review.
+                  </p>
+                )}
                 {disposition === 'QUARANTINE' && (
                   <>
-                    <Label htmlFor="return-location">Quarantine location</Label>
+                    <Label htmlFor="return-location">Keep-aside (quarantine) location</Label>
                     <select
                       id="return-location"
                       className={selectClass}
@@ -911,8 +965,8 @@ export function ReturnForm({
                     </select>
                     {data.locations.length === 0 && (
                       <p role="alert">
-                        No quarantine location is configured for this branch. Ask a supervisor to
-                        configure one.
+                        No keep-aside (quarantine) location is configured for this branch. Ask a
+                        supervisor to configure one.
                       </p>
                     )}
                   </>
@@ -1002,10 +1056,10 @@ export function ReturnForm({
                 {!attempt && witnessRequired && witnessFields}
                 {/* DEV-621: one PIN entry approves the next return or refund; it clears after each. */}
                 {!attempt && managerPinField}
-                {line && unitsValid && (
+                {line && unitsValid && reason && disposition && (
                   <p className="text-sm text-text-muted">
                     Confirming records {quantitySummary} of {line.name} as inspected (
-                    {disposition === 'RESTOCK' ? 'restock' : 'quarantine'})
+                    {disposition === 'RESTOCK' ? 'restock' : "keep aside — don't resell"})
                     {returnTender && returnAmountMinor > 0
                       ? ` and refunds PKR ${formatMinor(returnAmountMinor)} to ${returnTender.type}`
                       : ''}
@@ -1096,7 +1150,7 @@ export function ReturnForm({
                         amountMinor,
                         deviceId: deviceId(),
                         businessDate: businessDate().toISOString(),
-                        reason,
+                        reason: refundReason,
                         idempotencyKey: browserUuid(),
                         manualCashFallback: manualRequired && manual,
                       },

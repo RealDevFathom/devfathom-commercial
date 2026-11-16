@@ -822,7 +822,13 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
+  await expect(
+    dialog.getByRole('button', { name: 'Confirm return & refund', exact: true })
+  ).toBeDisabled();
+  await pressControl(dialog.getByRole('button', { name: 'Wrong item / strip', exact: true }));
+  await pressControl(
+    dialog.getByRole('button', { name: 'Restock — back on the shelf for sale', exact: true })
+  );
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
@@ -840,7 +846,17 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption('');
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
+  await expect(
+    dialog.getByRole('button', { name: 'Wrong item / strip', exact: true })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await expect(
+    dialog.getByRole('button', { name: "Keep aside — don't resell", exact: true })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await pressControl(dialog.getByRole('button', { name: 'Wrong item / strip', exact: true }));
+  await pressControl(
+    dialog.getByRole('button', { name: "Keep aside — don't resell", exact: true })
+  );
+  await dialog.getByLabel('Keep-aside (quarantine) location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Batch marking unreadable; pharmacist verification required');
