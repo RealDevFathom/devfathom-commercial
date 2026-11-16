@@ -4,7 +4,10 @@ import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useReducedMotion } from 'motion/react';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import Link from 'next/link';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Eyebrow } from '@/components/ui/eyebrow';
+import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { assistantEntry } from './assistant-suggestions';
 import { useChat } from '@ai-sdk/react';
 import {
@@ -12,7 +15,7 @@ import {
   lastAssistantMessageIsCompleteWithToolCalls,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square } from 'lucide-react';
+import { Sparkles, ArrowUp, ArrowUpRight, Check, X, Loader2, Wrench, Square } from 'lucide-react';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
@@ -86,7 +89,10 @@ function humanizeTool(name: string): string {
 export function AssistantPanel() {
   const entitlements = useEntitlements();
   const { data: session, status } = useSession();
-  const entry = assistantEntry(entitlements, session?.user, status);
+  const { capabilities } = usePharmacyNavigationAccess(
+    status === 'authenticated' && entitlements.vertical === 'PHARMACY'
+  );
+  const entry = assistantEntry(entitlements, session?.user, status, capabilities);
   // Match the shell's live-session identity boundary. Remount before rendering
   // another tenant/user/access context; never reuse or persist their messages.
   const contextKey = JSON.stringify([
@@ -297,7 +303,12 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
           {messages.length === 0 ? (
-            <EmptyState entry={entry} onPick={send} disabled={busy || failed} />
+            <EmptyState
+              entry={entry}
+              onPick={send}
+              onNavigate={() => setOpen(false)}
+              disabled={busy || failed}
+            />
           ) : (
             messages.map((m) => (
               <MessageBubble key={m.id} message={m} onApprove={approve} disabled={busy || failed} />
@@ -469,7 +480,11 @@ function MessageBubble({
         {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
-              <p key={i} dir="auto" className="whitespace-pre-wrap break-words text-start text-current">
+              <p
+                key={i}
+                dir="auto"
+                className="whitespace-pre-wrap break-words text-start text-current"
+              >
                 {part.text}
               </p>
             ) : (
@@ -758,10 +773,12 @@ function Thinking() {
 function EmptyState({
   entry,
   onPick,
+  onNavigate,
   disabled,
 }: {
   entry: ReturnType<typeof assistantEntry>;
   onPick: (q: string) => void;
+  onNavigate: () => void;
   disabled: boolean;
 }) {
   return (
@@ -773,7 +790,7 @@ function EmptyState({
       <p role="status" className="mt-1.5 max-w-[18rem] text-xs text-muted-foreground">
         {entry.description}
       </p>
-      {entry.canChat && entry.suggestions.length === 0 && (
+      {entry.canChat && entry.suggestions.length === 0 && entry.shortcuts.length === 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
           {entry.accessLimited
             ? 'No suggested actions are available for your current access.'
@@ -794,6 +811,26 @@ function EmptyState({
           </Button>
         ))}
       </div>
+      {entry.shortcuts.length > 0 && (
+        <nav aria-label="Counter shortcuts" className="mt-5 grid w-full gap-2 text-left">
+          <Eyebrow>At the Counter</Eyebrow>
+          {entry.shortcuts.map((shortcut) => (
+            <Link
+              key={shortcut.label}
+              href={shortcut.href}
+              onClick={onNavigate}
+              className={buttonVariants({
+                variant: 'outline',
+                className:
+                  'h-auto min-h-11 justify-between whitespace-normal rounded-xl border border-border bg-card px-3 py-2 text-left text-[13px] text-foreground',
+              })}
+            >
+              {shortcut.label}
+              <ArrowUpRight aria-hidden="true" className="text-muted-foreground" />
+            </Link>
+          ))}
+        </nav>
+      )}
     </div>
   );
 }
