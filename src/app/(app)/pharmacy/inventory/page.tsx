@@ -665,6 +665,13 @@ export default async function PharmacyInventoryPage({
                     <span className="block text-xs text-text-muted">
                       Batch {lot.batch.batchNumber} · {lot.supplierName}
                     </span>
+                    <Link
+                      className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                      href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branch.id, medicine: lot.batch.medicineId })}`}
+                      aria-label={`Print shelf labels for ${lot.batch.medicine.productName}`}
+                    >
+                      Print labels
+                    </Link>
                   </TableCell>
                   <TableCell>{formatLotExpiry(lot.batch.expiresAt, when)}</TableCell>
                   <TableCell>{balance.location.name}</TableCell>
