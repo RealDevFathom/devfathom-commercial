@@ -76,7 +76,13 @@ function callerFor(
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    $queryRaw: lock,
+    // Normalize both Prisma.sql objects and tagged-template calls into the same
+    // lock trace. Every lock remains visible to the existing ordering assertions.
+    $queryRaw: (query: unknown, ...values: unknown[]) => {
+      if (Array.isArray(query)) return lock(query, ...values);
+      const sql = query as { strings: string[]; values: unknown[] };
+      return lock(sql.strings, ...sql.values);
+    },
     pharmacyBranch: {
       findMany: async () => [{ id: 'branch-1' }],
       findFirst: async () => ({ id: 'branch-1' }),
