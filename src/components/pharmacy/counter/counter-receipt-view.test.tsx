@@ -167,8 +167,8 @@ it('renders every Urdu receipt amount in Urdu digits', () => {
   expect(container.textContent).not.toContain('1234.56');
   expect(region.textContent).not.toMatch(/\d\.\d\d/);
   // The settled banner's net and change follow the receipt locale too.
-  expect(screen.getByText('PKR ۱٫۰۰')).toBeTruthy();
-  expect(screen.getByText('PKR ۰٫۰۰')).toBeTruthy();
+  expect(screen.getByText((_text, element) => element?.tagName === 'DD' && element.textContent === 'پاکستانی روپے ۱٫۰۰')).toBeTruthy();
+  expect(screen.getByText((_text, element) => element?.tagName === 'DD' && element.textContent === 'پاکستانی روپے ۰٫۰۰')).toBeTruthy();
 });
 
 it('keeps English receipt amounts on ASCII digits', () => {

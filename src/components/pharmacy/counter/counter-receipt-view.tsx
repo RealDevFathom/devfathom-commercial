@@ -405,6 +405,7 @@ export function CounterReceiptView({
 
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
+  const currencyLabel = locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency;
   const language = locale === 'ur' ? 'ur-PK' : 'en';
 
   let document: string | null = null;
@@ -464,7 +465,7 @@ export function CounterReceiptView({
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
                 <ReceiptText
                   locale={locale}
-                  value={`${receipt.currency} ${formatMinor(receipt.totals.netMinor, locale)}`}
+                  value={`${currencyLabel} ${formatMinor(receipt.totals.netMinor, locale)}`}
                 />
               </dd>
             </div>
@@ -473,7 +474,7 @@ export function CounterReceiptView({
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
                 <ReceiptText
                   locale={locale}
-                  value={`${receipt.currency} ${formatMinor(receipt.totals.changeMinor, locale)}`}
+                  value={`${currencyLabel} ${formatMinor(receipt.totals.changeMinor, locale)}`}
                 />
               </dd>
             </div>

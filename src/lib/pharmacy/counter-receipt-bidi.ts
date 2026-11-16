@@ -3,5 +3,5 @@
  * Callers must still escape/render every segment as inert text.
  */
 export function splitReceiptBidiText(value: string): string[] {
-  return value.split(/([A-Za-z0-9۰-۹٠-٩][\x20-\x7e۰-۹٠-٩٫٬×−]*)/g);
+  return value.split(/([+−-]?[A-Za-z0-9۰-۹٠-٩][\x20-\x7e۰-۹٠-٩٫٬×−]*)/g);
 }

@@ -671,3 +671,12 @@ it('waits for Nastaliq before requesting Urdu print and reports a failed font lo
   expect(popup.close).toHaveBeenCalledOnce();
   expect(popup.print).toHaveBeenCalledOnce();
 });
+
+
+it('keeps a signed Urdu amount together inside its LTR isolate', () => {
+  const html = buildCounterBrowserReceipt(
+    { ...receipt, totals: { ...receipt.totals, changeMinor: -11 } }, 'ur', 'A4'
+  );
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+  expect([...dom.querySelectorAll('bdi[dir="ltr"]')].map(element => element.textContent)).toContain('-۰٫۱۱');
+});
