@@ -206,6 +206,38 @@ describeDb('DEV-877 period lock against PostgreSQL with enforced RLS', () => {
     ).resolves.toBeDefined();
   });
 
+  it('refuses balanced undimensioned lines appended to an entry after close', async () => {
+    const date = new Date('2027-01-16T12:00:00Z');
+    const original = await inOrg((db) =>
+      journal.postJournalEntry(db, scope, input(date, otherBranch))
+    );
+    await inOrg((db) =>
+      bookkeeping.closeAccountingPeriod(
+        db,
+        { ...scope, branchId: otherBranch },
+        {
+          startsAt: new Date('2027-01-01'),
+          endsAt: new Date('2027-02-01'),
+        }
+      )
+    );
+    await expect(
+      inOrg((db) =>
+        db.financeJournalLine.createMany({
+          data: input().lines.map((line) => ({
+            ...line,
+            organizationId,
+            entryId: original.id,
+            branchId: null,
+          })),
+        })
+      )
+    ).rejects.toThrow('PHARMACY_ACCOUNTING_PERIOD_CLOSED');
+    await inOrg(async (db) => {
+      expect(await db.financeJournalLine.count({ where: { entryId: original.id } })).toBe(2);
+    });
+  });
+
   it('a direct close that wins the lock makes a waiting raw posting fail', async () => {
     const close = new pg.Client({ connectionString: runtimeUrl });
     const post = new pg.Client({ connectionString: runtimeUrl });

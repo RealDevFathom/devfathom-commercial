@@ -193,12 +193,16 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// Every rule scans the same source snapshot. Parse it once rather than building
+// the entire UI's AST again for each rule (twice in the permission/table test).
+const visibleText = files.flatMap((file) =>
+  userFacingText(file, readFileSync(file, 'utf8')).map((entry) => ({ file, ...entry }))
+);
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
-      .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
-      .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
-  );
+  return visibleText
+    .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
+    .map(({ file, line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`);
 }
 
 describe('owner UI copy guard', () => {

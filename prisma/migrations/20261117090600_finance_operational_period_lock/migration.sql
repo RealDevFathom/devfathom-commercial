@@ -20,15 +20,19 @@ BEGIN
 END $$;
 
 CREATE OR REPLACE FUNCTION finance_journal_period_open() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE entry_at TIMESTAMP;
+DECLARE entry_at TIMESTAMP; entry_branch TEXT;
 BEGIN
   IF TG_TABLE_NAME = 'finance_journal_entries' THEN
     PERFORM finance_assert_period_open(NEW."organizationId", NEW."branchId", NEW."occurredAt");
   ELSE
     -- Lines can carry a different branch (e.g. inter-branch transfers), including
     -- entries without a header branch. Protect those ledgers at the same date.
-    SELECT e."occurredAt" INTO entry_at FROM finance_journal_entries e
+    SELECT e."occurredAt", e."branchId" INTO entry_at, entry_branch
+      FROM finance_journal_entries e
       WHERE e."organizationId" = NEW."organizationId" AND e.id = NEW."entryId";
+    -- A line appended to an existing entry must also obey the header's period,
+    -- even if the line has no branch dimension of its own.
+    PERFORM finance_assert_period_open(NEW."organizationId", entry_branch, entry_at);
     PERFORM finance_assert_period_open(NEW."organizationId", NEW."branchId", entry_at);
   END IF;
   RETURN NEW;

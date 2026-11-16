@@ -2,11 +2,11 @@
  * FIN-01 / §8A invariant 15 — the shared double-entry journal primitive.
  *
  * This is the ONE write path into `finance_journal_entries` /
- * `finance_journal_lines`, and it is deliberately vertical-agnostic: it knows
- * about debits, credits, source references and reversals, and nothing about
- * pharmacies, restaurants or agencies. A vertical composes it through an
- * adapter (see `src/lib/pharmacy/finance-postings.ts`) rather than growing its
- * own ledger, so "balanced" means the same thing everywhere.
+ * `finance_journal_lines`: it enforces debits, credits, source references,
+ * reversals and branch accounting-period locks. A vertical supplies the
+ * operational meaning through an adapter (see
+ * `src/lib/pharmacy/finance-postings.ts`) rather than growing its own ledger,
+ * so "balanced" and "closed" mean the same thing on every posting path.
  *
  * WHAT THIS MODULE DOES NOT DECIDE. Balance, append-only, at-most-one-reversal
  * and the shape of a reversal are all enforced by the migration — a deferred

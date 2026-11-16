@@ -28,6 +28,8 @@ function ledger(
   const created: Row[] = [];
   const journal: Row[] = [];
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyTender: {
       findMany: vi.fn(async ({ where }: { where: { type?: unknown } }) =>
         tenders.filter((tender) =>
