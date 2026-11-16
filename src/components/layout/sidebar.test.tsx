@@ -604,17 +604,22 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     expect(currentLinks()[0]).toHaveAccessibleName(expect.stringMatching(new RegExp(`${label}$`)));
   });
 
-  it('marks exactly one destination current on every pharmacy page (DEV-497)', () => {
-    const root = join(process.cwd(), 'src/app/(app)');
-    const routes = readdirSync(join(root, 'pharmacy'), { recursive: true, encoding: 'utf8' })
-      .filter((file) => file.endsWith('page.tsx'))
-      .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
+  const root = join(process.cwd(), 'src/app/(app)');
+  const routes = readdirSync(join(root, 'pharmacy'), { recursive: true, encoding: 'utf8' })
+    .filter((file) => file.endsWith('page.tsx'))
+    .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
+
+  it('discovers the pharmacy root and statement pages (DEV-497)', () => {
     expect(routes).toContain('/pharmacy');
     expect(routes).toContain('/pharmacy/accounts/profit-loss');
-    pharmacyRailQuery.safety = true;
-    pharmacyRailQuery.sop = true;
-    try {
-      for (const route of routes) {
+  });
+
+  it.each(routes)(
+    'marks exactly one destination current on every pharmacy page: %s (DEV-497)',
+    (route) => {
+      pharmacyRailQuery.safety = true;
+      pharmacyRailQuery.sop = true;
+      try {
         // DEV-502: the not-found catch-all is not a destination. Render it at a
         // real unknown address; it must mark no entry current.
         const notFound = route === '/pharmacy/[...missing]';
@@ -625,12 +630,12 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
           pathname,
           current: notFound ? 0 : 1,
         });
+      } finally {
+        pharmacyRailQuery.safety = false;
+        pharmacyRailQuery.sop = false;
       }
-    } finally {
-      pharmacyRailQuery.safety = false;
-      pharmacyRailQuery.sop = false;
     }
-  });
+  );
 
   it('marks the statements current under Reports for a reports reader without Finance', () => {
     renderNavigation({
