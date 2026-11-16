@@ -64,7 +64,7 @@ describe('cheque maturity accounts page', () => {
 
   it('labels empty and exact-cap live reads without claiming completeness', async () => {
     const view = await show();
-    expect(screen.getByText(/contained no safe cheque evidence/i)).toBeVisible();
+    expect(screen.getByText(/No cheques were found in the latest records/i)).toBeVisible();
     const coverage = screen.getByText(/full branch coverage unknown/i);
     expect(coverage.closest('details')).not.toHaveAttribute('open');
     coverage.closest('details')!.open = true;
@@ -80,7 +80,7 @@ describe('cheque maturity accounts page', () => {
     expect(limits).not.toHaveAttribute('open');
     limits.open = true;
     expect(screen.getByText(/exactly 50 means the read cap was reached/i)).toBeVisible();
-    expect(screen.getAllByText('PDC')).toHaveLength(50);
+    expect(screen.getAllByText('Post-dated')).toHaveLength(50);
     expect(screen.getAllByText('PKR 1.00')).toHaveLength(50);
     expect(screen.queryByText(/^100 PKR$/)).toBeNull();
   });
@@ -127,4 +127,18 @@ describe('cheque maturity accounts page', () => {
       }
     }
   );
+  it('keeps unknown-currency raw amounts in Details without guessing a scale', async () => {
+    mocks.workspace.mockResolvedValue({
+      transactions: [{ ...cheque(0), amountMinor: 12500, currency: 'JPY' }],
+    });
+    await show();
+    expect(screen.getByText('Amount unavailable (currency not confirmed)')).toBeVisible();
+    const raw = screen.getByText('12500 minor units JPY');
+    expect(raw.closest('details')).not.toHaveAttribute('open');
+    expect(raw).not.toBeVisible();
+    raw.closest('details')!.open = true;
+    expect(raw).toBeVisible();
+    expect(screen.queryByText('JPY 125.00')).not.toBeInTheDocument();
+    expect(screen.getByText('Post-dated')).toBeVisible();
+  });
 });

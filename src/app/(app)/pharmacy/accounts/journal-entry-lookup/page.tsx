@@ -1,3 +1,4 @@
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -16,8 +17,7 @@ import { createTRPCContext } from '@/server/trpc';
 export const metadata: Metadata = { title: 'Journal entry lookup · Pharmacy accounts' };
 type Query = Record<string, string | string[] | undefined>;
 type ViewState =
-  | JournalEntryLookupResult
-  | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
+  JournalEntryLookupResult | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
 const scalar = (value: string | string[] | undefined) => (typeof value === 'string' ? value : null);
 const pageInput = z
   .object({
@@ -197,10 +197,12 @@ function EntryDetail({
   const { entry } = result;
   return (
     <SectionCard title="Authorized branch slice" titleLevel={2}>
-      <p className="mb-4 text-sm text-text-muted">
-        This is only the selected branch slice, not a complete journal or global-balance assertion.
-        A nonzero difference can be legitimate for an interbranch entry.
-      </p>
+      <ReportDetails>
+        <p className="mb-4 text-sm text-text-muted">
+          This is only the selected branch slice, not a complete journal or global-balance
+          assertion. A nonzero difference can be legitimate for an interbranch entry.
+        </p>
+      </ReportDetails>
       <dl className="mb-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div>
           <dt className="font-mono text-xs uppercase text-text-muted">Entry</dt>

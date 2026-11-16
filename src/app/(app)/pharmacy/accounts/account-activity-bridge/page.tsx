@@ -243,11 +243,13 @@ export default async function AccountActivityBridgePage({
                 </tbody>
               </table>
             </div>
-            <p className="my-4 font-mono text-sm">
-              {bridge.openingMinor} + {bridge.debitMinor} − {bridge.creditMinor} ={' '}
-              {bridge.closingMinor}
-              {screenCopy.accountActivity.minorUnits}
-            </p>
+            <ReportDetails>
+              <p className="my-4 font-mono text-sm">
+                {bridge.openingMinor} + {bridge.debitMinor} − {bridge.creditMinor} ={' '}
+                {bridge.closingMinor}
+                {screenCopy.accountActivity.minorUnits}
+              </p>
+            </ReportDetails>
             <AccountActivityExportButton
               csv={accountActivityBridgeCsv(bridge)}
               filename={`account-activity-${from}-to-${to}.csv`}

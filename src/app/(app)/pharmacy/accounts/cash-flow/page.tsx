@@ -1,3 +1,4 @@
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
@@ -239,13 +240,14 @@ export default async function CashFlowPage({
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {formatUtcInstant(entry.occurredAt)} · {entry.classification} · {entry.currency}{' '}
+                  {formatUtcInstant(entry.occurredAt)} ·{' '}
+                  {PHARMACY_COPY.account.cashFlowClasses[entry.classification]} · {entry.currency}{' '}
                   {money(entry.netMinor)} · {financeEntryDescription(entry.description)}
                 </summary>
                 <p className="break-all text-xs text-text-muted">
                   {screenCopy.cashFlow.entry}
                   {entry.id}
-                  {screenCopy.cashFlow.source}
+                  {screenCopy.cashFlow.sourceLabel}
                   {entry.sourceKind}/{entry.sourceId}
                   {entry.sourceDetail ? `/${entry.sourceDetail}` : ''}
                   {entry.reversesEntryId ? ` · reverses ${entry.reversesEntryId}` : ''} ·{' '}

@@ -75,6 +75,27 @@ export const PHARMACY_COPY = {
     expiryFailure:
       'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.',
   },
+  account: {
+    exportCsv: 'Download CSV',
+    amountUnconfirmed: 'Amount unavailable (currency not confirmed)',
+    noTotals: 'No account totals found',
+    totalsMismatch: 'These totals do not match',
+    allZero: 'All supplied amounts are zero',
+    totalsChecked: 'Totals checked',
+    chequeStates: {
+      PDC: 'Post-dated',
+      CLEARED: 'Cleared',
+      BOUNCED: 'Bounced',
+      REVERSED: 'Reversed',
+      UNKNOWN: 'Not confirmed',
+    },
+    cashFlowClasses: {
+      OPERATING: 'Day-to-day trade',
+      INVESTING: 'Assets',
+      FINANCING: 'Funding',
+      UNCLASSIFIED: 'Needs a category',
+    },
+  },
   tender: {
     balance: 'Balance due',
     payments: 'Recorded payments',

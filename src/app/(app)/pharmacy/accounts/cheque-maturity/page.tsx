@@ -1,3 +1,4 @@
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
@@ -20,6 +21,7 @@ import {
   chequeMaturityEvidence,
   chequeMaturityMonths,
   formatChequeAmount,
+  hasChequeAmountScale,
 } from '@/lib/pharmacy/accounts/cheque-maturity';
 import { tenantContext } from '../../purchasing/_lib/console';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
@@ -238,17 +240,27 @@ function EvidenceTable({ rows }: { rows: ReturnType<typeof chequeMaturityEvidenc
             <TableCell>
               <StatusPill
                 status={row.state}
+                label={PHARMACY_COPY.account.chequeStates[row.state]}
                 tone={
                   row.state === 'CLEARED'
                     ? 'success'
                     : row.state === 'BOUNCED' || row.state === 'REVERSED'
-                      ? 'danger'
+                      ? 'warning'
                       : 'neutral'
                 }
               />
             </TableCell>
             <TableCell numeric>
-              {formatChequeAmount(row.amountMinor, row.recordedCurrency)}
+              {row.amountMinor !== null && !hasChequeAmountScale(row.recordedCurrency) ? (
+                <>
+                  <span>{PHARMACY_COPY.account.amountUnconfirmed}</span>
+                  <ReportDetails>
+                    <p>{formatChequeAmount(row.amountMinor, row.recordedCurrency)}</p>
+                  </ReportDetails>
+                </>
+              ) : (
+                formatChequeAmount(row.amountMinor, row.recordedCurrency)
+              )}
             </TableCell>
           </TableRow>
         ))}

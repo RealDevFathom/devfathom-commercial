@@ -94,7 +94,7 @@ describe('cash-flow page', () => {
       { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-10-31T00:00:00Z') },
       accounts
     );
-    expect(screen.getByText(/No scoped cash postings/)).toBeVisible();
+    expect(screen.getByText(/No cash movements were found/)).toBeVisible();
   });
 
   it('defaults the exclusive upper bound to tomorrow so today is included', async () => {
@@ -121,11 +121,11 @@ describe('cash-flow page', () => {
     expect(screen.getByText(/Showing 51–100 of 120/)).toBeVisible();
     expect(screen.getByText(/· Entry 50$/)).toBeInTheDocument();
     expect(screen.queryByText(/· Entry 49$/)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Next evidence' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Next payments' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '3' })}`
     );
-    expect(screen.getByRole('link', { name: 'Previous evidence' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Previous payments' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '1' })}`
     );

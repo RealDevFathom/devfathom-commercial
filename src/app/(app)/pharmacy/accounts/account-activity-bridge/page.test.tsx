@@ -83,7 +83,7 @@ describe('account activity bridge filters', () => {
     const query = Object.fromEntries(new FormData(form)) as Record<string, string>;
     const result = await read(query);
     expect(result.querySelector('tbody')?.textContent).toContain('CASH / USD');
-    expect(result.querySelector('button[type="button"]')?.textContent).toContain('Export evidence');
+    expect(result.querySelector('button[type="button"]')?.textContent).toContain('Download CSV');
   });
 
   it('refuses a requested branch outside the active organization scope', async () => {
@@ -95,7 +95,7 @@ describe('account activity bridge filters', () => {
   it('does not substitute another aggregate for an unrecognized selection', async () => {
     const result = await read({ ...window, selection: JSON.stringify(['CASH', 'EUR']) });
     expect(result.querySelector('tbody')).toBeNull();
-    expect(result.textContent).not.toContain('Export evidence CSV');
+    expect(result.textContent).not.toContain('Download CSV');
     expect(result.querySelector<HTMLSelectElement>('[name="selection"]')?.value).toBe('');
     expect(result.textContent).toContain('No unique, complete aggregate');
   });
@@ -106,7 +106,7 @@ describe('account activity bridge filters', () => {
       mocks.financialStatements.mockResolvedValue({ scope, accounts: [] });
       const result = await read();
       expect(result.textContent).toContain('Account activity unavailable');
-      expect(result.textContent).not.toContain('Export evidence CSV');
+      expect(result.textContent).not.toContain('Download CSV');
     }
   );
 

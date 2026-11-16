@@ -142,7 +142,7 @@ describe('journal evidence export page', () => {
   it('does not export if request context or entitlement resolution fails', async () => {
     mocks.createTRPCContext.mockRejectedValue(new Error('database unavailable'));
     const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
-    expect(html).toContain('Evidence could not be read');
+    expect(html).toContain('Entries could not load');
     expect(html).not.toContain('Export this page (CSV)');
     expect(mocks.financialStatements).not.toHaveBeenCalled();
   });
@@ -150,7 +150,7 @@ describe('journal evidence export page', () => {
   it('fails closed when the authorized branch list cannot be read', async () => {
     mocks.branches.mockRejectedValue(new Error('denied'));
     const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
-    expect(html).toContain('Evidence could not be read');
+    expect(html).toContain('Entries could not load');
     expect(html).not.toContain('Export this page (CSV)');
     expect(mocks.financialStatements).not.toHaveBeenCalled();
   });
@@ -158,7 +158,7 @@ describe('journal evidence export page', () => {
   it('suppresses export when the existing DTO read fails', async () => {
     mocks.financialStatements.mockRejectedValue(new Error('read failed'));
     const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
-    expect(html).toContain('Evidence could not be read');
+    expect(html).toContain('Entries could not load');
     expect(html).not.toContain('Export this page (CSV)');
   });
 });

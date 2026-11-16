@@ -167,7 +167,7 @@ export async function DailyWorkPack({
                           href={`#${encodeURIComponent(sourceAnchor(evidence.sourceId))}`}
                           className={linkClass}
                         >
-                          {screenCopy.workPack.source}{' '}
+                          {screenCopy.workPack.sourceLabel}{' '}
                           {
                             sourceNames[
                               pack.sources.find((source) => source.id === evidence.sourceId)!.kind

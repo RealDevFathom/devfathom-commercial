@@ -110,7 +110,7 @@ export const SHOP_SCREEN_COPY = {
     reportCatalog: 'Report catalog',
     availableReports: 'Available reports',
     metricContractsFilters: ' metric contracts · filters: ',
-    source: 'Source: ',
+    sourceLabel: 'Source: ',
     scope2: 'Scope: ',
     access: 'Access: ',
     drillThrough: 'Drill through',
@@ -161,7 +161,7 @@ export const SHOP_SCREEN_COPY = {
     period: 'Period: ',
     branches: '. Branches:',
     preparedAt: 'Prepared at ',
-    source: 'Source:',
+    sourceLabel: 'Source:',
     observed: 'Observed: ',
     computed: '. Computed:',
     secondsSinceLastCheck: '. Seconds since last check:',
@@ -253,7 +253,7 @@ export const SHOP_SCREEN_COPY = {
     discrepancyIsCanonicalCashPlusBankAccountClosing:
       ' Discrepancy is canonical CASH plus BANK account closing from the financial statements, read in the same snapshot, minus the projected closing.',
     noScopedCashPostingsThisDoesNotProve:
-      'No scoped cash postings; this does not prove zero activity.',
+      'No cash movements were found for these dates. Other activity may be missing.',
     paymentsAndReversals: 'Payments and reversals',
     classificationRequiresSupportedSourceAndCounterpartEvidenceAmbiguous:
       'Classification requires supported source and counterpart evidence. Ambiguous, mixed, and future policies remain unclassified; this is not a statutory or audited statement.',
@@ -262,17 +262,17 @@ export const SHOP_SCREEN_COPY = {
     cashMovingEntriesTotalsAboveIncludeEveryEntry:
       'cash-moving entries; totals above include every entry in the period.',
     entry: 'Entry ',
-    source: ' · source ',
+    sourceLabel: ' · source ',
     classificationJournalLines: 'Classification journal lines',
-    evidencePages: 'Evidence pages',
-    previousEvidence: 'Previous evidence',
-    nextEvidence: 'Next evidence',
+    evidencePages: 'Payment pages',
+    previousEvidence: 'Previous payments',
+    nextEvidence: 'Next payments',
   },
   journalExport: {
     pharmacyAccounts: 'Pharmacy / accounts',
-    journalEvidenceExport: 'Journal evidence export',
+    journalEvidenceExport: 'Download account entries',
     downloadTheEntriesOnOnePageForThe: 'Download the entries on one page for the selected branch.',
-    evidenceCouldNotBeRead: 'Evidence could not be read',
+    evidenceCouldNotBeRead: 'Entries could not load',
     accessCouldNotBeVerifiedNoCsvIs:
       'Access could not be verified. No CSV is available; retry or ask your workspace administrator.',
     permissionRequired: 'Permission required',
@@ -280,14 +280,14 @@ export const SHOP_SCREEN_COPY = {
       'Owner financial-report permission and Pharmacy Reports access are required. No CSV is available.',
     downloadTheEntriesOnThisPageOtherEntries:
       'Download the entries on this page. Other entries are not included.',
-    evidenceWindow: 'Evidence window',
+    evidenceWindow: 'Branch and dates',
     branch: 'Branch',
     chooseABranch: 'Choose a branch',
     from500AmPkt: 'From (5:00 AM PKT)',
     until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
     page: 'Page',
     readAuthorizedPage: 'Read authorized page',
-    chooseAValidEvidenceWindow: 'Choose a valid evidence window',
+    chooseAValidEvidenceWindow: 'Choose valid dates',
     chooseAnAuthorizedBranchAUtcDateWindow:
       'Choose an authorized branch, a UTC date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
     accessMayBeDeniedOrTheReadFailed:
@@ -299,7 +299,7 @@ export const SHOP_SCREEN_COPY = {
     entriesCountedInTheWindow: ' entries counted in the window.',
     theCsvContainsOnlyThisPageDtoIt:
       'The CSV contains only this page DTO. It is not a complete-ledger export, is not an atomic snapshot, and cannot establish unposted activity. Entry currency, source and reversal IDs, and exact integer minor-unit strings are retained.',
-    journalEvidenceExportPharmacyAccounts: 'Journal evidence export · Pharmacy accounts',
+    journalEvidenceExportPharmacyAccounts: 'Download account entries · Pharmacy accounts',
   },
   accountActivity: {
     permissionRequired: 'Permission required',
@@ -314,7 +314,7 @@ export const SHOP_SCREEN_COPY = {
     chooseAValidUtcDateWindowWithAn: 'Choose a valid UTC date window with an exclusive end.',
     chooseADateWindowOfAtMost92: 'Choose a date window of at most 92 days.',
     pharmacyAccounts: 'Pharmacy accounts',
-    accountActivityBridge: 'Account activity bridge',
+    accountActivityBridge: 'Account activity',
     isolateOnePostedAccountAndRecordedCurrencyFrom:
       'Isolate one posted account and recorded currency from financial-statement aggregates.',
     chooseAnAccount: 'Choose an account',
@@ -335,7 +335,7 @@ export const SHOP_SCREEN_COPY = {
   },
   cheques: {
     pharmacyAccounts: 'Pharmacy accounts',
-    recordedChequeMaturity: 'Recorded cheque maturity',
+    recordedChequeMaturity: 'Cheques due',
     seeWhenYourRecordedChequesAreDue: 'See when your recorded cheques are due.',
     financialReportAccessRequired: 'Financial report access required',
     ownerFinancialReportCapabilityPharmacyReportsAndExisting:
@@ -350,7 +350,7 @@ export const SHOP_SCREEN_COPY = {
     chooseABranch: 'Choose a branch',
     thisIsolatedReadNeverCombinesBranchChequeRecords:
       'This isolated read never combines branch cheque records.',
-    chequeEvidenceUnavailable: 'Cheque evidence unavailable',
+    chequeEvidenceUnavailable: 'Cheques could not load',
     theLiveFinanceWorkspaceReadFailedNoCached:
       'The live Finance workspace read failed. No cached data is shown and no financial record was changed.',
     aboutThisList: 'About this list',
@@ -360,7 +360,7 @@ export const SHOP_SCREEN_COPY = {
       ' recorded cheques retained from the latest workspace response. Empty does not prove no cheques; exactly 50 means the read cap was reached. Dates use UTC. This does not infer contractual AP maturity, perform BANK deductions, repair postings, or establish historical currency.',
     noRecordedChequesInThisRead: 'No recorded cheques in this read',
     theRecentCappedLiveResponseContainedNoSafe:
-      'The recent capped live response contained no safe cheque evidence. Full branch coverage remains unknown.',
+      'No cheques were found in the latest records. Other cheques may still be missing from this list.',
     unknownRecordedDueDate: 'Unknown recorded due date',
     theseChequeRecordsHaveNoUsableRecordedMaturity:
       'These cheque records have no usable recorded maturity date; no date was inferred.',

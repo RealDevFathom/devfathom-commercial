@@ -1210,7 +1210,9 @@ export default async function PharmacyReportsPage({
                           </p>
                           <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
                             <div>
-                              <dt className="inline font-semibold">{screenCopy.reports.source}</dt>
+                              <dt className="inline font-semibold">
+                                {screenCopy.reports.sourceLabel}
+                              </dt>
                               <dd className="inline">
                                 {plainReportSource(contract.source) ?? 'Not recorded'}
                               </dd>

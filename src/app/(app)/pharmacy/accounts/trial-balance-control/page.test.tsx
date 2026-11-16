@@ -118,7 +118,7 @@ describe('TrialBalanceControlPage', () => {
 
   it('distinguishes empty, all-zero, nonzero and inconsistent responses', async () => {
     expect(await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' })).toContain(
-      'No matching posted account rows'
+      'No account totals found'
     );
     mocks.financialStatements.mockResolvedValueOnce(
       report([
@@ -133,7 +133,7 @@ describe('TrialBalanceControlPage', () => {
       ])
     );
     expect(await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' })).toContain(
-      'All supplied account values are zero'
+      'All supplied amounts are zero'
     );
     mocks.financialStatements.mockResolvedValueOnce(
       report([
@@ -148,7 +148,7 @@ describe('TrialBalanceControlPage', () => {
       ])
     );
     expect(await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' })).toContain(
-      'Account controls calculated'
+      'Totals checked'
     );
     mocks.financialStatements.mockResolvedValueOnce(
       report([
@@ -163,7 +163,7 @@ describe('TrialBalanceControlPage', () => {
       ])
     );
     expect(await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' })).toContain(
-      'Source algebra is inconsistent'
+      'These totals do not match'
     );
   });
 
