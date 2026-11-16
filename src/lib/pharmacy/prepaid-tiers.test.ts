@@ -39,28 +39,42 @@ function fixture(balance = 0, refundable = 0) {
       findMany: vi.fn(async () => [
         { id: 'version-a', version: 1, tiers: [bronze], refundable: true },
       ]),
-      create: vi.fn(async ({ data }) => data),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
     },
     pharmacyPrepaidAccount: {
       upsert: vi.fn(async () => ({ ...account })),
-      updateMany: vi.fn(async ({ where, data }) => {
-        if (
-          account.balanceMinor !== where.balanceMinor ||
-          account.refundableMinor !== where.refundableMinor
-        )
-          return { count: 0 };
-        account = { ...account, ...data };
-        return { count: 1 };
-      }),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { balanceMinor: number; refundableMinor: number };
+          data: Partial<typeof account>;
+        }) => {
+          if (
+            account.balanceMinor !== where.balanceMinor ||
+            account.refundableMinor !== where.refundableMinor
+          )
+            return { count: 0 };
+          account = { ...account, ...data };
+          return { count: 1 };
+        }
+      ),
     },
     pharmacyPrepaidEntry: {
-      findUnique: vi.fn(async ({ where }) => {
-        const entry = entries.find(
-          (e) => e.idempotencyKey === where.organizationId_idempotencyKey.idempotencyKey
-        );
-        return entry ? { ...entry, account } : null;
-      }),
-      create: vi.fn(async ({ data }) => {
+      findUnique: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { organizationId_idempotencyKey: { idempotencyKey: string } };
+        }) => {
+          const entry = entries.find(
+            (e) => e.idempotencyKey === where.organizationId_idempotencyKey.idempotencyKey
+          );
+          return entry ? { ...entry, account } : null;
+        }
+      ),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         const row = {
           id: `entry-${entries.length}`,
           createdAt: new Date(),
@@ -71,8 +85,9 @@ function fixture(balance = 0, refundable = 0) {
         entries.push(row);
         return row;
       }),
-      findFirst: vi.fn(async ({ where }) =>
-        entries.find((e) => e.kind === where.kind && e.tenderId === where.tenderId)
+      findFirst: vi.fn(
+        async ({ where }: { where: { kind: string; tenderId?: string } }) =>
+          entries.find((e) => e.kind === where.kind && e.tenderId === where.tenderId)
       ),
       aggregate: vi.fn(async () => ({ _sum: { amountMinor: 0, refundableDeltaMinor: 0 } })),
     },
