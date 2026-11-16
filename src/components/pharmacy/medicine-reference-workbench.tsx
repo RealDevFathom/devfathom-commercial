@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
 
+import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -240,6 +241,12 @@ const CATALOGUE_REVIEW_DENIED =
   'Confirming connector proposals needs the pharmacy:catalogue-review permission granted to your role by name. Wildcard grants such as * or pharmacy:* do not include it.';
 
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
+  const [approvalPin, setApprovalPin] = useState('');
+  function freshPin() {
+    const pin = approvalPin;
+    setApprovalPin('');
+    return pin ? { pin } : {};
+  }
   const [source, setSource] = useState<ReferenceSource>('manual-file');
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
@@ -642,6 +649,25 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         ) : null}
       </SectionCard>
 
+      <SectionCard title="Catalogue approval" titleLevel={2}>
+        <p className="mb-3 text-sm text-text-muted">
+          An editor needs a different reviewer. A solo owner may approve their own changes by
+          entering their PIN again for each approval.
+        </p>
+        <label htmlFor="reference-approval-pin" className="text-sm text-text-strong">
+          Solo-owner approval PIN
+        </label>
+        <Input
+          id="reference-approval-pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={64}
+          className="mt-2 min-h-11"
+          value={approvalPin}
+          onChange={(event) => setApprovalPin(event.target.value)}
+        />
+      </SectionCard>
       <SectionCard
         title="Connector proposals"
         titleLevel={2}
@@ -716,7 +742,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   disabled={isConfirming}
                   onClick={() =>
                     void confirming.run(proposal.id, () =>
-                      decideProposal.mutateAsync({ proposalId: proposal.id, decision: 'CONFIRM' })
+                      decideProposal.mutateAsync({
+                        proposalId: proposal.id,
+                        decision: 'CONFIRM',
+                        ...freshPin(),
+                      })
                     )
                   }
                 >
@@ -747,7 +777,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         {candidates.data?.length === 0 ? (
           <p className="rounded-md bg-surface-sunken p-5 text-sm text-text-muted">
             No confirmed reference rows await publication. Upload a manual batch above; regulated
-            changes remain proposals until a pharmacist confirms them.
+            changes remain proposals until an authorized reviewer confirms them.
           </p>
         ) : null}
         <div className="space-y-4">
@@ -823,6 +853,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                       onClick={() =>
                         void reviewing.run(candidate.id, () =>
                           review.mutateAsync({
+                            ...freshPin(),
                             duplicateKey: `reference:${candidate.id}`,
                             action,
                             medicineIds: [candidate.id],

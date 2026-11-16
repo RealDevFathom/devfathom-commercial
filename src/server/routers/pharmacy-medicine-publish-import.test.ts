@@ -574,3 +574,28 @@ describe('pack chains built after publication, then imported', () => {
     });
   });
 });
+
+describe('DEV-766 front-shop publication', () => {
+  it('publishes a reviewed front-shop item with a receiving pack, without a strength or ingredient', async () => {
+    const store = makeStore({ productName: 'Soap', pack: '1 unit' });
+    store.rows.medicines[0]!.productFamily = 'FRONT_SHOP';
+    await expect(
+      caller(store).publishAssertions({ assertionIds: ['assertion_productName', 'assertion_pack'] })
+    ).resolves.toMatchObject({ status: 'PUBLISHED' });
+    expect(store.rows.medicines[0]).toMatchObject({ productName: 'Soap', saleable: true });
+    expect(store.rows.packLevels).toHaveLength(1);
+    expect(store.rows.packLevels[0]).toMatchObject({ unitsPerParent: 1 });
+    expect(store.ingredient.upsert).not.toHaveBeenCalled();
+    expect(store.medicineStrengthComponent.create).not.toHaveBeenCalled();
+  });
+
+  it('still refuses pharmaceutical publication without a strength', async () => {
+    const store = makeStore({ productName: 'Medicine', pack: '10 tablets', dosageForm: 'tablet' });
+    await expect(
+      caller(store).publishAssertions({
+        assertionIds: ['assertion_productName', 'assertion_pack', 'assertion_dosageForm'],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Publication requires strength.' });
+    expect(store.medicine.update).not.toHaveBeenCalled();
+  });
+});

@@ -94,11 +94,19 @@ describe('Owner / Operator catalogue review', () => {
       const create = vi.fn().mockResolvedValue({ id: 'decision-1', action });
       const updateMany = vi.fn().mockResolvedValue({ count: 1 });
       const owner = caller('owner-operator', {
+        auditLog: { create: vi.fn() },
         medicine: { count: vi.fn().mockResolvedValue(1) },
         medicineProvenance: {
           findMany: vi
             .fn()
-            .mockResolvedValue([{ id: 'assertion-1', medicineId: 'med-1', status: 'UNREVIEWED' }]),
+            .mockResolvedValue([
+              {
+                id: 'assertion-1',
+                medicineId: 'med-1',
+                editorId: 'editor-1',
+                status: 'UNREVIEWED',
+              },
+            ]),
           updateMany,
         },
         medicineReviewDecision: { create },

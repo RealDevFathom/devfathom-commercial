@@ -669,10 +669,29 @@ model Medicine {
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
   promotions                   PharmacyPromotion[]
+  catalogueEdits               PharmacyCatalogueEdit[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
+}
+
+model PharmacyCatalogueEdit {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId String
+  editorId String
+  changes Json
+  baseUpdatedAt DateTime
+  status String @default("PENDING")
+  reviewerId String?
+  reviewedAt DateTime?
+  soloOwnerReauthenticatedAt DateTime?
+  createdAt DateTime @default(now())
+  medicine Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, status, createdAt])
+  @@map("pharmacy_catalogue_edits")
 }
 
 model MedicineStrengthComponent {
@@ -772,6 +791,7 @@ model MedicineProvenance {
   retrievedAt        DateTime
   confidence         Decimal?                     @db.Decimal(5, 4)
   reviewer           String?
+  editorId           String?
   status             MedicineProvenanceStatus
   supersedesId       String?
   assertedValue      Json?

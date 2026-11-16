@@ -22,7 +22,7 @@ export const APPROVAL_BLOCKED = 'An authorized approver must enter a valid PIN.'
 /** Count people, not just qualified approvers: an unqualified second staff member
  * does not turn a multi-person operation into a solo-owner exception. */
 export async function soloOwnerApprovalAllowed(
-  db: ScopedDb,
+  db: Pick<ScopedDb, 'user'>,
   organizationId: string,
   userId: string,
   branchId?: string | null

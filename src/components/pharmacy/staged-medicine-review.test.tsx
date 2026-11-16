@@ -1,3 +1,6 @@
+vi.mock('@/components/pharmacy/catalogue-edit-queue', () => ({
+  CatalogueEditQueue: () => <div>Catalogue edit queue</div>,
+}));
 import '@testing-library/jest-dom/vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

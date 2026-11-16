@@ -37,6 +37,7 @@ function makeDb() {
     user: {
       findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
     },
+    pharmacyCatalogueEdit: model(),
     ingredient: model(),
     medicine: model(),
     presentation: model(),
@@ -547,19 +548,21 @@ describe('non-drug retail catalogue fields (#718)', () => {
     expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
-  it('sets retail details on a front-shop item but refuses a medicine', async () => {
+  it('queues retail details on a front-shop item but refuses a medicine', async () => {
     db.medicine.findFirst.mockResolvedValueOnce({ id: 'soap', productFamily: 'FRONT_SHOP' });
     await caller().setRetailDetails({
       medicineId: 'soap',
       retailPriceMinor: 12_000,
       retailCategory: 'FMCG',
     });
-    expect(db.medicine.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'soap' },
-        data: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
-      })
-    );
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        medicineId: 'soap',
+        editorId: 'user_a',
+        changes: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
+      }),
+    });
+    expect(db.medicine.update).not.toHaveBeenCalled();
 
     db.medicine.findFirst.mockResolvedValueOnce({ id: 'syrup', productFamily: 'PHARMACEUTICAL' });
     await expect(
@@ -569,6 +572,7 @@ describe('non-drug retail catalogue fields (#718)', () => {
         retailCategory: null,
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.medicine.update).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledTimes(1);
+    expect(db.medicine.update).not.toHaveBeenCalled();
   });
 });

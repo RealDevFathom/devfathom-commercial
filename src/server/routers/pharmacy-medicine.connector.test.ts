@@ -179,6 +179,7 @@ describe('MED-06 connector router boundary', () => {
             },
           },
         }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         update: vi.fn().mockResolvedValue({ id: 'proposal-d', status: 'CONFIRMED' }),
       },
       medicine: {
@@ -192,6 +193,8 @@ describe('MED-06 connector router boundary', () => {
         }),
       },
       medicineReviewDecision: { create: vi.fn() },
+      auditLog: { create: vi.fn() },
+      pharmacyReferenceConnectorRun: { findFirst: vi.fn().mockResolvedValue({ triggeredBy: 'editor' }) },
     };
     await caller({
       $transaction: (run: (client: typeof tx) => unknown) => run(tx),
