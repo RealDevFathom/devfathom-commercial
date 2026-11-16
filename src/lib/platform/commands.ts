@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { hash } from 'bcryptjs';
+import { publishJurisdictionRulesSchema, RULE_FIELDS } from '@/lib/platform/jurisdiction-rules';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -253,6 +254,7 @@ function sensitiveCommand(action: string): boolean {
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
+      'jurisdiction.rules.publish',
       'organization.pharmacy.placeholder.apply',
       'organization.pharmacy.placeholder.lock',
     ].includes(action) ||
@@ -1658,6 +1660,67 @@ async function runCommand(
   payload: unknown
 ): Promise<CommandResult> {
   switch (action) {
+    case 'jurisdiction.rules.publish': {
+      if (actor.role !== 'SUPER_ADMIN')
+        throw new PlatformSecurityError('Only a SuperAdmin may publish jurisdiction rules.', 403);
+      const input = publishJurisdictionRulesSchema.parse(payload);
+      await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
+      // Lock the predecessor before reading the latest version. A concurrent
+      // publisher must re-read after waiting and cannot publish a stale draft.
+      await db.$queryRawUnsafe(
+        'SELECT id FROM pharmacy_jurisdiction_rule_sets WHERE id = $1 FOR UPDATE',
+        input.previousId
+      );
+      const before = await db.jurisdictionRuleSet.findUnique({ where: { id: input.previousId } });
+      if (!before || before.isPlaceholder)
+        throw new PlatformSecurityError('Choose a published, non-placeholder rule set.', 400);
+      const latest = await db.jurisdictionRuleSet.findFirst({
+        where: { code: before.code },
+        orderBy: { version: 'desc' },
+      });
+      if (latest?.id !== before.id || before.effectiveTo !== null)
+        throw new PlatformSecurityError(
+          'This draft is stale. Open the latest version and draft again.',
+          409
+        );
+      if (input.effectiveFrom <= before.effectiveFrom || input.effectiveFrom < new Date())
+        throw new PlatformSecurityError(
+          'Choose a future effective date after the previous version starts.',
+          400
+        );
+      const rules = Object.fromEntries(RULE_FIELDS.map((key) => [key, input[key]])) as Pick<
+        z.infer<typeof publishJurisdictionRulesSchema>,
+        (typeof RULE_FIELDS)[number]
+      >;
+      // Existing database triggers permit only this closing-date update; rule
+      // values and tenant profile references remain immutable.
+      await db.jurisdictionRuleSet.update({
+        where: { id: before.id },
+        data: { effectiveTo: input.effectiveFrom },
+      });
+      const saved = await db.jurisdictionRuleSet.create({
+        data: {
+          code: before.code,
+          version: before.version + 1,
+          effectiveFrom: input.effectiveFrom,
+          ...rules,
+        },
+      });
+      return {
+        targetType: 'JurisdictionRuleSet',
+        targetId: saved.id,
+        data: { id: saved.id, version: saved.version },
+        auditBefore: before,
+        audit: {
+          ruleSet: saved,
+          previous: { id: before.id, effectiveTo: input.effectiveFrom },
+          reason: input.reason,
+          reviewerName: input.reviewerName,
+          reviewerRole: input.reviewerRole,
+          evidenceRef: input.evidenceRef ?? null,
+        },
+      };
+    }
     case 'organization.pharmacy.placeholder.apply': {
       if (actor.role !== 'SUPER_ADMIN')
         throw new PlatformSecurityError('Only a SuperAdmin may apply a placeholder rule set.', 403);
