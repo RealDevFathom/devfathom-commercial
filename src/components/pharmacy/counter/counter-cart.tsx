@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
+import { counterUnitNoun, plural } from '@/lib/pharmacy/counter-pricing';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
 
@@ -143,8 +144,13 @@ export function CounterCartPanel({
                     ) : null}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits}{' '}
-                    units @ {formatMinor(line.unitPriceMinor)}
+                    {line.presentation} ·{' '}
+                    {line.saleUnit === 'UNIT'
+                      ? counterUnitNoun(line.dosageForm)
+                      : line.saleUnit.toLowerCase()}{' '}
+                    · {line.canonicalUnits}{' '}
+                    {plural(counterUnitNoun(line.dosageForm), line.canonicalUnits)} @{' '}
+                    {formatMinor(line.unitPriceMinor)}
                     {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
                   </p>
                   <div className="mt-1 flex flex-wrap gap-1">
@@ -170,9 +176,15 @@ export function CounterCartPanel({
                 </th>
                 <td role="cell" className="col-span-2 col-start-2 row-start-2 lg:py-3 lg:pr-4">
                   <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
-                    {line.quantity} × {line.saleUnit.toLowerCase()}
+                    {line.quantity} ×{' '}
+                    {line.saleUnit === 'UNIT'
+                      ? counterUnitNoun(line.dosageForm)
+                      : line.saleUnit.toLowerCase()}
                   </p>
-                  <p className="text-xs text-text-muted">{line.canonicalUnits} units</p>
+                  <p className="text-xs text-text-muted">
+                    {line.canonicalUnits}{' '}
+                    {plural(counterUnitNoun(line.dosageForm), line.canonicalUnits)}
+                  </p>
                 </td>
                 <td role="cell" className="col-span-2 col-start-2 row-start-3 lg:py-3 lg:pr-4">
                   <ul

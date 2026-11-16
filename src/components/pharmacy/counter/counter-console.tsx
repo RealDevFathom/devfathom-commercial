@@ -3143,7 +3143,8 @@ function ScopedPharmacyCounterConsole({
                           const first =
                             searchCurrent &&
                             !searchQuery.isPlaceholderData &&
-                            !searchQuery.isFetching
+                            !searchQuery.isFetching &&
+                            !searchQuery.isError
                               ? searchQuery.data?.rows[0]
                               : undefined;
                           if (first) stageRow(first);

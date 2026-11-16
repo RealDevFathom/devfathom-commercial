@@ -224,3 +224,15 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(preview.parentElement!.className).toContain('flex-wrap');
   });
 });
+
+
+it('DEV-705 moves keyboard focus with the radio selection so consecutive arrows traverse units', () => {
+  const props = renderToggle({ selected: 'STRIP' });
+  screen.getByRole('radio', { name: /Strip/ }).focus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(props.onSelect).toHaveBeenLastCalledWith('UNIT');
+  expect(screen.getByRole('radio', { name: /Unit/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(props.onSelect).toHaveBeenLastCalledWith('PACK');
+  expect(screen.getByRole('radio', { name: /Pack/ })).toHaveFocus();
+});

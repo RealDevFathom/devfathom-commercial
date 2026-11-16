@@ -67,6 +67,9 @@ export function CounterUnitToggle({
   emptyMessage,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
+  const containingPack = [...options]
+    .filter((option) => option.canonicalUnitsPerSaleUnit > 1)
+    .sort((a, b) => a.canonicalUnitsPerSaleUnit - b.canonicalUnitsPerSaleUnit)[0];
   const parsedQuantity = Number(quantity);
   const validQuantity =
     /^\d+$/.test(quantity) && Number.isSafeInteger(parsedQuantity) && parsedQuantity > 0;
@@ -119,11 +122,14 @@ export function CounterUnitToggle({
                   if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
                   event.preventDefault();
                   const index = options.findIndex((entry) => entry.kind === option.kind);
-                  const next =
+                  const nextIndex =
                     event.key === 'ArrowRight'
-                      ? options[(index + 1) % options.length]!
-                      : options[(index - 1 + options.length) % options.length]!;
-                  onSelect(next.kind);
+                      ? (index + 1) % options.length
+                      : (index - 1 + options.length) % options.length;
+                  onSelect(options[nextIndex]!.kind);
+                  event.currentTarget.parentElement
+                    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]
+                    ?.focus();
                 }}
                 className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                   active
@@ -223,6 +229,12 @@ export function CounterUnitToggle({
       {options.length === 1 && options[0]?.canonicalUnitsPerSaleUnit === 1 ? (
         <p className="text-xs text-text-muted">
           Already sold as one {counterUnitNoun(dosageForm)}; no separate loose option.
+        </p>
+      ) : null}
+      {selected === 'UNIT' && containingPack ? (
+        <p className="text-xs text-text-muted">
+          1 {counterUnitNoun(dosageForm)} = 1/{containingPack.canonicalUnitsPerSaleUnit} of{' '}
+          {containingPack.levelLabel.toLowerCase()}
         </p>
       ) : null}
       {preview ? (

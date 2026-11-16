@@ -552,6 +552,7 @@ export type CounterCartLine = {
   medicineName: string;
   strength: string | null;
   presentation: string;
+  dosageForm?: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
@@ -689,6 +690,7 @@ export async function readCounterCart(
       medicineName: line.medicine.productName,
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
+      dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,

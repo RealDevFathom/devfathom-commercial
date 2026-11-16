@@ -281,8 +281,8 @@ export function counterChordTargetIsField(target: EventTarget | null | undefined
 
 /**
  * Whether `target` keeps `key` for itself. Every field does, except that the
- * marked scan and next-line quantity fields hand their F-keys to the counter. Enter and the editing keys
- * stay with the scan field, which handles Enter itself.
+ * marked scan and next-line quantity fields hand their F-keys to the counter.
+ * Enter and editing keys stay with those fields, which handle Enter themselves.
  */
 function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boolean {
   if (!counterChordTargetIsField(target)) return false;

@@ -1367,38 +1367,35 @@ describe('PharmacyCounterConsole tender recovery', () => {
   it.each([
     ['without a prescription', null, false],
     ['with a prescription no pharmacist has signed for this line', 'rx-line-a', false],
-  ])(
-    'DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one',
-    (_label, prescriptionLineId, prescriptionSigned) => {
-      const bill = cart();
-      bill.lines[0]!.rx = true;
-      bill.lines[0]!.prescriptionLineId = prescriptionLineId;
-      bill.lines[0]!.prescriptionSigned = prescriptionSigned;
-      mocks.queries.counterCart!.data = bill;
-      mocks.queries.counterPatientPanel = query({
-        prescriptions: [
-          {
-            validFrom: '2020-01-01T00:00:00.000Z',
-            validUntil: '2999-12-31T00:00:00.000Z',
-            lines: [
-              {
-                prescriptionLineId: 'rx-line-a',
-                medicineId: bill.lines[0]!.medicineId,
-                verified: true,
-                remainingAuthorizedUnits: 10,
-              },
-            ],
-          },
-        ],
-      });
-      renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-      expect(
-        screen.getAllByText(/This bill carries an unresolved safety block/)[0]
-      ).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
-      expect(mocks.mutations.tender).not.toHaveBeenCalled();
-    }
-  );
+  ])('DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one', (_label, prescriptionLineId, prescriptionSigned) => {
+    const bill = cart();
+    bill.lines[0]!.rx = true;
+    bill.lines[0]!.prescriptionLineId = prescriptionLineId;
+    bill.lines[0]!.prescriptionSigned = prescriptionSigned;
+    mocks.queries.counterCart!.data = bill;
+    mocks.queries.counterPatientPanel = query({
+      prescriptions: [
+        {
+          validFrom: '2020-01-01T00:00:00.000Z',
+          validUntil: '2999-12-31T00:00:00.000Z',
+          lines: [
+            {
+              prescriptionLineId: 'rx-line-a',
+              medicineId: bill.lines[0]!.medicineId,
+              verified: true,
+              remainingAuthorizedUnits: 10,
+            },
+          ],
+        },
+      ],
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.getAllByText(/This bill carries an unresolved safety block/)[0]
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
 
   it('preserves unresolved prescription safety blocks', () => {
     const bill = cart();
@@ -2492,15 +2489,18 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
-  it('does not run F9 while a field is focused or another dialog is open', async () => {
+  it('does not run F9 while an unrelated field is focused or another dialog is open', async () => {
     openTheDrawer();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
-    const quantity = screen.getByLabelText('Quantity');
-    quantity.focus();
-    fireEvent.keyDown(quantity, { key: 'F9' });
-    expect(document.activeElement).toBe(quantity);
+    // Scan and next-line quantity explicitly own counter chords; unrelated fields do not.
+    const field = document.createElement('input');
+    document.body.append(field);
+    field.focus();
+    fireEvent.keyDown(field, { key: 'F9' });
+    expect(document.activeElement).toBe(field);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    field.remove();
 
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
@@ -4874,6 +4874,30 @@ describe('DEV-41 cashier actions', () => {
 });
 
 describe('DEV-705 keyboard loose sale', () => {
+  it('stages the current first text result with Enter and moves directly to quantity', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('ready'));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.getByLabelText('Quantity')).toHaveFocus();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+  it('does not stage stale results while the current text search failed', async () => {
+    mocks.queries.counterSearch = {
+      ...query({ rows: [barcodeRow()], truncated: false }),
+      isError: true,
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('error'));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   function looseRow(overrides: Partial<CounterSearchRow> = {}) {
     return barcodeRow({
       unitsPerPack: 10,
@@ -4893,6 +4917,7 @@ describe('DEV-705 keyboard loose sale', () => {
     const quantity = screen.getByLabelText('Quantity');
     expect(screen.getByRole('radio', { name: /Tablet/ })).toHaveAttribute('aria-checked', 'true');
     expect(quantity).toHaveFocus();
+    expect(screen.getByText('1 tablet = 1/10 of strip')).toBeVisible();
     fireEvent.change(quantity, { target: { value: '1' } });
     fireEvent.keyDown(quantity, { key: 'Enter' });
     await waitFor(() =>
