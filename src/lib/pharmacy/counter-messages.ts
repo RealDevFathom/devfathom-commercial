@@ -278,3 +278,21 @@ export function counterPaymentErrorMessage(error: unknown): string {
     return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
   return counterErrorMessage(error);
 }
+
+/** Drawer-manager refusals must not imply the cashier cannot take payments. */
+export function counterDrawerErrorMessage(
+  error: unknown,
+  action: 'OPEN_EMPTY' | 'OPEN_WITH_FLOAT' | 'ASSIGN_CASHIER'
+): string {
+  if (action === 'OPEN_EMPTY') return counterPaymentErrorMessage(error);
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  ) {
+    return action === 'OPEN_WITH_FLOAT'
+      ? 'Only a manager or owner can open with a float. If the drawer is empty, enter 0 to open it; otherwise ask a manager or owner.'
+      : 'Only a manager or owner can assign or hand over the cash drawer to another cashier. Ask a manager or owner.';
+  }
+  return counterErrorMessage(error);
+}
