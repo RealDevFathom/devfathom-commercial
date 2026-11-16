@@ -9,6 +9,7 @@ import {
 } from '@/generated/prisma/client';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import { enqueue } from '@/lib/restaurant/scheduler';
+import { recordAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';
 
@@ -131,7 +132,10 @@ function isAuthenticatedTerminal(
   return verificationStatus === 'VERIFIED' && (eventType?.startsWith('terminal.') ?? false);
 }
 
-type ExistingInbox = RecordInboundWebhookResult['inbox'] & { eventType: string | null };
+type ExistingInbox = RecordInboundWebhookResult['inbox'] & {
+  eventType: string | null;
+  organizationId: string;
+};
 
 async function findExistingInbox(
   tx: ScopedDb,
@@ -142,7 +146,7 @@ async function findExistingInbox(
   // externalEventId)` is the effective dedup key without threading the org id.
   return tx.restaurantWebhookInbox.findFirst({
     where: { source, externalEventId },
-    select: { ...INBOX_SELECT, eventType: true },
+    select: { ...INBOX_SELECT, eventType: true, organizationId: true },
   });
 }
 
@@ -187,6 +191,28 @@ export async function recordInboundWebhook(
           // Authenticated promotion: drop the unauthenticated row that holds this
           // event id. Its pending job, if any, no-ops once the row is gone.
           await tx.restaurantWebhookInbox.deleteMany({ where: { id: existing.id } });
+          // Awaited in this transaction: the deletion and its audit commit together.
+          await recordAudit(
+            {
+              organizationId: existing.organizationId,
+              actorType: 'SYSTEM',
+              source: 'SYSTEM',
+              category: 'TERMINAL',
+              operation: 'DELETE',
+              action: 'restaurant.webhook.unauthenticated_row_replaced',
+              targetType: 'RestaurantWebhookInbox',
+              targetId: existing.id,
+              metadata: {
+                source: input.source,
+                externalEventId: input.externalEventId,
+                replacedEventType: existing.eventType,
+                replacedVerificationStatus: existing.verificationStatus,
+                replacedStatus: existing.status,
+                replacedByEventType: input.eventType ?? null,
+              },
+            },
+            tx
+          );
         }
 
         const inbox = await tx.restaurantWebhookInbox.create({

@@ -36,6 +36,15 @@ import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  claimSoldPackSerial,
+  PharmacySerializedPackError,
+  releaseSoldPackSerials,
+  resolveSerializedPackForSale,
+  SERIALIZED_PACK_APPROVAL_POLICY,
+  serializedPackOverrideReason,
+  type ResolvedSerializedPack,
+} from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
@@ -304,6 +313,8 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
+  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
+  scannedPack?: { payload: string };
   idempotencyKey: string;
 };
 
@@ -396,7 +407,7 @@ export async function addSaleLine(
 export async function addReservedSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
-  input: Omit<AddSaleLineInput, 'override'>,
+  input: Omit<AddSaleLineInput, 'override' | 'scannedPack'>,
   reservation: ReservedSaleAllocation
 ) {
   return addSaleLineWithAllocation(db, scope, input, reservation);
@@ -550,6 +561,24 @@ async function addSaleLineWithAllocation(
   // DEV-830 (F05): reserved customer-order and refill lines carry a multiplier the server
   // derived from the stored lot when it reserved them; every other line is checked here.
   if (!reservation) await assertSaleUnitConversion(db, scope, input, saleUnitAt);
+  // DEV-92: a scanned serial names exactly one sealed pack of one lot.
+  let pack: ResolvedSerializedPack | null = null;
+  let override = input.override;
+  if (input.scannedPack) {
+    if (reservation || input.saleUnit !== 'PACK' || input.quantity !== 1)
+      throw new PharmacySaleError('INVALID_QUANTITY');
+    pack = await resolveSerializedPackForSale(db, scope, {
+      medicineId: input.medicineId,
+      payload: input.scannedPack.payload,
+    });
+    if (override && override.inventoryLotId !== pack.inventoryLotId)
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    override ??= {
+      inventoryLotId: pack.inventoryLotId,
+      reason: serializedPackOverrideReason(pack.serialNumber),
+      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+    };
+  }
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
   // enforced here, before any stock is allocated, so a voucher never applies to
   // an Rx, OTC drug, supplement or medical-device line.
@@ -559,7 +588,7 @@ async function addSaleLineWithAllocation(
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
-    override: input.override,
+    override,
   };
   const allocation = reservation
     ? await allocateReservedForSale(db, scope, allocationInput, input.packLevelId, reservation)
@@ -573,6 +602,18 @@ async function addSaleLineWithAllocation(
     include: { batch: { select: { batchNumber: true } } },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  if (pack) {
+    // The whole line must come out of the scanned pack's own lot, as one sealed pack.
+    const pinned = pack.inventoryLotId;
+    if (
+      allocation.allocations.some(
+        (part) =>
+          part.inventoryLotId !== pinned ||
+          lotById.get(part.inventoryLotId)?.unitsPerPack !== input.canonicalUnitsPerSaleUnit
+      )
+    )
+      throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+  }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
   const mrpRules = lots.length
@@ -693,6 +734,13 @@ async function addSaleLineWithAllocation(
       })
     )
   );
+  if (pack) {
+    await claimSoldPackSerial(db, scope, pack, {
+      saleId: input.saleId,
+      saleLineId: line.id,
+      inventoryLotId: pack.inventoryLotId,
+    });
+  }
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
     saleLineId: line.id,
     ...(promotion
@@ -859,6 +907,7 @@ export async function changeSaleStatus(
         restoreSellable: true,
       })),
     });
+    await releaseSoldPackSerials(db, scope, saleId);
   }
 
   await event(db, scope, saleId, kind, reason, eventPayload);
@@ -1435,6 +1484,14 @@ export async function returnSaleLine(
   });
   if (plan.remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
+  // DEV-92: a serialized pack returned whole to sellable stock may be sold again.
+  if (
+    disposition === 'RESTOCK' &&
+    line.returnLines.reduce((total, returned) => total + returned.canonicalUnits, 0) >=
+      line.canonicalUnits
+  ) {
+    await releaseSoldPackSerials(db, scope, line.saleId, new Date(), line.id);
+  }
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {
     returnId: saleReturn.id,
     disposition,

@@ -12,12 +12,14 @@ const state = vi.hoisted(() => ({
   inbox: new Map<string, Record<string, unknown>>(),
   jobs: [] as Array<{ inboxId: string }>,
   seq: 0,
+  configured: false,
 }));
 
 const mocks = vi.hoisted(() => ({
   processTerminalEvent: vi.fn(),
 }));
 
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '203.0.113.10',
   rateLimit: () => ({ ok: true, remaining: 1, retryAfter: 0 }),
@@ -75,7 +77,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       count: state.inbox.delete(where.id) ? 1 : 0,
     }),
   };
-  const db: Record<string, unknown> = { restaurantWebhookInbox };
+  const restaurantTerminalProviderConfig = {
+    findFirst: async () => (state.configured ? { id: 'cfg_1' } : null),
+  };
+  const db: Record<string, unknown> = { restaurantWebhookInbox, restaurantTerminalProviderConfig };
   db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
   return { createTenantDb: () => db };
 });
@@ -145,6 +150,7 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.inbox.clear();
     state.jobs.length = 0;
     state.seq = 0;
+    state.configured = false;
     mocks.processTerminalEvent.mockReset();
   });
 
@@ -219,5 +225,41 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     expect(response.status).toBe(401);
     expect(state.inbox.size).toBe(0);
     expect(state.jobs).toHaveLength(0);
+  });
+
+  it.each([
+    ['no signature headers', {}],
+    ['a forged signature', { 'x-webhook-signature': 'forged' }],
+  ])('rejects a non-terminal envelope with %s for a configured payment source', async (_l, headers) => {
+    state.configured = true;
+    const response = await post(
+      JSON.stringify({ externalEventId: EVENT_ID, eventType: 'order.created', payload: {} }),
+      headers
+    );
+
+    expect(response.status).toBe(401);
+    expect(state.inbox.size).toBe(0);
+    expect(state.jobs).toHaveLength(0);
+  });
+
+  it('accepts a correctly signed non-terminal envelope for a configured payment source', async () => {
+    state.configured = true;
+    const rawBody = JSON.stringify({
+      externalEventId: EVENT_ID,
+      eventType: 'order.created',
+      payload: {},
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac('sha256', SECRET)
+      .update(`${timestamp}.${SOURCE}.${rawBody}`)
+      .digest('hex');
+
+    const response = await post(rawBody, {
+      'x-webhook-signature': signature,
+      'x-webhook-timestamp': timestamp,
+    });
+
+    expect(response.status).toBe(202);
+    expect(state.inbox.size).toBe(1);
   });
 });

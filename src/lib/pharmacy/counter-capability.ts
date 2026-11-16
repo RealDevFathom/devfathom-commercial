@@ -82,6 +82,22 @@ export async function counterOperatorDenial(
     return 'forbidden';
   const rules = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])];
   if (counterCapabilityDecision(rules) !== 'ALLOW') return 'forbidden';
+  return counterBranchAssignmentDenial(db, user, organizationId, branchId);
+}
+
+/**
+ * Branch-assignment gate alone: an organization ADMIN may act in any branch of
+ * their organization, everyone else needs an active assignment to an active
+ * branch. Managers who lease receipt blocks, grant lot quota or reject offline
+ * commands pass `admin:access` instead of the counter grant, so they use this
+ * check directly.
+ */
+export async function counterBranchAssignmentDenial(
+  db: ScopedDb,
+  user: CounterOperator,
+  organizationId: string,
+  branchId: string
+): Promise<'branch_forbidden' | null> {
   if (user.role === 'ADMIN') return null;
   const assignment = await db.pharmacyBranchAssignment.findFirst({
     where: {
