@@ -107,6 +107,8 @@ describe('pharmacy settlement invariants', () => {
     const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1', createdAt: tenderCreatedAt });
     const saleUpdate = vi.fn().mockResolvedValue({});
     const db = {
+      organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+      branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
       $executeRaw: vi.fn().mockImplementation(async () => {
         idempotency ??= {

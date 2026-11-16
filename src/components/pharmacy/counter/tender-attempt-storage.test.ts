@@ -40,6 +40,12 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('original tender attempt storage', () => {
+  it('retains the exact buyer with the uncertain tender after a reload', () => {
+    const attempt = original();
+    attempt.input.buyerName = 'Synthetic Buyer';
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  });
   it('retains exact manual evidence for outcome recovery after reload', () => {
     const attempt = original();
     attempt.input.type = 'RAAST';

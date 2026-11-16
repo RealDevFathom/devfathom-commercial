@@ -387,6 +387,8 @@ export async function applyPharmacyTender(
     referenceSkipped?: boolean;
     /** Manual card: the approval code on the standalone terminal slip. */
     approvalCode?: string;
+    /** #708: the buyer the Sindh cash memo names, recorded only on the completing tender. */
+    buyerName?: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;

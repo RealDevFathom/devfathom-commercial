@@ -114,6 +114,7 @@ import {
 import {
   formatMinor,
   formatShortExpiry,
+  isSindhCashMemoProvince,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -2008,6 +2009,7 @@ function ScopedPharmacyCounterConsole({
         payerName?: string;
         referenceSkipped?: boolean;
         approvalCode?: string;
+        buyerName?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -2054,7 +2056,8 @@ function ScopedPharmacyCounterConsole({
           idempotencyKey:
             input.familyAccountId ||
             input.payerName !== undefined ||
-            input.approvalCode !== undefined
+            input.approvalCode !== undefined ||
+            input.buyerName !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
                   paidMinor > 0 ? `:after:${paidMinor}` : ''
@@ -2074,6 +2077,7 @@ function ScopedPharmacyCounterConsole({
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
           ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
+          ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -3609,9 +3613,13 @@ function ScopedPharmacyCounterConsole({
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
                   approvalCode: restoredAttempt.input.approvalCode,
+                  buyerName: restoredAttempt.input.buyerName,
                 }
               : undefined
           }
+          cashMemo={isSindhCashMemoProvince(
+            branches.find((branch) => branch.id === branchId)?.provinceCode
+          )}
           recoveryOutcome={tenderOutcome}
           checkingOutcome={checkingOutcome}
           onCheckOutcome={
