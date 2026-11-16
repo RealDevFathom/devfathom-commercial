@@ -193,9 +193,16 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// The source corpus is an immutable fixture for this run. Parse it once so
+// every pattern inspects every text without repeatedly rebuilding the ASTs.
+const textFixtures = files.map((file) => ({
+  file,
+  texts: userFacingText(file, readFileSync(file, 'utf8')),
+}));
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+  return textFixtures.flatMap(({ file, texts }) =>
+    texts
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
       .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
   );
