@@ -151,6 +151,7 @@ function fixture() {
     deviceId: 'device-1',
     businessDate: new Date('2026-09-02T00:00:00.000Z'),
     type: 'BANK_TRANSFER' as const,
+    providerRef: 'BANK-TEST-123',
     amountMinor: 100,
     idempotencyKey: 'retry-1',
     leasedReceipt: leasedReceipt(),

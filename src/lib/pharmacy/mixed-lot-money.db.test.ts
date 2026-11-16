@@ -142,6 +142,7 @@ test('charges the weighted amount, completes once, freezes receipt identity, and
     deviceId: randomUUID(),
     businessDate: day,
     type: 'BANK_TRANSFER' as const,
+    providerRef: 'BANK-TEST-123',
     amountMinor: 301,
     idempotencyKey: randomUUID(),
   };
@@ -187,6 +188,7 @@ test('records exact revenue against each mixed-MRP lot', async () => {
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER',
+      providerRef: 'BANK-TEST-123',
       amountMinor: 300,
       idempotencyKey: randomUUID(),
     })
@@ -209,6 +211,7 @@ test.each([0, 1])(
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER' as const,
+      providerRef: 'BANK-TEST-123',
       amountMinor: 300,
       idempotencyKey: randomUUID(),
     };
@@ -284,6 +287,7 @@ test('restores a free zero-cost allocation and posts one balanced marker across 
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER',
+      providerRef: 'BANK-TEST-123',
       amountMinor: 200,
       idempotencyKey: randomUUID(),
     })

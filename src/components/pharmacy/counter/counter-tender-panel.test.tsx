@@ -79,11 +79,12 @@ describe('DEV-618 payment panel', () => {
     rerender(<CounterTenderPanel {...props} balanceMinor={12450} />);
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('124.50');
     chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-123' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenNthCalledWith(
         2,
-        { type: 'BANK_TRANSFER', amountMinor: 12450 },
+        { type: 'BANK_TRANSFER', amountMinor: 12450, providerRef: 'BANK-123' },
         { amount: '', cashReceived: '' }
       )
     );
@@ -185,12 +186,13 @@ describe('DEV-714 tender buttons', () => {
     expect(props.onTender).not.toHaveBeenCalled();
 
     chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-123' } });
     expect(take).toBeEnabled();
     expect(take).not.toHaveAccessibleDescription(new RegExp(message));
     fireEvent.click(take);
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'BANK_TRANSFER', amountMinor: 12550 },
+        { type: 'BANK_TRANSFER', amountMinor: 12550, providerRef: 'BANK-123' },
         { amount: '125.50', cashReceived: '' }
       )
     );
@@ -371,13 +373,15 @@ describe('CounterTenderPanel acknowledgement', () => {
     const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
     setup({ onTender });
     chooseTender(type);
+    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-123' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment refused.');
     expect(tenderButton(type)).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(screen.getByLabelText('Transfer reference')).toHaveValue('BANK-123');
     expect(onTender).toHaveBeenCalledExactlyOnceWith(
-      { type, amountMinor: 12550 },
+      { type, amountMinor: 12550, providerRef: 'BANK-123' },
       { amount: '125.50', cashReceived: '' }
     );
   });
@@ -1203,5 +1207,32 @@ describe('DEV-41 disabled payment explanations', () => {
     });
     expect(button).toBeEnabled();
     expect(screen.queryByText(/Enter the payer/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe('DEV-875 bank transfer reference', () => {
+  it('blocks empty and whitespace references, including Enter, then sends the trimmed reference', async () => {
+    const { props } = setup({ balanceMinor: 3000 });
+    chooseTender('BANK_TRANSFER');
+    const take = screen.getByRole('button', { name: 'Take payment' });
+    expect(take).toBeDisabled();
+    expect(take).toHaveAccessibleDescription(/Enter the transfer reference/);
+    const reference = screen.getByLabelText('Transfer reference');
+    expect(reference).toBeRequired();
+    fireEvent.change(reference, { target: { value: '   ' } });
+    fireEvent.keyDown(reference, { key: 'Enter' });
+    fireEvent.click(take);
+    expect(props.onTender).not.toHaveBeenCalled();
+    expect(reference).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(reference, { target: { value: '  BANK/2026-11/1234567890123456  ' } });
+    expect(take).toBeEnabled();
+    fireEvent.keyDown(reference, { key: 'Enter' });
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'BANK_TRANSFER', amountMinor: 3000, providerRef: 'BANK/2026-11/1234567890123456' },
+        { amount: '', cashReceived: '' }
+      )
+    );
   });
 });

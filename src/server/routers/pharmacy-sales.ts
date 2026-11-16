@@ -28,7 +28,7 @@ import {
   isManualTender,
   manualMerchantPolicies,
   MANUAL_CARD_APPROVAL_CODE,
-  MANUAL_CARD_REFERENCE,
+  validTenderReference,
 } from '@/lib/pharmacy/manual-payments';
 import {
   readManualPaymentSettings,
@@ -242,14 +242,16 @@ const tenderInput = z
      */
     overLimitApproval: counterApprovalPin.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
-    // reference, never a full card number. Each tender's shape is enforced in settlement.
-    providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
+    // reference, never a full card number. Bank transfers use a bank statement reference.
+    // Each tender's shape is enforced in settlement.
+    providerRef: z.string().max(128).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
     approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
   })
-  .strict();
+  .strict()
+  .refine(validTenderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',

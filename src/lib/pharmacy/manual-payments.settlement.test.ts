@@ -22,6 +22,7 @@ vi.mock('./regulatory', async () => ({
 vi.mock('./sale-completion', () => ({ completionSaleInclude: {}, completePaidPharmacySale: vi.fn(async () => 41) }));
 import { applyPharmacyTender, readPharmacyTenderOutcome, type PharmacyPaymentAdapter } from './settlement';
 import { completePaidPharmacySale } from './sale-completion';
+import { postTenderEntry } from './finance-postings';
 import { MANUAL_TENDER_TYPES } from './manual-payments';
 
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'cashier' };
@@ -149,5 +150,121 @@ describe('DEV-713 manual card and wallet confirmation', () => {
     expect(await readPharmacyTenderOutcome(db as unknown as ScopedDb, scope, input)).toMatchObject({ status: 'ACCEPTED' });
     db.pharmacyTender.findFirst.mockResolvedValue({ ...tender, approvalCode: 'ZZZZ' });
     expect(await readPharmacyTenderOutcome(db as unknown as ScopedDb, scope, input)).toMatchObject({ status: 'UNKNOWN' });
+  });
+});
+
+
+describe('DEV-875 bank transfer confirmation', () => {
+  const transfer = { ...cardBase, type: 'BANK_TRANSFER' as const };
+  it.each([undefined, '', '   ', 'x'.repeat(129)])(
+    'refuses bank transfer reference %j before tender, posting or completion',
+    async (providerRef) => {
+      const input = { ...transfer, providerRef };
+      const { db, scoped } = fixture(input);
+      await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+        reason: 'INVALID_MANUAL_CAPTURE',
+      });
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(postTenderEntry).not.toHaveBeenCalled();
+      expect(completePaidPharmacySale).not.toHaveBeenCalled();
+      expect(db.pharmacyMoneyIdempotencyKey.update).not.toHaveBeenCalled();
+    }
+  );
+  it('stores the trimmed transfer reference and authenticated cashier without a drawer', async () => {
+    const input = { ...transfer, providerRef: '  BANK/2026-11/1234567890123456  ' };
+    const { db, scoped } = fixture(input);
+    await expect(applyPharmacyTender(scoped, scope, input)).resolves.toMatchObject({
+      settled: true,
+    });
+    expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'BANK_TRANSFER',
+        providerRef: 'BANK/2026-11/1234567890123456',
+        confirmedById: 'cashier',
+        actorId: 'cashier',
+        drawerSessionId: undefined,
+      }),
+    });
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+  });
+  it.each([
+    { referenceSkipped: true },
+    { payerName: 'Ayesha' },
+    { cashReceivedMinor: 1000 },
+    { approvalCode: 'AB12' },
+  ])('refuses unrelated capture evidence %j', async (extra) => {
+    const input = { ...transfer, providerRef: 'BANK-123', ...extra };
+    const { db, scoped } = fixture(input);
+    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+      reason: 'INVALID_MANUAL_CAPTURE',
+    });
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+  });
+  it('still replays an already recorded legacy transfer without requiring new evidence', async () => {
+    const { db, scoped } = fixture(transfer);
+    const result = {
+      tenderId: 'old-transfer',
+      settled: true,
+      receiptNumber: 41,
+      remainingMinor: 0,
+    };
+    db.pharmacyMoneyIdempotencyKey.findUnique.mockResolvedValue({
+      id: 'key',
+      commandType: 'tender',
+      payloadHash: createHash('sha256').update(JSON.stringify(transfer)).digest('hex'),
+      resultPayload: result,
+    } as never);
+    await expect(applyPharmacyTender(scoped, scope, transfer)).resolves.toEqual({
+      ...result,
+      replayed: true,
+    });
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+  });
+  it('checks the exact saved reference and confirmer during outcome recovery', async () => {
+    const input = { ...transfer, providerRef: ' BANK/123 ' };
+    const result = { tenderId: 'tender', settled: true, receiptNumber: 41, remainingMinor: 0 };
+    const tender = {
+      id: 'tender',
+      organizationId: 'org',
+      branchId: 'branch',
+      saleId: 'sale',
+      deviceId: 'counter',
+      type: 'BANK_TRANSFER',
+      amountMinor: 1000,
+      businessDate: input.businessDate,
+      cashReceivedMinor: null,
+      changeGivenMinor: null,
+      providerRef: 'BANK/123',
+      confirmedById: 'cashier',
+    };
+    const db = {
+      pharmacySale: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'sale', organizationId: 'org', branchId: 'branch' }),
+      },
+      pharmacyMoneyIdempotencyKey: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({
+            organizationId: 'org',
+            deviceId: 'counter',
+            key: input.idempotencyKey,
+            commandType: 'tender',
+            payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+            resultPayload: result,
+          }),
+      },
+      pharmacyTender: { findFirst: vi.fn().mockResolvedValue(tender) },
+    };
+    expect(await readPharmacyTenderOutcome(db as unknown as ScopedDb, scope, input)).toMatchObject({
+      status: 'ACCEPTED',
+    });
+    for (const change of [{ providerRef: 'BANK/other' }, { confirmedById: 'other-cashier' }]) {
+      db.pharmacyTender.findFirst.mockResolvedValue({ ...tender, ...change });
+      expect(
+        await readPharmacyTenderOutcome(db as unknown as ScopedDb, scope, input)
+      ).toMatchObject({ status: 'UNKNOWN' });
+    }
   });
 });

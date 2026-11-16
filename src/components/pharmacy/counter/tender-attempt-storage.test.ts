@@ -337,3 +337,26 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   ).toThrow();
   expect(window.localStorage.length).toBe(0);
 });
+
+
+it('DEV-875 retains exact bank reference evidence across recovery and rejects mixed captures', () => {
+  const attempt = original();
+  attempt.input.type = 'BANK_TRANSFER';
+  delete attempt.input.cashReceivedMinor;
+  attempt.input.providerRef = 'BANK/2026-11/1234567890123456';
+  attempt.draft.cashReceived = '';
+  persistTenderAttempt(attempt);
+  expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  clearTenderAttempt(attempt);
+  for (const change of [
+    { approvalCode: 'AB12' },
+    { payerName: 'Ayesha' },
+    { referenceSkipped: true },
+    { providerRef: '   ' },
+    { providerRef: 'x'.repeat(129) },
+  ]) {
+    expect(() =>
+      persistTenderAttempt({ ...attempt, input: { ...attempt.input, ...change } })
+    ).toThrow();
+  }
+});

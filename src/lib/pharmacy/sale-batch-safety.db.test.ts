@@ -230,18 +230,39 @@ function tenderInput(saleId: string, amountMinor: number) {
     deviceId: randomUUID(),
     businessDate,
     type: 'BANK_TRANSFER' as const,
+    providerRef: 'BANK-TEST-123',
     amountMinor,
     idempotencyKey: randomUUID(),
   };
 }
 
 describeDatabase('#659 batch safety is rechecked at tender and completion', () => {
+  it.each([undefined, '', '   '])(
+    'DEV-875 refuses bank reference %j and rolls back all money and stock writes',
+    async (providerRef) => {
+      const f = await cart('bank-reference-required');
+      const before = await moneyAndStock(f.saleId, f.lotId);
+      await expect(
+        tenant((db) =>
+          settlement.applyPharmacyTender(db, scope, {
+            ...tenderInput(f.saleId, f.totalMinor),
+            providerRef,
+          })
+        )
+      ).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
+      expect(await moneyAndStock(f.saleId, f.lotId)).toEqual(before);
+    }
+  );
+
   it('still settles and completes a sale whose batch stayed safe', async () => {
     const f = await cart('safe');
     const result = await tenant((db) =>
       settlement.applyPharmacyTender(db, scope, tenderInput(f.saleId, f.totalMinor))
     );
     expect(result).toMatchObject({ settled: true, remainingMinor: 0 });
+    expect(
+      await tenant((db) => db.pharmacyTender.findFirst({ where: { saleId: f.saleId } }))
+    ).toMatchObject({ providerRef: 'BANK-TEST-123', confirmedById: scope.actorId });
     const after = await moneyAndStock(f.saleId, f.lotId);
     expect(after.sale.status).toBe('COMPLETED');
     expect(after.sale.receiptNumber).toEqual(expect.any(Number));

@@ -80,6 +80,19 @@ export const manualCardCaptureSchema = z.object({
   approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
 }).strict();
 
+/** Bank statement reference; unlike card evidence it may contain separators or long IDs. */
+export const bankTransferCaptureSchema = z.object({
+  providerRef: z.string().trim().min(1).max(128),
+}).strict();
+
+// Keep transport values unchanged: the exact input is hashed for payment recovery.
+// Missing references remain readable for legacy outcomes; new tenders validate in settlement.
+export function validTenderReference(input: { type: string; providerRef?: string }) {
+  return input.providerRef === undefined || (input.type === 'BANK_TRANSFER'
+    ? bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef }).success
+    : MANUAL_CARD_REFERENCE.test(input.providerRef));
+}
+
 const confirmerSchema = z.object({
   /** The confirming user's id; absent on reports saved before it was recorded. */
   id: z.string().min(1).optional(),

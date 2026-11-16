@@ -251,6 +251,7 @@ async function setupTenant(label: string, options: { camera?: boolean } = {}) {
       deviceId: `device-${label}`,
       businessDate,
       type: 'BANK_TRANSFER' as const,
+      providerRef: 'BANK-TEST-123',
       amountMinor,
       idempotencyKey: randomUUID(),
     };

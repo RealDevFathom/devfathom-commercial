@@ -29,6 +29,7 @@ import {
   aggregateTenderTotals,
   MANUAL_CARD_PROVIDER,
   manualCardCaptureSchema,
+  bankTransferCaptureSchema,
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
@@ -233,6 +234,10 @@ export async function readPharmacyTenderOutcome(
     if (input.approvalCode !== undefined && (tender.provider !== MANUAL_CARD_PROVIDER ||
       tender.providerRef !== input.providerRef?.trim() ||
       tender.approvalCode !== input.approvalCode.trim())) return unknown;
+
+    if (input.type === 'BANK_TRANSFER' && input.providerRef !== undefined &&
+      (tender.providerRef !== input.providerRef.trim() || tender.confirmedById !== scope.actorId))
+      return unknown;
 
     return { status: 'ACCEPTED', replayUnsafe: true, result };
   } catch {
@@ -510,7 +515,11 @@ export async function applyPharmacyTender(
   } else if (input.approvalCode !== undefined) {
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   }
-  if (!isManualTender(input.type) && !manualCard &&
+  const bankTransfer = input.type === 'BANK_TRANSFER';
+  if (bankTransfer && (input.payerName !== undefined || input.referenceSkipped !== undefined ||
+      input.cashReceivedMinor !== undefined))
+    throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+  if (!isManualTender(input.type) && !manualCard && !bankTransfer &&
       (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined))
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   if (input.type === 'CASH') {
@@ -525,6 +534,12 @@ export async function applyPharmacyTender(
       options.drawerOperator
     );
     drawerSessionId = drawer.id;
+  } else if (bankTransfer) {
+    const capture = bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef });
+    if (!capture.success) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+    providerRef = capture.data.providerRef;
+    // The signed-in cashier confirms receipt in the bank account.
+    confirmedById = scope.actorId;
   } else if (isManualTender(input.type)) {
     if (input.cashReceivedMinor !== undefined) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     // Policy and capture are checked in the money transaction. Saving policy

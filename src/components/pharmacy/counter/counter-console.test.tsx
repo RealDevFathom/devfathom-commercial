@@ -430,6 +430,8 @@ function enterPayment(type = 'CASH') {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+  if (type === 'BANK_TRANSFER')
+    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-123' } });
   if (type === 'CARD') {
     fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
       target: { value: '4242' },
@@ -3001,6 +3003,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     });
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-123' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
