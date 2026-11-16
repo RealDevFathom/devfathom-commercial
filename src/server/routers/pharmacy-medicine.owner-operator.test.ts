@@ -37,6 +37,7 @@ function caller(roleKey: string, models: Record<string, unknown>) {
     },
     ...models,
   };
+  db.$queryRaw = vi.fn().mockResolvedValue([]);
   db.$transaction = vi.fn((run: (tx: unknown) => unknown) => run(db));
   return pharmacyMedicineRouter.createCaller({
     db,
@@ -71,18 +72,18 @@ describe('Owner / Operator catalogue review', () => {
   it('lists and decides connector proposals', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const findFirst = vi.fn().mockResolvedValue({ id: 'proposal-1', status: 'PENDING' });
-    const update = vi.fn().mockResolvedValue({ id: 'proposal-1', status: 'REJECTED' });
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const owner = caller('owner-operator', {
-      pharmacyReferenceConnectorProposal: { findMany, findFirst, update },
+      pharmacyReferenceConnectorProposal: { findMany, findFirst, updateMany },
     });
 
     await expect(owner.referenceConnectorProposals()).resolves.toEqual([]);
     await expect(
       owner.decideReferenceConnectorProposal({ proposalId: 'proposal-1', decision: 'REJECT' })
     ).resolves.toMatchObject({ status: 'REJECTED' });
-    expect(update).toHaveBeenCalledWith(
+    expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'proposal-1' },
+        where: { id: 'proposal-1', status: 'PENDING' },
         data: expect.objectContaining({ status: 'REJECTED', decidedBy: 'owner-1' }),
       })
     );
@@ -92,22 +93,24 @@ describe('Owner / Operator catalogue review', () => {
     'records a %s review decision on an unreviewed assertion',
     async (action) => {
       const create = vi.fn().mockResolvedValue({ id: 'decision-1', action });
-      const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+      const updateMany = vi.fn(() => {
+        throw new Error('Provenance is append-only');
+      });
+      const append = vi.fn().mockResolvedValue({ id: 'reviewed-1' });
       const owner = caller('owner-operator', {
         auditLog: { create: vi.fn() },
         medicine: { count: vi.fn().mockResolvedValue(1) },
         medicineProvenance: {
-          findMany: vi
-            .fn()
-            .mockResolvedValue([
-              {
-                id: 'assertion-1',
-                medicineId: 'med-1',
-                editorId: 'editor-1',
-                status: 'UNREVIEWED',
-              },
-            ]),
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'assertion-1',
+              medicineId: 'med-1',
+              editorId: 'editor-1',
+              status: 'UNREVIEWED',
+            },
+          ]),
           updateMany,
+          create: append,
         },
         medicineReviewDecision: { create },
       });
@@ -123,7 +126,16 @@ describe('Owner / Operator catalogue review', () => {
       expect(create).toHaveBeenCalledWith({
         data: expect.objectContaining({ action, reviewerId: 'owner-1' }),
       });
-      expect(updateMany).toHaveBeenCalledTimes(action === 'DEFER' ? 0 : 1);
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(append).toHaveBeenCalledTimes(action === 'DEFER' ? 0 : 1);
+      if (action !== 'DEFER')
+        expect(append).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            supersedesId: 'assertion-1',
+            reviewer: 'owner-1',
+            status: action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+          }),
+        });
     }
   );
 

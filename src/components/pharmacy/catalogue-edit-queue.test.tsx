@@ -84,3 +84,9 @@ it('shows loading, empty, denied and pending states', () => {
   view.rerender(<CatalogueEditQueue />);
   expect(screen.getByRole('button', { name: 'Approve edit' })).toBeDisabled();
 });
+
+it('keeps the edit form out of a reviewer-only view', () => {
+  render(<CatalogueEditQueue canEdit={false} />);
+  expect(screen.queryByRole('button', { name: 'Submit for review' })).not.toBeInTheDocument();
+  expect(screen.getByText('No catalogue edits await review.')).toBeVisible();
+});

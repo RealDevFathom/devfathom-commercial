@@ -1,3 +1,4 @@
+import { can, subjectFromSession } from '@/lib/abac';
 import { CatalogueEditQueue } from '@/components/pharmacy/catalogue-edit-queue';
 import type { Metadata } from 'next';
 import { StagedMedicineCatalogue } from '@/components/pharmacy/staged-medicine-catalogue';
@@ -17,6 +18,22 @@ export default async function MedicineReferencePage({
 }) {
   const ctx = await createTRPCContext();
   if (ctx.session?.user.role !== 'ADMIN') {
+    const reviewer =
+      ctx.session?.user.id &&
+      (await can(subjectFromSession(ctx.session.user), 'pharmacy:catalogue-review', undefined, {
+        db: ctx.db,
+      }));
+    if (reviewer)
+      return (
+        <div className="min-w-0 space-y-6">
+          <PageHeader
+            eyebrow="Pharmacy / catalog governance"
+            heading="Catalogue review"
+            description="Review pending catalogue edits before they become live."
+          />
+          <CatalogueEditQueue canEdit={false} />
+        </div>
+      );
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader

@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   rows: vi.fn(),
   detail: vi.fn(),
   context: vi.fn(),
+  can: vi.fn(async () => false),
 }));
+vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/server/routers/pharmacy-staged-review', () => ({
   pharmacyStagedReviewRouter: {
@@ -49,6 +51,24 @@ beforeEach(() => {
   });
 });
 describe('staged medicine review UI', () => {
+  it('allows an explicitly authorized non-admin reviewer to reach the edit queue only', async () => {
+    mocks.context.mockResolvedValue({
+      session: { user: { id: 'reviewer', role: 'EMPLOYEE', status: 'ACTIVE' } },
+      db: {},
+    });
+    mocks.can.mockResolvedValueOnce(true);
+    render(await MedicinePage({}));
+    expect(screen.getByRole('heading', { name: 'Catalogue review' })).toBeVisible();
+    expect(screen.getByText('Catalogue edit queue')).toBeVisible();
+    expect(screen.queryByText('Existing workbench')).not.toBeInTheDocument();
+    expect(mocks.branches).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'reviewer' }),
+      'pharmacy:catalogue-review',
+      undefined,
+      { db: {} }
+    );
+  });
   it('shows staged review within the normal medicine catalogue', async () => {
     render(await MedicinePage({}));
     expect(screen.getByRole('heading', { name: 'Medicine catalogue', level: 1 })).toBeTruthy();

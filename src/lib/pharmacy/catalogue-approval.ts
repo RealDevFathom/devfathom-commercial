@@ -2,7 +2,7 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import type { Prisma } from '@/generated/prisma/client';
+import type { Medicine, Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 type CatalogueDb = ScopedDb | Prisma.TransactionClient;
 import { soloOwnerApprovalAllowed } from './purchase-approval';
@@ -29,6 +29,30 @@ export const catalogueChanges = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Select at least one change.');
+
+export function validateCatalogueChanges(
+  medicine: Pick<Medicine, 'productFamily' | 'saleable'>,
+  changes: z.infer<typeof catalogueChanges>
+) {
+  if ('retailPriceMinor' in changes || 'retailCategory' in changes) {
+    validateRetailFields({
+      productFamily: medicine.productFamily,
+      retailPriceMinor: changes.retailPriceMinor,
+      retailCategory: changes.retailCategory,
+    });
+  }
+  if (
+    medicine.saleable &&
+    medicine.productFamily !== 'FRONT_SHOP' &&
+    'drapRegistrationNumber' in changes &&
+    !changes.drapRegistrationNumber
+  ) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'A published medicine must retain its registration number.',
+    });
+  }
+}
 
 /** A PIN is consumed by this request only; never accept a cached client proof. */
 export async function authorizeCatalogueReview(
@@ -110,13 +134,7 @@ export async function submitCatalogueEdit(
     where: { id: input.medicineId, organizationId: input.organizationId },
   });
   if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Medicine not found.' });
-  if ('retailPriceMinor' in changes || 'retailCategory' in changes) {
-    validateRetailFields({
-      productFamily: medicine.productFamily,
-      retailPriceMinor: changes.retailPriceMinor,
-      retailCategory: changes.retailCategory,
-    });
-  }
+  validateCatalogueChanges(medicine, changes);
   return db.pharmacyCatalogueEdit.create({
     data: {
       organizationId: input.organizationId,

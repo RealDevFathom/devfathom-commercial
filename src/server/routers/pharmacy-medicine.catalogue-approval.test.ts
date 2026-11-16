@@ -77,7 +77,9 @@ function fixture(
       updateMany: vi.fn(),
       update: vi.fn(),
     },
+    $queryRaw: vi.fn().mockResolvedValue([]),
     medicineProvenance: {
+      create: vi.fn(async ({ data }) => ({ id: 'reviewed-assertion', ...data })),
       findMany: vi.fn(async () => [
         { id: 'assertion', medicineId: 'medicine', editorId: 'editor', status: 'UNREVIEWED' },
       ]),
@@ -284,7 +286,15 @@ describe('DEV-766 durable catalogue approvals', () => {
     expect(self.db.medicineProvenance.updateMany).not.toHaveBeenCalled();
     const other = fixture('reviewer');
     await other.caller.recordReviewDecision(input);
-    expect(other.db.medicineProvenance.updateMany).toHaveBeenCalledOnce();
+    expect(other.db.medicineProvenance.updateMany).not.toHaveBeenCalled();
+    expect(other.db.medicineProvenance.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supersedesId: 'assertion',
+        status: 'ACCEPTED',
+        editorId: 'editor',
+        reviewer: 'reviewer',
+      }),
+    });
   });
 
   it('rejects unknown authors rather than inventing attribution', async () => {
@@ -311,6 +321,89 @@ describe('DEV-766 durable catalogue approvals', () => {
       caller.submitCatalogueEdit({
         medicineId: 'medicine',
         changes: { retailPriceMinor: 2_147_483_648 },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
+  });
+  it('keeps corrected values pending for a different reviewer', async () => {
+    const { caller, db } = fixture('reviewer');
+    db.medicineProvenance.findMany.mockResolvedValue([
+      {
+        id: 'assertion',
+        medicineId: 'medicine',
+        editorId: 'editor',
+        status: 'UNREVIEWED',
+        field: 'productName',
+        source: 'Synthetic fixture',
+        sourceType: 'USER',
+        retrievedAt: new Date(),
+        assertedValue: {
+          value: 'Old value',
+          connectorId: 'manual-file',
+          sourceLabel: 'Fixture',
+          batchId: 'batch',
+          rowSourceKey: 'row',
+          rights: {
+            acquisition: 'Local test',
+            cache: 'Local test',
+            redistribution: 'Local test',
+            deletion: 'Local test',
+          },
+          blockingIssues: [],
+        },
+      },
+    ] as never);
+    await caller.recordReviewDecision({
+      duplicateKey: 'reference:medicine',
+      action: 'CORRECT',
+      medicineIds: ['medicine'],
+      payload: {
+        assertionIds: ['assertion'],
+        corrections: [{ assertionId: 'assertion', value: 'Corrected value' }],
+      },
+    });
+    expect(db.medicineProvenance.updateMany).not.toHaveBeenCalled();
+    const version = db.medicineProvenance.create.mock.calls[0]![0].data;
+    expect(version).toMatchObject({
+      editorId: 'reviewer',
+      reviewer: null,
+      status: 'UNREVIEWED',
+      supersedesId: 'assertion',
+      assertedValue: { value: 'Corrected value' },
+    });
+    db.medicineProvenance.findMany.mockResolvedValue([
+      { id: 'reviewed-assertion', ...version },
+    ] as never);
+    await expect(
+      caller.recordReviewDecision({
+        duplicateKey: 'reference:medicine',
+        action: 'ACCEPT',
+        medicineIds: ['medicine'],
+        payload: { assertionIds: ['reviewed-assertion'] },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it.each(['CONFIRM', 'REJECT'] as const)(
+    'does not overwrite a concurrent connector decision with %s',
+    async (decision) => {
+      const { caller, db } = fixture();
+      db.pharmacyReferenceConnectorProposal.updateMany.mockResolvedValue({ count: 0 });
+      await expect(
+        caller.decideReferenceConnectorProposal({ proposalId: 'proposal', decision })
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(db.pharmacyReferenceConnectorProposal.update).not.toHaveBeenCalled();
+      expect(db.medicine.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('cannot remove the registration required by a published medicine', async () => {
+    const { caller, db, medicine } = fixture();
+    Object.assign(medicine, { productFamily: 'PHARMACEUTICAL', saleable: true });
+    await expect(
+      caller.submitCatalogueEdit({
+        medicineId: medicine.id,
+        changes: { drapRegistrationNumber: null },
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();

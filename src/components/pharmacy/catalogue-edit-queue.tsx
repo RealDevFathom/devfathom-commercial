@@ -36,7 +36,7 @@ const flags = new Set<Field>([
   'coldChain',
 ]);
 
-export function CatalogueEditQueue() {
+export function CatalogueEditQueue({ canEdit = true }: { canEdit?: boolean }) {
   const [query, setQuery] = useState('');
   const [medicine, setMedicine] = useState<{ id: string; productName: string } | null>(null);
   const [field, setField] = useState<Field>('productName');
@@ -45,7 +45,7 @@ export function CatalogueEditQueue() {
   const utils = trpc.useUtils();
   const search = trpc.pharmacyMedicine.search.useQuery(
     { query: query || ' ', limit: 10 },
-    { enabled: query.trim().length > 0, retry: false }
+    { enabled: canEdit && query.trim().length > 0, retry: false }
   );
   const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, { retry: false });
   const submit = trpc.pharmacyMedicine.submitCatalogueEdit.useMutation({
@@ -64,114 +64,122 @@ export function CatalogueEditQueue() {
       ]);
     },
   });
+  const valueInvalid = submit.error?.data?.code === 'BAD_REQUEST';
   return (
     <SectionCard title="Catalogue edits" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
         Edits stay pending until reviewed. The editor cannot approve their own edit unless they are
         a solo owner and enter a fresh PIN.
       </p>
-      <form
-        className="space-y-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!medicine) return;
-          const next = flags.has(field)
-            ? value === 'true'
-            : field === 'retailPriceMinor'
-              ? value
-                ? Number(value)
-                : null
-              : value || null;
-          submit.mutate({ medicineId: medicine.id, changes: { [field]: next } });
-        }}
-      >
-        <label className="block text-sm">
-          Find a catalogue item
-          <Input
-            className="mt-2 min-h-11"
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setMedicine(null);
-            }}
-          />
-        </label>
-        {search.isFetching && <p role="status">Searching catalogue…</p>}
-        {search.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {search.error.message}
-          </p>
-        )}
-        {query.trim() && search.data?.length === 0 && (
-          <p className="text-sm text-text-muted">No matching items. Try another name.</p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {search.data?.map((item) => (
-            <Button
-              type="button"
-              key={item.id}
-              variant="outline"
-              aria-pressed={medicine?.id === item.id}
-              onClick={() => setMedicine(item)}
-            >
-              {item.productName}
-            </Button>
-          ))}
-        </div>
-        {medicine && <p className="text-sm">Editing {medicine.productName}</p>}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm">
-            Field
-            <select
-              className="mt-2 min-h-11 w-full rounded-sm border border-border bg-surface-card px-3"
-              value={field}
+      {canEdit && (
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!medicine) return;
+            const next = flags.has(field)
+              ? value === 'true'
+              : field === 'retailPriceMinor'
+                ? value
+                  ? Number(value)
+                  : null
+                : value || null;
+            submit.mutate({ medicineId: medicine.id, changes: { [field]: next } });
+          }}
+        >
+          <label className="block text-sm">
+            Find a catalogue item
+            <Input
+              className="mt-2 min-h-11"
+              value={query}
               onChange={(event) => {
-                setField(event.target.value as Field);
-                setValue('');
+                setQuery(event.target.value);
+                setMedicine(null);
               }}
-            >
-              {Object.entries(fields).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          <label className="text-sm">
-            Proposed value
-            {flags.has(field) ? (
-              <select
-                required
-                className="mt-2 min-h-11 w-full rounded-sm border border-border bg-surface-card px-3"
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
+          {search.isFetching && <p role="status">Searching catalogue…</p>}
+          {search.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {search.error.message}
+            </p>
+          )}
+          {query.trim() && search.data?.length === 0 && (
+            <p className="text-sm text-text-muted">No matching items. Try another name.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {search.data?.map((item) => (
+              <Button
+                className="min-h-11"
+                type="button"
+                key={item.id}
+                variant="outline"
+                aria-pressed={medicine?.id === item.id}
+                onClick={() => setMedicine(item)}
               >
-                <option value="">Select a value</option>
-                <option value="true">Yes</option>
-                <option value="false">No</option>
+                {item.productName}
+              </Button>
+            ))}
+          </div>
+          {medicine && <p className="text-sm">Editing {medicine.productName}</p>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="text-sm">
+              Field
+              <select
+                className="mt-2 min-h-11 w-full rounded-sm border border-border bg-surface-card px-3"
+                value={field}
+                onChange={(event) => {
+                  setField(event.target.value as Field);
+                  setValue('');
+                }}
+              >
+                {Object.entries(fields).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
               </select>
-            ) : (
-              <Input
-                className="mt-2 min-h-11"
-                required={field === 'productName'}
-                type={field === 'retailPriceMinor' ? 'number' : 'text'}
-                min={1}
-                step={1}
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-              />
-            )}
-          </label>
-        </div>
-        {submit.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {submit.error.message}
-          </p>
-        )}
-        <Button type="submit" disabled={!medicine || submit.isPending}>
-          {submit.isPending ? 'Submitting…' : 'Submit for review'}
-        </Button>
-      </form>
+            </label>
+            <label className="text-sm">
+              Proposed value
+              {flags.has(field) ? (
+                <select
+                  required
+                  aria-invalid={valueInvalid}
+                  aria-describedby={submit.error ? 'catalogue-edit-error' : undefined}
+                  className="mt-2 min-h-11 w-full rounded-sm border border-border bg-surface-card px-3"
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                >
+                  <option value="">Select a value</option>
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              ) : (
+                <Input
+                  className="mt-2 min-h-11"
+                  aria-invalid={valueInvalid}
+                  aria-describedby={submit.error ? 'catalogue-edit-error' : undefined}
+                  required={field === 'productName'}
+                  type={field === 'retailPriceMinor' ? 'number' : 'text'}
+                  min={1}
+                  step={1}
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                />
+              )}
+            </label>
+          </div>
+          {submit.error && (
+            <p id="catalogue-edit-error" role="alert" className="text-sm text-destructive">
+              {submit.error.message}
+            </p>
+          )}
+          <Button className="min-h-11" type="submit" disabled={!medicine || submit.isPending}>
+            {submit.isPending ? 'Submitting…' : 'Submit for review'}
+          </Button>
+        </form>
+      )}
       <div className="mt-6 space-y-4" aria-label="Pending catalogue edits">
         {queue.isPending && <p role="status">Loading pending edits…</p>}
         {queue.error && (
@@ -181,13 +189,18 @@ export function CatalogueEditQueue() {
                 ? 'Catalogue review permission is required to view and decide edits.'
                 : queue.error.message}
             </p>
-            <Button variant="outline" onClick={() => void queue.refetch()}>
+            <Button className="min-h-11" variant="outline" onClick={() => void queue.refetch()}>
               Retry queue
             </Button>
           </div>
         )}
         {queue.data?.length === 0 && (
           <p className="text-sm text-text-muted">No catalogue edits await review.</p>
+        )}
+        {decide.isPending && (
+          <p role="status" className="text-sm text-text-muted">
+            Saving catalogue decision…
+          </p>
         )}
         {decide.error && (
           <p role="alert" className="text-sm text-destructive">
@@ -229,6 +242,7 @@ export function CatalogueEditQueue() {
             <div className="flex flex-wrap gap-2">
               {(['APPROVE', 'REJECT'] as const).map((decision) => (
                 <Button
+                  className="min-h-11"
                   key={decision}
                   variant={decision === 'REJECT' ? 'outline' : 'default'}
                   disabled={decide.isPending}
