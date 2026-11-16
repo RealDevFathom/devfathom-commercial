@@ -42,6 +42,7 @@ const bridge = {
   revokedAt: null,
 };
 const db = {
+  $queryRaw: vi.fn(),
   pharmacyBranch: {
     findFirst: vi.fn(async (): Promise<{ id: string } | null> => ({ id: 'branch_a' })),
   },
@@ -65,6 +66,7 @@ function request(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.$queryRaw.mockResolvedValue([{ id: bridge.id }]);
   mocks.rateLimit.mockResolvedValue({ ok: true });
   mocks.withTenantDb.mockImplementation(async (_org: string, run: (tx: unknown) => unknown) =>
     run(db)
@@ -76,6 +78,24 @@ beforeEach(() => {
 });
 
 describe('pharmacy print bridge transport', () => {
+  it.each(['GET', 'POST'] as const)(
+    'refuses %s when revocation wins after credential lookup',
+    async (method) => {
+      db.$queryRaw.mockResolvedValueOnce([]);
+      const req = request(method, {
+        token: credential,
+        wait: '0',
+        ...(method === 'POST'
+          ? { body: { jobId: 'job-1', claimToken: 'a'.repeat(64), status: 'TRANSPORT_ACCEPTED' } }
+          : {}),
+      });
+      const response = await (method === 'GET' ? GET(req) : POST(req));
+      expect(response.status).toBe(403);
+      expect(mocks.claimNextPharmacyPrintJob).not.toHaveBeenCalled();
+      expect(mocks.acknowledgePharmacyPrintJob).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses requests without a well-formed pharmacy bridge credential', async () => {
     for (const token of [undefined, 'rdk_restaurant_token', `pcd_${'C'.repeat(43)}`, 'ppb_bad']) {
       const response = await GET(request('GET', { token, wait: '0' }));

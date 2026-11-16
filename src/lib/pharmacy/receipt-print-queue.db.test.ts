@@ -143,6 +143,7 @@ describeIfDatabase('DEV-741 pharmacy receipt print queue (PostgreSQL)', () => {
     const job = await inOrg(ORG_A, (db) =>
       enqueue(db, ORG_A, BRANCH_A, a.saleId, { bridgeId: a.bridge.id })
     );
+    expect(a.bridge).not.toHaveProperty('deviceSecretHash');
     const parsed = deps.queue.parsePharmacyPrintBridgeCredential(a.credential)!;
     const fromB = await inOrg(ORG_B, async (db) => ({
       bridges: await db.pharmacyPrintBridge.count({ where: { id: a.bridge.id } }),
@@ -152,6 +153,34 @@ describeIfDatabase('DEV-741 pharmacy receipt print queue (PostgreSQL)', () => {
     expect(fromB).toEqual({ bridges: 0, jobs: 0, byHash: null });
     const fromA = await inOrg(ORG_A, (db) => deps.queue.resolvePharmacyPrintBridge(db, parsed));
     expect(fromA?.id).toBe(a.bridge.id);
+    expect(fromA).not.toHaveProperty('deviceSecretHash');
+  });
+
+  it('requires durable dispatch evidence and copy-consistent reprint marking', async () => {
+    const a = await saleWithBridge(ORG_A, BRANCH_A);
+    const data = {
+      organizationId: ORG_A,
+      branchId: BRANCH_A,
+      bridgeId: a.bridge.id,
+      printerId: a.bridge.printerId,
+      saleId: a.saleId,
+      receiptNumber: 7,
+      copyNumber: 9,
+      reprint: true,
+      idempotencyKey: 'missing-dispatch-0001',
+      document,
+      byteCount: deps.renderEscPos(document).length,
+      paperWidth: 80,
+      requestedByActorId: ACTOR,
+    };
+    expect(await refusal(ORG_A, (db) => db.pharmacyPrintJob.create({ data }))).toMatch(
+      /Foreign key|foreign key/i
+    );
+    expect(
+      await refusal(ORG_A, (db) =>
+        db.pharmacyPrintJob.create({ data: { ...data, reprint: false } })
+      )
+    ).toContain('pharmacy_print_jobs_copy_check');
   });
 
   it('allows one original per sale even under a different key, but any number of reprints', async () => {

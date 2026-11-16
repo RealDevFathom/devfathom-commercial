@@ -9,11 +9,11 @@ import {
   PRINT_FAILURE_CODES,
   resolvePharmacyPrintBridge,
   touchPharmacyPrintBridge,
+  type PharmacyPrintBridge,
 } from '@/lib/pharmacy/receipt-print-queue';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { isDeviceUsable } from '@/lib/retail-terminal/device-secret';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
-import type { PharmacyPrintBridge } from '@/generated/prisma/client';
 
 /**
  * DEV-741 — device-only transport for a branch-bound Pharmacy print bridge.
@@ -76,6 +76,14 @@ async function withBridge<T>(
     if (!bridge) throw new BridgeRequestError('Unknown print bridge.', 401);
     if (!isDeviceUsable(bridge))
       throw new BridgeRequestError('This print bridge was revoked.', 403);
+    // Recheck under a row lock: revocation may have committed since the
+    // credential lookup. Hold this lock through claim/ack in the tenant transaction.
+    const active = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM pharmacy_print_bridges
+      WHERE id = ${bridge.id} AND "organizationId" = ${bridge.organizationId}
+        AND "branchId" = ${bridge.branchId} AND status = 'ACTIVE' AND "revokedAt" IS NULL
+      FOR UPDATE`;
+    if (active.length !== 1) throw new BridgeRequestError('This print bridge was revoked.', 403);
     if (
       !hasModule(
         await resolveOrganizationEntitlements(credential.organizationId, db),

@@ -2,7 +2,10 @@ import 'server-only';
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import type { PharmacyPrintBridge, PharmacyPrintJob } from '@/generated/prisma/client';
+import type {
+  PharmacyPrintBridge as PharmacyPrintBridgeRow,
+  PharmacyPrintJob,
+} from '@/generated/prisma/client';
 import {
   RawPrintValidationError,
   validateRawStoredPrintDocument,
@@ -16,6 +19,9 @@ import {
   isDeviceUsable,
 } from '@/lib/retail-terminal/device-secret';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+/** A stored verifier is never needed in a bridge record or response. */
+export type PharmacyPrintBridge = Omit<PharmacyPrintBridgeRow, 'deviceSecretHash'>;
 
 /**
  * DEV-741 — the Pharmacy thermal receipt print queue.
@@ -166,6 +172,7 @@ export async function enrollPharmacyPrintBridge(
   if (!isValidPrinterTarget(input.printerId)) throw new PharmacyPrintQueueError('INVALID_PRINTER');
   const { secret, secretHash } = generateDeviceSecret(PHARMACY_PRINT_BRIDGE_SECRET_PREFIX);
   const bridge = await db.pharmacyPrintBridge.create({
+    omit: { deviceSecretHash: true },
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -186,11 +193,13 @@ export async function revokePharmacyPrintBridge(
   now: Date
 ): Promise<PharmacyPrintBridge> {
   const bridge = await db.pharmacyPrintBridge.findFirst({
+    omit: { deviceSecretHash: true },
     where: { id: bridgeId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!bridge) throw new PharmacyPrintQueueError('BRIDGE_NOT_FOUND');
   if (bridge.status === 'REVOKED') return bridge;
   return db.pharmacyPrintBridge.update({
+    omit: { deviceSecretHash: true },
     where: { organizationId_id: { organizationId: scope.organizationId, id: bridgeId } },
     data: { status: 'REVOKED', revokedAt: now },
   });
@@ -201,6 +210,7 @@ export async function listPharmacyPrintBridges(
   scope: Scope
 ): Promise<PharmacyPrintBridge[]> {
   return db.pharmacyPrintBridge.findMany({
+    omit: { deviceSecretHash: true },
     where: { organizationId: scope.organizationId, branchId: scope.branchId },
     orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
   });
@@ -212,6 +222,7 @@ export async function resolvePharmacyPrintBridge(
   credential: { secret: string; organizationId: string }
 ): Promise<PharmacyPrintBridge | null> {
   const bridge = await db.pharmacyPrintBridge.findUnique({
+    omit: { deviceSecretHash: true },
     where: { deviceSecretHash: hashDeviceSecret(credential.secret) },
   });
   return bridge && bridge.organizationId === credential.organizationId ? bridge : null;
@@ -223,6 +234,7 @@ export async function touchPharmacyPrintBridge(
   now: Date
 ): Promise<void> {
   await db.pharmacyPrintBridge.update({
+    omit: { deviceSecretHash: true },
     where: { organizationId_id: { organizationId: bridge.organizationId, id: bridge.id } },
     data: { lastSeenAt: now },
   });
@@ -306,6 +318,7 @@ export async function selectPharmacyPrintBridge(
   now: Date
 ) {
   const bridges = await db.pharmacyPrintBridge.findMany({
+    omit: { deviceSecretHash: true },
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -432,6 +445,7 @@ export async function retryPharmacyPrintJob(
     throw new PharmacyPrintQueueError('PAPER_CHECK_REQUIRED');
   }
   const bridge = await db.pharmacyPrintBridge.findFirst({
+    omit: { deviceSecretHash: true },
     where: { id: job.bridgeId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!bridge || !isDeviceUsable(bridge)) throw new PharmacyPrintQueueError('BRIDGE_REVOKED');
