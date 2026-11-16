@@ -42,7 +42,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('original tender attempt storage', () => {
   it('retains the exact buyer with the uncertain tender after a reload', () => {
     const attempt = original();
-    attempt.input.buyerName = 'Synthetic Buyer';
+    attempt.input.buyerName = 'B'.repeat(200);
     persistTenderAttempt(attempt);
     expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
   });

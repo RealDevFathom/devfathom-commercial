@@ -116,7 +116,7 @@ export async function completePaidPharmacySale(
   }
   // #708: typed at tender first, else the sale's customer; an unnamed walk-in stays blank.
   const buyerName =
-    snapshotText(input.buyerName, 100) ?? snapshotText(sale.customer?.displayName, 100);
+    snapshotText(input.buyerName, 200) ?? snapshotText(sale.customer?.displayName, 200);
   const organization = await db.organization.findUnique({
     where: { id: scope.organizationId },
     select: { timezone: true },
@@ -157,8 +157,8 @@ export async function completePaidPharmacySale(
               .join(' + ')
           : null,
         presentation: line.presentation.presentation,
-        ...(snapshotText(line.medicine.manufacturer, 200)
-          ? { manufacturer: snapshotText(line.medicine.manufacturer, 200) }
+        ...(snapshotText(line.medicine.manufacturer, 300)
+          ? { manufacturer: snapshotText(line.medicine.manufacturer, 300) }
           : {}),
         allocations: line.allocations.map((allocation) => {
           const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;

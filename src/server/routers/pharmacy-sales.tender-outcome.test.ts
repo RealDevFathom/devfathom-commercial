@@ -166,7 +166,7 @@ beforeEach(() => {
 describe('pharmacySales.tenderOutcome', () => {
   it('binds the cash-memo buyer to the original tender recovery payload', async () => {
     const f = fixture();
-    const named = { ...input, buyerName: 'Synthetic Buyer' };
+    const named = { ...input, buyerName: 'B'.repeat(200) };
     f.prior.payloadHash = digest(named);
     await expect(f.caller().tenderOutcome(named)).resolves.toMatchObject({ status: 'ACCEPTED' });
     expect(f.context.audit?.detail.skipInput).toBe(true);
@@ -176,7 +176,7 @@ describe('pharmacySales.tenderOutcome', () => {
     expect(f.transaction).not.toHaveBeenCalled();
     expect(f.unexpected).not.toHaveBeenCalled();
   });
-  it.each(['<buyer>', 'buyer\u202ename', 'buyer\nname', 'x'.repeat(101)])(
+  it.each(['<buyer>', 'buyer\u202ename', 'buyer\nname', 'x'.repeat(201)])(
     'rejects invalid cash-memo buyer text before any payment read or write: %j',
     async (buyerName) => {
       const f = fixture();

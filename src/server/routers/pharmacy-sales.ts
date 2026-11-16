@@ -253,7 +253,7 @@ const tenderInput = z
       .string()
       .trim()
       .min(1)
-      .max(100)
+      .max(200)
       .regex(/^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]*$/u, 'Use a plain name.')
       .optional(),
   })

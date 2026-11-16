@@ -1021,19 +1021,19 @@ describe('#708 Sindh cash memo buyer name', () => {
     );
   });
 
-  it('limits a long selected patient name to the 100 characters a tender accepts', async () => {
+  it('preserves the full 200-character name accepted by patient creation', async () => {
     const longName = `${'A'.repeat(99)}BC${'D'.repeat(99)}`;
     const { props } = setup({
       cashMemo: true,
       khataSignupPatient: { patientId: 'patient-a', displayName: longName },
     });
     expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue(
-      `${'A'.repeat(99)}B`
+      longName
     );
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'CASH', amountMinor: 25000, buyerName: `${'A'.repeat(99)}B` },
+        { type: 'CASH', amountMinor: 25000, buyerName: longName },
         { amount: '', cashReceived: '' }
       )
     );

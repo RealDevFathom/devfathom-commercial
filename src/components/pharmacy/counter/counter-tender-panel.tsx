@@ -216,8 +216,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
     // Null until edited, so the selected patient's name fills it without an effect.
     const [buyerDraft, setBuyerDraft] = useState<string | null>(initialDraft?.buyerName ?? null);
-    // Patient names allow 200 characters; the cash memo, tender and recovery record take 100.
-    const buyerName = (buyerDraft ?? khataSignupPatient?.displayName ?? '').slice(0, 100);
+    // Match the existing patient-name limit throughout tender and recovery.
+    const buyerName = (buyerDraft ?? khataSignupPatient?.displayName ?? '').slice(0, 200);
     const buyerInvalid =
       cashMemo && /[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]/u.test(buyerName);
     const [referenceSkipped, setReferenceSkipped] = useState(
@@ -854,7 +854,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             <Input
               id="tender-buyer-name"
               autoComplete="off"
-              maxLength={100}
+              maxLength={200}
               value={buyerName}
               aria-invalid={buyerInvalid}
               disabled={!editable}

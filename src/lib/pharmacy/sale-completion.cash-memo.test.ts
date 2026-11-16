@@ -132,6 +132,14 @@ describe('#708 cash memo facts in the completion snapshot', () => {
     expect((await snapshotFor(sale({}))).cashMemoIdentity).toBeNull();
   });
 
+  it('preserves the full buyer and manufacturer lengths accepted by the existing patient and medicine forms', async () => {
+    const buyer = 'B'.repeat(200);
+    const manufacturer = 'M'.repeat(300);
+    const snapshot = await snapshotFor(sale({ manufacturer }), buyer);
+    expect(snapshot.buyerName).toBe(buyer);
+    expect(snapshot.lines[0]!.manufacturer).toBe(manufacturer);
+  });
+
   it('records the buyer typed at tender ahead of the sale customer', async () => {
     const snapshot = await snapshotFor(
       sale({ customer: { displayName: 'Customer On File' } }),
