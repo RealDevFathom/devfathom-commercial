@@ -382,7 +382,8 @@ function deriveExceptions(
           'UNIT_AMBIGUOUS',
           !row.rawPayload.__quantity_unit
             ? `Choose whether quantity counts PACKS or UNITS for ${where}.`
-            : row.rawPayload.__quantity_unit === 'PACKS' && readQuantity(quantityRaw ?? undefined) !== null
+            : row.rawPayload.__quantity_unit === 'PACKS' &&
+                readQuantity(quantityRaw ?? undefined) !== null
               ? `Quantity "${quantityRaw}" packs for ${where} cannot be converted: no countable pack factor.`
               : `Quantity "${quantityRaw}" for ${where} is not a whole count of a canonical unit.`
         );

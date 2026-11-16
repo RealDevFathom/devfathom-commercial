@@ -58,7 +58,8 @@ const SEEDED: OwnerDataExportRows = {
 
 function reimport(key: 'medicines' | 'stockLots' | 'customers' | 'suppliers') {
   const table = parseDelimitedText(exportCsv(OWNER_DATA_EXPORT_FILES[key], SEEDED[key]));
-  return profileTable(excelCsvProfiler, table);
+  // Match the explicit mapping choice documented in the export README.
+  return profileTable(excelCsvProfiler, table, { quantityUnit: 'UNITS' });
 }
 
 describe('owner data export format', () => {
@@ -78,6 +79,8 @@ describe('owner data export format', () => {
 
     const lots = reimport('stockLots');
     expect(lots.rows).toHaveLength(SEEDED.stockLots.length);
+    expect(lots.rows[0]!.quantityCanonical).toBe(BigInt(120));
+    expect(lots.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
     expect(Object.keys(lots.columnMap).sort()).toEqual(
       [
         'sourceKey',
@@ -150,6 +153,7 @@ describe('owner data export format', () => {
       for (const column of spec.columns) expect(readme).toContain(`| ${column.header} |`);
     }
     expect(readme).toContain('customers.csv (3 rows)');
+    expect(readme).toContain('explicitly choose Units for the quantity column');
   });
 
   it('lets only the four importable files map onto import fields', () => {
@@ -190,4 +194,13 @@ describe('formatExpiryDateOnly (QA-3)', () => {
     expect(formatExpiryDateOnly(new Date('2027-04-30T19:00:00.000Z'))).toBe('2027-04-30');
     expect(formatExpiryDateOnly(null)).toBe('');
   });
+});
+
+it('requires a quantity choice even when re-importing an owner export', () => {
+  const table = parseDelimitedText(exportCsv(OWNER_DATA_EXPORT_FILES.stockLots, SEEDED.stockLots));
+  const result = profileTable(excelCsvProfiler, table);
+  expect(result.rows[0]!.quantityCanonical).toBeNull();
+  expect(result.exceptions).toContainEqual(
+    expect.objectContaining({ bucket: 'UNIT_AMBIGUOUS', severity: 'BLOCKING' })
+  );
 });
