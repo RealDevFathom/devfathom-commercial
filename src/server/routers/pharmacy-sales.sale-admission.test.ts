@@ -60,6 +60,7 @@ function fixture(options: {
   role?: 'ADMIN' | 'EMPLOYEE';
 }) {
   const db = {
+    pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {

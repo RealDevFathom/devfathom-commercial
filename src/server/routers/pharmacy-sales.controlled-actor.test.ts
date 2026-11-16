@@ -72,6 +72,7 @@ function callerFor(
   const register = vi.fn();
   const lock = vi.fn();
   const db = {
+    pharmacySaleLine: { findFirst: vi.fn<(args: unknown) => Promise<unknown>>(async () => null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
     pharmacyBranch: {
@@ -266,7 +267,12 @@ describe('pharmacySales.addLine controlled actor', () => {
       blocked:
         'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
-    expect(lock).toHaveBeenCalledTimes(1);
+    expect(lock).toHaveBeenCalledTimes(2);
+    expect((lock.mock.calls[0]![0] as string[]).join('?')).toContain('pg_advisory_xact_lock');
+    expect(lock.mock.calls[0]!.slice(1)).toEqual(['org-1:sale-line:counter:sale-1:controlled']);
+    expect((lock.mock.calls[1]![0] as string[]).join('?')).toContain(
+      'restaurant_operator_credentials'
+    );
     expect(credential).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-1',
@@ -491,5 +497,78 @@ describe('pharmacySales.addLine prescription reference (DEV-629)', () => {
         requestedByUserId: 'cashier-1',
       },
     });
+  });
+});
+
+describe('[DEF-10] counter add-line replay (DEV-874)', () => {
+  it.each(['ordinary', 'prescription', 'controlled prescription', 'controlled emergency'])(
+    'replays a recorded %s line before any second dispense side effects',
+    async (path) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      const { controlledAuthorization, ...plain } = line;
+      const request =
+        path === 'ordinary'
+          ? plain
+          : path === 'prescription'
+            ? {
+                ...plain,
+                prescription: { prescriptionLineId: 'rx-line-1', patientId: 'patient-1' },
+              }
+            : path === 'controlled prescription'
+              ? {
+                  ...line,
+                  controlledAuthorization: {
+                    ...controlledAuthorization,
+                    emergency: false,
+                    prescriptionLineId: 'rx-line-1',
+                  },
+                }
+              : line;
+      if (!path.startsWith('controlled'))
+        f.db.medicine.findFirst = async () => ({
+          id: 'medicine-1',
+          controlled: false,
+          manufacturer: 'Maker',
+        });
+      const stored = {
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        grossMinor: 100,
+        discountMinor: 0,
+      };
+      const { branchId: _branch, ...expectedLine } = stored;
+      void _branch;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...stored,
+        allocations: [
+          {
+            inventoryLotId: 'lot-1',
+            stockLocationId: 'shelf-1',
+            canonicalUnits: 2,
+            stockMovementId: 'movement-1',
+          },
+        ],
+      });
+      await expect(f.caller.addLine(request)).resolves.toMatchObject({
+        line: expectedLine,
+        replayed: true,
+        allocation: { movementIds: ['movement-1'] },
+      });
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(f.credential).not.toHaveBeenCalled();
+      expect(f.register).not.toHaveBeenCalled();
+      expect(f.db.pharmacySaleLine.findFirst).toHaveBeenCalledExactlyOnceWith({
+        where: { organizationId: 'org-1', idempotencyKey: plain.idempotencyKey },
+        include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+      });
+    }
+  );
+
+  it('still denies replay to an actor whose dispense permission was revoked', async () => {
+    const f = callerFor([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
   });
 });

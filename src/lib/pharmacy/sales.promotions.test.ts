@@ -23,6 +23,7 @@ vi.mock('./voucher-scope', async () => ({
 }));
 
 import { addSaleLine } from './sales';
+import { allocateForSale } from './stock-ledger';
 
 /**
  * #727: the online counter prices a line against the branch's live promotions;
@@ -58,6 +59,7 @@ function counterDb(
   }
 ) {
   return {
+    $queryRaw: vi.fn(async () => []),
     pharmacyBranchAssignment: {
       findFirst: vi.fn<(args: unknown) => Promise<{ branchId: string } | null>>(async () => ({
         branchId: 'branch-a',
@@ -105,6 +107,7 @@ function counterDb(
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {
+      findFirst: vi.fn<(args: unknown) => Promise<unknown>>(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'line-a',
         ...data,
@@ -352,5 +355,84 @@ describe('addSaleLine counter promotion hook (#727)', () => {
       discountMinor: 0,
       promotionId: undefined,
     });
+  });
+});
+
+describe('[DEF-10] add-line retry (DEV-874)', () => {
+  it('returns the original line without allocating, repricing or auditing twice', async () => {
+    const db = counterDb();
+    const first = await addSaleLine(db as never, scope, lineInput, {
+      applyCounterPromotions: true,
+    });
+    db.pharmacySaleLine.findFirst.mockResolvedValue({
+      ...first.line,
+      allocations: [
+        {
+          inventoryLotId: 'lot-a',
+          stockLocationId: 'location-a',
+          canonicalUnits: 10,
+          stockMovementId: 'movement-a',
+        },
+      ],
+    });
+    db.pharmacySaleLine.create.mockRejectedValue(new Error('P2002 duplicate key'));
+    const allocationCalls = vi.mocked(allocateForSale).mock.calls.length;
+
+    const replay = await addSaleLine(db as never, scope, lineInput, {
+      applyCounterPromotions: true,
+    });
+
+    expect(replay).toMatchObject({
+      line: first.line,
+      replayed: true,
+      allocation: {
+        movementIds: ['movement-a'],
+        allocations: [{ inventoryLotId: 'lot-a', stockLocationId: 'location-a', units: 10 }],
+      },
+    });
+    expect(db.pharmacySaleLine.create).toHaveBeenCalledOnce();
+    expect(vi.mocked(allocateForSale).mock.calls.length).toBe(allocationCalls);
+    expect(db.pharmacyPromotion.findMany).toHaveBeenCalledOnce();
+    expect(db.pharmacySaleEvent.create).toHaveBeenCalledOnce();
+    expect(db.pharmacySaleLineAllocation.create).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a reused key for a different quantity before stock changes', async () => {
+    const db = counterDb();
+    const first = await addSaleLine(db as never, scope, lineInput);
+    db.pharmacySaleLine.findFirst.mockResolvedValue({ ...first.line, allocations: [] });
+    const allocationCalls = vi.mocked(allocateForSale).mock.calls.length;
+    await expect(addSaleLine(db as never, scope, { ...lineInput, quantity: 2 })).rejects.toThrow(
+      'IDEMPOTENCY_CONFLICT'
+    );
+    expect(db.pharmacySaleLine.create).toHaveBeenCalledOnce();
+    expect(vi.mocked(allocateForSale).mock.calls.length).toBe(allocationCalls);
+  });
+});
+
+describe('add-line replay scope (DEV-874)', () => {
+  it.each([
+    ['branch', { branchId: 'other-branch' }],
+    ['sale', { saleId: 'other-sale' }],
+    ['medicine', { medicineId: 'other-medicine' }],
+    ['presentation', { presentationId: 'other-presentation' }],
+    ['pack', { packLevelId: 'other-pack' }],
+    ['unit', { saleUnit: 'UNIT' }],
+    ['conversion', { canonicalUnitsPerSaleUnit: 1 }],
+    ['voucher', { voucherId: 'other-voucher' }],
+  ])('does not return a stored line with a different %s', async (_field, change) => {
+    const db = counterDb();
+    db.pharmacySaleLine.findFirst.mockResolvedValue({
+      ...lineInput,
+      branchId: scope.branchId,
+      voucherId: null,
+      ...change,
+      allocations: [],
+    });
+    await expect(addSaleLine(db as never, scope, lineInput)).rejects.toThrow(
+      'IDEMPOTENCY_CONFLICT'
+    );
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    expect(db.pharmacySale.updateMany).not.toHaveBeenCalled();
   });
 });
