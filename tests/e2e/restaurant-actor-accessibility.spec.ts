@@ -1,3 +1,4 @@
+import { platformActorCode } from './fixtures/restaurant-platform-auth';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
@@ -10,6 +11,9 @@ import {
   signInAs,
   type ActorKey,
 } from './fixtures/restaurant-actor-accessibility';
+
+// Enrollment, OTP and recovery keys must never enter automatic browser artifacts.
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 const OUTPUT =
   process.env.RESTAURANT_QA_EVIDENCE_DIR ??
@@ -169,8 +173,20 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
     const login = (email: string, password: string) =>
       page.request.post(new URL('/api/platform/session', actorOrigin).href, {
         headers: { origin: actorOrigin, 'x-forwarded-for': clientIp },
-        data: { email, password },
+        data: {
+          email,
+          password,
+          ...(email === actorFixture.superAdmin.email
+            ? { authenticationCode: platformActorCode(actorOrigin, email) }
+            : {}),
+        },
       });
+
+    const withoutOtp = await page.request.post(new URL('/api/platform/session', actorOrigin).href, {
+      headers: { origin: actorOrigin, 'x-forwarded-for': clientIp },
+      data: { email: actorFixture.superAdmin.email, password: actorFixture.superAdmin.password },
+    });
+    expect(withoutOtp.status(), 'an enrolled SuperAdmin still requires OTP').toBe(401);
 
     for (let attempt = 0; attempt < 9; attempt += 1) {
       const response = await login(actorFixture.superAdmin.email, actorFixture.superAdmin.password);

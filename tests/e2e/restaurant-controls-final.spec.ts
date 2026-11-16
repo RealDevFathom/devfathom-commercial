@@ -560,10 +560,16 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
     await pos.getByRole('button', { name: 'Close day' }).click();
     await expect(dayClose.getByLabel('Business date')).toHaveValue(businessDate);
     const blocked = await readiness();
-    expect(blocked.readiness).toMatchObject({ openBillCount: 0, openDrawerCount: 1 });
+    expect(blocked.readiness).toMatchObject({
+      openBillCount: 0,
+      unresolvedOrderCount: 0,
+      openDrawerCount: 1,
+    });
     expect(blocked.totals).toMatchObject({ grossSales: '28.00', refundTotal: '0.00' });
     await expect(dayClose.getByRole('heading', { name: 'Close blocked' })).toBeVisible();
-    await expect(dayClose.getByText('Resolve 0 open order(s) and 1 open drawer(s).')).toBeVisible();
+    await expect(
+      dayClose.getByText('Resolve 0 active order(s), 0 open bill(s) and 1 open drawer(s).')
+    ).toBeVisible();
     await expect(dayClose.getByRole('button', { name: 'Close business day' })).toHaveCount(0);
     await dayClose.getByRole('button', { name: 'Close day panel' }).click();
 
@@ -591,7 +597,11 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
 
     await pos.getByRole('button', { name: 'Close day' }).click();
     const ready = await readiness();
-    expect(ready.readiness).toMatchObject({ openBillCount: 0, openDrawerCount: 0 });
+    expect(ready.readiness).toMatchObject({
+      openBillCount: 0,
+      unresolvedOrderCount: 0,
+      openDrawerCount: 0,
+    });
     expect(ready.existingCloseId).toBeNull();
     await expect(dayClose.getByRole('heading', { name: 'Ready to close' })).toBeVisible();
     const closeResponse = pos.waitForResponse(
