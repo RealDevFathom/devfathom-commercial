@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { recordDeliveryCommand } from './customer-delivery';
-import { refundPharmacyTender } from './settlement';
+import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 vi.mock('./settlement', async () => ({
   ...(await vi.importActual<typeof import('./settlement')>('./settlement')),
   applyPharmacyTender: vi.fn(),
@@ -57,6 +57,7 @@ function fixture(
   };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    $executeRaw: vi.fn().mockResolvedValue(0),
     pharmacyCustomerOrder: { findFirst: vi.fn().mockResolvedValue(order), update: vi.fn() },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale) },
     // The linked customer holds a funded 2% tier.
@@ -100,8 +101,53 @@ it('DEV-863: a tier customer’s COD amount is the bill after their prepaid tier
   await expect(recordDeliveryCommand(db as never, scope, collect(980))).resolves.toMatchObject({
     replayed: false,
   });
-  // Collection quotes without writing; only a remittance freezes the discount with its tender.
+  // The first collection freezes the discount on the bill under the customer lock.
+  expect(db.pharmacySaleLine.update).toHaveBeenCalledWith(
+    expect.objectContaining({ data: expect.objectContaining({ tierDiscountMinor: 20 }) })
+  );
+});
+it('DEV-863: after collection the remittance settles the frozen bill, whatever the tier does next', async () => {
+  const { db, sale } = fixture(
+    [],
+    [{ action: 'COLLECT', amountMinor: 980, requestKey: 'collect-a' }]
+  );
+  // The collection froze 20 off the bill; the customer has since moved to a 5% tier.
+  Object.assign(sale.lines[0]!, {
+    discountMinor: 20,
+    tierDiscountMinor: 20,
+    tierName: 'Bronze',
+    tierAllocationDiscounts: { 'alloc-a': 20 },
+  });
+  db.pharmacyCustomer.findFirst.mockResolvedValue({
+    prepaidAccount: {
+      balanceMinor: 50000,
+      tierName: 'Gold',
+      discountBasisPoints: 500,
+      tierVersionId: 'tier-v2',
+    },
+  });
+  await recordDeliveryCommand(
+    db as never,
+    { ...scope, actorId: 'cashier' },
+    {
+      branchId: scope.branchId,
+      orderId: 'order-a',
+      action: 'REMIT',
+      amountMinor: 980,
+      reference: 'cash-received',
+      requestKey: 'remit-a',
+      deviceId: 'device-a',
+      businessDate: new Date('2026-11-17'),
+    }
+  );
   expect(db.pharmacySaleLine.update).not.toHaveBeenCalled();
+  expect(applyPharmacyTender).toHaveBeenCalledWith(
+    db,
+    expect.anything(),
+    expect.objectContaining({ type: 'CASH', amountMinor: 980 }),
+    undefined,
+    expect.objectContaining({ prepaidPricingFrozen: true })
+  );
 });
 it('DEV-863: a failed delivery partly paid from a prepaid balance restores it before the void', async () => {
   const { db } = fixture(

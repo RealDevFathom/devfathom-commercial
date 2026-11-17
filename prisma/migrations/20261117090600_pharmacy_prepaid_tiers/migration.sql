@@ -159,7 +159,11 @@ BEGIN
    LEFT JOIN pharmacy_sale_line_allocations a ON a.id=d.key AND a."organizationId"=line."organizationId" AND a."saleLineId"=line.id
    LEFT JOIN pharmacy_inventory_lots l ON l.id=a."inventoryLotId" AND l."organizationId"=a."organizationId"
    WHERE a.id IS NULL OR l.id IS NULL OR d.value::bigint < 0 OR a."grossMinor" IS NULL OR a."discountMinor" IS NULL
-     OR a."grossMinor"::bigint-a."discountMinor"::bigint-d.value::bigint < l."unitCostMinor"::bigint*a."canonicalUnits"::bigint
+     -- Only an allocation that takes a tier share must stay at or above its cost. An allocation
+     -- an earlier, line-level discount already left below cost takes a zero share and is not
+     -- this discount's doing.
+     OR (d.value::bigint > 0 AND
+       a."grossMinor"::bigint-a."discountMinor"::bigint-d.value::bigint < l."unitCostMinor"::bigint*a."canonicalUnits"::bigint)
  ) THEN RAISE EXCEPTION 'Prepaid discount exceeds allocation price floor'; END IF;
  RETURN NULL;
 END $$;

@@ -351,6 +351,31 @@ describe('prepaid discount and receipts', () => {
           .amountMinor
       ).toBe(0);
   });
+  it('gives no tier share to an allocation an earlier line discount already left below cost', () => {
+    // 2 x 100 gross, costs 95 and 5, a 20 line discount apportioned 10/10: nets are 90 and 90.
+    const mixed = {
+      ...line,
+      grossMinor: 200,
+      discountMinor: 20,
+      allocations: [
+        {
+          id: 'dear',
+          canonicalUnits: 1,
+          grossMinor: 100,
+          discountMinor: 10,
+          lot: { unitCostMinor: 95 },
+        },
+        {
+          id: 'cheap',
+          canonicalUnits: 1,
+          grossMinor: 100,
+          discountMinor: 10,
+          lot: { unitCostMinor: 5 },
+        },
+      ],
+    };
+    expect(prepaidLineDiscount(mixed, 200)).toEqual({ amountMinor: 3, allocations: [0, 3] });
+  });
   it('does not price a legacy mixed allocation whose charged money is unavailable', () => {
     expect(
       prepaidLineDiscount(

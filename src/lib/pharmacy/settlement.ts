@@ -321,6 +321,11 @@ export type PharmacySettlementOptions = {
    * idempotent payload. A prepaid WALLET payment without the right PIN is refused.
    */
   prepaidPin?: string;
+  /**
+   * DEV-863: the bill's prepaid tier prices were frozen earlier (a COD rider's first
+   * collection), so this payment must settle that same total and never reprice it.
+   */
+  prepaidPricingFrozen?: boolean;
 };
 
 /** The cashier who runs a drawer. Drawers opened before DEV-821 are run by their opener. */
@@ -462,7 +467,7 @@ export async function applyPharmacyTender(
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
-  sale = await pricePrepaidSale(db, sale, true);
+  if (!options.prepaidPricingFrozen) sale = await pricePrepaidSale(db, sale, true);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)

@@ -213,4 +213,21 @@ describe('prepaid wallet at the counter', () => {
     expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
     expect(mocks.move).not.toHaveBeenCalled();
   });
+  it('settles a bill whose tier prices were frozen earlier without repricing it', async () => {
+    const db = fixture();
+    const whole = { ...input, amountMinor: 1000 };
+    db.pharmacyMoneyIdempotencyKey.findUnique.mockResolvedValue({
+      id: 'key-a',
+      commandType: 'tender',
+      payloadHash: createHash('sha256').update(JSON.stringify(whole)).digest('hex'),
+      resultPayload: null,
+    });
+    await expect(
+      applyPharmacyTender(db as never, scope, whole, undefined, {
+        ...withPin,
+        prepaidPricingFrozen: true,
+      })
+    ).resolves.toMatchObject({ settled: true, remainingMinor: 0 });
+    expect(db.pharmacySaleLine.update).not.toHaveBeenCalled();
+  });
 });

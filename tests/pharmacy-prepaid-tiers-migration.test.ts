@@ -43,6 +43,8 @@ describe('DEV-863 prepaid migration', () => {
       /CREATE CONSTRAINT TRIGGER pharmacy_prepaid_line_evidence AFTER INSERT OR UPDATE ON pharmacy_sale_lines\s+DEFERRABLE INITIALLY DEFERRED/
     );
     expect(sql).toContain('("tierDiscountMinor" = 0) = ("tierName" IS NULL)');
+    // Only allocations that take a tier share are held to the cost floor.
+    expect(sql).toContain('OR (d.value::bigint > 0 AND');
     expect(sql).toContain(
       'CREATE TRIGGER pharmacy_prepaid_freeze_line BEFORE UPDATE ON pharmacy_sale_lines'
     );

@@ -190,10 +190,13 @@ export async function recordDeliveryCommand(
     return { evidence: prior, totals: deliveryTotals(order.deliveryEvidence), replayed: true };
   }
   // DEV-863: the rider collects and remits the bill after the customer's prepaid tier discount.
-  // A remittance freezes it under the customer lock, exactly as its tender will.
-  const counterSale = order.counterSale
-    ? await pricePrepaidSale(db, order.counterSale, input.action === 'REMIT')
-    : null;
+  // The first collection freezes it under the customer lock; from then on nothing reprices the
+  // bill, so later prepaid activity cannot make the collected cash wrong.
+  const collected = order.deliveryEvidence.some((row) => row.action === 'COLLECT');
+  const counterSale =
+    order.counterSale && !collected
+      ? await pricePrepaidSale(db, order.counterSale, input.action === 'COLLECT')
+      : order.counterSale;
   const totals = validateDeliveryCommand(
     { ...order, expectedMinor: counterSale ? saleTotalMinor(counterSale.lines) : 0 },
     order.deliveryEvidence,
@@ -215,7 +218,7 @@ export async function recordDeliveryCommand(
         idempotencyKey: `cod:${order.id}:${input.requestKey}`,
       },
       undefined,
-      { drawerOperator }
+      { drawerOperator, prepaidPricingFrozen: collected }
     );
   }
   if (input.action === 'PHYSICAL_RETURN') {
