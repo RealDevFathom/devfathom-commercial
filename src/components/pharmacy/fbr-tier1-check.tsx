@@ -30,7 +30,7 @@ import type { AppRouter } from '@/server/routers/_app';
 type Status = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['fbrTier1Status'];
 
 const labelClass =
-  'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
+  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 
 const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));

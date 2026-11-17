@@ -97,7 +97,7 @@ export function CounterKhataPaymentPanel(props: Props) {
           setOpen(next);
         }}
       >
-        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
+        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-xl">
           <DialogTitle>Khata payment</DialogTitle>
           <DialogDescription>
             Receive money against a khata account. Cash goes into this counter&apos;s open drawer.

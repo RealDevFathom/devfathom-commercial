@@ -686,7 +686,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                   className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 >
                   <table className="w-full min-w-[46rem] text-left text-sm">
-                    <thead className="font-mono text-[0.65rem] tracking-wide text-text-muted uppercase">
+                    <thead className="font-mono text-xs tracking-wide text-text-muted uppercase">
                       <tr>
                         <th className="pb-3">Patient</th>
                         <th className="pb-3">Prescriber</th>
