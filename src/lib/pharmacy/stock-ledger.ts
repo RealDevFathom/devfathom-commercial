@@ -460,6 +460,8 @@ export async function reverseMovements(
 
 export type AllocateForSaleInput = {
   medicineId: string;
+  /** A shelf scan constrains the result; it never grants a FEFO override. */
+  expectedInventoryLotId?: string;
   requiredUnits: number;
   at: Date;
   idempotencyKeyPrefix: string;
@@ -533,6 +535,14 @@ export async function allocateForSale(
     if (!shortOfStock || !input.emergency) throw error;
     return emergencyShortfall(db, scope, input, candidates, byBucket, input.emergency.reason);
   }
+
+  // Check under the candidate locks, before writing any movement or override.
+  // A stale label selection must be rescanned, never billed against another lot.
+  if (
+    input.expectedInventoryLotId &&
+    plan.allocations.some((part) => part.inventoryLotId !== input.expectedInventoryLotId)
+  )
+    throw new PharmacyInventoryError('BLOCKED_STOCK');
 
   let overrideId: string | null = null;
   if (plan.override) {

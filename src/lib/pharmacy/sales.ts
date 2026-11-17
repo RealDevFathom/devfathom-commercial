@@ -315,6 +315,8 @@ type AddSaleLineInput = {
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
   scannedPack?: { payload: string };
+  /** Exact lot selected by a shelf sticker; allocation still enforces FEFO approval. */
+  shelfLabelLotId?: string;
   idempotencyKey: string;
 };
 
@@ -585,6 +587,7 @@ async function addSaleLineWithAllocation(
   const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
+    ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,

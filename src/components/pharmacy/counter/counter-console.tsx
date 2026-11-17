@@ -77,6 +77,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
@@ -1481,10 +1482,21 @@ function ScopedPharmacyCounterConsole({
   );
 
   const stageRow = useCallback((row: CounterSearchRow) => {
+    const label = counterLabelScanDecision(row);
+    if (label.kind === 'BLOCKED') {
+      setActiveRow(null);
+      setQuantityText('');
+      setSaleUnit(null);
+      setLotOverride(null);
+      setNotice({ tone: 'danger', message: label.message });
+      return;
+    }
     setActiveRow(row);
     setQuantityText('');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
-    setLotOverride(null);
+    setLotOverride(
+      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+    );
   }, []);
 
   const openSale = useCallback(async () => {
@@ -1651,9 +1663,10 @@ function ScopedPharmacyCounterConsole({
             saleUnit: option.kind,
             quantity: units,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
             // A stable key per (sale, medicine, unit, quantity) so a double-press of
             // the add chord cannot post the same line twice.
-            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
+            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${row.labelLot ? `:label:${row.labelLot.inventoryLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
             // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
             ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
             ...(overrideLotId && batchOverride
@@ -1786,8 +1799,21 @@ function ScopedPharmacyCounterConsole({
           return;
         const row = result.rows[0]!;
         const serialized = search.serializedPack;
+        const label = counterLabelScanDecision(row);
+        if (label.kind === 'BLOCKED') {
+          stageRow(row);
+          return;
+        }
+        if (label.kind === 'OVERRIDE') {
+          stageRow(row);
+          setQuantityText('1');
+          setNotice({ tone: 'warning', message: label.message });
+          return;
+        }
         const restage =
-          activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
+          label.kind === 'FEFO' ||
+          activeRow?.medicineId !== row.medicineId ||
+          saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
           stageRow(row);
           // Barcode entry keeps its one-item default; manual selection starts empty.
