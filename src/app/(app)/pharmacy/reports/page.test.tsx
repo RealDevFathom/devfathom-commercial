@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { chromium } from '@playwright/test';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -177,12 +178,17 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
 
 import PharmacyReportsPage from './page';
 
-/** True only when both a Chromium binary and Poppler's pdftotext can run here. */
+/** True only when both a Chromium binary and Poppler's pdftotext can run here. Mirrors the
+ * browser lookup in tests/helpers/pharmacy-report-print.ts, including Playwright's bundled one. */
 function pdfToolsAvailable() {
-  const chromium = [process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, '/usr/bin/chromium', '/opt/pw-browsers/chromium']
-    .filter((path): path is string => !!path)
-    .some((path) => existsSync(path));
-  return chromium && spawnSync('pdftotext', ['-v']).error === undefined;
+  const candidates = [
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/opt/pw-browsers/chromium',
+    chromium.executablePath(),
+  ];
+  const hasChromium = candidates.some((path) => !!path && existsSync(path));
+  return hasChromium && spawnSync('pdftotext', ['-v']).error === undefined;
 }
 
 describe('pharmacy report catalog filters', () => {
