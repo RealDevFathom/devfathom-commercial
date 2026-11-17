@@ -194,3 +194,22 @@ describe('AppShell module guard', () => {
     expect(moduleDisplayName(null)).toBe('this module');
   });
 });
+
+it('DEV-61 admits licensed pharmacy reports and keeps unlicensed routes locked', () => {
+  for (const pathname of [
+    '/pharmacy/reports',
+    '/pharmacy/reports/replenishment',
+    '/pharmacy/reports/repeat-purchasing',
+  ]) {
+    expect(
+      isPathModuleEnabled(pathname, { vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] })
+    ).toBe(true);
+    expect(
+      isPathModuleEnabled(pathname, {
+        vertical: 'PHARMACY',
+        enabledModules: ['pharmacy-inventory'],
+      })
+    ).toBe(false);
+  }
+  expect(moduleDisplayName('pharmacy-reports')).toBe('Pharmacy Reports');
+});

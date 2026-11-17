@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Copy, Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import { AuthenticatorQr } from '@/components/ui/authenticator-qr';
 
 type Status = { enabled: boolean; required: boolean; recoveryCodes: number };
 
@@ -95,6 +96,20 @@ export function PlatformMfaCard() {
         {secret ? (
           <div className="rounded-lg border border-border-subtle bg-surface-sunken/40 p-4">
             <p className="text-xs font-semibold">Add this account to your authenticator</p>
+            {otpauthUri ? (
+              <>
+                <p className="mt-1 text-xs text-text-muted">
+                  Scan this code with your authenticator app.
+                </p>
+                <AuthenticatorQr
+                  uri={otpauthUri}
+                  className="mt-3 h-44 w-44 max-w-full rounded-lg"
+                />
+                <p className="mt-3 text-xs text-text-muted">
+                  Cannot scan? Type this key into the app instead.
+                </p>
+              </>
+            ) : null}
             <code className="mt-3 block break-all font-mono text-xs">{secret}</code>
             <button
               type="button"

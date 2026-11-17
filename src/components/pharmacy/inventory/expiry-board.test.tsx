@@ -263,14 +263,20 @@ describe('DEV-728 distributor grouping and return claims', () => {
       key: `lot_${index}:location_1`,
       inventoryLotId: `lot_${index}`,
     }));
-    render(<ExpiryBoard {...props} rows={many} />);
-    const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
-    const positions = new FormData(form).getAll('position');
+    const { container } = render(<ExpiryBoard {...props} rows={many} />);
+    // Scoped DOM queries: a role query over the whole board of 105 lots is the
+    // slow part, so find the claim form and its distributor section directly.
+    const form = container
+      .querySelector('form:has(input[name="action"][value="claim"])')
+      ?.closest('form');
+    expect(form).toBeTruthy();
+    expect(within(form as HTMLElement).getByText('Draft return claim')).toBeVisible();
+    const positions = new FormData(form as HTMLFormElement).getAll('position');
     expect(positions).toHaveLength(EXPIRY_CLAIM_MAX_POSITIONS);
     expect(positions[0]).toBe('lot_0|location_1');
-    expect(screen.getByRole('region', { name: 'Branch distributor' })).toHaveTextContent(
-      'draft again for the other 5'
-    );
+    const section = (form as HTMLElement).closest('section') as HTMLElement;
+    expect(section).toHaveAccessibleName('Branch distributor');
+    expect(section).toHaveTextContent('draft again for the other 5');
   });
 
   it('offers no group claim once every lot is already on a return, and links to it', () => {

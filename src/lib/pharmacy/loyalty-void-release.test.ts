@@ -28,8 +28,10 @@ function ledger(
   const created: Row[] = [];
   const journal: Row[] = [];
   const db = {
+    // DEV-877: the journal reads the branch's accounting periods before posting.
     pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
-    $queryRaw: vi.fn().mockResolvedValue([]),
+    // No branch bound: the ledger replay reads every branch of the tenant as it is.
+    $queryRaw: vi.fn(async () => [{ branchId: null }]),
     pharmacyTender: {
       findMany: vi.fn(async ({ where }: { where: { type?: unknown } }) =>
         tenders.filter((tender) =>

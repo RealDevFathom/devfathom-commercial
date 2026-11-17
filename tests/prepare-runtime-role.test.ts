@@ -53,10 +53,18 @@ function clientWithRoles(
 const logger = () => ({ log: vi.fn(), warn: vi.fn() });
 
 describe('runtime role preparation', () => {
+  it('quotes the configured database name as a single SQL identifier', async () => {
+    const { client, queries } = clientWithRoles([correctRole, correctRole]);
+    await prepareRuntimeRole(client, undefined, 'tenant " staging', logger());
+    expect(queries.map(({ sql }) => sql)).toContain(
+      'GRANT CONNECT ON DATABASE "tenant "" staging" TO devfathom_app'
+    );
+  });
+
   it('creates a fresh restricted role, sets supplied password, and grants access', async () => {
     const { client, queries } = clientWithRoles([undefined, correctRole, correctRole]);
     const output = logger();
-    await prepareRuntimeRole(client, 'secret-value', output);
+    await prepareRuntimeRole(client, 'secret-value', 'devfathom', output);
     expect(queries.map(({ sql }) => sql)).toContain(
       'CREATE ROLE devfathom_app LOGIN NOCREATEDB NOCREATEROLE NOINHERIT'
     );
@@ -78,7 +86,7 @@ describe('runtime role preparation', () => {
   it('skips changes when existing posture is correct', async () => {
     const { client, queries } = clientWithRoles([correctRole, correctRole]);
     const output = logger();
-    await prepareRuntimeRole(client, undefined, output);
+    await prepareRuntimeRole(client, undefined, 'devfathom', output);
     expect(queries.some(({ sql }) => /^(CREATE|ALTER) ROLE/.test(sql))).toBe(false);
     expect(output.log).toHaveBeenCalledWith('attributes: skipped (already correct)');
     expect(output.log).toHaveBeenCalledWith('password: skipped (APP_DATABASE_URL has no password)');
@@ -90,7 +98,7 @@ describe('runtime role preparation', () => {
     const { client, queries } = clientWithRoles([correctRole, correctRole], { password: denied });
     const output = logger();
 
-    await prepareRuntimeRole(client, secret, output);
+    await prepareRuntimeRole(client, secret, 'devfathom', output);
 
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
       7
@@ -108,7 +116,7 @@ describe('runtime role preparation', () => {
     const denied = Object.assign(new Error('permission denied'), { code: '42501' });
     const { client, queries } = clientWithRoles([incorrect, correctRole], { attributes: denied });
     const output = logger();
-    await prepareRuntimeRole(client, undefined, output);
+    await prepareRuntimeRole(client, undefined, 'devfathom', output);
     expect(queries.findIndex(({ sql }) => sql.startsWith('GRANT CONNECT'))).toBeGreaterThan(
       queries.findIndex(({ sql }) => sql.startsWith('ALTER ROLE'))
     );
@@ -121,7 +129,7 @@ describe('runtime role preparation', () => {
     const incorrect = { ...correctRole, rolcanlogin: false };
     const denied = Object.assign(new Error('permission denied'), { code: '42501' });
     const { client, queries } = clientWithRoles([incorrect, incorrect], { attributes: denied });
-    await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow(
+    await expect(prepareRuntimeRole(client, undefined, 'devfathom', logger())).rejects.toThrow(
       'devfathom_app does not have the required restricted role attributes.'
     );
     expect(queries.some(({ sql }) => sql.startsWith('GRANT CONNECT'))).toBe(true);
@@ -130,7 +138,7 @@ describe('runtime role preparation', () => {
   it('never mutates privileged attributes', async () => {
     const privileged = { ...correctRole, rolsuper: true, rolbypassrls: true };
     const { client, queries } = clientWithRoles([privileged, privileged]);
-    await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow();
+    await expect(prepareRuntimeRole(client, undefined, 'devfathom', logger())).rejects.toThrow();
     expect(queries.filter(({ sql }) => /^(CREATE|ALTER) ROLE/.test(sql))).toEqual([]);
   });
 
@@ -147,7 +155,7 @@ describe('runtime role preparation', () => {
       const admin = clientWithRoles([]);
       const open = vi.fn(async () => admin.client);
       const output = logger();
-      await prepareRuntimeRole(client, undefined, output, open);
+      await prepareRuntimeRole(client, undefined, 'devfathom', output, open);
       expect(open).toHaveBeenCalledOnce();
       expect(admin.queries.map(({ sql }) => sql)).toEqual([
         'BEGIN',
@@ -165,7 +173,7 @@ describe('runtime role preparation', () => {
 
     it('fails with guidance when the runtime role still cannot execute it', async () => {
       const { client } = clientWithRoles([correctRole, correctRole], { similarity: denied() });
-      await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow(
+      await expect(prepareRuntimeRole(client, undefined, 'devfathom', logger())).rejects.toThrow(
         'devfathom_app cannot execute public.similarity_op(text,text)'
       );
     });
@@ -174,7 +182,7 @@ describe('runtime role preparation', () => {
       const { client } = clientWithRoles([correctRole, correctRole], { similarity: denied() });
       const admin = clientWithRoles([]);
       await expect(
-        prepareRuntimeRole(client, undefined, logger(), async () => admin.client)
+        prepareRuntimeRole(client, undefined, 'devfathom', logger(), async () => admin.client)
       ).rejects.toThrow('devfathom_app cannot execute public.similarity_op(text,text)');
     });
 
@@ -185,7 +193,7 @@ describe('runtime role preparation', () => {
         true
       );
       const output = logger();
-      await prepareRuntimeRole(client, undefined, output);
+      await prepareRuntimeRole(client, undefined, 'devfathom', output);
       expect(output.log).toHaveBeenCalledWith(
         'medicine search similarity operator: skipped (already executable)'
       );
@@ -194,7 +202,7 @@ describe('runtime role preparation', () => {
     it('rethrows errors other than permission denied', async () => {
       const broken = Object.assign(new Error('function does not exist'), { code: '42883' });
       const { client } = clientWithRoles([correctRole, correctRole], { similarity: broken }, true);
-      await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow(
+      await expect(prepareRuntimeRole(client, undefined, 'devfathom', logger())).rejects.toThrow(
         'function does not exist'
       );
     });
