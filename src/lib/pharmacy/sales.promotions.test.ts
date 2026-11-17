@@ -103,7 +103,11 @@ function counterDb(
       ]),
     },
     // DEV-66: no configured discount policy, so the default cost floor applies.
-    pharmacyBranch: { findFirst: vi.fn(async () => ({ discountPolicy: null })) },
+    pharmacyBranch: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ discountPolicy: unknown }>>(async () => ({
+        discountPolicy: null,
+      })),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {
@@ -140,6 +144,20 @@ afterEach(() => {
 });
 
 describe('addSaleLine counter promotion hook (#727)', () => {
+  it('skips a promotion that would breach the branch minimum margin and still sells at full price', async () => {
+    // Gross 1000, cost 500, 10% off leaves 900. A 50% minimum margin needs 1000.
+    const db = counterDb();
+    db.pharmacyBranch.findFirst.mockResolvedValue({ discountPolicy: { minMarginBps: 5_000 } });
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 1_000,
+      discountMinor: 0,
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data.promotionId ?? null).toBeNull();
+  });
+
   it('prices the line with the live promotion and attributes it', async () => {
     const db = counterDb();
 

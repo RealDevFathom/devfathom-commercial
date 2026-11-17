@@ -666,16 +666,22 @@ async function addSaleLineWithAllocation(
   // #727: priced after allocation has finished waiting for its stock locks. A voucher,
   // manual discount or complimentary line is never combined with an automatic promotion.
   const promotionEvaluatedAt = new Date();
-  const promotion =
-    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor
-      ? await priceCounterPromotion(db, scope, {
-          medicineId: input.medicineId,
-          regulated,
-          grossMinor,
-          costMinor,
-          at: promotionEvaluatedAt,
-        })
-      : null;
+  const promotionCandidate =
+    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor;
+  // DEV-66: an automatic offer that would breach the branch's minimum margin is skipped,
+  // never allowed to block an otherwise valid full-price sale.
+  const policyMinMarginBps = promotionCandidate
+    ? (await readDiscountPolicy(db, scope)).minMarginBps
+    : null;
+  const promotion = promotionCandidate
+    ? await priceCounterPromotion(db, scope, {
+        medicineId: input.medicineId,
+        regulated,
+        grossMinor,
+        costMinor: minimumPriceForMargin(costMinor, policyMinMarginBps ?? 0),
+        at: promotionEvaluatedAt,
+      })
+    : null;
   const discountMinor = voucher
     ? Math.min(voucher.discountMinor, grossMinor)
     : (promotion?.discountMinor ?? input.discountMinor ?? 0);
@@ -694,7 +700,10 @@ async function addSaleLineWithAllocation(
       : input.approvalPolicy;
   // DEV-66: every discounted line (manual, promotion or voucher) must keep the
   // branch's configured minimum margin.
-  const minMarginBps = discountMinor > 0 ? (await readDiscountPolicy(db, scope)).minMarginBps : 0;
+  const minMarginBps =
+    discountMinor > 0
+      ? (policyMinMarginBps ?? (await readDiscountPolicy(db, scope)).minMarginBps)
+      : 0;
   validateDiscount({
     minMarginBps,
     regulated,
