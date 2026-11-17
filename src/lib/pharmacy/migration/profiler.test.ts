@@ -47,7 +47,7 @@ function bucketCounts(result: ProfileResult): Partial<Record<ExceptionBucket, nu
 }
 
 function profileFixture(name: string, profiler = excelCsvProfiler): ProfileResult {
-  return profileTable(profiler, parseDelimitedText(fixture(name)));
+  return profileTable(profiler, parseDelimitedText(fixture(name)), { quantityUnit: 'UNITS' });
 }
 
 describe('Excel/CSV profiling — the three PRD fixtures', () => {
@@ -319,5 +319,93 @@ describe('Delimited text parsing', () => {
     const table = parseDelimitedText('Item,Batch No,Expiry\nPanadol,B1\n');
 
     expect(table.rows).toEqual([['Panadol', 'B1', '']]);
+  });
+});
+
+describe('Quantity column meaning is chosen in the column mapping', () => {
+  const table = () => parseDelimitedText('Product,Pack,Qty\nExample Tablet,30,29\nNo Pack,,5\n');
+  it('keeps base units when explicitly chosen', () => {
+    const { rows } = profileTable(excelCsvProfiler, table(), { quantityUnit: 'UNITS' });
+    expect(rows[0]!.quantityCanonical).toBe(BigInt(29));
+  });
+  it('converts packs to units: 29 packs of 30 is 870', () => {
+    const { rows, exceptions } = profileTable(excelCsvProfiler, table(), {
+      quantityUnit: 'PACKS',
+    });
+    expect(rows[0]!.quantityCanonical).toBe(BigInt(870));
+    // No pack factor: never assume 1; flagged instead.
+    expect(rows[1]!.quantityCanonical).toBeNull();
+    expect(exceptions.some((e) => e.rowIndex === 1 && e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
+  });
+});
+
+describe('pack labels that are strengths, not counts', () => {
+  it.each(['500mg', '30 g', '5%'])('does not multiply packs by %s', (label) => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText(`Product,Pack,Qty\nExample,${label},2`),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.exceptions.some((e) => e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
+  });
+  it.each([
+    ['10x10', 200],
+    ['20 Tabs', 40],
+    ['100ML', 200],
+  ])('still converts countable pack %s', (label, units) => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText(`Product,Pack,Qty\nExample,${label},2`),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBe(BigInt(units));
+  });
+});
+
+describe('mapped quantity column identity', () => {
+  it('records the header of the mapped quantity column', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty\nExample,30,29'),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.quantityColumn).toBe('Qty');
+  });
+});
+
+describe('unrecorded quantity mapping', () => {
+  it('does not stage a raw count as units without a choice', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty\nExample,30,29')
+    );
+    expect(result.quantityUnit).toBeNull();
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBeUndefined();
+    expect(result.exceptions).toContainEqual(
+      expect.objectContaining({
+        bucket: 'UNIT_AMBIGUOUS',
+        severity: 'BLOCKING',
+        detail: expect.stringContaining('Choose whether quantity counts'),
+      })
+    );
+  });
+  it('does not accept quantity metadata supplied as a source column', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty,__quantity_unit\nExample,30,29,UNITS')
+    );
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
+  });
+  it('keeps an uploaded __quantity_unit column intact even with a recorded choice', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty,__quantity_unit\nExample,30,29,UNITS'),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBe(BigInt(870));
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
   });
 });

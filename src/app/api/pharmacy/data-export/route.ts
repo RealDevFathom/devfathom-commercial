@@ -241,34 +241,53 @@ export async function POST(request: Request) {
   }
 
   const now = new Date();
-  const queued = await withPlatformDb((db) =>
-    queueOwnerDataExport(db, { organizationId, userId, range: range!, now })
-  );
-  if (queued.kind === 'rate_limited') {
-    return audited(
-      ctx,
-      REQUEST,
-      json(
-        429,
-        { error: 'You have reached the daily limit for data exports. Try again later.' },
-        { 'Retry-After': String(queued.retryAfterSeconds) }
-      ),
-      { from: range!.from, to: range!.to, pinCheck, rateLimited: true }
-    );
+  // DEV-883: the audit row is written in the same transaction as the queue
+  // insert, so a job can never exist without its audit record. When the audit
+  // write fails the transaction rolls back, nothing is queued and the caller
+  // gets a 503.
+  try {
+    return await withPlatformDb(async (db) => {
+      const queued = await queueOwnerDataExport(db, {
+        organizationId,
+        userId,
+        range: range!,
+        now,
+      });
+      const auditCtx = { ...ctx, db };
+      if (queued.kind === 'rate_limited') {
+        await auditOwnerDataExport(auditCtx, {
+          ...REQUEST,
+          path: PATH,
+          status: 429,
+          metadata: { from: range!.from, to: range!.to, pinCheck, rateLimited: true },
+        });
+        return json(
+          429,
+          { error: 'You have reached the daily limit for data exports. Try again later.' },
+          { 'Retry-After': String(queued.retryAfterSeconds) }
+        );
+      }
+      const created = queued.kind === 'created';
+      const status = created ? 202 : 200;
+      await auditOwnerDataExport(auditCtx, {
+        ...REQUEST,
+        path: PATH,
+        status,
+        metadata: {
+          jobId: queued.job.id,
+          from: range!.from,
+          to: range!.to,
+          alreadyQueued: !created,
+          pinCheck,
+        },
+      });
+      return json(status, { export: exportView(queued.job, now.getTime()) });
+    });
+  } catch (error) {
+    // Logged for diagnosis; never the PIN or request body.
+    console.error('[data-export] queue or audit failed; request rolled back', error);
+    return json(503, { error: 'The export could not be recorded. Try again.' });
   }
-  const created = queued.kind === 'created';
-  return audited(
-    ctx,
-    REQUEST,
-    json(created ? 202 : 200, { export: exportView(queued.job, now.getTime()) }),
-    {
-      jobId: queued.job.id,
-      from: range!.from,
-      to: range!.to,
-      alreadyQueued: !created,
-      pinCheck,
-    }
-  );
 }
 
 async function downloadExport(

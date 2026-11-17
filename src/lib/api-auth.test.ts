@@ -7,11 +7,12 @@ const mocks = vi.hoisted(() => ({
   deleteToken: vi.fn(),
   createTenantDb: vi.fn(),
   resolveEntitlements: vi.fn(),
+  recordRestAudit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ compare: mocks.compare, hash: vi.fn() }));
-vi.mock('@/server/audit', () => ({ recordRestAudit: vi.fn() }));
+vi.mock('@/server/audit', () => ({ recordRestAudit: mocks.recordRestAudit }));
 vi.mock('@/lib/rate-limit', () => ({
   clientIp: vi.fn(() => '127.0.0.1'),
   rateLimit: vi.fn(() => ({ ok: true })),
@@ -33,7 +34,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   };
 });
 
-import { authenticateApiRequest } from './api-auth';
+import { authenticateApiRequest, withApiAuth } from './api-auth';
 
 describe('authenticateApiRequest entitlement enforcement', () => {
   beforeEach(() => {
@@ -81,5 +82,63 @@ describe('authenticateApiRequest entitlement enforcement', () => {
     });
     expect(mocks.createTenantDb).not.toHaveBeenCalled();
     expect(mocks.deleteToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('withApiAuth error logging', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.compare.mockResolvedValue(true);
+    mocks.update.mockResolvedValue({});
+    mocks.resolveEntitlements.mockResolvedValue({
+      organizationId: 'org_1',
+      seatLimit: 10,
+      activeSeats: 1,
+      enabledModules: ['api'],
+      modules: [],
+      limits: {},
+    });
+    mocks.findMany.mockResolvedValue([
+      {
+        id: 'token_1',
+        organizationId: 'org_1',
+        userId: 'user_1',
+        tokenHash: 'hash',
+        scopes: ['*'],
+        expiresAt: null,
+        user: {
+          id: 'user_1',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          organization: { id: 'org_1', status: 'ACTIVE' },
+        },
+      },
+    ]);
+  });
+
+  it('logs with a constant format string, the scope and the full error, and returns a generic 500', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failure = new Error('prisma internals: relation "secret" does not exist');
+    // A scope containing format tokens must never be interpreted as a format string.
+    const scope = 'odd%s%d%o:read';
+    const handler = withApiAuth(scope, () => {
+      throw failure;
+    });
+
+    const response = await handler(
+      new Request('https://acme.example.com/api/v1/odd', {
+        headers: { Authorization: 'Bearer df_existing_valid_token' },
+      })
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]).toEqual(['API error in %s:', scope, failure]);
+    expect(spy.mock.calls[0]?.[2]).toBe(failure);
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'Internal server error' });
+    expect(mocks.recordRestAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ scope, status: 500, error: failure })
+    );
+    spy.mockRestore();
   });
 });

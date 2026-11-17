@@ -72,6 +72,7 @@ import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
+import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
@@ -384,13 +385,41 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified' | 'scannedPack'
 > & {
   discountApproval?: CounterApprovalPin;
   /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
   voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
+  /** DEV-843: a manager or owner PIN approves a scanned pack that is not from the FEFO lot. */
+  scannedPack?: { payload: string; approval?: CounterApprovalPin };
 };
+
+/**
+ * DEV-843: a scanned pack taken out of FEFO order is labelled on the audit row like a typed
+ * batch override (PH-A4): sold with a manager's approval, refused without one, or refused
+ * because the manager PIN sent for it was wrong or ineligible.
+ */
+function labelScannedPackFefo(
+  ctx: TRPCContext,
+  input: { branchId: string; saleId: string; medicineId: string },
+  outcome: 'sold' | 'refused' | 'pin_refused'
+) {
+  annotateAudit(ctx, {
+    category: 'PHARMACY_SAFETY',
+    action: 'fefo_override',
+    targetType: 'PharmacySale',
+    targetId: input.saleId,
+    description:
+      outcome === 'sold'
+        ? 'Counter sold a scanned pack out of FEFO order.'
+        : outcome === 'refused'
+          ? 'Counter refused a scanned pack out of FEFO order without a manager approval.'
+          : // Refused before the pack was resolved, so this does not claim it was out of order.
+            'Counter refused the manager PIN sent with a scanned pack.',
+    metadata: { branchId: input.branchId, medicineId: input.medicineId, scannedPack: true },
+  });
+}
 
 /**
  * #520: build the domain line input with server-verified approvals only. A discount needs a
@@ -440,6 +469,34 @@ async function approvedLineInput(
     lineInput.approvedByUserId = approval.approvedByUserId;
     lineInput.approvalPolicy = approval.approvalPolicy;
     annotateAudit(ctx, { metadata: { discountApproval: approval } });
+  }
+  const { scannedPack } = input;
+  if (scannedPack) {
+    lineInput.scannedPack = { payload: scannedPack.payload };
+    // DEV-843: whether the pack's lot is FEFO's choice is known only once the sale resolves
+    // it, so a manager or owner PIN sent with the scan is verified here and the domain refuses
+    // an out-of-order pack without one. There is no on-duty default, and a batch override's
+    // pharmacist approval does not stand in. A wrong or ineligible PIN is refused outright;
+    // a scan with no PIN may still sell a pack from the earliest-expiry lot.
+    if (scannedPack.approval) {
+      const approval = await authorizeCounterApproval(
+        db,
+        scope,
+        'SCANNED_PACK_FEFO',
+        scannedPack.approval
+      );
+      approvals.push({ kind: 'SCANNED_PACK_FEFO', approval });
+      lineInput.scannedPack.fefoApprovalPolicy = fefoOverrideApprovalPolicy(
+        approval,
+        scope.actorId
+      );
+      annotateAudit(ctx, {
+        metadata: {
+          scannedPackApprovalPolicy: approval.approvalPolicy,
+          scannedPackApprovedByUserId: approval.approvedByUserId,
+        },
+      });
+    }
   }
   if (override) {
     const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
@@ -695,7 +752,12 @@ function fail(error: unknown): never {
   if (error instanceof PharmacySerializedPackError) {
     // A pack that was already sold is a state conflict the operator must see.
     throw new TRPCError({
-      code: error.reason === 'SERIAL_ALREADY_SOLD' ? 'CONFLICT' : 'BAD_REQUEST',
+      code:
+        error.reason === 'SERIAL_ALREADY_SOLD'
+          ? 'CONFLICT'
+          : error.reason === 'SERIAL_FEFO_APPROVAL_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -1033,6 +1095,27 @@ export function canClosePharmacyDay(ctx: TRPCContext): Promise<boolean> {
   return closeAccessDecision(ctx);
 }
 
+// Both reads expose the existing owner-only financial findings.
+async function requireOwnerFinancialReports(ctx: TRPCContext) {
+  // `adminProcedure` only checks the grantable `admin:access` capability; this
+  // check is owner-only, so a delegated EMPLOYEE is refused before any read.
+  if (ctx.session?.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
+  // Refund/void analytics and staff findings are financial reporting: an owner
+  // explicitly denied `reports:financial` is refused before any evidence read,
+  // as the anomaly report and the Ask Fathom tool already do.
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Financial reports permission required.',
+    });
+}
+
 async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   if (!(await closeAccessDecision(ctx, branch)))
     throw new TRPCError({
@@ -1363,27 +1446,26 @@ export const pharmacySalesRouter = router({
   closeAnomalyCheck: adminProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      // `adminProcedure` only checks the grantable `admin:access` capability; this
-      // check is owner-only, so a delegated EMPLOYEE is refused before any read.
-      if (ctx.session?.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
-      // Refund/void analytics and staff findings are financial reporting: an owner
-      // explicitly denied `reports:financial` is refused before any evidence read,
-      // as the anomaly report and the Ask Fathom tool already do.
-      if (
-        !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }))
-      )
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Financial reports permission required.',
-        });
+      await requireOwnerFinancialReports(ctx);
       try {
         const scope = await scopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyCashCloseCheck(txDb(tx), scope, input.businessDate)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // A read-only draft after drawer close, with the same access as DEV-84.
+  shiftHandoverNote: adminProcedure
+    .input(z.object({ branchId, drawerSessionId: z.string().min(1).max(128) }).strict())
+    .query(async ({ ctx, input }) => {
+      await requireOwnerFinancialReports(ctx);
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(
+          async (tx) => readPharmacyShiftHandover(txDb(tx), scope, input.drawerSessionId),
+          { isolationLevel: 'RepeatableRead' }
         );
       } catch (error) {
         fail(error);
@@ -1960,12 +2042,22 @@ export const pharmacySalesRouter = router({
             .optional(),
           // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
           scannedPack: z
-            .object({ payload: z.string().trim().min(1).max(256) })
+            .object({
+              payload: z.string().trim().min(1).max(256),
+              // DEV-843: a manager or owner PIN for a pack that is not from the FEFO lot.
+              approval: counterApprovalPin.optional(),
+            })
             .strict()
             .optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
+        // DEV-843: a scanned pack decides its own batch, so a typed batch override (and its
+        // pharmacist approval and reason) never travels with one.
+        .refine((line) => !(line.scannedPack && line.override), {
+          message: 'A scanned pack sets its own batch; send it without a batch override.',
+          path: ['override'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       // The input stays out of the audit row (it can carry a controlled PIN), but
@@ -2358,7 +2450,12 @@ export const pharmacySalesRouter = router({
           });
           return result;
         });
-        if (input.override && 'line' in outcome) {
+        const scannedOutOfOrder = Boolean(
+          input.scannedPack && 'line' in outcome && outcome.allocation.overrideId
+        );
+        // DEV-843: a scanned pack sold out of FEFO order is the same safety decision.
+        if (scannedOutOfOrder && !input.override) labelScannedPackFefo(ctx, input, 'sold');
+        if ('line' in outcome && (input.override || scannedOutOfOrder)) {
           annotateAudit(ctx, {
             metadata: {
               saleLineId: outcome.line.id,
@@ -2369,6 +2466,18 @@ export const pharmacySalesRouter = router({
         }
         return outcome;
       } catch (error) {
+        if (
+          !input.override &&
+          error instanceof PharmacySerializedPackError &&
+          error.reason === 'SERIAL_FEFO_APPROVAL_REQUIRED'
+        )
+          labelScannedPackFefo(ctx, input, 'refused');
+        else if (
+          input.scannedPack?.approval &&
+          error instanceof CounterApprovalDenied &&
+          error.kind === 'SCANNED_PACK_FEFO'
+        )
+          labelScannedPackFefo(ctx, input, 'pin_refused');
         fail(error);
       }
     }),
@@ -2561,7 +2670,7 @@ export const pharmacySalesRouter = router({
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
-          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
@@ -2629,7 +2738,7 @@ export const pharmacySalesRouter = router({
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
-          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1).max(120),
@@ -3243,9 +3352,7 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          linkRestockRecoveries(txDb(tx), scope)
-        );
+        return await ctx.db.$transaction(async (tx) => linkRestockRecoveries(txDb(tx), scope));
       } catch (error) {
         fail(error);
       }
