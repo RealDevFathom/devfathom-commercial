@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { resolveRestaurantE2eDatabaseUrl } from '../../../scripts/restaurant-e2e-database';
 import { expect, type Page } from '@playwright/test';
 
@@ -105,6 +105,15 @@ export async function signInPlatformActor(page: Page, email: string) {
   );
   await page.getByRole('button', { name: 'Continue to control desk' }).click();
   const response = await session;
+  if (secret && response.status() === 401) {
+    // The fixture cannot recover a key it never saw, so name the stale cache.
+    const file = authenticatorFile(origin, email);
+    throw new Error(
+      'Platform sign-in refused the cached fixture authenticator. If the disposable database ' +
+        'was re-created and enrolled outside this fixture, delete ' +
+        `${file ? dirname(file) : 'the in-memory cache'} and re-seed the database.`
+    );
+  }
   // Do not include authentication response bodies in failure output.
   expect(response.status(), 'Platform sign-in must accept the fixture credentials and OTP').toBe(
     200

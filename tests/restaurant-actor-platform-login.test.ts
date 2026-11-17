@@ -2,12 +2,14 @@
 import { expect, it, vi } from 'vitest';
 import type { Page } from '@playwright/test';
 
-const { signInPlatformActor } = vi.hoisted(() => ({ signInPlatformActor: vi.fn() }));
+const { signInPlatformActor } = vi.hoisted(() => ({
+  signInPlatformActor: vi.fn<(page: Page, email: string) => Promise<void>>(),
+}));
 vi.mock('./e2e/fixtures/restaurant-platform-auth', () => ({ signInPlatformActor }));
 import { actorFixture, signInAs } from './e2e/fixtures/restaurant-actor-accessibility';
 
 it('routes the restaurant SuperAdmin through MFA before awaiting the authenticated destination', async () => {
-  const waitForURL = vi.fn(async () => undefined);
+  const waitForURL = vi.fn<Page['waitForURL']>(async () => undefined);
   const page = {
     goto: vi.fn(async () => undefined),
     getByLabel: () => ({ fill: vi.fn() }),
@@ -20,7 +22,9 @@ it('routes the restaurant SuperAdmin through MFA before awaiting the authenticat
     waitForLoadState: vi.fn(),
     url: () => 'http://admin.localhost:4319/platform',
   } as unknown as Page;
-  signInPlatformActor.mockImplementation(async () => {
+  signInPlatformActor.mockImplementation(async (signedInPage, email) => {
+    expect(signedInPage).toBe(page);
+    expect(email).toBe(actorFixture.superAdmin.email);
     expect(waitForURL).not.toHaveBeenCalled();
   });
   expect(await signInAs(page, 'superAdmin')).toBe('http://admin.localhost:4319');

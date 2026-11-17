@@ -2,6 +2,7 @@
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Page } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixtureTotp, platformActorCode } from './e2e/fixtures/restaurant-platform-auth';
 
@@ -70,5 +71,26 @@ describe('restaurant fixture authenticator cache', () => {
     const files = readdirSync(join(directory, cache!));
     expect(files).toEqual(['authenticator']);
     expect(statSync(join(directory, cache!, 'authenticator')).mode & 0o777).toBe(0o600);
+  });
+
+  it('names the stale cache when an account enrolled elsewhere refuses the cached key', async () => {
+    const auth = await import('./e2e/fixtures/restaurant-platform-auth');
+    auth.storeEnrolledAuthenticator(origin, email, secret);
+    const fill = vi.fn<(value: string) => Promise<void>>(async () => undefined);
+    const page = {
+      url: () => `${origin}/platform/login`,
+      getByLabel: () => ({ fill }),
+      getByRole: () => ({ click: async () => undefined }),
+      waitForResponse: async () => ({
+        status: () => 401,
+        json: async () => ({ error: 'Email, password, or authentication code is incorrect.' }),
+      }),
+    } as unknown as Page;
+
+    const [cache] = readdirSync(directory);
+    await expect(auth.signInPlatformActor(page, email)).rejects.toThrow(
+      `refused the cached fixture authenticator. If the disposable database was re-created and enrolled outside this fixture, delete ${join(directory, cache!)} and re-seed the database.`
+    );
+    expect(fill).toHaveBeenCalledExactlyOnceWith(fixtureTotp(secret));
   });
 });

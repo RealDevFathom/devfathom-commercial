@@ -221,6 +221,13 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
       );
       expect(closed.status(), await closed.text()).toBe(200);
       expect(await closed.json()).toMatchObject({ id: opened.orderId, status: 'CLOSED' });
+      // An authorized close against the terminal order is refused, so it cannot
+      // earn the settled points a second time.
+      const reclosed = await request.post('/api/restaurant/orders/close', {
+        headers: { ...manager.headers, 'Idempotency-Key': `wha1600-reclose-${opened.orderId}` },
+        data: { orderId: opened.orderId },
+      });
+      expect(reclosed.status(), await reclosed.text()).toBe(409);
       expect((await snapshot(attached.billId)).balance).toBe(
         openingBalance + (sale === 0 ? 14 : 17)
       );
