@@ -576,6 +576,8 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const quantityRef = useRef<HTMLInputElement>(null);
+  const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1071,26 +1073,28 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
-  const busy =
+  // #1254: opening the drawer moves no money for this bill, so the bill re-read a
+  // refused payment demands must not lock "Open drawer", the usual fix for that refusal.
+  const drawerBusy =
     pending !== null ||
-    tenderReadRequired ||
     unknownTender ||
     refreshingTenderBill ||
     !recoveryReady ||
     attempt !== null ||
     checkingOutcome;
+  const busy = drawerBusy || tenderReadRequired;
   const lineCount = cart?.lines.length ?? 0;
-  const counterBusyReason = !busy
-    ? null
-    : unknownTender || attempt !== null || checkingOutcome
+  const describeBusy = (billReadRequired: boolean) =>
+    unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
       : storageError
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
-        : tenderReadRequired
+        : billReadRequired
           ? 'Refresh this bill to verify payment before continuing.'
           : !recoveryReady
             ? 'Checking saved payment details. Please wait.'
             : 'Wait for the current counter action to finish.';
+  const counterBusyReason = busy ? describeBusy(tenderReadRequired) : null;
   const branchControlReason = !branchAuthorized
     ? 'Select a branch you can access before continuing.'
     : counterBusyReason;
@@ -1117,7 +1121,11 @@ function ScopedPharmacyCounterConsole({
     ? settlementAccess.isError
       ? "Couldn't check payment access. Retry payment access before opening the drawer."
       : 'Checking payment access before opening the drawer.'
-    : (counterBusyReason ?? (!drawerStatusKnown ? 'Checking the cash drawer. Please wait.' : null));
+    : drawerBusy
+      ? describeBusy(false)
+      : !drawerStatusKnown
+        ? 'Checking the cash drawer. Please wait.'
+        : null;
 
   // DEV-623: the bill open on this device survives a reload. It is restored once
   // payment recovery has run (an in-flight payment takes precedence), and only
@@ -1708,6 +1716,8 @@ function ScopedPharmacyCounterConsole({
           message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
         setQuery('');
+        // The scan field is disabled while adding. Restore focus after it is enabled.
+        restoreSearchAfterAdd.current = true;
         focusSearch();
       } catch (error) {
         const message = messageFrom(error);
@@ -2167,6 +2177,10 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
         }
       }
+      // #1254: a refused cash payment may mean this counter's drawer is not open
+      // after all (closed elsewhere); re-read it so the opening-cash step returns.
+      if (outcome.status === 'rejected' && dispatched && input.type === 'CASH')
+        void utils.pharmacySales.drawerStatus.invalidate();
       // An acknowledged write stays accepted even if the follow-up read fails.
       // Unknown writes are never replayed or inferred from aggregate balances.
       if (outcome.status === 'accepted') await refreshTenderBill('accepted');
@@ -2187,6 +2201,7 @@ function ScopedPharmacyCounterConsole({
       saleId,
       tender,
       todayBusinessDate,
+      utils,
     ]
   );
 
@@ -2674,7 +2689,10 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && document.activeElement === document.body) focusSearch();
+    if (!busy && (restoreSearchAfterAdd.current || document.activeElement === document.body)) {
+      restoreSearchAfterAdd.current = false;
+      focusSearch();
+    }
   }, [busy, focusSearch]);
 
   const chordFor = useCallback(
@@ -3051,7 +3069,7 @@ function ScopedPharmacyCounterConsole({
 
               {drawerRequired ? (
                 <CounterOpenDrawerStep
-                  disabled={busy || !drawerStatusKnown || !canSettlePayments}
+                  disabled={drawerBusy || !drawerStatusKnown || !canSettlePayments}
                   disabledReason={drawerDisabledReason}
                   statusError={drawerQuery.isError}
                   deviceUnavailable={deviceUnavailable}
@@ -3075,6 +3093,8 @@ function ScopedPharmacyCounterConsole({
                     }),
                   }}
                   onOpen={(openingFloatMinor, operatingCashierId) => {
+                    // #1254: a refused payment left this bill needing a re-read.
+                    const rereadBill = tenderReadRequired;
                     setPending('drawer');
                     setNotice(null);
                     openDrawer
@@ -3085,12 +3105,15 @@ function ScopedPharmacyCounterConsole({
                         openingFloatMinor,
                         ...(operatingCashierId ? { operatingCashierId } : {}),
                       })
-                      .then(() =>
+                      .then(() => {
                         setNotice({
                           tone: 'success',
                           message: 'Cash drawer opened for this counter.',
-                        })
-                      )
+                        });
+                        // #1254: re-read the bill, as "Refresh bill" does, so the counter
+                        // is ready to take the refused payment again.
+                        if (rereadBill) void refreshTenderBill();
+                      })
                       .catch((error: unknown) =>
                         setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
                       )
@@ -3161,6 +3184,38 @@ function ScopedPharmacyCounterConsole({
                           setQuantityText('1');
                         }}
                         onKeyDown={(event) => {
+                          if (
+                            event.nativeEvent.isComposing ||
+                            event.shiftKey ||
+                            event.ctrlKey ||
+                            event.altKey ||
+                            event.metaKey
+                          )
+                            return;
+                          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                            const rows = searchQuery.data?.rows ?? [];
+                            if (
+                              busy ||
+                              !searchCurrent ||
+                              searchQuery.isFetching ||
+                              searchQuery.isError ||
+                              searchQuery.isPlaceholderData ||
+                              rows.length === 0
+                            )
+                              return;
+                            event.preventDefault();
+                            const index = rows.findIndex(
+                              (row) => row.medicineId === activeRow?.medicineId
+                            );
+                            const next =
+                              event.key === 'ArrowDown'
+                                ? (index + 1) % rows.length
+                                : index < 0
+                                  ? rows.length - 1
+                                  : (index - 1 + rows.length) % rows.length;
+                            stageRow(rows[next]!);
+                            return;
+                          }
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
@@ -3169,7 +3224,8 @@ function ScopedPharmacyCounterConsole({
                             return;
                           }
                           if (activeRow) {
-                            void addToCart();
+                            if (quantity === null) quantityRef.current?.focus();
+                            else void addToCart();
                             return;
                           }
                           void runSearch();
@@ -3259,6 +3315,8 @@ function ScopedPharmacyCounterConsole({
                       disabled={busy}
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantityText}
+                      quantityRef={quantityRef}
+                      onSubmit={() => void addToCart()}
                       chordFor={chordFor}
                       emptyMessage={<CounterUnsellableMessage row={activeRow} />}
                     />
