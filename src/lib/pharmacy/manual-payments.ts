@@ -84,11 +84,12 @@ export const manualCardCaptureSchema = z.object({
 export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
 /** True when the text holds a 13-19 digit run (separators ignored): a possible card number. */
 export function looksLikeCardNumber(text: string): boolean {
-  // Fold full-width digits, then drop spaces, dashes, dots, slashes, underscores and
-  // invisible characters so a card number cannot be split into short runs.
+  // Turn every Unicode decimal digit into ASCII, then drop every character that is not a
+  // letter or digit, so no separator can split a card number into short runs.
   const compact = text
     .normalize('NFKC')
-    .replace(/[\s\-._/\p{Cf}]+/gu, '');
+    .replace(/\p{Nd}/gu, asciiDigit)
+    .replace(/[^\p{L}\p{Nd}]+/gu, '');
   const runs = compact.match(/\d{13,}/g);
   if (!runs) return false;
   // Any run of 13-19 digits is refused outright, so a Luhn-valid number at those lengths
@@ -102,6 +103,17 @@ export function looksLikeCardNumber(text: string): boolean {
     }
     return false;
   });
+}
+
+/** Decimal digit blocks come in tens, so the position inside the block is the value. */
+function asciiDigit(char: string): string {
+  let cp = char.codePointAt(0)!;
+  let offset = 0;
+  while (/^\p{Nd}$/u.test(String.fromCodePoint(cp - 1))) {
+    cp -= 1;
+    offset += 1;
+  }
+  return String(offset % 10);
 }
 
 function passesLuhn(digits: string): boolean {

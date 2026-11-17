@@ -441,7 +441,7 @@ describe('DEV-875 bank transfer reference recovery', () => {
     '4242-4242-4242-4242',
     '1234567890123',
     'TRF 4111111111111111',
-    '4111.1111.1111.1111',
+    '4111.1111.1111.1111', '4111/1111/1111/1111', '4111_1111_1111_1111', '4111,1111,1111,1111', '٤١١١٤١١١٤١١١٤١١١',
     '4242\u200b4242\u200b4242\u200b4242',
   ])('refuses a card number typed into a bank transfer reference %j', async (providerRef) => {
     const f = fixture();
