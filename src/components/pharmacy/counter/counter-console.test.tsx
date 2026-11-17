@@ -3614,6 +3614,142 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2);
   });
 
+  function typeBurst(search: HTMLElement, code: string, from = 1) {
+    // The submitted code stays selected, so each burst replaces it digit by digit.
+    for (let length = from; length <= code.length; length += 1)
+      fireEvent.change(search, { target: { value: code.slice(0, length) } });
+  }
+
+  function heldSaves() {
+    const saves: Array<() => void> = [];
+    mocks.mutations.addLine!.mockImplementation(
+      () => new Promise((resolve) => saves.push(() => resolve({})))
+    );
+    return saves;
+  }
+
+  function rowPerCode() {
+    mocks.searchQuery.mockImplementation(async ({ query }: { query: string }) => ({
+      rows: [barcodeRow({ medicineId: `med-${query}`, displayName: `Item ${query}` })],
+      truncated: false,
+    }));
+  }
+
+  it('keeps the field live while a line saves and never clears a scan typed meanwhile', async () => {
+    const saves = heldSaves();
+    rowPerCode();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeBurst(search, '8964000100001');
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(search).toBeEnabled();
+    typeBurst(search, '8964000');
+    await act(async () => saves.shift()!());
+    await screen.findByText('1 × Item 8964000100001 added.');
+    expect(search).toHaveValue('8964000');
+    // Not selected: the scanner's next digit must extend the draft, not replace it.
+    expect(document.activeElement).toBe(search);
+    expect((search as HTMLInputElement).selectionStart).toBe(7);
+    expect((search as HTMLInputElement).selectionEnd).toBe(7);
+    typeBurst(search, '8964000100002', 8);
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    await act(async () => saves.shift()!());
+    await screen.findByText('1 × Item 8964000100002 added.');
+    expect(mocks.mutations.addLine!.mock.calls.map(([input]) => input.medicineId)).toEqual([
+      'med-8964000100001',
+      'med-8964000100002',
+    ]);
+    expect(search).toHaveValue('');
+  });
+
+  it('adds 50 rapid scans entered while earlier lines are still saving, in order, none dropped', async () => {
+    const saves = heldSaves();
+    rowPerCode();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const codes = Array.from({ length: 50 }, (_, index) => `89640001${10000 + index}`);
+    typeBurst(search, codes[0]!);
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    // The other 49 bursts all arrive while the first line is still saving.
+    for (const code of codes.slice(1)) {
+      expect(search).toBeEnabled();
+      typeBurst(search, code);
+      expect(search).toHaveValue(code);
+      fireEvent.keyDown(search, { key: 'Enter' });
+      expect(search).toHaveValue('');
+    }
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+    for (let saved = 1; saved < codes.length; saved += 1) {
+      await act(async () => saves.shift()!());
+      await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(saved + 1));
+    }
+    await act(async () => saves.shift()!());
+    await screen.findByText(`1 × Item ${codes.at(-1)} added.`);
+    const calls = mocks.mutations.addLine!.mock.calls.map(([input]) => input);
+    expect(calls.map((input) => input.medicineId)).toEqual(codes.map((code) => `med-${code}`));
+    expect(new Set(calls.map((input) => input.idempotencyKey)).size).toBe(50);
+    expect(mocks.searchQuery.mock.calls.map(([input]) => input.query)).toEqual(codes);
+    expect(search).toBeEnabled();
+    expect(search).toHaveValue('');
+  }, 30_000);
+
+  it('discards scans buffered behind a refused line and says which to scan again', async () => {
+    let refuse!: () => void;
+    mocks.mutations.addLine!.mockImplementationOnce(
+      () => new Promise((resolve) => (refuse = () => resolve({ blocked: 'Stock changed.' })))
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeBurst(search, '8964000100001');
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    for (const code of ['8964000100002', '8964000100003']) {
+      typeBurst(search, code);
+      fireEvent.keyDown(search, { key: 'Enter' });
+    }
+    await act(async () => refuse());
+    expect(
+      await screen.findByText('Stock changed. 2 later scans were not added. Scan them again.')
+    ).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+    expect(search).toBeEnabled();
+  });
+
+  it('treats a repeated Enter on the code being saved as a duplicate press', async () => {
+    const saves = heldSaves();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeBurst(search, '8964000123456');
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => saves.shift()!());
+    await screen.findByText('1 × Paracetamol added.');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns results to idle when the field is edited below two characters', () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'pan' } });
+    act(() => vi.advanceTimersByTime(150));
+    expect(mocks.searchProps.mock.lastCall![0]).toMatchObject({ query: 'pan' });
+    fireEvent.change(search, { target: { value: 'p' } });
+    expect(mocks.searchProps.mock.lastCall![0]).toMatchObject({ state: 'idle', query: 'p' });
+    fireEvent.change(search, { target: { value: '' } });
+    expect(mocks.searchProps.mock.lastCall![0]).toMatchObject({ state: 'idle', query: '' });
+  });
+
   it('submits a typed search 150 ms after the last keystroke and aborts superseded ones', () => {
     vi.useFakeTimers();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

@@ -3,6 +3,7 @@ import type { CounterSearchRow } from './counter';
 import { CounterCatalogueCache } from './counter-catalogue-cache';
 
 const code = '8964000123456';
+const branch = 'synthetic-branch';
 function row(overrides: Partial<CounterSearchRow> = {}): CounterSearchRow {
   return {
     medicineId: 'synthetic-medicine',
@@ -43,25 +44,25 @@ describe('counter catalogue hints', () => {
   it('expires at ten seconds and sales never extend the original expiry', () => {
     let now = 0;
     const cache = new CounterCatalogueCache(() => now);
-    cache.put(code, row());
+    cache.put(branch, code, row());
     now = 9_999;
     cache.sold('synthetic-medicine', 1);
-    expect(cache.get(code)?.onHandUnits).toBe(1);
+    expect(cache.get(branch, code)?.onHandUnits).toBe(1);
     now = 10_000;
-    expect(cache.get(code)).toBeUndefined();
+    expect(cache.get(branch, code)).toBeUndefined();
   });
 
   it('debits all barcode aliases without mutating the server response and refetches exhausted hints', () => {
     const cache = new CounterCatalogueCache();
     const source = row();
-    cache.put(code, source);
-    cache.put('123456789', source);
+    cache.put(branch, code, source);
+    cache.put(branch, '123456789', source);
     cache.sold(source.medicineId, 1);
     expect(source.onHandUnits).toBe(2);
-    expect(cache.get('123456789')?.onHandUnits).toBe(1);
+    expect(cache.get(branch, '123456789')?.onHandUnits).toBe(1);
     cache.sold(source.medicineId, 1);
-    expect(cache.get(code)).toBeUndefined();
-    expect(cache.get('123456789')).toBeUndefined();
+    expect(cache.get(branch, code)).toBeUndefined();
+    expect(cache.get(branch, '123456789')).toBeUndefined();
   });
 
   it.each(['rx', 'controlled', 'restricted', 'highAlert', 'lasa'] as const)(
@@ -70,8 +71,8 @@ describe('counter catalogue hints', () => {
       const cache = new CounterCatalogueCache();
       const value = row();
       value.restriction[flag] = true;
-      cache.put(code, value);
-      expect(cache.get(code)).toBeUndefined();
+      cache.put(branch, code, value);
+      expect(cache.get(branch, code)).toBeUndefined();
     }
   );
 
@@ -82,26 +83,35 @@ describe('counter catalogue hints', () => {
       row({ onHandUnits: 0 }),
       row({ blocked: ['EXPIRED'] }),
     ]) {
-      cache.put(code, value);
-      expect(cache.get(code)).toBeUndefined();
+      cache.put(branch, code, value);
+      expect(cache.get(branch, code)).toBeUndefined();
     }
-    cache.put('(01)01234567890128(21)fixture', row());
-    expect(cache.get('(01)01234567890128(21)fixture')).toBeUndefined();
+    cache.put(branch, '(01)01234567890128(21)fixture', row());
+    expect(cache.get(branch, '(01)01234567890128(21)fixture')).toBeUndefined();
   });
 
   it('bounds memory at 100 entries and clears an operator scope', () => {
     const cache = new CounterCatalogueCache();
-    for (let i = 0; i <= 100; i++) cache.put(String(100000 + i), row());
-    expect(cache.get('100000')).toBeUndefined();
-    expect(cache.get('100001')).toBeDefined();
+    for (let i = 0; i <= 100; i++) cache.put(branch, String(100000 + i), row());
+    expect(cache.get(branch, '100000')).toBeUndefined();
+    expect(cache.get(branch, '100001')).toBeDefined();
     cache.clear();
-    expect(cache.get('100001')).toBeUndefined();
+    expect(cache.get(branch, '100001')).toBeUndefined();
   });
 
   it('never shares catalogue entries between instances', () => {
     const a = new CounterCatalogueCache();
     const b = new CounterCatalogueCache();
-    a.put(code, row());
-    expect(b.get(code)).toBeUndefined();
+    a.put(branch, code, row());
+    expect(b.get(branch, code)).toBeUndefined();
+  });
+
+  it('never answers one branch scan with another branch hint', () => {
+    const cache = new CounterCatalogueCache();
+    cache.put(branch, code, row());
+    expect(cache.get('other-branch', code)).toBeUndefined();
+    expect(cache.get(branch, code)).toBeDefined();
+    cache.put('', code, row());
+    expect(cache.get('', code)).toBeUndefined();
   });
 });
