@@ -8,10 +8,12 @@
  * together.
  */
 import { TRPCError } from '@trpc/server';
-import { readApAging } from '@/lib/pharmacy/accounts/ap-aging';
+import { apAgingWindow, readApAging } from '@/lib/pharmacy/accounts/ap-aging';
 import {
   buildPaymentDraft,
   buildSetOffDraft,
+  SUPPLIER_CREDIT_CURRENCY,
+  SUPPLIER_CREDIT_MAX_ROWS,
   computeDueBillReminders,
 } from '@/lib/pharmacy/accounts/ap-payables-drafts';
 import { z } from 'zod';
@@ -165,19 +167,28 @@ export const pharmacyApInvoicesRouter = router({
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
       try {
         const view = await readApAging(ctx.db, scope, input.asOf);
+        const { cutoff } = apAgingWindow(input.asOf, new Date());
         const credits = await ctx.db.pharmacySupplierCredit.findMany({
-          where: { organizationId: scope.organizationId, branchId: scope.branchId },
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            receivedAt: { lt: cutoff },
+          },
           select: {
             id: true,
             reference: true,
             amountMinor: true,
             receivedAt: true,
             supplier: { select: { name: true } },
-            allocations: { select: { amountMinor: true } },
+            allocations: {
+              where: { createdAt: { lt: cutoff } },
+              select: { amountMinor: true },
+            },
           },
           orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
-          take: 1000,
+          take: SUPPLIER_CREDIT_MAX_ROWS + 1,
         });
+        const creditsComplete = credits.length <= SUPPLIER_CREDIT_MAX_ROWS;
         const currency = input.payee?.currency ?? view.totals[0]?.currency ?? 'PKR';
         return {
           scope: { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -192,7 +203,7 @@ export const pharmacyApInvoicesRouter = router({
             : null,
           setOffDraft: buildSetOffDraft(
             view,
-            credits.map((c) => ({
+            credits.slice(0, SUPPLIER_CREDIT_MAX_ROWS).map((c) => ({
               creditId: c.id,
               reference: c.reference,
               supplierName: c.supplier.name,
@@ -200,9 +211,10 @@ export const pharmacyApInvoicesRouter = router({
               amountMinor: c.amountMinor,
               allocatedMinor: c.allocations.reduce((s, a) => s + a.amountMinor, 0),
             })),
-            currency
+            SUPPLIER_CREDIT_CURRENCY
           ),
-          viewComplete: view.complete,
+          viewComplete: view.complete && creditsComplete,
+          creditsComplete,
           retrievedAt: new Date(),
         };
       } catch (error) {

@@ -11,6 +11,9 @@ import type { ApAgingRow, ApAgingView } from './ap-aging';
 import { normalizePayeeKey } from './ap-invoices';
 
 export const DUE_SOON_DAYS = 7;
+/** Supplier credits carry no currency; they are PKR-denominated (schema default). */
+export const SUPPLIER_CREDIT_CURRENCY = 'PKR';
+export const SUPPLIER_CREDIT_MAX_ROWS = 5_000;
 
 export type DueBillReminder = {
   payeeKey: string;
