@@ -52,11 +52,17 @@ describe('DEV-748 loyalty card codes', () => {
 
 function cardDb(active: { id: string; issuedAt: Date } | null = null) {
   const db = {
-    pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ id: 'customer-a' }) },
+    pharmacyCustomer: {
+      findFirst: vi.fn<() => Promise<{ id: string } | null>>().mockResolvedValue({ id: 'customer-a' }),
+    },
     pharmacyLoyaltyCard: {
-      findFirst: vi.fn().mockResolvedValue(active),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      findFirst: vi
+        .fn<() => Promise<{ id: string; issuedAt: Date } | null>>()
+        .mockResolvedValue(active),
+      updateMany: vi.fn<() => Promise<{ count: number }>>().mockResolvedValue({ count: 1 }),
+      create: vi.fn<
+        (args: { data: Record<string, unknown> }) => Promise<{ id: string; issuedAt: Date }>
+      >(async ({ data }) => ({
         id: 'card-new',
         issuedAt: new Date('2026-11-15T00:00:00Z'),
         ...data,
@@ -152,9 +158,13 @@ describe('DEV-748 issuing and replacing a card', () => {
   });
 });
 
-function scanDb(card: unknown) {
+function scanDb(card: { id: string; customer: Record<string, unknown> } | null) {
   return {
-    pharmacyLoyaltyCard: { findFirst: vi.fn().mockResolvedValue(card) },
+    pharmacyLoyaltyCard: {
+      findFirst: vi
+        .fn<() => Promise<{ id: string; customer: Record<string, unknown> } | null>>()
+        .mockResolvedValue(card),
+    },
     patientConsent: {
       findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }),
     },
