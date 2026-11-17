@@ -327,6 +327,20 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Receipt posting creates finance journal entries whose visibility foreign
+  // key requires the organization itself to exist before any tenant fixtures.
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: `Goods receipt ${id}`,
+        displayName: `Goods receipt ${id}`,
+        status: 'ACTIVE' as const,
+      })),
+      skipDuplicates: true,
+    })
+  );
 }, 120_000);
 
 // ── Row level security ──────────────────────────────────────────────────────
@@ -1033,8 +1047,9 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
     const raised = await inOrg(ORG_A, async (db) => {
       const drafted = await draftReceipt(db, f, 'exceptions', {
         line: {
-          receivedPacks: 8,
-          bonusPacks: 0,
+          // Receive the promised bonus so only the paid quantity is short.
+          receivedPacks: 6,
+          bonusPacks: 2,
           rejectedCanonicalUnits: 10,
           invoicedPricePerPackMinor: 12_000,
         },
@@ -1059,7 +1074,8 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
     const f = await fixture(ORG_A, BRANCH_A, 'resolve');
     const journey = await inOrg(ORG_A, async (db) => {
       const drafted = await draftReceipt(db, f, 'resolve', {
-        line: { receivedPacks: 5, bonusPacks: 0 },
+        // Isolate the paid shortage that this case resolves.
+        line: { receivedPacks: 5, bonusPacks: 2 },
       });
       const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
         goodsReceiptId: drafted.id,

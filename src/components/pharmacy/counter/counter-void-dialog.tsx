@@ -72,6 +72,14 @@ function CounterVoidForm({
           : null
         : { code: choice };
 
+  const disabledReason = busy
+    ? 'Wait for the current counter action to finish.'
+    : !reason
+      ? choice === 'OTHER'
+        ? 'Describe the reason before voiding this bill.'
+        : 'Choose a reason before voiding this bill.'
+      : null;
+
   return (
     <form
       className="grid gap-4"
@@ -120,11 +128,22 @@ function CounterVoidForm({
           </div>
         ) : null}
       </fieldset>
+      {disabledReason ? (
+        <p id="counter-void-disabled-reason" className="text-sm text-text-muted">
+          {disabledReason}
+        </p>
+      ) : null}
       <DialogFooter>
         <Button type="button" variant="outline" className="h-11" onClick={onCancel}>
           Keep bill
         </Button>
-        <Button type="submit" variant="destructive" className="h-11" disabled={busy || !reason}>
+        <Button
+          type="submit"
+          variant="destructive"
+          className="h-11"
+          disabled={busy || !reason}
+          aria-describedby={disabledReason ? 'counter-void-disabled-reason' : undefined}
+        >
           Void bill
         </Button>
       </DialogFooter>
