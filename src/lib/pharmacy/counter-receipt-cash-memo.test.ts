@@ -129,6 +129,39 @@ describe('#708 Sindh cash memo mode', () => {
     }
   );
 
+  it('reprints the issued address, phone, NTN and STRN with the memo when a later profile differs', () => {
+    const changed: CounterReceipt = {
+      ...base,
+      cashMemoIdentity: sindh,
+      taxIdentity: {
+        ...sindh,
+        address: 'CHANGED ADDRESS',
+        phone: 'CHANGED-PHONE',
+        ntn: 'CHANGED-NTN',
+        strn: 'CHANGED-STRN',
+      },
+    };
+    const escPos = buildPharmacyReceiptPrintDocument(changed, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: changed.taxIdentity!,
+      reprint: true,
+    }).receiptSnapshot!.facts.taxLines;
+    for (const text of [
+      flat(buildCounterReceiptPreview(changed, 'en', 80)),
+      flat(buildCounterBrowserReceipt(changed, 'ur', 'A4')),
+      flat(escPos.join('\n')),
+    ]) {
+      expect(text).toContain('7 Zaibunnisa Street, Karachi');
+      expect(text).toContain('NTN-1');
+      expect(text).not.toContain('CHANGED');
+    }
+    // An issued non-Sindh receipt keeps the profile read for the sale, as before.
+    const punjabSale: CounterReceipt = { ...base, cashMemoIdentity: null, taxIdentity: punjab };
+    expect(buildCounterReceiptPreview(punjabSale, 'en', 80)).toBe(
+      buildCounterReceiptPreview({ ...base, taxIdentity: punjab }, 'en', 80)
+    );
+  });
+
   it('keeps a snapshotted Punjab receipt ordinary after a move to Sindh', () => {
     expect(counterReceiptCashMemo({ ...base, cashMemoIdentity: null }, sindh, 'en')).toBeNull();
   });

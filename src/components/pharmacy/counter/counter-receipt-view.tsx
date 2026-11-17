@@ -612,9 +612,7 @@ export function CounterReceiptView({
           </p>
           {cashMemo ? (
             <>
-              <p className="font-semibold text-text-strong">
-                {cashMemo.title}
-              </p>
+              <p className="font-semibold text-text-strong">{cashMemo.title}</p>
               {cashMemo.licence.map((fact) => (
                 <p key={fact} className="text-text-muted">
                   {fact}

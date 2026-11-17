@@ -137,9 +137,11 @@ export function buildCounterReceiptPreview(
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const cashReceived = receiptCashReceived(receipt.tenders);
-  const ntn = receipt.taxIdentity?.ntn?.trim();
-  const strn = receipt.taxIdentity?.strn?.trim();
-  const identity = receipt.taxIdentity;
+  // #708: a cash memo reprints every identity fact frozen at issuance; other receipts
+  // (and older snapshots without the frozen identity) keep the profile read for the sale.
+  const identity = receipt.cashMemoIdentity ?? receipt.taxIdentity;
+  const ntn = identity?.ntn?.trim();
+  const strn = identity?.strn?.trim();
   // #708: Sindh branches print the r.18 cash memo; every other branch is unchanged.
   const memo = counterReceiptCashMemo(receipt, identity, locale);
   return buildReceiptPreview(

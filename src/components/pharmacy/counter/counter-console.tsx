@@ -2091,11 +2091,12 @@ function ScopedPharmacyCounterConsole({
             : {}),
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
+          // #708: a cash-memo buyer keeps this key; a changed buyer conflicts on the
+          // payload hash rather than recording the same payment twice.
           idempotencyKey:
             input.familyAccountId ||
             input.payerName !== undefined ||
-            input.approvalCode !== undefined ||
-            input.buyerName !== undefined
+            input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
                   paidMinor > 0 ? `:after:${paidMinor}` : ''

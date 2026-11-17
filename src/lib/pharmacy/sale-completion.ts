@@ -27,10 +27,18 @@ export const completionSaleInclude = {
   customer: { select: { displayName: true } },
 } satisfies Prisma.PharmacySaleInclude;
 
-/** Trimmed, length-clamped snapshot text; blank values are omitted, never stored empty. */
+// Characters receipt text rejects (controls, bidi overrides and isolates, lone surrogates).
+const UNPRINTABLE_RECEIPT_TEXT = /\s*[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩\p{Cs}]+\s*/gu;
+
+/**
+ * Trimmed, length-clamped snapshot text; blank values are omitted, never stored empty.
+ * Stored names can carry characters a receipt refuses to print, which would make an
+ * issued memo unprintable forever, so each such run becomes one space. Clamping comes
+ * first so a character split at the limit is removed rather than left half-written.
+ */
 function snapshotText(value: string | null | undefined, max: number): string | undefined {
-  const text = value?.trim();
-  return text ? text.slice(0, max).trim() : undefined;
+  const text = value?.trim().slice(0, max).replace(UNPRINTABLE_RECEIPT_TEXT, ' ').trim();
+  return text || undefined;
 }
 
 // Internal: callers hold the sale lock and have verified exact paid coverage in this transaction.

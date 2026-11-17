@@ -9,6 +9,7 @@ vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(async () => unde
 vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
 
 import { completePaidPharmacySale } from './sale-completion';
+import { receiptTextSchema } from '@/lib/receipts/configuration';
 
 const scope = { organizationId: 'org_a', branchId: 'branch_a', actorId: 'cashier_1' };
 const businessDate = new Date('2026-11-14T00:00:00.000Z');
@@ -156,6 +157,24 @@ describe('#708 cash memo facts in the completion snapshot', () => {
   it('leaves an unnamed walk-in without a buyer rather than an empty string', async () => {
     const snapshot = await snapshotFor(sale({ customer: null }), '   ');
     expect(snapshot).not.toHaveProperty('buyerName');
+  });
+
+  it('drops characters a receipt cannot print from a stored customer or manufacturer', async () => {
+    const snapshot = await snapshotFor(
+      sale({
+        customer: { displayName: '\tBilal‮Ahmed\u0000' },
+        manufacturer: 'GSK⁦ Pakistan\n',
+      })
+    );
+    expect(snapshot.buyerName).toBe('Bilal Ahmed');
+    expect(snapshot.lines[0]!.manufacturer).toBe('GSK Pakistan');
+    for (const value of [snapshot.buyerName, snapshot.lines[0]!.manufacturer])
+      expect(receiptTextSchema(2000).safeParse(value).success).toBe(true);
+  });
+
+  it('never leaves half of a character at the length limit', async () => {
+    const snapshot = await snapshotFor(sale({ customer: { displayName: `${'B'.repeat(199)}😀` } }));
+    expect(snapshot.buyerName).toBe('B'.repeat(199));
   });
 
   it('snapshots the manufacturer on every line, and omits a blank one', async () => {

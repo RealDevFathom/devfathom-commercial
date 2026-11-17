@@ -760,6 +760,30 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
   });
 });
 
+describe('PharmacyCounterConsole Sindh cash-memo buyer (#708)', () => {
+  it('keeps the replayable balance key when a buyer name is sent', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1', provinceCode: 'PK-SD' }],
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Buyer name (cash memo, optional)'), {
+      target: { value: 'Synthetic Buyer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    // A repeated tap at the same balance replays the first payment; a changed buyer
+    // conflicts on the payload hash instead of recording a second payment.
+    await waitFor(() =>
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          buyerName: 'Synthetic Buyer',
+          idempotencyKey: 'counter-tender:sale-a:CASH:25000',
+        })
+      )
+    );
+  });
+});
+
 describe('DEV-499 exact cash with F9 then Enter', () => {
   it('takes the prefilled balance as exact cash with F9 then Enter', async () => {
     mocks.mutations.tender!.mockResolvedValue(accepted(0));

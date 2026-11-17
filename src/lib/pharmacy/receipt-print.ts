@@ -79,9 +79,12 @@ function lineIdentity(line: CounterReceipt['lines'][number]): string {
 /** English facts with ASCII separators; mirrors counter-receipt-presentation semantics. */
 function escPosFacts(
   receipt: CounterReceipt & { receiptNumber: number; completedAt: string },
-  taxIdentity: PharmacyReceiptTaxIdentity,
+  currentTaxIdentity: PharmacyReceiptTaxIdentity,
   reprint: boolean
 ): ReceiptPreviewFacts {
+  // #708: a cash memo reprints every identity fact frozen at issuance; other receipts
+  // (and older snapshots without the frozen identity) keep the profile read for the sale.
+  const taxIdentity = receipt.cashMemoIdentity ?? currentTaxIdentity;
   const strings = COUNTER_RECEIPT_STRINGS.en;
   const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
   let cashReceived: number | null;

@@ -1027,9 +1027,7 @@ describe('#708 Sindh cash memo buyer name', () => {
       cashMemo: true,
       khataSignupPatient: { patientId: 'patient-a', displayName: longName },
     });
-    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue(
-      longName
-    );
+    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue(longName);
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
