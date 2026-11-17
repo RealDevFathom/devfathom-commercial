@@ -196,13 +196,13 @@ function saleDb(
   return { db, claims };
 }
 
-/** The server-verified FEFO approval the router attaches for the pharmacist on duty. */
-const ON_DUTY = 'PHARMACIST_ON_DUTY';
+/** The server-verified manager PIN approval the router attaches to an out-of-order scan. */
+const MANAGER_APPROVAL = 'MANAGER_PIN:manager-a';
 
 function bottleLine(
   payload = SYRUP_BOTTLE,
   key = 'line-a',
-  fefoApprovalPolicy: string | null = ON_DUTY
+  fefoApprovalPolicy: string | null = MANAGER_APPROVAL
 ) {
   return {
     saleId: 'sale-a',
@@ -368,7 +368,7 @@ describe('DEV-92 counter sale of a serialized primary pack', () => {
       data: expect.objectContaining({
         selectedLotId: 'lot-scanned',
         recommendedLotId: 'lot-fefo',
-        approvalPolicy: `${SERIALIZED_PACK_APPROVAL_POLICY}:${ON_DUTY}`,
+        approvalPolicy: `${SERIALIZED_PACK_APPROVAL_POLICY}:${MANAGER_APPROVAL}`,
         reason: expect.stringContaining('A1B2C3D4E5F6'),
       }),
     });
@@ -417,20 +417,20 @@ describe('DEV-92 counter sale of a serialized primary pack', () => {
     expect(claims).toEqual([expect.objectContaining({ inventoryLotId: 'lot-fefo' })]);
   });
 
-  it('accepts an approved batch override that names the scanned pack lot', async () => {
+  it('does not let a pharmacist-approved batch override stand in for the manager PIN', async () => {
     const { db } = saleDb();
-    const { allocation } = await addSaleLine(db as never, scope, {
-      ...bottleLine(SYRUP_BOTTLE, 'line-a', null),
-      override: {
-        inventoryLotId: 'lot-scanned',
-        reason: 'Customer asked',
-        approvalPolicy: ON_DUTY,
-      },
-    });
-    expect(allocation.overrideId).toBe('override-a');
-    expect(db.pharmacyAllocationOverride.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ selectedLotId: 'lot-scanned', approvalPolicy: ON_DUTY }),
-    });
+    await expect(
+      addSaleLine(db as never, scope, {
+        ...bottleLine(SYRUP_BOTTLE, 'line-a', null),
+        override: {
+          inventoryLotId: 'lot-scanned',
+          reason: 'Customer asked',
+          approvalPolicy: 'PHARMACIST_ON_DUTY',
+        },
+      })
+    ).rejects.toMatchObject({ reason: 'SERIAL_FEFO_APPROVAL_REQUIRED' });
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    expect(db.pharmacySoldPackSerial.create).not.toHaveBeenCalled();
   });
 
   it('refuses a second sale of the same serial before any stock moves', async () => {

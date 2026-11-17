@@ -23,12 +23,21 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/stock-ledger')>()),
   onHand: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/counter-line-approval', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/counter-line-approval')>();
+  // The real check runs unless a test stubs one call (DEV-843 manager PIN approvals).
+  return { ...actual, authorizeCounterApproval: vi.fn(actual.authorizeCounterApproval) };
+});
 vi.mock('@/lib/abac', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/abac')>()),
   can: vi.fn(),
 }));
 
 import { can } from '@/lib/abac';
+import {
+  authorizeCounterApproval,
+  CounterApprovalDenied,
+} from '@/lib/pharmacy/counter-line-approval';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { addSaleLine, PharmacySaleError } from '@/lib/pharmacy/sales';
 import { PharmacySerializedPackError } from '@/lib/pharmacy/serialized-pack-sale';
@@ -202,37 +211,17 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 
 describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
   const scannedPack = { payload: ']d2010896123450001321A1B2C3D4E5F6' };
+  const managerPin = { staffProfileId: 'staff-manager', pin: '2468' };
   const packLine = { ...line, saleUnit: 'PACK' as const, canonicalUnitsPerSaleUnit: 1 };
+  const managerApproval = {
+    approvedByUserId: 'manager-1',
+    approvalPolicy: 'MANAGER_PIN',
+    selfApproved: false,
+    credentialId: null,
+  };
 
-  it('forwards the scanned pack with the pharmacist on duty as its FEFO approval', async () => {
+  it('forwards a scan without a PIN with no approval, even for the pharmacist on duty', async () => {
     const f = fixture();
-    vi.mocked(addSaleLine).mockResolvedValue({
-      line: { id: 'line-1' },
-      allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
-    } as never);
-
-    await f.caller.addLine({ ...packLine, scannedPack });
-
-    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
-    expect(input.scannedPack).toEqual({
-      payload: scannedPack.payload,
-      fefoApprovalPolicy: 'PHARMACIST_ON_DUTY',
-    });
-    expect(input.override).toBeUndefined();
-    expect(lastAudit().detail).toMatchObject({
-      metadata: {
-        scannedPackApprovalPolicy: 'PHARMACIST_ON_DUTY',
-        scannedPackApprovedByUserId: 'actor-1',
-        overrideId: 'override-1',
-        recommendedLotId: 'lot-fefo',
-        saleLineId: 'line-1',
-      },
-    });
-  });
-
-  it('forwards a cashier scan without a PIN with no approval, so only a FEFO pack can sell', async () => {
-    const f = fixture();
-    vi.mocked(can).mockResolvedValue(false);
     vi.mocked(addSaleLine).mockResolvedValue({
       line: { id: 'line-1' },
       allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
@@ -242,11 +231,69 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
 
     const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
     expect(input.scannedPack).toEqual({ payload: scannedPack.payload });
+    expect(input.override).toBeUndefined();
+    expect(authorizeCounterApproval).not.toHaveBeenCalled();
+    // A pack from the FEFO lot is a plain add, with no safety label.
+    expect(lastAudit().detail).not.toHaveProperty('action');
   });
 
-  it('refuses a cashier scan of a later-expiry pack as FORBIDDEN', async () => {
+  it('verifies a manager PIN sent with the scan and forwards only its server-derived policy', async () => {
     const f = fixture();
-    vi.mocked(can).mockResolvedValue(false);
+    vi.mocked(authorizeCounterApproval).mockResolvedValueOnce(managerApproval);
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1' },
+      allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
+    } as never);
+
+    await f.caller.addLine({ ...packLine, scannedPack: { ...scannedPack, approval: managerPin } });
+
+    expect(authorizeCounterApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
+      'SCANNED_PACK_FEFO',
+      managerPin
+    );
+    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
+    // Exact on purpose: the PIN itself never reaches the sale domain.
+    expect(input.scannedPack).toEqual({
+      payload: scannedPack.payload,
+      fefoApprovalPolicy: 'MANAGER_PIN:manager-1',
+    });
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('SUCCESS');
+    expect(audit.detail).toMatchObject({
+      category: 'PHARMACY_SAFETY',
+      action: 'fefo_override',
+      description: 'Counter sold a scanned pack out of FEFO order.',
+      metadata: {
+        medicineId: 'medicine-1',
+        scannedPackApprovalPolicy: 'MANAGER_PIN',
+        scannedPackApprovedByUserId: 'manager-1',
+        overrideId: 'override-1',
+        recommendedLotId: 'lot-fefo',
+        saleLineId: 'line-1',
+      },
+    });
+  });
+
+  it('refuses a wrong or ineligible manager PIN before the sale transaction opens', async () => {
+    const f = fixture();
+    vi.mocked(authorizeCounterApproval).mockRejectedValueOnce(
+      new CounterApprovalDenied('SCANNED_PACK_FEFO')
+    );
+    await expect(
+      f.caller.addLine({ ...packLine, scannedPack: { ...scannedPack, approval: managerPin } })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'A scanned pack that is not from the earliest-expiry batch needs a manager or owner to approve it with their PIN.',
+    });
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unapproved later-expiry scan as FORBIDDEN and labels the refusal', async () => {
+    const f = fixture();
     vi.mocked(addSaleLine).mockRejectedValue(
       new PharmacySerializedPackError('SERIAL_FEFO_APPROVAL_REQUIRED')
     );
@@ -255,13 +302,21 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
       code: 'FORBIDDEN',
       message: 'SERIAL_FEFO_APPROVAL_REQUIRED',
     });
+    expect(lastAudit()).toMatchObject({
+      outcome: 'FAILURE',
+      detail: {
+        category: 'PHARMACY_SAFETY',
+        action: 'fefo_override',
+        description: 'Counter refused a scanned pack out of FEFO order without a manager approval.',
+      },
+    });
   });
 
-  it('lets a batch override carry the approval for a scanned pack', async () => {
+  it('does not turn a pharmacist-approved batch override into a scan approval', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({
       line: { id: 'line-1' },
-      allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
     } as never);
 
     await f.caller.addLine({ ...packLine, scannedPack, override });
@@ -276,7 +331,7 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
     await expect(
       f.caller.addLine({
         ...packLine,
-        scannedPack: { ...scannedPack, fefoApprovalPolicy: 'PHARMACIST_ON_DUTY' },
+        scannedPack: { ...scannedPack, fefoApprovalPolicy: 'MANAGER_PIN' },
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.transaction).not.toHaveBeenCalled();

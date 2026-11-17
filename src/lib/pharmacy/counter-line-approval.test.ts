@@ -208,6 +208,57 @@ describe('counter discount approval (#520)', () => {
   });
 });
 
+describe('counter scanned-pack FEFO approval (DEV-843)', () => {
+  it('has no on-duty default: even an approver needs their PIN', async () => {
+    const db = fixture(manager, ['cashier']);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO')
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('accepts a manager PIN checked against the manager capability', async () => {
+    const db = fixture();
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'manager',
+      approvalPolicy: 'MANAGER_PIN',
+      selfApproved: false,
+      credentialId: 'cred',
+    });
+    expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('refuses a pharmacist PIN from someone who is not a manager or owner', async () => {
+    const pharmacist = { ...manager, id: 'pharmacist' };
+    const db = fixture(pharmacist, []);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
+  it('lets a solo owner self-approve with a fresh PIN, recorded as self-approved', async () => {
+    const self = { ...actor };
+    const db = fixture(self, ['cashier'], []);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'cashier',
+      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      selfApproved: true,
+      credentialId: 'cred',
+    });
+  });
+});
+
 describe('counter FEFO-override approval (#520)', () => {
   it('lets the pharmacist on duty approve their own override without a PIN', async () => {
     const db = fixture(manager, ['cashier']);

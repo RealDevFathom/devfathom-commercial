@@ -315,8 +315,8 @@ type AddSaleLineInput = {
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   /**
    * DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells.
-   * DEV-843: `fefoApprovalPolicy` is set only by the server from a verified FEFO-override
-   * approval; without it a pack whose lot is not the earliest-expiry one is refused.
+   * DEV-843: `fefoApprovalPolicy` is set only by the server from a verified manager or owner
+   * PIN; without it a pack whose lot is not the earliest-expiry one is refused.
    */
   scannedPack?: { payload: string; fefoApprovalPolicy?: string };
   idempotencyKey: string;
@@ -577,8 +577,10 @@ async function addSaleLineWithAllocation(
     });
     if (override && override.inventoryLotId !== pack.inventoryLotId)
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    // The pack's own evidence is always what is recorded: its serial, and the manager or owner
+    // approval that let it leave FEFO order. A batch override's approval does not stand in.
     const packApproval = input.scannedPack.fefoApprovalPolicy;
-    override ??= {
+    override = {
       inventoryLotId: pack.inventoryLotId,
       reason: serializedPackOverrideReason(pack.serialNumber),
       approvalPolicy: packApproval
@@ -621,9 +623,9 @@ async function addSaleLineWithAllocation(
     )
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
     // DEV-843: a scanned pack is not an approval. When its lot is not FEFO's choice the
-    // allocation records an override, and that override needs the same verified approval
-    // as a batch picked by hand. The sale transaction rolls back everything allocated above.
-    if (allocation.overrideId && !input.override && !input.scannedPack?.fefoApprovalPolicy)
+    // allocation records an override, and that needs a verified manager or owner PIN.
+    // The sale transaction rolls back everything allocated above.
+    if (allocation.overrideId && !input.scannedPack?.fefoApprovalPolicy)
       throw new PharmacySerializedPackError('SERIAL_FEFO_APPROVAL_REQUIRED');
   }
   // MED-08: price each lot with the rounding increment of its own

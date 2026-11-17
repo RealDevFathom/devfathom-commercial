@@ -390,9 +390,31 @@ type CounterLineRequest = Omit<
   /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
   voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
-  /** DEV-843: a pharmacist's PIN approves a scanned pack that is not from the FEFO lot. */
+  /** DEV-843: a manager or owner PIN approves a scanned pack that is not from the FEFO lot. */
   scannedPack?: { payload: string; approval?: CounterApprovalPin };
 };
+
+/**
+ * DEV-843: a scanned pack taken out of FEFO order is labelled on the audit row like a typed
+ * batch override (PH-A4), whether it sold with a manager's approval or was refused without one.
+ */
+function labelScannedPackFefo(
+  ctx: TRPCContext,
+  input: { branchId: string; saleId: string; medicineId: string },
+  outcome: 'sold' | 'refused'
+) {
+  annotateAudit(ctx, {
+    category: 'PHARMACY_SAFETY',
+    action: 'fefo_override',
+    targetType: 'PharmacySale',
+    targetId: input.saleId,
+    description:
+      outcome === 'sold'
+        ? 'Counter sold a scanned pack out of FEFO order.'
+        : 'Counter refused a scanned pack out of FEFO order without a manager approval.',
+    metadata: { branchId: input.branchId, medicineId: input.medicineId, scannedPack: true },
+  });
+}
 
 /**
  * #520: build the domain line input with server-verified approvals only. A discount needs a
@@ -447,33 +469,28 @@ async function approvedLineInput(
   if (scannedPack) {
     lineInput.scannedPack = { payload: scannedPack.payload };
     // DEV-843: whether the pack's lot is FEFO's choice is known only once the sale resolves
-    // it, so an approval is settled here and the domain refuses an out-of-order pack without
-    // one. A pharmacist on duty approves by default; anyone else may send a pharmacist's PIN.
-    // A wrong or ineligible PIN is refused outright; a cashier who sent none may still sell
-    // a pack from the earliest-expiry lot. A batch override's own approval covers the pack.
-    if (!override) {
+    // it, so a manager or owner PIN sent with the scan is verified here and the domain refuses
+    // an out-of-order pack without one. There is no on-duty default, and a batch override's
+    // pharmacist approval does not stand in. A wrong or ineligible PIN is refused outright;
+    // a scan with no PIN may still sell a pack from the earliest-expiry lot.
+    if (scannedPack.approval) {
       const approval = await authorizeCounterApproval(
         db,
         scope,
-        'FEFO_OVERRIDE',
+        'SCANNED_PACK_FEFO',
         scannedPack.approval
-      ).catch((error: unknown) => {
-        if (error instanceof CounterApprovalDenied && !scannedPack.approval) return null;
-        throw error;
+      );
+      approvals.push({ kind: 'SCANNED_PACK_FEFO', approval });
+      lineInput.scannedPack.fefoApprovalPolicy = fefoOverrideApprovalPolicy(
+        approval,
+        scope.actorId
+      );
+      annotateAudit(ctx, {
+        metadata: {
+          scannedPackApprovalPolicy: approval.approvalPolicy,
+          scannedPackApprovedByUserId: approval.approvedByUserId,
+        },
       });
-      if (approval) {
-        approvals.push({ kind: 'FEFO_OVERRIDE', approval });
-        lineInput.scannedPack.fefoApprovalPolicy = fefoOverrideApprovalPolicy(
-          approval,
-          scope.actorId
-        );
-        annotateAudit(ctx, {
-          metadata: {
-            scannedPackApprovalPolicy: approval.approvalPolicy,
-            scannedPackApprovedByUserId: approval.approvedByUserId,
-          },
-        });
-      }
     }
   }
   if (override) {
@@ -2002,7 +2019,7 @@ export const pharmacySalesRouter = router({
           scannedPack: z
             .object({
               payload: z.string().trim().min(1).max(256),
-              // DEV-843: a pharmacist's PIN for a pack that is not from the FEFO lot.
+              // DEV-843: a manager or owner PIN for a pack that is not from the FEFO lot.
               approval: counterApprovalPin.optional(),
             })
             .strict()
@@ -2394,10 +2411,12 @@ export const pharmacySalesRouter = router({
           });
           return result;
         });
-        if (
-          'line' in outcome &&
-          (input.override || (input.scannedPack && outcome.allocation.overrideId))
-        ) {
+        const scannedOutOfOrder = Boolean(
+          input.scannedPack && 'line' in outcome && outcome.allocation.overrideId
+        );
+        // DEV-843: a scanned pack sold out of FEFO order is the same safety decision.
+        if (scannedOutOfOrder && !input.override) labelScannedPackFefo(ctx, input, 'sold');
+        if ('line' in outcome && (input.override || scannedOutOfOrder)) {
           annotateAudit(ctx, {
             metadata: {
               saleLineId: outcome.line.id,
@@ -2408,6 +2427,12 @@ export const pharmacySalesRouter = router({
         }
         return outcome;
       } catch (error) {
+        if (
+          !input.override &&
+          error instanceof PharmacySerializedPackError &&
+          error.reason === 'SERIAL_FEFO_APPROVAL_REQUIRED'
+        )
+          labelScannedPackFefo(ctx, input, 'refused');
         fail(error);
       }
     }),
