@@ -1655,9 +1655,13 @@ describe('DEV-878 counter search suggestion access', () => {
         : kind === 'foreign-branch'
           ? 'foreign-branch'
           : 'branch-a';
-    await expect(f.caller().counterSearch({ branchId, query: 'Nalbin' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
+    // A branch outside the workspace keeps DEV-876's workspace refusal; every other
+    // case is refused by the branch assignment or the counter grant.
+    await expect(f.caller().counterSearch({ branchId, query: 'Nalbin' })).rejects.toMatchObject(
+      kind === 'foreign-branch'
+        ? { code: 'BAD_REQUEST', message: 'That record is not in this workspace.' }
+        : { code: 'FORBIDDEN' }
+    );
     expect(searchCounterCatalog).not.toHaveBeenCalled();
   });
 });
