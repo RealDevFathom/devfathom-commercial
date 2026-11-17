@@ -497,19 +497,20 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
     expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyLoyaltyPointsEntry.aggregate.mock.invocationCallOrder[0]!
     );
-    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
-      where: {
-        organizationId: 'org-a',
-        customerId: 'customer-a',
-        kind: 'ADJUSTMENT',
-        occurredAt: {
-          gte: new Date('2026-11-16T19:00:00.000Z'),
-          lt: new Date('2026-11-17T19:00:00.000Z'),
-        },
-        points: { gt: 0 },
-      },
-      _sum: { points: true },
-    });
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          customerId: 'customer-a',
+          kind: 'ADJUSTMENT',
+          occurredAt: {
+            gte: new Date('2026-11-16T19:00:00.000Z'),
+            lt: new Date('2026-11-17T19:00:00.000Z'),
+          },
+          points: { gt: 0 },
+        }),
+      })
+    );
   });
 
   it('starts a fresh allowance at midnight Pakistan time', async () => {

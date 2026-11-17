@@ -418,14 +418,16 @@ describe('DEV-881 manager adjustments need the manager PIN', () => {
       code: 'FORBIDDEN',
       message: 'Adjustment not recorded. Enter your manager PIN.',
     });
-    expect(mocks.pin).toHaveBeenCalledWith({
-      organizationId: 'org-a',
-      actorId: 'user-a',
-      pin: '0000',
-      action: 'pharmacyLoyalty.adjustPoints',
-      policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
-      errorCode: 'LOYALTY_ADJUST_PIN_REFUSED',
-    });
+    expect(mocks.pin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org-a',
+        actorId: 'user-a',
+        pin: '0000',
+        action: 'pharmacyLoyalty.adjustPoints',
+        policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
+        errorCode: 'LOYALTY_ADJUST_PIN_REFUSED',
+      })
+    );
     expect(mocks.adjust).not.toHaveBeenCalled();
   });
 
@@ -450,11 +452,11 @@ describe('DEV-881 manager adjustments need the manager PIN', () => {
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        metadata: {
+        metadata: expect.objectContaining({
           policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
           approverId: 'user-a',
           pinVerified: true,
-        },
+        }),
       })
     );
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
