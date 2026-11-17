@@ -825,7 +825,11 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await expect(
     dialog.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
   ).toBeDisabled();
-  await pressControl(dialog.getByRole('button', { name: 'Wrong item / strip', exact: true }));
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
@@ -844,13 +848,19 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
   await expect(
-    dialog.getByRole('button', { name: 'Wrong item / strip', exact: true })
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
   ).toHaveAttribute('aria-pressed', 'false');
   await expect(dialog.getByRole('button', { name: /^Keep aside — don't resell/ })).toHaveAttribute(
     'aria-pressed',
     'false'
   );
-  await pressControl(dialog.getByRole('button', { name: 'Wrong item / strip', exact: true }));
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
   await dialog.getByLabel('Keep-aside (quarantine) location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')

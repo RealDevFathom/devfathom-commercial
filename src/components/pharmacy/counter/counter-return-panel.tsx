@@ -247,7 +247,7 @@ export function ReturnForm({
   const [quantity, setQuantity] = useState<{ sold: string; loose: string } | null>(null);
   const [reason, setReason] = useState('');
   // Keep the existing later-refund reason independent of fresh return choices.
-  const [refundReason, setRefundReason] = useState('WRONG_ITEM');
+  const [refundReason, setRefundReason] = useState('');
   const [disposition, setDisposition] = useState<'' | 'RESTOCK' | 'QUARANTINE'>('');
   const [chosenLocation, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
@@ -398,6 +398,7 @@ export function ReturnForm({
     setLotId('');
     setQuantity(null);
     setReason('');
+    setRefundReason('');
     setDisposition('');
     setIntegrity('');
     setReturnTender('');
@@ -1096,6 +1097,13 @@ export function ReturnForm({
             >
               <legend className="px-1 font-semibold">Refund returned value awaiting refund</legend>
               <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
+              <ChoiceGroup
+                id="refund-reason"
+                label="Refund reason"
+                value={refundReason}
+                options={REASONS.map(([value, label]) => ({ value, label }))}
+                onChange={setRefundReason}
+              />
               <Label htmlFor="refund-tender">Original tender</Label>
               <select
                 id="refund-tender"
@@ -1145,6 +1153,7 @@ export function ReturnForm({
                 className="h-11"
                 disabled={
                   !tender ||
+                  !refundReason ||
                   !Number.isSafeInteger(amountMinor) ||
                   amountMinor <= 0 ||
                   amountMinor > available ||

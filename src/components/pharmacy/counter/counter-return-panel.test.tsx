@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
@@ -52,7 +52,16 @@ function recordOnly() {
   fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'none' } });
 }
 function chooseReturnReason(reason = 'Wrong item / strip') {
-  fireEvent.click(screen.getByRole('button', { name: reason }));
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Reason' })).getByRole('button', { name: reason })
+  );
+}
+function chooseRefundReason(reason = 'Wrong item / strip') {
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Refund reason' })).getByRole('button', {
+      name: reason,
+    })
+  );
 }
 function setLooseUnits(units: string) {
   fireEvent.change(screen.getByLabelText('Return quantity (strips)'), { target: { value: '0' } });
@@ -130,7 +139,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 describe('DEV-732 explicit return choices', () => {
   function chooseReason() {
-    fireEvent.click(screen.getByRole('button', { name: 'Damaged' }));
+    chooseReturnReason('Damaged');
   }
   function keepAside() {
     fireEvent.click(screen.getByRole('button', { name: /^Keep aside — don't resell/ }));
@@ -342,7 +351,7 @@ describe('DEV-732 explicit return choices', () => {
     await screen.findByText(/Return recorded/);
   });
 
-  it('retains the chosen reason for a later refund after clearing fresh return choices', async () => {
+  it('requires a fresh refund reason after a return clears its choices', async () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
     recordOnly();
@@ -352,6 +361,14 @@ describe('DEV-732 explicit return choices', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Record return$/ }));
     await screen.findByText(/Return recorded/);
     expectCleared();
+    // The refund form never inherits the return's reason; it must be chosen.
+    expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+    for (const button of screen
+      .getByRole('group', { name: 'Refund reason' })
+      .querySelectorAll('button')) {
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+    }
+    chooseRefundReason('Damaged');
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     enterManagerPin();
@@ -359,6 +376,25 @@ describe('DEV-732 explicit return choices', () => {
     await waitFor(() =>
       expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ reason: 'DAMAGED' }))
     );
+  });
+});
+
+describe('DEV-732 refund reason does not leak across receipts', () => {
+  it('clears the refund reason when another receipt is chosen', () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    chooseRefundReason('Damaged');
+    expect(
+      within(screen.getByRole('group', { name: 'Refund reason' })).getByRole('button', {
+        name: 'Damaged',
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
+    chooseReceipt();
+    for (const button of screen
+      .getByRole('group', { name: 'Refund reason' })
+      .querySelectorAll('button')) {
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+    }
   });
 });
 
@@ -522,6 +558,7 @@ describe('counter returns', () => {
   it('sends the cash refund to the active branch drawer', async () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     enterManagerPin();
@@ -609,6 +646,7 @@ describe('counter returns', () => {
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'card' } });
     enterManagerPin();
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '6.00' } });
@@ -625,6 +663,7 @@ describe('counter returns', () => {
       mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
       const view = render(<ReturnForm {...props} />);
       chooseReceipt();
+      chooseRefundReason();
       fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
       fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
       enterManagerPin();
@@ -654,6 +693,7 @@ describe('counter returns', () => {
     mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
     const view = render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     enterManagerPin();
@@ -896,6 +936,7 @@ describe('DEV-647 refund access', () => {
     });
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     const submit = screen.getByRole('button', { name: 'Confirm refund' });
@@ -914,6 +955,7 @@ describe('DEV-647 refund access', () => {
     mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
     const view = render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     enterManagerPin();
@@ -934,6 +976,7 @@ describe('DEV-647 refund access', () => {
     });
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
     fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
     enterManagerPin();
@@ -1073,7 +1116,7 @@ describe('DEV-501 returns in six steps or fewer', () => {
     // The refund is prefilled from the line: 2 strips = PKR 24.00.
     expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('24.00');
     // 4. Reason.
-    step(() => fireEvent.click(screen.getByRole('button', { name: 'Damaged' })));
+    step(() => chooseReturnReason('Damaged'));
     // 5. Manager or owner PIN.
     step(() => enterManagerPin());
     // 6. Explicitly choose Keep aside and confirm the return and refund in one action.
