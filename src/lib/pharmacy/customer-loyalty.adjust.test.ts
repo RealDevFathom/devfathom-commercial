@@ -529,6 +529,19 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
     expect(created).toHaveLength(1);
   });
 
+  it('dates a manager entry with the instant its day was checked against', async () => {
+    // 23:59:59.999 PKT, after a wait for the lock that began before midnight.
+    const lateNow = new Date('2026-11-17T18:59:59.999Z');
+    const { db } = ledger();
+    await adjustLoyaltyPoints(db as never, scope, grant('midnight', 500), {
+      managerLimit: 500,
+      now: lateNow,
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ occurredAt: lateNow, points: 500 }),
+    });
+  });
+
   it('applies no day total when no manager ceiling is given (the owner)', async () => {
     const { db } = ledger([{ points: 5_000, occurredAt: now }]);
     await expect(
