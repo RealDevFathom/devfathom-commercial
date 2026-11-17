@@ -150,6 +150,7 @@ Do not invent isolated values unless a visual alignment genuinely requires one.
 | ------------------------------------------------------ | --------------- | ------------------------------------------------ |
 | Display, headings, navigation, body UI                 | Instrument Sans | Precise, compact, editorial                      |
 | Data, labels, eyebrows, timestamps, technical metadata | IBM Plex Mono   | Uppercase when used as an eyebrow or table label |
+| Urdu receipt text | Noto Nastaliq Urdu | Receipt-only, relaxed 2.5 line height; dates and numbers isolated LTR |
 
 Rules:
 
@@ -368,3 +369,10 @@ primitives. Run typecheck, lint, tests, and a production build in proportion to 
 
 Historical source material remains in `docs/superpowers/prototype-ref/`, but it is not permission
 to reintroduce the former visual system.
+
+Urdu receipts use the self-hosted variable Noto Nastaliq Urdu face (400–700), registered
+in the root stylesheet and used by `.receipt-urdu`; isolated browser print documents
+load the same public font and wait for it before requesting print. English keeps the
+existing Studio faces. The SIL OFL notice ships at
+`/licenses/noto-nastaliq-urdu-OFL.txt`. Source and hash are recorded in
+`docs/design-system/urdu-receipt-font.md`.

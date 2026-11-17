@@ -2507,7 +2507,7 @@ function ScopedPharmacyCounterConsole({
           saleId: receipt.saleId,
           locale: receiptLocale,
         });
-        printCounterBrowserReceipt(
+        await printCounterBrowserReceipt(
           receipt,
           receiptLocale,
           receiptFormat,

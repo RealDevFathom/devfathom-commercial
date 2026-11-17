@@ -167,8 +167,8 @@ it('renders every Urdu receipt amount in Urdu digits', () => {
   expect(container.textContent).not.toContain('1234.56');
   expect(region.textContent).not.toMatch(/\d\.\d\d/);
   // The settled banner's net and change follow the receipt locale too.
-  expect(screen.getByText('PKR ۱٫۰۰')).toBeTruthy();
-  expect(screen.getByText('PKR ۰٫۰۰')).toBeTruthy();
+  expect(screen.getByText((_text, element) => element?.tagName === 'DD' && element.textContent === 'پاکستانی روپے ۱٫۰۰')).toBeTruthy();
+  expect(screen.getByText((_text, element) => element?.tagName === 'DD' && element.textContent === 'پاکستانی روپے ۰٫۰۰')).toBeTruthy();
 });
 
 it('keeps English receipt amounts on ASCII digits', () => {
@@ -251,7 +251,11 @@ it.each(['UNAVAILABLE', undefined] as const)(
     const region = within(screen.getByRole('region', { name: 'رسید 12' }));
     expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
     expect(
-      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7')
+      region.getByText(
+        (_text, element) =>
+          element?.tagName === 'P' &&
+          element.textContent === 'بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7'
+      )
     ).toBeTruthy();
     expect(screen.queryByText(/LIVE_CATALOG/)).toBeNull();
   }
@@ -569,4 +573,19 @@ it('#727: shows the issued promotion name and saving under its line', () => {
   Object.assign(input.receipt!.totals, { discountMinor: 10, netMinor: 90 });
   render(<CounterReceiptView {...input} />);
   expect(screen.getByText('Promotion: Winter week (-0.10)')).toBeTruthy();
+});
+
+it('isolates Urdu receipt dates and amounts and translates the tender label', () => {
+  const input = props({ locale: 'ur' });
+  input.receipt!.tenders = [{ tenderId: 'cash', type: 'CASH', amountMinor: 100, changeGivenMinor: 0 }];
+  render(<CounterReceiptView {...input} />);
+  const region = screen.getByRole('region', { name: 'رسید 12' });
+  expect(region).toHaveClass('receipt-urdu');
+  expect(within(region).queryByText('CASH')).not.toBeInTheDocument();
+  expect(within(region).getByText('نقد')).toBeInTheDocument();
+  const values = [...region.querySelectorAll('bdi[dir="ltr"]')].map((element) =>
+    element.textContent!.trim()
+  );
+  expect(values).toContain('۱٫۰۰');
+  expect(values.some((value) => /2026-/.test(value))).toBe(true);
 });

@@ -176,7 +176,9 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(browser).toContain('Cash received: 8.00');
     expect(browser.indexOf('Cash received: 8.00')).toBeLessThan(browser.indexOf('Change: 1.00'));
     const urdu = buildCounterBrowserReceipt(source, 'ur', 'THERMAL');
-    expect(urdu).toContain('نقد ادا شدہ: ۸٫۰۰');
+    expect(new DOMParser().parseFromString(urdu, 'text/html').body.textContent).toContain(
+      'نقد ادا شدہ: ۸٫۰۰'
+    );
     expect(urdu).not.toContain('Cash received:');
   });
 
@@ -622,4 +624,59 @@ describe('receipt tax identity on a profile start day (DEV-298)', () => {
       })
     );
   });
+});
+
+it.each(['THERMAL', 'THERMAL_58', 'A4'] as const)(
+  'uses a local Nastaliq face and isolates Urdu decimals on %s paper',
+  (format) => {
+    const html = buildCounterBrowserReceipt(receipt, 'ur', format);
+    const dom = new DOMParser().parseFromString(html, 'text/html');
+    expect(dom.querySelector('style')!.textContent).toContain('Noto Nastaliq Urdu');
+    expect(dom.querySelector('style')!.textContent).toContain('/fonts/noto-nastaliq-urdu.ttf');
+    const isolated = [...dom.querySelectorAll('bdi[dir="ltr"]')].map((element) =>
+      element.textContent!.trim()
+    );
+    expect(isolated).toContain('۱٫۷۹');
+    expect(isolated).toContain('2026-09-05 15:00 PKT');
+    expect(dom.body.textContent).toContain('رسید: 12');
+    expect(dom.body.textContent).toContain('نقد: ۱٫۹۰');
+    expect(dom.body.textContent).toContain('پاکستانی روپے');
+    expect(dom.body.textContent).not.toMatch(/Invoice:|CASH|PKR/);
+  }
+);
+
+it('waits for Nastaliq before requesting Urdu print and reports a failed font load', async () => {
+  let loaded!: (value: FontFace[]) => void;
+  const font = new Promise<FontFace[]>((resolve) => {
+    loaded = resolve;
+  });
+  const popup = {
+    opener: window,
+    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), fonts: { load: vi.fn(() => font) } },
+    focus: vi.fn(),
+    print: vi.fn(),
+    close: vi.fn(),
+  };
+  vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  const completion = printCounterBrowserReceipt(receipt, 'ur', 'A4');
+  expect(popup.print).not.toHaveBeenCalled();
+  expect(popup.document.fonts.load).toHaveBeenCalledWith('12px "Noto Nastaliq Urdu"');
+  loaded([{} as FontFace]);
+  await completion;
+  expect(popup.print).toHaveBeenCalledOnce();
+  popup.document.fonts.load.mockRejectedValueOnce(new Error('Synthetic font failure'));
+  await expect(printCounterBrowserReceipt(receipt, 'ur', 'A4')).rejects.toThrow(
+    'Retry Print receipt'
+  );
+  expect(popup.close).toHaveBeenCalledOnce();
+  expect(popup.print).toHaveBeenCalledOnce();
+});
+
+
+it('keeps a signed Urdu amount together inside its LTR isolate', () => {
+  const html = buildCounterBrowserReceipt(
+    { ...receipt, totals: { ...receipt.totals, changeMinor: -11 } }, 'ur', 'A4'
+  );
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+  expect([...dom.querySelectorAll('bdi[dir="ltr"]')].map(element => element.textContent)).toContain('-۰٫۱۱');
 });

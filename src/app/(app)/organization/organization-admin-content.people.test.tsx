@@ -367,3 +367,11 @@ it('names the domain host and kind inputs for assistive technology (#1233)', () 
   expect(screen.getByRole('textbox', { name: 'Domain host' })).toHaveAttribute('name', 'host');
   expect(screen.getByRole('textbox', { name: 'Domain kind' })).toHaveValue('APP');
 });
+
+it('saves the workspace profile without offering the ineffective Locale control', () => {
+  render(<OrganizationAdminContent />);
+  expect(screen.queryByRole('textbox', { name: 'Locale' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+  expect(mutationFor('updateProfile').mutate).toHaveBeenCalledOnce();
+  expect(mutationFor('updateProfile').mutate.mock.calls[0]![0]).not.toHaveProperty('locale');
+});
