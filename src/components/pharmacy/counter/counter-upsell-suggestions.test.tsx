@@ -127,3 +127,39 @@ describe('DEV-41 remaining disabled explanations for branch suggestions', () => 
     expect(onChoose).toHaveBeenCalledExactlyOnceWith(suggestion);
   });
 });
+
+it('DEV-41 uses a shared upsell explanation or its visible standalone fallback', () => {
+  const reason = 'Wait for the current counter action to finish.';
+  const props = {
+    suggestions: [suggestion],
+    state: 'ready' as const,
+    onChoose: vi.fn(),
+    onRetry: vi.fn(),
+  };
+  const view = render(
+    <>
+      <p id="parent-upsell-reason">{reason}</p>
+      <CounterUpsellList {...props} disabled disabledReasonId="parent-upsell-reason" />
+    </>
+  );
+  expect(screen.getAllByText(reason)).toHaveLength(1);
+  const button = screen.getByRole('button', { name: 'Find item' });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAccessibleDescription(reason);
+  expect(button).toHaveAttribute('aria-describedby', 'parent-upsell-reason');
+  fireEvent.click(button);
+  expect(props.onChoose).not.toHaveBeenCalled();
+  view.rerender(<CounterUpsellList {...props} disabled />);
+  expect(screen.getAllByText(reason)).toHaveLength(1);
+  expect(screen.getByText(reason)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Find item' })).toHaveAccessibleDescription(reason);
+  view.rerender(
+    <CounterUpsellList {...props} disabled={false} disabledReasonId="parent-upsell-reason" />
+  );
+  expect(screen.queryByText(reason)).not.toBeInTheDocument();
+  const enabled = screen.getByRole('button', { name: 'Find item' });
+  expect(enabled).toBeEnabled();
+  expect(enabled).not.toHaveAccessibleDescription();
+  fireEvent.click(enabled);
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith(suggestion);
+});

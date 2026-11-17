@@ -477,3 +477,52 @@ describe('DEV-41 remaining disabled explanations for branch search', () => {
     }
   );
 });
+
+describe('DEV-41 shared and standalone search explanations', () => {
+  it.each(['ready', 'empty', 'error'] as const)(
+    'uses one parent explanation for %s controls and restores the standalone fallback',
+    (state) => {
+      const reason = 'Wait for the current counter action to finish.';
+      const props = {
+        rows: state === 'empty' ? [] : [row],
+        state: state === 'error' ? ('error' as const) : ('ready' as const),
+        query: 'para',
+        activeMedicineId: null,
+        onSelect: vi.fn(),
+        onCaptureDemand: vi.fn(),
+        onRetry: vi.fn(),
+      };
+      const view = render(
+        <>
+          <p id="parent-search-reason">{reason}</p>
+          <CounterSearchResults {...props} disabled disabledReasonId="parent-search-reason" />
+        </>
+      );
+      expect(screen.getAllByText(reason)).toHaveLength(1);
+      for (const button of screen.getAllByRole('button')) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveAccessibleDescription(reason);
+        expect(button).toHaveAttribute('aria-describedby', 'parent-search-reason');
+        fireEvent.click(button);
+      }
+      expect(props.onSelect).not.toHaveBeenCalled();
+      expect(props.onCaptureDemand).not.toHaveBeenCalled();
+      expect(props.onRetry).not.toHaveBeenCalled();
+      view.rerender(<CounterSearchResults {...props} disabled />);
+      expect(screen.getAllByText(reason)).toHaveLength(1);
+      expect(screen.getByText(reason)).toBeVisible();
+      for (const button of screen.getAllByRole('button')) {
+        expect(button).toHaveAccessibleDescription(reason);
+        expect(button).not.toHaveAttribute('aria-describedby', 'parent-search-reason');
+      }
+      view.rerender(
+        <CounterSearchResults {...props} disabled={false} disabledReasonId="parent-search-reason" />
+      );
+      expect(screen.queryByText(reason)).not.toBeInTheDocument();
+      for (const button of screen.getAllByRole('button')) {
+        expect(button).toBeEnabled();
+        expect(button).not.toHaveAccessibleDescription();
+      }
+    }
+  );
+});

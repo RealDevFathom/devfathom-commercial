@@ -1108,6 +1108,11 @@ function ScopedPharmacyCounterConsole({
   const resumeDisabledReason =
     counterBusyReason ??
     (!heldSaleId ? 'No bill is held on this counter. Use Open bills to find another bill.' : null);
+  const resumeReasonId = resumeDisabledReason
+    ? resumeDisabledReason === billActionReason
+      ? 'counter-bill-action-reason'
+      : 'counter-resume-reason'
+    : undefined;
   const drawerDisabledReason = !canSettlePayments
     ? settlementAccess.isError
       ? "Couldn't check payment access. Retry payment access before opening the drawer."
@@ -3153,7 +3158,7 @@ function ScopedPharmacyCounterConsole({
                         placeholder="Brand, generic or barcode"
                         aria-describedby={
                           counterBusyReason
-                            ? 'counter-search-help counter-branch-controls-reason'
+                            ? 'counter-search-help counter-branch-reason'
                             : 'counter-search-help'
                         }
                         onChange={(event) => {
@@ -3187,11 +3192,6 @@ function ScopedPharmacyCounterConsole({
                     </div>
                   </div>
 
-                  {branchControlReason ? (
-                    <p id="counter-branch-controls-reason" className="text-xs text-text-muted">
-                      {branchControlReason}
-                    </p>
-                  ) : null}
                   <CounterSearchResults
                     rows={
                       searchCurrent && !searchQuery.isPlaceholderData
@@ -3211,7 +3211,7 @@ function ScopedPharmacyCounterConsole({
                     }
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
-                    disabledReason={branchControlReason}
+                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
                     activeMedicineId={activeRow?.medicineId ?? null}
                     error={searchQuery.error ? messageFrom(searchQuery.error) : null}
                     onSelect={stageRow}
@@ -3293,9 +3293,7 @@ function ScopedPharmacyCounterConsole({
                         variant="outline"
                         className="h-auto min-h-11 whitespace-normal"
                         disabled={busy || !branchAuthorized}
-                        aria-describedby={
-                          branchControlReason ? 'counter-branch-controls-reason' : undefined
-                        }
+                        aria-describedby={branchControlReason ? 'counter-branch-reason' : undefined}
                         onClick={() => void captureShortfall()}
                       >
                         {pending === 'captureDemand'
@@ -3400,7 +3398,7 @@ function ScopedPharmacyCounterConsole({
             branchId={branchId}
             medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
             disabled={busy || !branchAuthorized}
-            disabledReason={branchControlReason}
+            disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
             onChoose={(suggestion) => {
               setQuery(suggestion.displayName);
               setSubmittedSearch({
@@ -3539,7 +3537,7 @@ function ScopedPharmacyCounterConsole({
                 variant="outline"
                 className="h-11 px-2 text-xs"
                 disabled={busy || !heldSaleId}
-                aria-describedby={resumeDisabledReason ? 'counter-resume-reason' : undefined}
+                aria-describedby={resumeReasonId}
                 onClick={() => void runTransition('resume')}
               >
                 Resume{' '}
@@ -3562,7 +3560,7 @@ function ScopedPharmacyCounterConsole({
                 {billActionReason}
               </p>
             ) : null}
-            {resumeDisabledReason ? (
+            {resumeReasonId === 'counter-resume-reason' ? (
               <p id="counter-resume-reason" className="mt-2 text-xs text-text-muted">
                 {resumeDisabledReason}
               </p>
