@@ -65,6 +65,7 @@ function mrpTable() {
 
 function counterDb() {
   return {
+    pharmacySaleLine: { groupBy: vi.fn(async () => []) },
     medicineBarcode: { findFirst: vi.fn(async () => null) },
     medicineAlias: { findMany: vi.fn(async () => []) },
     medicineStrengthComponent: { findMany: vi.fn(async () => []) },
@@ -243,5 +244,53 @@ describe('MRP rounding increment parity between counter quote and posting', () =
     );
     expect(line).toMatchObject({ unitPriceMinor: 120, grossMinor: 360 });
     expect(line.unitPriceMinor).toBe(quoted.unitPriceMinor);
+  });
+});
+
+describe('DEV-705 branch preferred sale units', () => {
+  it('selects the most frequent completed-sale unit with exact tenant, branch and conversion scope', async () => {
+    const db = counterDb();
+    db.pharmacySaleLine.groupBy.mockResolvedValue([
+      {
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        saleUnit: 'PACK',
+        canonicalUnitsPerSaleUnit: 10,
+        _count: { _all: 2 },
+      },
+      {
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        saleUnit: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+        _count: { _all: 8 },
+      },
+      {
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        saleUnit: 'PACK',
+        canonicalUnitsPerSaleUnit: 100,
+        _count: { _all: 99 },
+      },
+      {
+        medicineId: 'medicine-a',
+        presentationId: 'other-presentation',
+        saleUnit: 'PACK',
+        canonicalUnitsPerSaleUnit: 10,
+        _count: { _all: 100 },
+      },
+    ] as never);
+    const { rows } = await searchCounterCatalog(db as never, scope, { query: 'Paracetamol' });
+    expect(rows[0]!.preferredSaleUnit).toBe('UNIT');
+    expect(db.pharmacySaleLine.groupBy).toHaveBeenCalledExactlyOnceWith({
+      by: ['medicineId', 'presentationId', 'saleUnit', 'canonicalUnitsPerSaleUnit'],
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        medicineId: { in: ['medicine-a'] },
+        sale: { organizationId: 'org-a', branchId: 'branch-a', status: 'COMPLETED' },
+      },
+      _count: { _all: true },
+    });
   });
 });

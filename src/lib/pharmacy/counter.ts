@@ -23,6 +23,7 @@ import {
 } from './inventory';
 import {
   previewSaleLine,
+  preferredSaleUnitOption,
   resolveCounterSaleUnits,
   type CounterPackMismatch,
   type SaleUnitKind,
@@ -77,6 +78,7 @@ export type CounterSearchRow = {
     proRataCeilingMinor: number;
   }>;
   saleUnits: SaleUnitOption[];
+  preferredSaleUnit?: SaleUnitKind | null;
   /**
    * DEV-724: set only when stock is on hand but neither the received lot nor the
    * medicine's own pack setup yields a priceable sale unit, so the counter can
@@ -278,7 +280,7 @@ export async function searchCounterCatalog(
   const medicineIds = [...matches.keys()].slice(0, limit);
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
-  const [medicines, lots, packLevels, mrps] = await Promise.all([
+  const [medicines, lots, packLevels, mrps, unitUsage] = await Promise.all([
     db.medicine.findMany({
       where: { organizationId: scope.organizationId, id: { in: medicineIds }, saleable: true },
       include: {
@@ -325,6 +327,20 @@ export async function searchCounterCatalog(
         packLevel: { presentation: { medicineId: { in: medicineIds } } },
       },
       select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+    }),
+    db.pharmacySaleLine.groupBy({
+      by: ['medicineId', 'presentationId', 'saleUnit', 'canonicalUnitsPerSaleUnit'],
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        medicineId: { in: medicineIds },
+        sale: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'COMPLETED',
+        },
+      },
+      _count: { _all: true },
     }),
   ]);
 
@@ -431,6 +447,7 @@ export async function searchCounterCatalog(
           .filter((lot) => lot.id !== best!.lot.id)
           .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
+        presentation: presentation.presentation,
         at,
       }));
     }
@@ -465,9 +482,24 @@ export async function searchCounterCatalog(
         })
       : [];
 
+    // Most frequently used sellable unit in completed branch sales; ties keep the
+    // tablet/strip default. Exact conversion prevents stale pack revisions winning.
+    const defaultUnit = preferredSaleUnitOption(saleUnits, presentation.dosageForm);
+    const rankedUnits = [...saleUnits].sort((a, b) => {
+      const count = (option: SaleUnitOption) =>
+        unitUsage.find(
+          (usage) =>
+            usage.medicineId === medicine.id &&
+            usage.presentationId === presentationId &&
+            usage.saleUnit === option.kind &&
+            usage.canonicalUnitsPerSaleUnit === option.canonicalUnitsPerSaleUnit
+        )?._count._all ?? 0;
+      return count(b) - count(a) || Number(b === defaultUnit) - Number(a === defaultUnit);
+    });
     const location = best ? locationById.get(best.locationId) : undefined;
     rows.push({
       medicineId: medicine.id,
+      preferredSaleUnit: rankedUnits[0]?.kind ?? null,
       displayName: medicine.productName,
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
@@ -520,6 +552,7 @@ export type CounterCartLine = {
   medicineName: string;
   strength: string | null;
   presentation: string;
+  dosageForm?: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
@@ -657,6 +690,7 @@ export async function readCounterCart(
       medicineName: line.medicine.productName,
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
+      dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,

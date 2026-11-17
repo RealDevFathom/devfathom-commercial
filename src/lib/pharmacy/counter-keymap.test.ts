@@ -243,3 +243,27 @@ describe('formatBinding', () => {
     );
   });
 });
+
+it('DEV-705 allows quantity unit/add chords while preserving payment, typing and modal guards', () => {
+  const quantity = document.createElement('input');
+  quantity.setAttribute('data-counter-quantity', '');
+  document.body.append(quantity);
+  quantity.focus();
+  for (const [key, action] of [
+    ['F3', 'selectPackUnit'],
+    ['F4', 'selectStripUnit'],
+    ['F5', 'selectLooseUnit'],
+    ['F6', 'addToCart'],
+    ['F7', 'selectPackUnit'],
+  ] as const) {
+    expect(shouldHandleCounterKey({ key, target: quantity }, false, action)).toBe(true);
+    expect(shouldHandleCounterKey({ key, target: quantity }, true, action)).toBe(false);
+  }
+  for (const action of ['openTender', 'holdSale', 'voidSale'] as const) {
+    expect(shouldHandleCounterKey({ key: 'F9', target: quantity }, false, action)).toBe(false);
+  }
+  for (const key of ['1', 'Enter', 'Backspace']) {
+    expect(shouldHandleCounterKey({ key, target: quantity }, false, 'addToCart')).toBe(false);
+  }
+  quantity.remove();
+});
