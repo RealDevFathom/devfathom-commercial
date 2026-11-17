@@ -32,6 +32,8 @@ import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { StaffingSuggestions } from './staffing-suggestions';
+import { ReportCsvButton } from './report-csv-button';
+import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
 export const metadata: Metadata = { title: screenCopy.reports.pharmacyReports };
@@ -177,7 +179,11 @@ export default async function PharmacyReportsPage({
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
-  const branch = value(query.branch);
+  const branch =
+    value(query.branch) ??
+    (query.branch === undefined && branchResult.branches.length === 1
+      ? branchResult.branches[0]?.id
+      : undefined);
   const section = value(query.section);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
@@ -464,7 +470,7 @@ export default async function PharmacyReportsPage({
       ]
     : [];
   return (
-    <div className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6" data-report-print>
       <PageHeader
         eyebrow={screenCopy.reports.pharmacyOperations}
         heading={screenCopy.reports.reports}
@@ -473,6 +479,27 @@ export default async function PharmacyReportsPage({
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
           <nav aria-label={screenCopy.reports.subReports} className="flex flex-wrap gap-2">
+            {result ? <ReportPrintButton /> : null}
+            {result ? (
+              <ReportCsvButton
+                rows={cards.map((card) => ({ label: card.label, figure: String(card.figure) }))}
+                context={{
+                  Branch: branch
+                    ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                    : 'All available branches',
+                  From: from,
+                  To: to,
+                  Supplier: supplier
+                    ? (suppliers?.find((item) => item.id === supplier)?.name ?? supplier)
+                    : 'All suppliers',
+                  'Ingredient ID': ingredient ?? 'All ingredients',
+                  'Batch ID': batch ?? 'All batches',
+                }}
+                filename={`pharmacy-report-${from}-to-${to}${
+                  supplier || ingredient || batch ? '-filtered' : ''
+                }.csv`}
+              />
+            ) : null}
             <Link
               href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
@@ -510,7 +537,7 @@ export default async function PharmacyReportsPage({
         title={screenCopy.reports.reportFilters}
         titleLevel={2}
       >
-        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
+        <form data-report-filters className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             {screenCopy.reports.branch}
             <select
@@ -590,6 +617,89 @@ export default async function PharmacyReportsPage({
           </Button>
         </form>
       </SectionCard>
+      {result ? (
+        <SectionCard
+          eyebrow={screenCopy.reports.ownerCommandCentre}
+          title={screenCopy.reports.selectedPeriodAtAGlance}
+          titleLevel={2}
+        >
+          <p className="mb-2 text-sm text-text-muted">
+            {formatShopPeriod(from, to)} ·{' '}
+            {branch
+              ? (branchResult.branches.find((item) => item.id === branch)?.name ??
+                copy.selectedBranch)
+              : copy.allBranches}
+          </p>
+          <p className="mb-4 text-sm text-text-muted">{copy.owner.currentStock}</p>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {cards.map(({ label, figure, flag, note, short }) => (
+              <Stat
+                key={label}
+                label={label}
+                value={figure}
+                className="min-w-0"
+                valueClassName={
+                  short
+                    ? 'break-words text-destructive'
+                    : flag
+                      ? 'break-words text-warning'
+                      : 'break-words'
+                }
+                data-flagged={flag ? 'true' : undefined}
+                sub={
+                  <span className="flex flex-col gap-1">
+                    {flag ? (
+                      <>
+                        <StatusPill status="Review" tone="warning" />
+                        <span className="text-warning">{flag.detail}</span>
+                      </>
+                    ) : null}
+                    {note ? <span>{note}</span> : null}
+                  </span>
+                }
+              />
+            ))}
+          </div>
+          <div className="mt-6">
+            <Stat
+              label={screenCopy.reports.organizationWideSafetyQueue}
+              value={metrics?.safetyQueue ?? '—'}
+              sub={screenCopy.reports.allBranchesLatestRecords}
+            />
+            <details className="text-sm text-text-muted">
+              <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
+                {copy.details}
+              </summary>
+              <p className="mt-2 text-sm text-text-muted">
+                {screenCopy.reports.theSelectedBranchDoesNotApplyToThis}
+              </p>
+            </details>
+          </div>
+          <details className="mt-4 text-sm text-text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
+              {copy.calculation}
+            </summary>
+            <p className="mb-4 text-sm text-text-muted">
+              {screenCopy.reports.reportPeriod}
+              {from}
+              {screenCopy.reports.to2}
+              {to}
+              {screenCopy.reports.inclusiveBusinessDatesBranchScope}{' '}
+              {branch
+                ? (branchResult.branches.find((item) => item.id === branch)?.name ??
+                  copy.selectedBranch)
+                : 'All available branches'}
+              .{' '}
+              {currency
+                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
+                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+              {screenCopy.reports.amountsUseThePharmacyMinorUnitScaleShown}
+              {workspaceZoneLabel(timeZone)}
+              {screenCopy.reports.financeAposSMarginComparisonStillSplitsDays}
+            </p>
+          </details>
+        </SectionCard>
+      ) : null}
       <MarketingSummary
         report={marketing}
         money={money}
@@ -691,87 +801,6 @@ export default async function PharmacyReportsPage({
               </Link>
             </SectionCard>
           ) : null}
-          <SectionCard
-            eyebrow={screenCopy.reports.ownerCommandCentre}
-            title={screenCopy.reports.selectedPeriodAtAGlance}
-            titleLevel={2}
-          >
-            <p className="mb-2 text-sm text-text-muted">
-              {formatShopPeriod(from, to)} ·{' '}
-              {branch
-                ? (branchResult.branches.find((item) => item.id === branch)?.name ??
-                  copy.selectedBranch)
-                : copy.allBranches}
-            </p>
-            <p className="mb-4 text-sm text-text-muted">{copy.owner.currentStock}</p>
-            <details className="mb-4 text-sm text-text-muted">
-              <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                {copy.calculation}
-              </summary>
-              <p className="mb-4 text-sm text-text-muted">
-                {screenCopy.reports.reportPeriod}
-                {from}
-                {screenCopy.reports.to2}
-                {to}
-                {screenCopy.reports.inclusiveBusinessDatesBranchScope}{' '}
-                {branch
-                  ? (branchResult.branches.find((item) => item.id === branch)?.name ??
-                    copy.selectedBranch)
-                  : 'All available branches'}
-                .{' '}
-                {currency
-                  ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                  : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-                {screenCopy.reports.amountsUseThePharmacyMinorUnitScaleShown}
-                {workspaceZoneLabel(timeZone)}
-                {screenCopy.reports.financeAposSMarginComparisonStillSplitsDays}
-              </p>
-            </details>
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(({ label, figure, flag, note, short }) => (
-                <Stat
-                  key={label}
-                  label={label}
-                  value={figure}
-                  className="min-w-0"
-                  valueClassName={
-                    short
-                      ? 'break-words text-destructive'
-                      : flag
-                        ? 'break-words text-warning'
-                        : 'break-words'
-                  }
-                  data-flagged={flag ? 'true' : undefined}
-                  sub={
-                    <span className="flex flex-col gap-1">
-                      {flag ? (
-                        <>
-                          <StatusPill status="Review" tone="warning" />
-                          <span className="text-warning">{flag.detail}</span>
-                        </>
-                      ) : null}
-                      {note ? <span>{note}</span> : null}
-                    </span>
-                  }
-                />
-              ))}
-            </div>
-            <div className="mt-6">
-              <Stat
-                label={screenCopy.reports.organizationWideSafetyQueue}
-                value={metrics?.safetyQueue ?? '—'}
-                sub={screenCopy.reports.allBranchesLatestRecords}
-              />
-              <details className="text-sm text-text-muted">
-                <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
-                  {copy.details}
-                </summary>
-                <p className="mt-2 text-sm text-text-muted">
-                  {screenCopy.reports.theSelectedBranchDoesNotApplyToThis}
-                </p>
-              </details>
-            </div>
-          </SectionCard>
           {expiryAdvice ? (
             <SectionCard
               eyebrow={screenCopy.reports.advisoryOnly}
