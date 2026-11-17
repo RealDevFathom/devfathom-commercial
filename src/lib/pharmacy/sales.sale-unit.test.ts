@@ -42,6 +42,7 @@ const hierarchy = [
 
 function saleDb(options: { receivedUnitsPerPack?: number[] } = {}) {
   return {
+    $queryRaw: vi.fn(async () => []),
     pharmacySale: {
       findFirst: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN', lines: [] })),
       updateMany: vi.fn(async () => ({ count: 1 })),
@@ -89,6 +90,7 @@ function saleDb(options: { receivedUnitsPerPack?: number[] } = {}) {
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'line-a',
         ...data,
@@ -278,4 +280,73 @@ describe('offline replay checks the sale unit at the signed sale time (DEV-830)'
     ).rejects.toThrow(new PharmacySaleError('INVALID_SALE_UNIT'));
     expectNoSideEffects(db);
   });
+});
+
+describe('DEV-705 legacy strip server conversion', () => {
+  function legacyDb() {
+    const db = saleDb();
+    db.packLevel.findMany.mockResolvedValue([
+      {
+        ...hierarchy[0],
+        unitsPerParent: 100,
+        presentation: { presentation: '10x10', dosageForm: 'Tablet' },
+      },
+    ] as never);
+    return db;
+  }
+  it('posts a legacy strip and three loose tablets at their exact stock and price', async () => {
+    const db = legacyDb();
+    await addSaleLine(db as never, scope, {
+      ...line,
+      saleUnit: 'STRIP',
+      canonicalUnitsPerSaleUnit: 10,
+    });
+    await addSaleLine(db as never, scope, {
+      ...line,
+      saleUnit: 'UNIT',
+      canonicalUnitsPerSaleUnit: 1,
+      quantity: 3,
+      idempotencyKey: 'loose',
+    });
+    expect(vi.mocked(allocateForSale).mock.calls.map((call) => call[2].requiredUnits)).toEqual([
+      10, 3,
+    ]);
+    expect(
+      db.pharmacySaleLine.create.mock.calls.map(([{ data }]) => [
+        data.canonicalUnits,
+        data.grossMinor,
+      ])
+    ).toEqual([
+      [10, 1000],
+      [3, 300],
+    ]);
+  });
+  it('refuses a strip on a box that is not counted in tablets or capsules', async () => {
+    const db = saleDb();
+    db.packLevel.findMany.mockResolvedValue([
+      {
+        ...hierarchy[0],
+        unitsPerParent: 100,
+        presentation: { presentation: '10x10', dosageForm: 'Injection' },
+      },
+    ] as never);
+    await expect(
+      addSaleLine(db as never, scope, { ...line, saleUnit: 'STRIP', canonicalUnitsPerSaleUnit: 10 })
+    ).rejects.toThrow(new PharmacySaleError('INVALID_SALE_UNIT'));
+    expectNoSideEffects(db);
+  });
+  it.each([1, 5, 20, 99])(
+    'refuses forged legacy strip multiplier %s before allocation',
+    async (multiplier) => {
+      const db = legacyDb();
+      await expect(
+        addSaleLine(db as never, scope, {
+          ...line,
+          saleUnit: 'STRIP',
+          canonicalUnitsPerSaleUnit: multiplier,
+        })
+      ).rejects.toThrow(new PharmacySaleError('INVALID_SALE_UNIT'));
+      expectNoSideEffects(db);
+    }
+  );
 });

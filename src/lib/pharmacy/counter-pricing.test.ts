@@ -7,8 +7,10 @@ import {
   looseSaleUnitOption,
   lotSaleUnitOptions,
   packLevelCanonicalUnits,
+  preferredSaleUnitOption,
   previewSaleLine,
   resolveCounterSaleUnits,
+  saleUnitLabel,
   saleUnitOptions,
   type PackLevelNode,
   type SaleUnitKind,
@@ -805,5 +807,96 @@ describe('packLevelCanonicalUnits (DEV-830 server-derived multiplier)', () => {
       for (const option of saleUnits)
         expect(derive(packLevels)(option.packLevelId)).toContain(option.canonicalUnitsPerSaleUnit);
     }
+  });
+});
+
+describe('DEV-705 legacy box sale units', () => {
+  const input = {
+    packLevels: [{ id: 'legacy-box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 100 }],
+    lotPackLevelId: 'legacy-box',
+    lotPackLevelLabel: 'BOX',
+    lotUnitsPerPack: 100,
+    dosageForm: 'Tablet',
+    presentation: '10x10',
+    at: new Date('2026-01-01'),
+  };
+  it('offers a priced strip and loose tablet without changing a legacy receiving pack', () => {
+    const { saleUnits } = resolveCounterSaleUnits(input);
+    expect(saleUnits.map((unit) => [unit.kind, unit.canonicalUnitsPerSaleUnit])).toEqual([
+      ['PACK', 100],
+      ['STRIP', 10],
+      ['UNIT', 1],
+    ]);
+    expect(
+      saleUnits.map(
+        (option) =>
+          previewSaleLine({
+            option,
+            quantity: 1,
+            printedMrpMinor: 25000,
+            unitsPerPack: 100,
+            availableUnits: 113,
+          }).unitPriceMinor
+      )
+    ).toEqual([25000, 2500, 250]);
+    expect(input.packLevels[0]!.unitsPerParent).toBe(100);
+  });
+  it.each(['100 tablets', '5x2x10', '1x10x10', '10x10 ml vials', 'Carton 10x10', '2x10'])(
+    'does not invent a strip for %s',
+    (presentation) => {
+      expect(
+        resolveCounterSaleUnits({ ...input, presentation }).saleUnits.map((u) => u.kind)
+      ).toEqual(['PACK', 'UNIT']);
+    }
+  );
+  it('does not infer strips for non-tablet containers or incompatible FEFO lots', () => {
+    expect(
+      resolveCounterSaleUnits({ ...input, dosageForm: 'Injection' }).saleUnits.map((u) => u.kind)
+    ).toEqual(['PACK', 'UNIT']);
+    expect(
+      resolveCounterSaleUnits({ ...input, otherLotUnitsPerPack: [15] }).saleUnits.some(
+        (u) => u.kind === 'STRIP'
+      )
+    ).toBe(false);
+  });
+});
+
+describe('DEV-705 manual default sale unit', () => {
+  const pack = {
+    kind: 'PACK',
+    packLevelId: 'box',
+    levelLabel: 'BOX',
+    canonicalUnitsPerSaleUnit: 100,
+  } as const;
+  const strip = {
+    kind: 'STRIP',
+    packLevelId: 'box',
+    levelLabel: 'STRIP',
+    canonicalUnitsPerSaleUnit: 10,
+  } as const;
+  const unit = {
+    kind: 'UNIT',
+    packLevelId: 'box',
+    levelLabel: 'UNIT',
+    canonicalUnitsPerSaleUnit: 1,
+  } as const;
+  it('starts tablets and capsules on one loose unit', () => {
+    expect(preferredSaleUnitOption([pack, strip, unit], 'Tablet')).toBe(unit);
+    expect(preferredSaleUnitOption([pack, strip, unit], 'Capsule')).toBe(unit);
+  });
+  it('falls back to the strip, then the largest unit, when no loose tablet is sellable', () => {
+    expect(preferredSaleUnitOption([pack, strip], 'Tablet')).toBe(strip);
+    expect(preferredSaleUnitOption([pack], 'Tablet')).toBe(pack);
+  });
+  it('keeps the largest unit for other dosage forms', () => {
+    expect(preferredSaleUnitOption([pack, unit], 'Syrup')).toBe(pack);
+    expect(preferredSaleUnitOption([], 'Tablet')).toBeNull();
+  });
+  it('labels units in shop words', () => {
+    expect([pack, strip, unit].map((option) => saleUnitLabel(option, 'Tablet'))).toEqual([
+      'Box of 100',
+      'Strip of 10',
+      'Tablet',
+    ]);
   });
 });

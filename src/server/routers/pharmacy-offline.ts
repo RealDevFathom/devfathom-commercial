@@ -42,6 +42,7 @@ import {
   validateLeasedReceiptReplay,
   createSale,
   addSaleLine,
+  lockSaleLineKey,
   assertSaleUnitConversion,
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
@@ -368,6 +369,10 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
+  // addSaleLine re-enters these request locks after the command's stock locks.
+  // Hold every line key up front so a concurrent online retry cannot invert that order.
+  for (let index = 0; index < command.lines.length; index += 1)
+    await lockSaleLineKey(db, scope, `${command.idempotencyKey}:${index}`);
   const sale = await createSale(db, scope);
   // DEV-825: one transaction adds every line and then tenders, so take the stock
   // locks for all of them up front in the global order (stock-lock-order.ts):
