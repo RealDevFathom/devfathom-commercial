@@ -27,13 +27,13 @@ trigger engine, advice reader, or advice actions. This change adds that missing 
 
 ## Review follow-up
 
-- Decisions stay append-only, but the tenant purge (`app.purging_organization_id`) can delete them.
+- Decisions stay append-only, but the platform purge (`app.purging_organization_id` inside an `app.is_platform_admin` transaction) can delete them; a tenant transaction cannot.
   Covered by `tests/pharmacy-lost-demand-advice-migration.test.ts` and `lost-demand-advice.db.test.ts`.
 - Advice drafts lock the branch row `FOR NO KEY UPDATE`, so counter sales are never blocked.
 - Forecast demand is summed in the database (`groupBy`), not loaded line by line.
 - Distributor terms come from this branch's own orders. Open DRAFT orders and transfers already in
   motion count as on order. A donor's undispatched requests are not offered again, and each donor keeps
-  its own configured cover.
+  its own configured cover and its own forecast window.
 - Transfer need is rounded like the order quantity. A transfer request must be fully covered by
   eligible stock. The solo PIN path accepts only the approver's own allocation.
 - Alternate margins are net of the recorded line discount.

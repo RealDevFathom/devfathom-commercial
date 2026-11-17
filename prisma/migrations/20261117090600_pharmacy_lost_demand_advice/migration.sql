@@ -66,12 +66,17 @@ CREATE INDEX IF NOT EXISTS "pharmacy_lost_demand_advice_decisions_key_idx"
 
 -- Append-only, except when the row's own tenant is destroyed: the retention
 -- worker's purge (transaction-local "app.purging_organization_id" naming this
--- tenant) or the organization row already being gone. UPDATE is always refused.
+-- tenant, inside the platform control plane's "app.is_platform_admin" = 'true'
+-- transaction, as 20261021104500_purge_guards_require_platform_admin requires of
+-- every purge guard) or the organization row already being gone. A tenant
+-- transaction that names its own organization deletes nothing. UPDATE is always
+-- refused.
 CREATE OR REPLACE FUNCTION pharmacy_lost_demand_decisions_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId" THEN
+    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
+       AND current_setting('app.is_platform_admin', true) = 'true' THEN
       RETURN OLD;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN

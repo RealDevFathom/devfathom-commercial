@@ -176,16 +176,28 @@ describeIfDatabase('lost-demand advice tables (DEV-80)', () => {
     });
   });
 
-  it('lets the purge of its own tenant remove decisions', async () => {
-    const removed = await inOrg(
+  const purgeDecisions = (extra: Record<string, string>) =>
+    inOrg(
       orgA,
       (dbx) =>
         dbx.$executeRawUnsafe(
           'DELETE FROM "pharmacy_lost_demand_advice_decisions" WHERE "organizationId" = $1',
           orgA
         ),
-      { 'app.purging_organization_id': orgA }
+      extra
     );
+
+  it('refuses a tenant transaction that names its own organization as purged', async () => {
+    await expect(purgeDecisions({ 'app.purging_organization_id': orgA })).rejects.toThrow(
+      /append-only/
+    );
+  });
+
+  it('lets the platform purge of its own tenant remove decisions', async () => {
+    const removed = await purgeDecisions({
+      'app.purging_organization_id': orgA,
+      'app.is_platform_admin': 'true',
+    });
     expect(removed).toBe(1);
   });
 });

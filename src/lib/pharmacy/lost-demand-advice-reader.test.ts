@@ -311,4 +311,25 @@ describe('readLostDemandAdvice', () => {
     )!;
     expect(onOrderRead[0].where.purchaseOrder.status.in).toContain('DRAFT');
   });
+
+  it('measures each donor demand over the donor own forecast window', async () => {
+    db.pharmacyLostDemandTriggerSetting!.findMany!.mockResolvedValue([
+      { branchId: 'b2', forecastWindowDays: 7 },
+    ]);
+    db.pharmacySaleLine!.groupBy!.mockImplementation(
+      async ({ where }: { where: { branchId: { in: string[] }; createdAt: { gte: Date } } }) =>
+        where.branchId.in.includes('b2')
+          ? // South sold 70 in its own last 7 days: 10 a day, not 30 over 30 days.
+            where.createdAt.gte.getTime() === ago(7).getTime()
+            ? [{ branchId: 'b2', _sum: { canonicalUnits: 70 } }]
+            : [{ branchId: 'b2', _sum: { canonicalUnits: 30 } }]
+          : [{ branchId: 'b1', _sum: { canonicalUnits: 300 } }]
+    );
+    const { advice } = await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    const salt = advice.find((row) => row.demandKey === `salt:${saltStrengthKey(PARACETAMOL)}`)!;
+    // 300 sellable, keeping 10 days at South's own 10 a day.
+    expect(salt.transfer).toMatchObject({ fromBranchId: 'b2', surplusUnits: 200 });
+    // The receiving branch still uses its own 30-day window.
+    expect(salt.dailyDemandUnits).toBe(10);
+  });
 });

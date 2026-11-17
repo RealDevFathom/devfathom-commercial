@@ -93,30 +93,36 @@ async function availableUnits(
   return totals;
 }
 
+/**
+ * Daily demand per branch, each over that branch's own forecast window. Summed in
+ * the database: one query per distinct window, one row per branch.
+ */
 async function dailyDemand(
   db: ScopedDb,
   organizationId: string,
   medicineId: string,
-  branchIds: readonly string[],
-  since: Date,
-  windowDays: number,
+  windowByBranch: ReadonlyMap<string, number>,
   now: Date
 ) {
-  // Summed in the database: one row per branch, however long the window.
-  const sums = await db.pharmacySaleLine.groupBy({
-    by: ['branchId'],
-    where: {
-      organizationId,
-      branchId: { in: [...branchIds] },
-      medicineId,
-      createdAt: { gte: since, lte: now },
-      sale: { status: 'COMPLETED' },
-    },
-    _sum: { canonicalUnits: true },
-  });
-  const totals = new Map<string, number>(branchIds.map((id) => [id, 0]));
-  for (const row of sums) totals.set(row.branchId, row._sum.canonicalUnits ?? 0);
-  return new Map([...totals].map(([id, units]) => [id, units / windowDays]));
+  const branchesByWindow = new Map<number, string[]>();
+  for (const [branchId, days] of windowByBranch)
+    branchesByWindow.set(days, [...(branchesByWindow.get(days) ?? []), branchId]);
+  const rates = new Map<string, number>([...windowByBranch.keys()].map((id) => [id, 0]));
+  for (const [days, branchIds] of branchesByWindow) {
+    const sums = await db.pharmacySaleLine.groupBy({
+      by: ['branchId'],
+      where: {
+        organizationId,
+        branchId: { in: branchIds },
+        medicineId,
+        createdAt: { gte: new Date(now.getTime() - days * DAY_MS), lte: now },
+        sale: { status: 'COMPLETED' },
+      },
+      _sum: { canonicalUnits: true },
+    });
+    for (const row of sums) rates.set(row.branchId, (row._sum.canonicalUnits ?? 0) / days);
+  }
+  return rates;
 }
 
 /**
@@ -451,7 +457,6 @@ export async function readLostDemandAdvice(
     },
     select: { id: true, name: true },
   });
-  const forecastSince = new Date(now.getTime() - config.forecastWindowDays * DAY_MS);
   // Each donor keeps the reserve its own branch settings call for.
   const donorSettings = donorBranches.length
     ? await db.pharmacyLostDemandTriggerSetting.findMany({
@@ -461,14 +466,28 @@ export async function readLostDemandAdvice(
         },
       })
     : [];
-  const donorCoverage = new Map(
+  // Each donor's reserve uses its own settings throughout: its own cover days and
+  // its own forecast window for the demand rate that cover multiplies.
+  const donorPlanning = new Map(
     donorBranches.map((branch) => {
       const own = resolveLostDemandTriggerConfig(
         donorSettings.find((row) => row.branchId === branch.id)
       );
-      return [branch.id, own.defaultLeadTimeDays + own.safetyStockDays];
+      return [
+        branch.id,
+        {
+          coverageDays: own.defaultLeadTimeDays + own.safetyStockDays,
+          forecastWindowDays: own.forecastWindowDays,
+        },
+      ];
     })
   );
+  const forecastWindowByBranch = new Map<string, number>([
+    [scope.branchId, config.forecastWindowDays],
+    ...donorBranches.map(
+      (branch) => [branch.id, donorPlanning.get(branch.id)!.forecastWindowDays] as const
+    ),
+  ]);
 
   const advice: LostDemandAdvice[] = [];
   for (const trigger of triggers) {
@@ -499,15 +518,7 @@ export async function readLostDemandAdvice(
     const branchIds = [scope.branchId, ...donorBranches.map((branch) => branch.id)];
     const [stock, demand, inbound, distributors, alternates, transfers] = await Promise.all([
       availableUnits(db, scope.organizationId, primary.id, branchIds, now),
-      dailyDemand(
-        db,
-        scope.organizationId,
-        primary.id,
-        branchIds,
-        forecastSince,
-        config.forecastWindowDays,
-        now
-      ),
+      dailyDemand(db, scope.organizationId, primary.id, forecastWindowByBranch, now),
       onOrderUnits(db, scope, primary.id),
       distributorFacts(db, scope, primary.id),
       alternateFacts(db, scope, primary, now),
@@ -526,7 +537,7 @@ export async function readLostDemandAdvice(
         (stock.get(branch.id) ?? 0) - (transfers.committedByDonor.get(branch.id) ?? 0)
       ),
       dailyDemandUnits: demand.get(branch.id) ?? 0,
-      coverageDays: donorCoverage.get(branch.id),
+      coverageDays: donorPlanning.get(branch.id)?.coverageDays,
     }));
     advice.push(
       buildLostDemandAdvice({

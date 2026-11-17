@@ -29,8 +29,11 @@ describe('DEV-80 lost-demand advice migration contract', () => {
       /BEFORE UPDATE OR DELETE ON "pharmacy_lost_demand_advice_decisions"\s+FOR EACH ROW EXECUTE FUNCTION pharmacy_lost_demand_decisions_append_only\(\);/
     );
     // A delete passes only for the tenant the purge names, or once the tenant is gone.
+    // ...and only inside the platform control plane's purge transaction, never a
+    // tenant transaction that names its own organization.
     expect(migration).toContain(
-      `IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId" THEN`
+      `IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
+       AND current_setting('app.is_platform_admin', true) = 'true' THEN`
     );
     expect(migration).toContain(
       `IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN`
