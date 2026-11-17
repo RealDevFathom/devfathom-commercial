@@ -75,6 +75,10 @@ describe('jurisdiction editor', () => {
       'datetime',
       '2026-01-01T00:00:00.000Z'
     );
+    expect(
+      screen.getByText(/until a successor is published \(current version\)/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/superseded/)).not.toBeInTheDocument();
   });
   it('starts a separate draft with every field provisional, preserving published values', () => {
     draft();

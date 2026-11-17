@@ -26,7 +26,7 @@ const help: Record<(typeof RULE_FIELDS)[number], string> = {
   prescriptionRetentionDays:
     'values: a positive whole number of days or an object mapping class names to days (maximum 36525).',
   controlledRegisterFlags:
-    'values: an object with optional recordEverySale (boolean) and emergencySupply: { maxUnits, repeatWindowHours, source: "JURISDICTION_RULE_SET" }.',
+    'values: an object with optional recordEverySale (boolean) and emergencySupply: { maxUnits, repeatWindowHours, source: "JURISDICTION_RULE_SET" }. Only emergencySupply changes counter behaviour today; recordEverySale is stored for reference and is not enforced.',
   pharmacistCoverageRule:
     'values: an object with optional dispenseGrantRequired (boolean) and presenceHours: { timeZone, windows: [{ days: [0–6], start: "HH:MM", end: "HH:MM" }] }. An end of "24:00" covers up to midnight; split an overnight shift into two windows, for example 20:00–24:00 and 00:00–08:00.',
   recordRetentionByClass:
@@ -118,7 +118,7 @@ export function JurisdictionRuleSets({ ruleSets }: { ruleSets: JurisdictionRuleS
                   {effectiveDate.format(ruleSet.effectiveTo)} UTC
                 </time>
               ) : (
-                'superseded'
+                'a successor is published (current version)'
               )}
               {ruleSet.isPlaceholder ? ' · Emergency placeholder (read only)' : ''}
             </p>
