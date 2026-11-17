@@ -611,7 +611,14 @@ export async function applyPharmacyTender(
   if (settled) {
     // F2: a leased offline receipt number was consumed above in this transaction; online
     // sales (receiptNumber still null) draw the next number from the device sequence.
-    receiptNumber = await completePaidPharmacySale(db, scope, sale, input, receiptNumber, providerPostingAt);
+    receiptNumber = await completePaidPharmacySale(
+      db,
+      scope,
+      sale,
+      input,
+      receiptNumber,
+      providerPostingAt
+    );
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
   await requestCounterEvidence(db, scope, { kind: 'TENDER', subjectId: tender.id });

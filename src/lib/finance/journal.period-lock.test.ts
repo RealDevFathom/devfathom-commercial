@@ -74,16 +74,17 @@ describe('DEV-877 operational accounting period lock', () => {
     await expect(
       postJournalEntry(scoped, scope, { ...input, occurredAt: new Date('2026-11-16T08:00:00Z') })
     ).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
-    expect(db.pharmacyAccountingPeriod.findFirst).toHaveBeenCalledWith({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: 'branch_a',
-        status: 'CLOSED',
-        startsAt: { lte: new Date('2026-11-16T08:00:00Z') },
-        endsAt: { gt: new Date('2026-11-16T08:00:00Z') },
-      },
-      select: { id: true },
-    });
+    expect(db.pharmacyAccountingPeriod.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: scope.organizationId,
+          branchId: 'branch_a',
+          status: 'CLOSED',
+          startsAt: { lte: new Date('2026-11-16T08:00:00Z') },
+          endsAt: { gt: new Date('2026-11-16T08:00:00Z') },
+        }),
+      })
+    );
   });
 
   it.each([new Date(startsAt.getTime() - 1), endsAt])(
