@@ -57,7 +57,8 @@ export function CounterDrawerOperator({
             <>You run this cash drawer.</>
           ) : (
             <>
-              <span className="font-semibold text-text-strong">{runBy}</span> runs this cash drawer.{' '}
+              <span className="font-semibold text-text-strong">{runBy}</span> runs this cash
+              drawer.{' '}
               {canHandOver
                 ? 'As a manager or owner you can still take cash, or hand the till over.'
                 : 'Ask a manager or owner to hand it over to you before you take cash.'}
