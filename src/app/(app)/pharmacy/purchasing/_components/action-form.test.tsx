@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { PurchasingActionForm } from './action-form';
+import { TextField } from './form-controls';
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -275,4 +276,91 @@ it('keeps confirmed writes locked when requesting the refresh throws', async () 
   expect(action).toHaveBeenCalledOnce();
   expect(router.refresh).toHaveBeenCalledOnce();
   expect(replace).not.toHaveBeenCalled();
+});
+
+describe('required-field validation (DEV-520)', () => {
+  it('explains an empty required field inline, blocks the write and clears on correction', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue('/pharmacy/purchasing/suppliers?kind=success&outcome=committed');
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Trading name" name="name" notice={null} required hint="Team name." />
+        <button type="submit">Add supplier</button>
+      </PurchasingActionForm>
+    );
+    const field = screen.getByLabelText('Trading name');
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    expect(action).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(/Trading name is required\./);
+    expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
+    expect(field).toHaveFocus();
+    fireEvent.change(field, { target: { value: 'Acme Distributors' } });
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    expect(action).toHaveBeenCalledOnce();
+    expect(action.mock.calls[0][0].get('name')).toBe('Acme Distributors');
+  });
+
+  it('shows a new required-field error ahead of a retained server rejection', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue(
+        '/pharmacy/purchasing/orders?kind=error&outcome=rejected&notice=Duplicate+reference&field=other'
+      );
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Reference" name="reference" notice={null} required />
+        <TextField label="Other" name="other" notice={null} />
+        <button type="submit">Save</button>
+      </PurchasingActionForm>
+    );
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: 'PO-1' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Duplicate reference');
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: '' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Reference is required.');
+    expect(screen.getByLabelText('Reference')).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('keeps the required-field error while an unrelated field is edited', async () => {
+    const action = vi.fn();
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Trading name" name="name" notice={null} required />
+        <TextField label="Contact name" name="contactName" notice={null} />
+        <button type="submit">Add supplier</button>
+      </PurchasingActionForm>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    fireEvent.change(screen.getByLabelText('Contact name'), { target: { value: 'Ali' } });
+    expect(screen.getByLabelText('Trading name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
+  });
 });

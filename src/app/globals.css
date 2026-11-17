@@ -1759,3 +1759,60 @@
     outline-color: Highlight;
   }
 }
+
+/* Reports print in document flow: the screen canvas is viewport-sized and scrollable.
+   Scope this to the report page so receipt/medication-card print layouts stay independent. */
+@media print {
+  body:has([data-report-print])
+    :is(.studio-viewport, .studio-shell, .studio-canvas, .studio-stage) {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    transform: none !important;
+    opacity: 1 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body:has([data-report-print]) .studio-viewport > :not(.studio-shell),
+  body:has([data-report-print]) .studio-shell > :not(.studio-canvas),
+  [data-report-print] :is(form:not([data-report-filters]), button, nav) {
+    display: none !important;
+  }
+
+  [data-report-print],
+  [data-report-print] * {
+    color-scheme: light !important;
+    color: CanvasText !important;
+    background-color: Canvas !important;
+    box-shadow: none !important;
+  }
+
+  [data-report-print] :is(section, [data-slot='section-card'], .overflow-x-auto) {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  [data-report-print] table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed;
+  }
+
+  [data-report-print] :is(th, td) {
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  [data-report-print] :is(h1, h2, h3) {
+    break-after: avoid;
+  }
+  [data-report-print] [data-slot='stat'] {
+    break-inside: avoid;
+  }
+}

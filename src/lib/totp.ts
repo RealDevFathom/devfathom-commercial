@@ -62,6 +62,33 @@ function hotp(secret: Buffer, counter: number): string {
 }
 
 /**
+ * The time step a 6-digit TOTP matches, allowing ±`window` steps of clock skew
+ * (default ±1 step = ±30s), or null when it matches none. Every candidate step is
+ * compared in constant time. Callers that must make a code single use record the
+ * returned step and refuse any step at or below it.
+ */
+export function matchTotpStep(
+  secretB32: string,
+  token: string,
+  window = 1,
+  nowMs = Date.now()
+): number | null {
+  const t = (token ?? '').replace(/\s+/g, '');
+  if (!/^\d{6}$/.test(t)) return null;
+  const secret = base32Decode(secretB32);
+  if (secret.length === 0) return null;
+  const counter = Math.floor(nowMs / 1000 / PERIOD_SECONDS);
+  const candidate = Buffer.from(t);
+  let matched: number | null = null;
+  for (let w = -window; w <= window; w++) {
+    const expected = Buffer.from(hotp(secret, counter + w));
+    if (expected.length === candidate.length && timingSafeEqual(expected, candidate))
+      matched ??= counter + w;
+  }
+  return matched;
+}
+
+/**
  * Verify a 6-digit TOTP against a base32 secret, allowing ±`window` steps of
  * clock skew (default ±1 step = ±30s). Constant-time digit comparison.
  */
@@ -71,17 +98,7 @@ export function verifyTotp(
   window = 1,
   nowMs = Date.now()
 ): boolean {
-  const t = (token ?? '').replace(/\s+/g, '');
-  if (!/^\d{6}$/.test(t)) return false;
-  const secret = base32Decode(secretB32);
-  if (secret.length === 0) return false;
-  const counter = Math.floor(nowMs / 1000 / PERIOD_SECONDS);
-  const candidate = Buffer.from(t);
-  for (let w = -window; w <= window; w++) {
-    const expected = Buffer.from(hotp(secret, counter + w));
-    if (expected.length === candidate.length && timingSafeEqual(expected, candidate)) return true;
-  }
-  return false;
+  return matchTotpStep(secretB32, token, window, nowMs) !== null;
 }
 
 /** otpauth:// URI for QR/manual entry into an authenticator app. */

@@ -31,6 +31,18 @@ const mocks = vi.hoisted(() => {
     withTenantDb,
   };
 });
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
@@ -1709,6 +1721,12 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
       }),
   },
   {
+    name: 'allocateRequestedTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateRequestedTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
+  },
+  {
     name: 'approveTransfer',
     capability: 'pharmacy:inventory',
     invoke: () => caller().approveTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
@@ -2474,7 +2492,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(41);
+    expect(ASSIGNMENT_GATED).toHaveLength(42);
   });
 });
 

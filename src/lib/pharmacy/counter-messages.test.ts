@@ -10,8 +10,11 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterSaleErrorMessage,
   RX_SALE_COMPLETING_ROLE_NAMES,
 } from './counter-messages';
+import { CounterApprovalDenied } from './counter-line-approval';
+import { PharmacyRxReferenceError } from './rx-prescription-reference';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS } from '@/lib/vertical-catalog';
 import { PharmacyLoyaltyError } from './customer-loyalty';
@@ -95,6 +98,8 @@ describe('counterErrorMessage', () => {
       // DEV-821: a till the user does not run, and a cashier not on the branch.
       'DRAWER_NOT_YOURS',
       'CASHIER_NOT_ASSIGNED',
+      // DEV-712: a payment whose attempt a supervisor discarded.
+      'TENDER_ATTEMPT_DISCARDED',
     ] as const;
 
     for (const reason of settlementReasons) {
@@ -248,5 +253,51 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
     // The payment is still refused on the server; the batch needs replacing.
     expect(counterErrorTone(new Error('SALE_BATCH_RECALLED'))).toBe('warning');
     expect(counterErrorTone(new Error('REFUND_EXCEEDS_TENDER'))).toBe('warning');
+  });
+});
+
+describe('DEV-860: sale admission messages', () => {
+  const refused = (code: string, message: string) =>
+    Object.assign(new Error(message), { data: { code } });
+
+  it('keeps the words of a deliberate add-line refusal', () => {
+    const fefo = new CounterApprovalDenied('FEFO_OVERRIDE').message;
+    expect(counterSaleErrorMessage(refused('FORBIDDEN', fefo))).toBe(fefo);
+    const rx = new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE').message;
+    expect(counterSaleErrorMessage(refused('BAD_REQUEST', rx))).toBe(rx);
+    const pharmacist = new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST').message;
+    expect(counterSaleErrorMessage(refused('FORBIDDEN', pharmacist))).toBe(pharmacist);
+  });
+
+  it('maps a known reason code and a declared setup reason to their copy', () => {
+    expect(counterSaleErrorMessage(refused('BAD_REQUEST', 'DRAWER_NOT_OPEN'))).toBe(
+      COUNTER_ERROR_MESSAGES.DRAWER_NOT_OPEN
+    );
+    const unassigned = Object.assign(new Error('Branch is outside your scope.'), {
+      data: { code: 'FORBIDDEN', reason: 'BRANCH_NOT_ASSIGNED' },
+    });
+    expect(counterSaleErrorMessage(unassigned)).toBe(COUNTER_ERROR_MESSAGES.BRANCH_NOT_ASSIGNED);
+  });
+
+  it('keeps unknown failures generic', () => {
+    // An internal failure's text (outside production the server passes it through).
+    expect(counterSaleErrorMessage(refused('INTERNAL_SERVER_ERROR', 'org-2 row x failed'))).toBe(
+      COUNTER_UNKNOWN_ERROR_MESSAGE
+    );
+    // A network or client fault carries no tRPC code.
+    expect(counterSaleErrorMessage(new Error('Failed to fetch /api/trpc'))).toBe(
+      COUNTER_UNKNOWN_ERROR_MESSAGE
+    );
+    // An unmapped reason code and serialized validation output are never shown.
+    expect(counterSaleErrorMessage(refused('BAD_REQUEST', 'SOME_NEW_REASON'))).toBe(
+      COUNTER_UNKNOWN_ERROR_MESSAGE
+    );
+    expect(counterSaleErrorMessage(refused('BAD_REQUEST', '[{"path":["internal"]}]'))).toBe(
+      COUNTER_UNKNOWN_ERROR_MESSAGE
+    );
+    expect(counterSaleErrorMessage(refused('FORBIDDEN', '   '))).toBe(
+      COUNTER_UNKNOWN_ERROR_MESSAGE
+    );
+    expect(counterSaleErrorMessage(null)).toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
   });
 });

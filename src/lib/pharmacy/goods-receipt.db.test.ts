@@ -20,7 +20,7 @@
  * error aborts its whole transaction, so a case that provokes a trigger and
  * then reads back must do the read from a new one (`expectRejection`).
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,6 +48,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   receipts: typeof import('./goods-receipt');
   ledger: typeof import('./stock-ledger');
+  locks: typeof import('./stock-lock-order');
 };
 let deps: Deps;
 
@@ -114,7 +115,8 @@ async function fixture(
   organizationId: string,
   branchId: string,
   label: string,
-  organizationWide = false
+  organizationWide = false,
+  locationIds: { storeId?: string; quarantineId?: string } = {}
 ): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
@@ -141,6 +143,7 @@ async function fixture(
     const [store, quarantine] = await Promise.all([
       db.pharmacyStockLocation.create({
         data: {
+          id: locationIds.storeId,
           organizationId,
           branchId,
           code: `MAIN-${tag(label)}`,
@@ -150,6 +153,7 @@ async function fixture(
       }),
       db.pharmacyStockLocation.create({
         data: {
+          id: locationIds.quarantineId,
           organizationId,
           branchId,
           code: `QUAR-${tag(label)}`,
@@ -319,13 +323,14 @@ async function balancesFor(db: ScopedDb, organizationId: string, inventoryLotId:
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, receipts, ledger, roleGuard] = await Promise.all([
+  const [scopedDb, receipts, ledger, locks, roleGuard] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./goods-receipt'),
     import('./stock-ledger'),
+    import('./stock-lock-order'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
+  deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger, locks };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // Receipt posting creates finance journal entries whose visibility foreign
   // key requires the organization itself to exist before any tenant fixtures.
@@ -1158,6 +1163,127 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
+  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'controlled-reverse');
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const pin = String(randomInt(100_000, 1_000_000));
+    const credentialHash = await hashOperatorCredential('PIN', pin);
+    // Commit the people and credential before reversal: its fresh witness PIN
+    // is verified in an independent tenant transaction.
+    const { actor, witness, staff, receipt } = await inOrg(ORG_A, async (db) => {
+      const department = await db.organizationDepartment.create({
+        data: { organizationId: ORG_A, key: tag('controlled'), name: tag('Pharmacy') },
+      });
+      async function member(capability: string) {
+        const label = tag('pharmacist');
+        return db.user.create({
+          data: {
+            organizationId: ORG_A,
+            name: label,
+            email: `${label}@example.test`,
+            department: department.key,
+            title: 'Pharmacist',
+            permissionOverrides: {
+              create: {
+                organizationId: ORG_A,
+                capability,
+                effect: 'ALLOW',
+                reason: 'Test fixture',
+              },
+            },
+          },
+        });
+      }
+      const actor = await member('pharmacy:safety');
+      const witness = await member('pharmacy:dispense');
+      await db.pharmacyBranchAssignment.create({
+        data: { organizationId: ORG_A, branchId: BRANCH_A, userId: actor.id },
+      });
+      const staff = await db.restaurantStaffProfile.create({
+        data: {
+          organizationId: ORG_A,
+          userId: witness.id,
+          displayName: witness.name,
+          credentials: { create: { organizationId: ORG_A, type: 'PIN', credentialHash } },
+        },
+      });
+      await db.medicine.update({ where: { id: f.medicineId }, data: { controlled: true } });
+      const receipt = await draftReceipt(db, f, 'controlled-reverse', {
+        line: { receivedPacks: 10, bonusPacks: 2, rejectedCanonicalUnits: 30 },
+      });
+      await db.pharmacyGoodsReceipt.update({
+        where: { id: receipt.id },
+        data: { qualifiedPersonUserId: witness.id },
+      });
+      return { actor, witness, staff, receipt };
+    });
+    const scope = { ...scopeOf(f), actorId: actor.id };
+    const posted = await inOrg(ORG_A, (db) =>
+      deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: receipt.id,
+        at: RECEIVED_AT,
+        staffProfileId: staff.id,
+        pin,
+      })
+    );
+    const lotId = posted.lines[0]!.inventoryLotId;
+    async function snapshot() {
+      return inOrg(ORG_A, async (db) => ({
+        entries: await db.pharmacyControlledRegisterEntry.findMany({
+          where: { organizationId: ORG_A, branchId: BRANCH_A, inventoryLotId: lotId },
+          orderBy: { serial: 'asc' },
+        }),
+        balances: await balancesFor(db, ORG_A, lotId),
+        sellable: await db.pharmacyStockBalance.aggregate({
+          where: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            inventoryLotId: lotId,
+            disposition: 'AVAILABLE',
+          },
+          _sum: { onHandUnits: true },
+        }),
+      }));
+    }
+    const received = await snapshot();
+    expect(received.balances).toEqual({ AVAILABLE: 90, QUARANTINE: 30 });
+    expect(received.entries).toHaveLength(1);
+    expect(received.entries[0]).toMatchObject({
+      entryKind: 'PURCHASE',
+      stockMovementId: posted.lines[0]!.acceptedMovementId,
+      quantityCanonicalUnits: 90,
+      balanceDelta: 90,
+      runningBalance: 90,
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+    });
+    expect(received.entries[0]!.runningBalance).toBe(received.sellable._sum.onHandUnits);
+
+    const reversal = await inOrg(ORG_A, (db) =>
+      deps.receipts.reverseGoodsReceipt(db, scope, {
+        goodsReceiptId: receipt.id,
+        reason: 'Wrong controlled consignment; returned to supplier.',
+        at: RECEIVED_AT,
+        controlledWitness: { staffProfileId: staff.id, pin },
+      })
+    );
+    const reversed = await snapshot();
+    expect(reversed.balances).toEqual({ AVAILABLE: 0, QUARANTINE: 0 });
+    expect(reversed.entries).toHaveLength(2);
+    expect(reversed.entries[0]).toEqual(received.entries[0]);
+    expect(reversed.entries[1]).toMatchObject({
+      entryKind: 'CORRECTION',
+      correctsEntryId: received.entries[0]!.id,
+      quantityCanonicalUnits: 0,
+      balanceDelta: -90,
+      runningBalance: 0,
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+    });
+    expect(reversal.reversalMovementIds).toContain(reversed.entries[1]!.restorationMovementId);
+    expect(reversed.entries[1]!.runningBalance).toBe(reversed.sellable._sum.onHandUnits);
+  }, 30_000);
+
   it('adds a negating ADJUSTMENT per posting, linked to what it cancels', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reverse');
     const result = await inOrg(ORG_A, async (db) => {
@@ -1321,6 +1447,127 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     );
     expect(edited).toContain('reverse the receipt instead');
     expect(deleted).toContain('never hard-deleted');
+  });
+});
+
+// ── DEV-610 — reversal against a concurrent stock path ─────────────────────
+
+describeIfDatabase('DEV-610 — a receipt reversal never deadlocks a concurrent stock path', () => {
+  /** Wait until another backend is queued behind a lock that `holderPid` holds. */
+  async function waitUntilBlockedBy(holderPid: number) {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [row] = await inOrg(
+        ORG_A,
+        (db) => db.$queryRaw<{ waiting: number }[]>`
+          SELECT count(*)::int AS "waiting" FROM pg_stat_activity
+          WHERE ${holderPid}::int = ANY(pg_blocking_pids("pid"))`
+      );
+      if ((row?.waiting ?? 0) > 0) return;
+      if (Date.now() > deadline) throw new Error('the reversal never queued behind the held lock');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  it('locks its balances in the global order, so two concurrent transactions both commit', async () => {
+    // A line with rejected units posts two movements into one lot: accepted
+    // units at the store, rejected units at quarantine. The reversal writes
+    // them in idempotency-key order (accepted first), while the global lock
+    // order (stock-lock-order.ts) sorts balances by location id. Pinning the
+    // store's id above quarantine's makes the two orders disagree: a reversal
+    // that locked each balance as it wrote it would take the store balance,
+    // then queue for quarantine, while the other transaction holds quarantine
+    // and queues for the store — a deadlock Postgres breaks by aborting one.
+    const label = 'deadlock';
+    const f = await fixture(ORG_A, BRANCH_A, label, false, {
+      storeId: `loc_z_store_${suffix}`,
+      quarantineId: `loc_a_quarantine_${suffix}`,
+    });
+    const { receipt, lotId } = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, label, {
+        line: { receivedPacks: 10, bonusPacks: 0, rejectedCanonicalUnits: 30 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+      return { receipt: drafted, lotId: posted.lines[0]!.inventoryLotId };
+    });
+    const receiptMovements = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockMovement.findMany({
+        where: { organizationId: ORG_A, inventoryLotId: lotId, kind: 'RECEIPT' },
+        orderBy: { idempotencyKey: 'asc' },
+        select: { inventoryLotId: true, stockLocationId: true, disposition: true },
+      })
+    );
+
+    // Preconditions that keep this case able to fail: the reversal's write
+    // order is the opposite of the global lock order.
+    expect(receiptMovements.map((movement) => movement.stockLocationId)).toEqual([
+      f.storeId,
+      f.quarantineId,
+    ]);
+    const [low, high] = [...receiptMovements].sort(deps.locks.compareBalanceLockKeys);
+    expect([low!.stockLocationId, high!.stockLocationId]).toEqual([f.quarantineId, f.storeId]);
+
+    let releaseLow!: () => void;
+    const holdLow = new Promise<void>((resolve) => {
+      releaseLow = resolve;
+    });
+    let lowLocked!: (pid: number) => void;
+    let lowFailed!: (error: unknown) => void;
+    const hasLow = new Promise<number>((resolve, reject) => {
+      lowLocked = resolve;
+      lowFailed = reject;
+    });
+
+    // The concurrent stock path follows the global order through the shared
+    // lock module, as every path does: the low balance, then the high one.
+    const otherPath = inOrg(ORG_A, async (db) => {
+      const [backend] = await db.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS "pid"`;
+      await deps.locks.lockStockBalances(db, scopeOf(f), [low!]);
+      lowLocked(backend!.pid);
+      await holdLow;
+      await deps.locks.lockStockBalances(db, scopeOf(f), [high!]);
+      return 'committed';
+    });
+    // A failure before the low lock is held must fail the case, not hang it.
+    otherPath.catch(lowFailed);
+    const otherPid = await hasLow;
+
+    const reversal = inOrg(ORG_A, (db) =>
+      deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: receipt.id,
+        reason: 'Wrong consignment; returned to the distributor.',
+        at: RECEIVED_AT,
+      })
+    );
+
+    // Only once the reversal is queued behind the low balance does the other
+    // path ask for the high one: that is the interleaving that deadlocks when
+    // the reversal already holds the high balance.
+    let queued: unknown = null;
+    try {
+      await waitUntilBlockedBy(otherPid);
+    } catch (error) {
+      queued = error;
+    } finally {
+      releaseLow();
+    }
+    const outcomes = await Promise.allSettled([otherPath, reversal]);
+    expect(queued).toBeNull();
+    expect(
+      outcomes.map((outcome) =>
+        outcome.status === 'fulfilled' ? 'committed' : (outcome.reason as Error).message
+      )
+    ).toEqual(['committed', 'committed']);
+
+    const after = await inOrg(ORG_A, async (db) => ({
+      receipt: await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: receipt.id } }),
+      balances: await balancesFor(db, ORG_A, lotId),
+    }));
+    expect(after.receipt.status).toBe('REVERSED');
+    expect(after.balances).toEqual({ AVAILABLE: 0, QUARANTINE: 0 });
   });
 });
 

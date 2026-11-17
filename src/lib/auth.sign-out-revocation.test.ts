@@ -110,6 +110,13 @@ function issuedToken(tokenVersion: number): Token {
   };
 }
 
+/** The same token, revalidated just now: inside the 60 s window. */
+function recentToken(tokenVersion: number, extra: Token = {}): Token {
+  return { ...issuedToken(tokenVersion), lastValidatedAt: Date.now() - 2_000, ...extra };
+}
+
+const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
+
 /** Replays a copied cookie: Auth.js decodes it and runs the jwt() callback. */
 function replay(token: Token) {
   return config().callbacks.jwt({ token: { ...token } });
@@ -169,5 +176,85 @@ describe('sign-out session revocation (#1252)', () => {
     await config().events.signOut({ token: null });
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
     expect(row.tokenVersion).toBe(3);
+  });
+});
+
+describe('sign-out revocation inside the revalidation window (#1252)', () => {
+  it('rejects a copied token replayed 2 s after sign-out', async () => {
+    const copied = recentToken(3);
+    await config().events.signOut({ token: { ...copied } });
+
+    const result = await replay(copied);
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('REVOKED');
+  });
+
+  it('leaves a live token unchanged so its cookie is not re-issued', async () => {
+    const live = recentToken(3, { signedInAt: Date.now() - 60_000 });
+    const result = await replay(live);
+    expect(result).toEqual(live);
+  });
+
+  it('rejects a recent token whose user no longer exists', async () => {
+    const result = await replay({ ...recentToken(3), id: 'user_gone' });
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('DELETED');
+  });
+
+  it('fails closed when the revocation check cannot read the database', async () => {
+    mocks.withTenantDb.mockRejectedValueOnce(new Error('connection reset'));
+    const recent = recentToken(3);
+    const result = await replay(recent);
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('REVALIDATION_FAILED');
+    expect(result.lastValidatedAt).toBe(recent.lastValidatedAt);
+  });
+});
+
+describe('absolute session lifetime (#1252)', () => {
+  it('stamps the sign-in time on a new session', async () => {
+    const before = Date.now();
+    const token = await config().callbacks.jwt({
+      token: {},
+      user: { id: USER, organizationId: ORG, role: 'MEMBER', tokenVersion: 3 },
+    });
+    expect(token.signedInAt).toBeGreaterThanOrEqual(before);
+    expect(token.signedInAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('ends a session eight hours after sign-in however recently it was used', async () => {
+    const result = await replay(recentToken(3, { signedInAt: Date.now() - EIGHT_HOURS_MS - 1 }));
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('EXPIRED');
+  });
+
+  it('keeps an expired session ended through a later full revalidation', async () => {
+    const expired = await replay(issuedToken(3));
+    const result = await replay({
+      ...expired,
+      signedInAt: Date.now() - EIGHT_HOURS_MS - 1,
+      lastValidatedAt: Date.now() - 75_000,
+    });
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('EXPIRED');
+    expect(mocks.withTenantDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts the clock for a token issued before the sign-in time was recorded', async () => {
+    const legacy = issuedToken(3);
+    expect(legacy.signedInAt).toBeUndefined();
+    const before = Date.now();
+    const result = await replay(legacy);
+    expect(result.sessionRevoked).toBe(false);
+    expect(result.signedInAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it('dates a legacy token from its recorded password sign-in', async () => {
+    const result = await replay({
+      ...issuedToken(3),
+      passwordAuthenticatedAt: Date.now() - EIGHT_HOURS_MS - 1,
+    });
+    expect(result.sessionRevoked).toBe(true);
+    expect(result.sessionInvalidReason).toBe('EXPIRED');
   });
 });

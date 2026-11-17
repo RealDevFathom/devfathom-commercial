@@ -24,3 +24,26 @@ it('detects Urdu script and instructs an Urdu reply for every tool', async () =>
   expect(ur).toContain('finance, work-pack, marketing and insight');
   expect(assistantSystemPrompt({ vertical: 'PHARMACY' }, [])).not.toContain('Nastaliq');
 });
+
+it('defaults the reply language to the workspace locale, normalised, with an explicit-language escape', async () => {
+  const { resolveReplyLocale, normalizeStoredLocale } = await import('./prompt');
+  expect(normalizeStoredLocale('ur-PK')).toBe('ur');
+  expect(normalizeStoredLocale('UR')).toBe('ur');
+  expect(normalizeStoredLocale('en-PK')).toBe('en');
+  expect(normalizeStoredLocale(null)).toBe('en');
+  expect(resolveReplyLocale('Show invoices', 'ur-PK')).toEqual({
+    locale: 'ur',
+    workspaceDefault: true,
+  });
+  expect(resolveReplyLocale('اس مہینے کی فروخت', 'en')).toEqual({
+    locale: 'ur',
+    workspaceDefault: false,
+  });
+  expect(resolveReplyLocale('Show invoices', 'en')).toEqual({
+    locale: 'en',
+    workspaceDefault: false,
+  });
+  const prompt = assistantSystemPrompt({ vertical: 'PHARMACY' }, [], 'ur', true);
+  expect(prompt).toContain('workspace’s language is Urdu');
+  expect(prompt).toContain('explicitly asks for another language');
+});

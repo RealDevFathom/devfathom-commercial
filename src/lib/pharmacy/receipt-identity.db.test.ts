@@ -186,6 +186,7 @@ async function fixture() {
         deviceId: randomUUID(),
         businessDate,
         type: 'BANK_TRANSFER' as const,
+        providerRef: 'BANK-001',
         amountMinor: 950,
         idempotencyKey: randomUUID(),
       },

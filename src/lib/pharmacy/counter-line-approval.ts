@@ -11,12 +11,13 @@ import {
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
 
 export type CounterApprovalKind =
-  'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT' | 'SCANNED_PACK_FEFO';
+  'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT' | 'SCANNED_PACK_FEFO' | 'TENDER_DISCARD';
 
 /** Server-derived approval evidence persisted on the sale line / allocation override. */
 export type CounterApproval = {
@@ -42,12 +43,15 @@ export type CounterApproval = {
  * - SCANNED_PACK_FEFO (DEV-843): selling a scanned serialized pack that is not from the
  *   earliest-expiry lot needs a manager or owner (`pharmacy:manage`) PIN. There is no
  *   on-duty default; the same different-person and solo rules as a discount apply.
+ * - TENDER_DISCARD (DEV-712): discarding a counter payment attempt whose outcome is unknown
+ *   is a manager's or owner's decision (`pharmacy:manage`), under the same rules.
  */
 export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = {
   DISCOUNT: 'pharmacy:manage',
   FEFO_OVERRIDE: 'pharmacy:dispense',
   KHATA_OVER_LIMIT: 'pharmacy:manage',
   SCANNED_PACK_FEFO: 'pharmacy:manage',
+  TENDER_DISCARD: 'pharmacy:manage',
 };
 
 /**
@@ -77,6 +81,8 @@ const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
     'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',
   SCANNED_PACK_FEFO:
     'A scanned pack that is not from the earliest-expiry batch needs a manager or owner to approve it with their PIN.',
+  TENDER_DISCARD:
+    'Discarding a payment attempt needs a manager or owner to approve it with their PIN.',
 };
 
 /**
@@ -217,7 +223,17 @@ async function verifyApproverPin(
   const selfApproved = approver.id === scope.actorId;
   if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
-  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: approver.id,
+      credentialHash: credential.credentialHash,
+      secret: input.pin,
+      action: `pharmacy.counterApproval.${kind}`,
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),

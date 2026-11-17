@@ -8,6 +8,18 @@ const mocks = vi.hoisted(() => {
   hasModule.mockReturnValue(true);
   return { hasModule, can: vi.fn() };
 });
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -1337,9 +1349,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         message: 'Branch is outside your scope.',
       });
       const locked = db.$queryRaw.mock.calls.some(([sql]) =>
-        String((sql as TemplateStringsArray).join?.('?') ?? '').includes(
-          'pharmacy_purchase_orders'
-        )
+        String((sql as TemplateStringsArray).join?.('?') ?? '').includes('pharmacy_purchase_orders')
       );
       expect(locked).toBe(false);
       expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
@@ -3396,6 +3406,8 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  lostDemandAdvice: () => caller().lostDemandAdvice({ branchId: 'branch_a' }),
+  lostDemandTriggerSettings: () => caller().lostDemandTriggerSettings({ branchId: 'branch_a' }),
   reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {

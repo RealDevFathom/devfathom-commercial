@@ -41,14 +41,33 @@ export function afterTenantTransaction(work: () => void): void {
   else work();
 }
 
+/**
+ * Wait until every registered piece of work has finished, including work that
+ * is registered while an earlier piece is still in flight. A single
+ * `Promise.all(pending)` only sees the array as it was when called, so an
+ * activity insert registered from a continuation would be left running after
+ * the transaction closed and be rejected with P2028.
+ */
+async function waitForAll(
+  pending: Promise<unknown>[],
+  wait: (batch: Promise<unknown>[]) => Promise<unknown>
+): Promise<void> {
+  let waited = 0;
+  while (waited < pending.length) {
+    const batch = pending.slice(waited);
+    waited = pending.length;
+    await wait(batch);
+  }
+}
+
 export function bindSideEffects<T>(run: (scope: SideEffectScope) => Promise<T>): Promise<T> {
   const pending: Promise<unknown>[] = [];
   const scope: SideEffectScope = {
     pending,
     enqueued: false,
     afterTransaction: [],
-    flush: () => Promise.all(pending).then(() => undefined),
-    settle: () => Promise.allSettled(pending).then(() => undefined),
+    flush: () => waitForAll(pending, (batch) => Promise.all(batch)),
+    settle: () => waitForAll(pending, (batch) => Promise.allSettled(batch)),
   };
   return storage.run(scope, () => run(scope));
 }

@@ -810,14 +810,18 @@ describe('DEV-766 catalogue review separation and immutable evidence', () => {
       id: 'presentation_a',
       medicineId: 'medicine_a',
     });
-    db.packLevel.findFirst.mockResolvedValue({
+    const pack = {
       id: 'pack_a',
       presentationId: 'presentation_a',
       presentation: { medicineId: 'medicine_a' },
       barcodes: [],
       effectiveFrom: new Date('2020-01-01'),
       effectiveTo: null,
-    });
+    };
+    // The duplicate-pack lookup (by level) finds nothing; lookups by id find the pack.
+    db.packLevel.findFirst.mockImplementation(async ({ where }: { where: object }) =>
+      'level' in where ? null : pack
+    );
     const procedure = caller()[name] as (value: typeof input) => Promise<unknown>;
     await expect(procedure(input)).resolves.toMatchObject({
       status: 'PENDING',
