@@ -245,6 +245,20 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
     });
   });
 
+  it('never calls a suggestion exact when the requested medicine itself has several forms', async () => {
+    const requested = medicine('requested');
+    requested.presentations.push({
+      ...requested.presentations[0]!,
+      id: 'p-requested-injection',
+      dosageForm: 'Injection',
+      route: 'IV',
+    });
+    const f = fixture([requested, medicine('alternative')]);
+    const result = (await f.search()).rows[0]!.stockAlternatives!;
+    expect(result.exact).toEqual([]);
+    expect(result.other.map((entry) => entry.medicineId)).toEqual(['alternative']);
+  });
+
   it('separates a different route even when the form matches', async () => {
     const candidate = medicine('alternative');
     candidate.presentations[0]!.route = 'Sublingual';

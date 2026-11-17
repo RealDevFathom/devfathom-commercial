@@ -360,16 +360,14 @@ export async function searchCounterCatalog(
         continue;
       // The sale writer allocates FEFO across every presentation of a medicine, so
       // the quoted row is medicine-wide. A medicine is an exact equivalent only when
-      // every presentation it could be dispensed from has the source form and route.
+      // every presentation of both the requested and the candidate medicine has one
+      // recorded dosage form and the same route; a requested medicine with several
+      // forms cannot say which one was asked for, so its suggestions stay under other.
       const same =
         strengthComponentKey(source.strengths) === strengthComponentKey(medicine.strengths) &&
         normalizedForm(row.dosageForm) !== '' &&
-        medicine.presentations.length > 0 &&
-        medicine.presentations.every(
-          (presentation) =>
-            normalizedForm(presentation.dosageForm) === normalizedForm(row.dosageForm) &&
-            normalizedForm(presentation.route) === normalizedForm(row.route)
-        );
+        hasOnlyPresentation(source.presentations, row) &&
+        hasOnlyPresentation(medicine.presentations, row);
       (same ? exact : other).push(candidate);
     }
     row.stockAlternatives = {
@@ -395,6 +393,20 @@ function fefoBefore(lot: LotRow, best: LotRow) {
 
 function hasSellableUnit(row: CounterSearchRow) {
   return row.onHandUnits > 0 && row.saleableUnits.some((unit) => unit.wholeUnits > 0);
+}
+
+function hasOnlyPresentation(
+  presentations: readonly { dosageForm: string | null; route: string | null }[],
+  form: { dosageForm: string | null; route: string | null }
+) {
+  return (
+    presentations.length > 0 &&
+    presentations.every(
+      (presentation) =>
+        normalizedForm(presentation.dosageForm) === normalizedForm(form.dosageForm) &&
+        normalizedForm(presentation.route) === normalizedForm(form.route)
+    )
+  );
 }
 
 function normalizedForm(value: string | null) {
