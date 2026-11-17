@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'prisma/migrations/20261117090600_pharmacy_loyalty_cards/migration.sql',
+  'prisma/migrations/20261117090700_pharmacy_loyalty_cards/migration.sql',
   'utf8'
 );
 const code = migration
@@ -19,7 +19,7 @@ describe('pharmacy loyalty cards migration (DEV-748)', () => {
       expect(index).toContain('IF NOT EXISTS');
     expect(code).toContain('DROP POLICY IF EXISTS tenant_isolation ON "pharmacy_loyalty_cards"');
     expect(readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')).toContain(
-      '20261117090600_pharmacy_loyalty_cards'
+      '20261117090700_pharmacy_loyalty_cards'
     );
   });
 

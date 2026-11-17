@@ -127,4 +127,80 @@ describe('staged medicine evidence', () => {
     expect(csv).toContain(hash);
     expect(csv).not.toContain('never exposed');
   });
+  it('shows 29 packs of 30 as 870 units when the mapping says packs', () => {
+    const row: ReviewRow = {
+      ...fixture(),
+      packFactor: BigInt(30),
+      quantityCanonical: BigInt(870),
+      rawPayload: { QTY: '29' },
+    };
+    const view = stagedReference(row, source, 'batch_1', 'PACKS');
+    expect(view.quantityReview).toMatchObject({ unit: 'PACKS', packs: '29', units: '870' });
+    expect(view.quantityReview.label).toBe('29 packs × 30 = 870 units');
+  });
+  it('shows base units without inventing packs', () => {
+    const view = stagedReference(
+      {
+        ...fixture(),
+        quantityCanonical: BigInt(29),
+        rawPayload: { QTY: '29' },
+      },
+      source,
+      'batch_1',
+      'UNITS'
+    );
+    expect(view.quantityReview).toMatchObject({ unit: 'UNITS', packs: null, units: '29' });
+  });
+});
+
+it.each([undefined, 'PACKS', 'unknown'])(
+  'preserves legacy raw counts without claiming a recorded choice (%s)',
+  (unit) => {
+    const row: ReviewRow = {
+      ...fixture(),
+      packFactor: BigInt(30),
+      quantityCanonical: BigInt(29),
+      // A source column named __quantity_unit must never count as a recorded choice.
+      rawPayload: { QTY: '29', __quantity_unit: unit ?? 'PACKS' },
+    };
+    const before = structuredClone(row);
+    const view = stagedReference(row, source, 'batch_legacy');
+    expect(view.quantityReview.unit).toBeNull();
+    expect(view.quantityReview.choiceLabel).toBe('not recorded (staged as raw count)');
+    expect(view.quantityReview.label).toBe('29 (staged as raw count)');
+    expect(view.canonicalQuantity).toBe('29');
+    expect(row).toEqual(before);
+  }
+);
+
+describe('unresolved supplied quantities', () => {
+  const unresolved = (unit: string | null) =>
+    stagedReference(
+      {
+        ...fixture(),
+        packFactor: null,
+        quantityCanonical: null,
+        rawPayload: { 'Exported count': '29', QTY: 'decoy' },
+      },
+      source,
+      'batch_1',
+      unit,
+      'Exported count'
+    ).quantityReview.label;
+  it('labels a pack count without a factor as unresolved, not missing', () => {
+    expect(unresolved('PACKS')).toBe('Unresolved: "29" packs (no countable pack factor)');
+    // The mapped column is used, never a synonym-named decoy column.
+    expect(unresolved('PACKS')).not.toContain('decoy');
+    expect(unresolved(null)).toBe('Unresolved: "29" (choose packs or units)');
+  });
+  it('reserves a null label for an empty quantity cell', () => {
+    const view = stagedReference(
+      { ...fixture(), quantityCanonical: null, rawPayload: { QTY: '', Other: '7' } },
+      source,
+      'batch_1',
+      'PACKS',
+      'QTY'
+    );
+    expect(view.quantityReview.label).toBeNull();
+  });
 });
