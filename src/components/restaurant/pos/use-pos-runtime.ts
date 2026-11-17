@@ -389,13 +389,26 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       const epoch = stateEpoch.current;
       if (standalone) setPending('menu');
       try {
-        const data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
-          headers: authHeaders(activeRuntime),
+        let data: EffectiveMenu | undefined;
+        const catalog = await offlineRuntime.current?.fetchLiveCatalog(nextChannel, async () => {
+          data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
+            headers: authHeaders(activeRuntime),
+          });
+          if (epoch !== stateEpoch.current) throw new Error('The terminal session changed.');
+          return data;
         });
         if (epoch !== stateEpoch.current) return;
-        setDraftMenu(data);
-        await offlineRuntime.current?.cacheCatalog(data, new Date().toISOString());
         syncQueue();
+        if (!catalog || !data) {
+          const latest = offlineRuntime.current?.snapshot().catalog;
+          setDraftMenu(latest?.channel === nextChannel ? cachedMenu(latest) : null);
+          setNotice({
+            tone: 'warning',
+            message: 'The menu changed while loading. Refresh it before composing another order.',
+          });
+          return;
+        }
+        setDraftMenu(data);
         setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
       } catch (error) {
         if (epoch !== stateEpoch.current) return;
@@ -937,19 +950,11 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           );
           syncQueue();
           if (result === 'CATALOG_REQUIRED') {
-            const draft = offlineRuntime.current
-              ?.snapshot()
-              .queue?.drafts.find((entry) => entry.draftId === draftId);
-            const open = draft?.commands.find((command) => command.kind === 'OPEN_ORDER');
-            if (open) {
-              const original = await request<EffectiveMenu>(
-                effectiveMenuPath(open.body.channel, open.body.publicationId),
-                {
-                  headers: authHeaders(runtime),
-                }
-              );
-              await offlineRuntime.current?.cacheCatalog(original, new Date().toISOString());
-            }
+            await offlineRuntime.current?.restoreReviewCatalog(draftId, (channel, publicationId) =>
+              request<EffectiveMenu>(effectiveMenuPath(channel, publicationId), {
+                headers: authHeaders(runtime),
+              })
+            );
           }
           syncQueue();
           if (result !== 'APPLIED') {

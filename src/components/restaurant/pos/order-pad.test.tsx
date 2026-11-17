@@ -69,7 +69,11 @@ function menu(publicationId: string, itemName: string) {
   return {
     version: `version-${publicationId}`,
     branchId: 'branch-1',
-    channel: publicationId.includes('TAKEAWAY') ? 'TAKEAWAY' : 'DINE_IN',
+    channel: publicationId.includes('DELIVERY')
+      ? 'DELIVERY'
+      : publicationId.includes('TAKEAWAY')
+        ? 'TAKEAWAY'
+        : 'DINE_IN',
     publicationId,
     channelOpen: true,
     menu: { id: 'menu-1', name: 'Dinner' },

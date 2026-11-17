@@ -190,6 +190,10 @@ export type PosQueueSnapshot = {
   drafts: PosQueuedDraft[];
   /** Bounded to catalogs still needed by saved orders plus the currently loaded menu. */
   reviewCatalogs?: PosCatalogSnapshot[];
+  /** Catalog request/write coordination; unrelated queue mutations do not invalidate reads. */
+  catalogInstance?: string;
+  catalogRevision?: number;
+  catalogRequestSequence?: number;
 };
 
 export function createQueueSnapshot(deviceId: string): PosQueueSnapshot {

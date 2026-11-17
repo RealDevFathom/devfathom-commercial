@@ -215,6 +215,31 @@ const scenarios = [
     after: 'Reviewing the saved order’s original menu.',
     stale: true,
   })),
+  ...['old-first', 'new-first'].map((order) => ({
+    name: `live-fetch-${order}`,
+    liveFetchProbe: order,
+    a: catalog(),
+    b: catalog({ price: '7.00' }),
+    before: 'Price: 4.00 → 5.00',
+    stale: true,
+  })),
+  ...[
+    'isolation',
+    'new-first',
+    'old-first',
+    'live-write',
+    'live-old-first',
+    'cache-write',
+    'failure-retry',
+  ].map((probe) => ({
+    name: `restoration-${probe}`,
+    restorationProbe: probe,
+    originalScope: true,
+    a: catalog({ publicationId: 'foreign-publication-two' }),
+    b: catalog({ publicationId: 'foreign-publication-three' }),
+    before: 'Publication: Different from the saved order',
+    stale: true,
+  })),
 ];
 let browser;
 const results = [];
@@ -234,6 +259,21 @@ try {
     const requests = [];
     let activeCatalog = scenario.a;
     let conflictSent = false;
+    let liveFetchArmed = false;
+    let liveFetchCount = 0;
+    let releaseSelector;
+    let selectorResponseReady = false;
+    const selectorResponse = new Promise((resolve) => {
+      releaseSelector = resolve;
+    });
+    let releaseOld;
+    let releaseNew;
+    const oldResponse = new Promise((resolve) => {
+      releaseOld = resolve;
+    });
+    const newResponse = new Promise((resolve) => {
+      releaseNew = resolve;
+    });
     try {
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
@@ -288,6 +328,35 @@ try {
           ) {
             data = catalog({ price: '4.00' });
             evidence.originalMenuRequests = (evidence.originalMenuRequests ?? 0) + 1;
+            if (scenario.restorationProbe) {
+              const number = evidence.originalMenuRequests;
+              data = catalog({
+                price: number === 1 || scenario.restorationProbe === 'isolation' ? '4.00' : '7.00',
+              });
+              if (scenario.restorationProbe === 'failure-retry' && number === 1) {
+                status = 404;
+                data = { error: 'Original menu unavailable' };
+              } else if (number === 1) await oldResponse;
+              else if (number === 2 && scenario.restorationProbe === 'old-first') await newResponse;
+            }
+          }
+          if (
+            scenario.restorationProbe === 'live-old-first' &&
+            evidence.originalMenuRequests === 1 &&
+            !url.searchParams.has('publicationId')
+          ) {
+            evidence.heldLiveRequests = (evidence.heldLiveRequests ?? 0) + 1;
+            await newResponse;
+          }
+          if (scenario.liveFetchProbe && liveFetchArmed) {
+            liveFetchCount += 1;
+            data = catalog({ price: liveFetchCount === 1 ? '4.00' : '7.00' });
+            if (liveFetchCount === 1) await oldResponse;
+            else if (liveFetchCount === 2) await newResponse;
+          }
+          if (scenario.selector && url.searchParams.get('channel') === 'TAKEAWAY') {
+            selectorResponseReady = true;
+            await selectorResponse;
           }
         } else if (path.endsWith('/orders/open-orders')) data = { orders: [] };
         else if (path.endsWith('/orders/commercial-terms'))
@@ -319,6 +388,11 @@ try {
           if (message.type() === 'error') {
             // Chromium logs the deliberately supplied HTTP 409 as a resource error.
             if (scenario.server409 && /Failed to load resource:.*409/.test(message.text())) return;
+            if (
+              scenario.restorationProbe === 'failure-retry' &&
+              /Failed to load resource:.*404/.test(message.text())
+            )
+              return;
             errors.push(message.text());
           }
         });
@@ -356,6 +430,216 @@ try {
         evidence.createdServerReview = before.queue.drafts[0].review;
       } else {
         assert.equal(requests.length, 0, 'Catalog review setup must never replay');
+      }
+      if (scenario.liveFetchProbe) {
+        liveFetchArmed = true;
+        const startReload = async (page) => {
+          await page.reload();
+          await page.waitForFunction(() => Boolean(window.posReviewFixture));
+          await page.evaluate(() => window.posReviewFixture.mount());
+        };
+        await startReload(tab1);
+        await expect.poll(() => liveFetchCount).toBe(1);
+        await startReload(tab2);
+        await expect.poll(() => liveFetchCount).toBe(2);
+        if (scenario.liveFetchProbe === 'old-first') {
+          releaseOld();
+          await expect(
+            tab1.getByRole('button', { name: 'Lock terminal', exact: true })
+          ).toBeEnabled();
+          const interim = await tab1.evaluate(() => window.posReviewFixture.read());
+          assert.equal(interim.catalog.sections[0].items[0].price, '5.00');
+          assert.equal(interim.queue.drafts[0].status, 'NEEDS_REVIEW');
+          assert.deepEqual(interim.queue.drafts[0].commands, before.queue.drafts[0].commands);
+          assert.equal(
+            requests.length,
+            0,
+            'Superseded live response cannot clear review or replay'
+          );
+          evidence.supersededFirst = interim;
+        }
+        releaseNew();
+        const freshCard = tab2.getByRole('region', { name: /Queued order .* review/ });
+        const freshSend = tab2.getByRole('button', { name: 'Send deliberately', exact: true });
+        await expect(freshCard).toContainText('Price: 4.00 → 7.00');
+        releaseOld();
+        await expect(
+          tab1.getByRole('button', { name: 'Lock terminal', exact: true })
+        ).toBeEnabled();
+        const current = await tab1.evaluate(() => window.posReviewFixture.read());
+        assert.equal(current.catalog.sections[0].items[0].price, '7.00');
+        assert.equal(current.queue.drafts[0].status, 'NEEDS_REVIEW');
+        assert.deepEqual(current.queue.drafts[0].commands, before.queue.drafts[0].commands);
+        assert.equal(requests.length, 0);
+        evidence.afterResponses = current;
+        await freshSend.click();
+        await expect.poll(() => requests.length).toBe(2);
+        await expect(freshSend).toHaveCount(0);
+        const completed = await tab2.evaluate(() => window.posReviewFixture.read());
+        assert.equal(completed.queue.drafts[0].status, 'COMPLETED');
+        assert.equal(completed.queue.drafts[0].commands[1].body.quotedUnitPrice, '7.00');
+        assert.deepEqual(errors, []);
+        evidence.completed = completed.queue.drafts[0];
+        evidence.replayRequests = requests;
+        evidence.result = 'PASS';
+        continue;
+      }
+      if (scenario.restorationProbe) {
+        const probe = scenario.restorationProbe;
+        const reload = async (page) => {
+          await page.reload();
+          await page.waitForFunction(() => Boolean(window.posReviewFixture));
+          await page.evaluate(() => window.posReviewFixture.mount());
+          await expect(
+            page.getByRole('button', { name: 'Send deliberately', exact: true }).first()
+          ).toBeEnabled();
+        };
+        const read = () => tab2.evaluate(() => window.posReviewFixture.read());
+        activeCatalog = scenario.b;
+        await tab2.evaluate((menu) => window.posReviewFixture.cache(menu), activeCatalog);
+        // For old-first, both UI tabs finish live loading BEFORE either restoration
+        // starts, isolating the same-scope request-generation race from live writes.
+        if (probe === 'old-first') await reload(tab2);
+        let liveBefore = (await read()).catalog;
+        await send.click();
+        await expect.poll(() => evidence.originalMenuRequests).toBe(1);
+        let acceptedB;
+        if (probe === 'isolation') {
+          await tab2.evaluate((draft) => window.posReviewFixture.seed(draft), {
+            ...input,
+            open: { ...input.open, publicationId: activeCatalog.publicationId },
+            lines: [{ ...input.lines[0], quotedUnitPrice: '5.00' }],
+          });
+          acceptedB = (await read()).queue.drafts[1];
+          assert.equal(acceptedB.status, 'QUEUED');
+          releaseOld();
+        } else if (probe === 'failure-retry') {
+          await expect(
+            tab1.getByRole('alert').filter({ hasText: 'Original menu unavailable' })
+          ).toBeVisible();
+          const failed = await read();
+          assert.equal(failed.queue.drafts[0].status, 'NEEDS_REVIEW');
+          assert.deepEqual(failed.queue.drafts[0].commands, before.queue.drafts[0].commands);
+          assert.deepEqual(failed.catalog, liveBefore);
+          assert.equal(requests.length, 0);
+          evidence.failedFetch = failed;
+          await reload(tab1);
+          liveBefore = (await read()).catalog;
+          assert.equal(requests.length, 0);
+          await send.click();
+          await expect.poll(() => evidence.originalMenuRequests).toBe(2);
+        } else if (['live-write', 'live-old-first', 'cache-write'].includes(probe)) {
+          activeCatalog = catalog({ price: '7.00' });
+          if (probe === 'cache-write') {
+            // A non-network observed cache write must invalidate the lease even
+            // though it did not start another request/generation.
+            await tab2.evaluate((menu) => window.posReviewFixture.cache(menu), activeCatalog);
+          } else if (probe === 'live-old-first') {
+            await tab2.reload();
+            await tab2.waitForFunction(() => Boolean(window.posReviewFixture));
+            await tab2.evaluate(() => window.posReviewFixture.mount());
+            await expect.poll(() => evidence.heldLiveRequests).toBe(1);
+            releaseOld();
+            await expect(
+              tab1.getByRole('button', { name: 'Lock terminal', exact: true })
+            ).toBeEnabled();
+            const interim = await read();
+            assert.deepEqual(interim.catalog, liveBefore);
+            assert.equal(
+              interim.queue.reviewCatalogs.some(
+                (menu) => menu.publicationId === input.open.publicationId
+              ),
+              false
+            );
+            assert.equal(interim.queue.drafts[0].status, 'NEEDS_REVIEW');
+            assert.equal(requests.length, 0);
+            evidence.supersededBeforeLiveResponse = interim;
+            releaseNew();
+          } else {
+            await reload(tab2); // actual hook live fetch supplies 7.00 during A's await
+          }
+          if (probe !== 'cache-write')
+            await expect(
+              tab2.getByRole('region', { name: /Queued order .* review/ })
+            ).toContainText('Price: 4.00 → 7.00');
+          releaseOld();
+        } else {
+          if (probe === 'new-first') {
+            await reload(tab2);
+            liveBefore = (await read()).catalog;
+          }
+          await tab2.getByRole('button', { name: 'Send deliberately', exact: true }).click();
+          await expect.poll(() => evidence.originalMenuRequests).toBe(2);
+          if (probe === 'old-first') {
+            releaseOld();
+            await expect(
+              tab1.getByRole('button', { name: 'Lock terminal', exact: true })
+            ).toBeEnabled();
+            const superseded = await read();
+            assert.equal(
+              superseded.queue.reviewCatalogs.some(
+                (menu) => menu.publicationId === input.open.publicationId
+              ),
+              false,
+              'Superseded first request must not supply even a temporary obsolete original'
+            );
+            assert.equal(superseded.queue.drafts[0].status, 'NEEDS_REVIEW');
+            assert.equal(requests.length, 0);
+            evidence.supersededFirst = superseded;
+            releaseNew();
+          }
+          await expect(tab2.getByRole('region', { name: /Queued order .* review/ })).toContainText(
+            'Price: 4.00 → 7.00'
+          );
+          evidence.newerBeforeOldCompletion = await read();
+          releaseOld();
+        }
+        await expect(
+          tab1.getByRole('button', { name: 'Lock terminal', exact: true })
+        ).toBeEnabled();
+        const after = await read();
+        evidence.afterRestoration = after;
+        assert.equal(after.queue.drafts[0].status, 'NEEDS_REVIEW');
+        assert.deepEqual(after.queue.drafts[0].commands, before.queue.drafts[0].commands);
+        assert.equal(requests.length, 0, 'Restoration is never deliberate approval');
+        const expectedPrice = probe === 'isolation' ? '4.00' : '7.00';
+        assert.equal(after.queue.drafts[0].review.catalog.line.currentPrice, expectedPrice);
+        if (!['live-write', 'live-old-first', 'cache-write'].includes(probe))
+          assert.deepEqual(
+            after.catalog,
+            liveBefore,
+            'Original restoration must not replace the live menu'
+          );
+        else assert.equal(after.catalog.sections[0].items[0].price, '7.00');
+        if (acceptedB) {
+          assert.deepEqual(
+            after.queue.drafts[1],
+            acceptedB,
+            'Restoration must leave accepted B unchanged'
+          );
+          await reload(tab2); // automatic replay may send B, while A still needs review
+          await expect.poll(() => requests.length).toBe(2);
+          const replayed = await read();
+          assert.equal(replayed.queue.drafts[1].status, 'COMPLETED');
+          assert.equal(replayed.queue.drafts[0].status, 'NEEDS_REVIEW');
+          evidence.unrelatedReplay = replayed.queue.drafts[1];
+        }
+        await reload(tab1);
+        await expect(card).toContainText(`Price: 4.00 → ${expectedPrice}`);
+        assert.equal(requests.length, acceptedB ? 2 : 0);
+        await tab1.screenshot({ path: resolve(artifacts, `${scenario.name}.png`), fullPage: true });
+        await send.click();
+        await expect.poll(() => requests.length).toBe(acceptedB ? 4 : 2);
+        await expect(send).toHaveCount(0);
+        const completed = await read();
+        assert.equal(completed.queue.drafts[0].status, 'COMPLETED');
+        assert.equal(completed.queue.drafts[0].commands[1].body.quotedUnitPrice, expectedPrice);
+        assert.deepEqual(completed.queue.drafts[0].commands[0].body, input.open);
+        assert.deepEqual(errors, []);
+        evidence.completed = completed.queue.drafts[0];
+        evidence.replayRequests = requests;
+        evidence.result = 'PASS';
+        continue;
       }
       if (scenario.lifecycle) {
         // Two additional synthetic composers exercise concurrent saves without
@@ -439,14 +723,17 @@ try {
       assert.equal(before.queue.drafts[0].status, 'NEEDS_REVIEW');
       assert.equal(requests.length - initialRequests.length, 0);
       // Hold the real native lock, queue B's production cache write, then queue A's click.
-      await tab2.evaluate(() => window.posReviewFixture.holdLock());
-      await tab2.waitForFunction(() => window.posReviewFixture.lockHeld);
       activeCatalog = scenario.b;
       if (scenario.selector) {
+        // Let the guarded network read start first, then hold its commit behind
+        // the native lock. The pending mutation must precede A's approval.
         await tab2.getByLabel('Channel', { exact: true }).selectOption('TAKEAWAY');
-      } else {
-        await tab2.evaluate((menu) => window.posReviewFixture.startUpdate(menu), scenario.b);
+        await expect.poll(() => selectorResponseReady).toBe(true);
       }
+      await tab2.evaluate(() => window.posReviewFixture.holdLock());
+      await tab2.waitForFunction(() => window.posReviewFixture.lockHeld);
+      if (scenario.selector) releaseSelector();
+      else await tab2.evaluate((menu) => window.posReviewFixture.startUpdate(menu), scenario.b);
       await tab2.waitForFunction(async () => (await navigator.locks.query()).pending.length === 1);
       await send.click();
       await tab2.waitForFunction(async () => (await navigator.locks.query()).pending.length === 2);
@@ -609,6 +896,9 @@ try {
       }
       failures.push(scenario.name);
     } finally {
+      releaseOld();
+      releaseNew();
+      releaseSelector();
       await context.close();
       results.push(evidence);
       console.log(
