@@ -7,4 +7,4 @@
 20261117090500_pharmacy_sold_pack_serials
 20261117090600_migration_quantity_unit
 20261117090700_approval_authenticators
-20261117090800_pharmacy_loyalty_cards
+20261117211344_pharmacy_loyalty_cards
