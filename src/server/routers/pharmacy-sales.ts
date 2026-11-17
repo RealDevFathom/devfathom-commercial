@@ -1876,6 +1876,13 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT');
     }),
+  /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
+  scannedPackFefoApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'SCANNED_PACK_FEFO');
+    }),
   refundTender: protectedProcedure
     .input(
       z
