@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   move: vi.fn(),
+  pin: vi.fn(),
   earn: vi.fn(),
   post: vi.fn(),
   complete: vi.fn(),
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./prepaid-tiers', async () => ({
   ...(await vi.importActual<typeof import('./prepaid-tiers')>('./prepaid-tiers')),
   movePrepaid: mocks.move,
+  assertPrepaidPin: mocks.pin,
 }));
 vi.mock('./customer-loyalty', () => ({
   accrueSalePoints: mocks.earn,
@@ -28,7 +30,8 @@ vi.mock('./rx-sale-gate', () => ({ assertRxSaleAllowed: vi.fn() }));
 vi.mock('./rx-prescription-reference', () => ({ assertRxLinesPrescribed: vi.fn() }));
 vi.mock('./regulatory', () => ({ assertStoredPharmacyMayOperate: vi.fn() }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
-import { applyPharmacyTender } from './settlement';
+import { applyPharmacyTender, refundPharmacyTender } from './settlement';
+import { PrepaidPinError } from './prepaid-tiers';
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 const input = {
   saleId: 'sale-a',
@@ -62,6 +65,7 @@ function fixture() {
         lines: [
           {
             id: 'line-a',
+            createdAt: new Date('2026-11-17T08:00:00Z'),
             quantity: 1,
             unitPriceMinor: 1000,
             grossMinor: 1000,
@@ -97,15 +101,19 @@ function fixture() {
   };
   return db;
 }
+const withPin = { prepaidPin: '4821' };
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.pin.mockResolvedValue(undefined);
   mocks.move.mockResolvedValue({});
   mocks.complete.mockResolvedValue(41);
 });
 describe('prepaid wallet at the counter', () => {
   it('settles the discounted total, debits the wallet once and still earns points', async () => {
     const db = fixture();
-    await expect(applyPharmacyTender(db as never, scope, input)).resolves.toMatchObject({
+    await expect(
+      applyPharmacyTender(db as never, scope, input, undefined, withPin)
+    ).resolves.toMatchObject({
       settled: true,
       remainingMinor: 0,
     });
@@ -141,9 +149,68 @@ describe('prepaid wallet at the counter', () => {
   it('cannot complete or post a payment when the wallet debit refuses', async () => {
     const db = fixture();
     mocks.move.mockRejectedValue(new Error('Insufficient prepaid balance'));
-    await expect(applyPharmacyTender(db as never, scope, input)).rejects.toThrow('Insufficient');
+    await expect(
+      applyPharmacyTender(db as never, scope, input, undefined, withPin)
+    ).rejects.toThrow('Insufficient');
     expect(mocks.post).not.toHaveBeenCalled();
     expect(mocks.complete).not.toHaveBeenCalled();
     expect(mocks.earn).not.toHaveBeenCalled();
+  });
+  it('never spends a prepaid balance without the customer’s own PIN', async () => {
+    const db = fixture();
+    mocks.pin.mockRejectedValueOnce(new PrepaidPinError());
+    await expect(applyPharmacyTender(db as never, scope, input)).rejects.toBeInstanceOf(
+      PrepaidPinError
+    );
+    expect(mocks.pin).toHaveBeenCalledWith(db, 'org-a', 'customer-a', undefined);
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(mocks.move).not.toHaveBeenCalled();
+    expect(mocks.complete).not.toHaveBeenCalled();
+    mocks.pin.mockClear();
+    await applyPharmacyTender(db as never, scope, input, undefined, withPin);
+    expect(mocks.pin).toHaveBeenCalledWith(db, 'org-a', 'customer-a', '4821');
+  });
+  it('refuses a cash fallback on a prepaid refund instead of paying cash and crediting the balance', async () => {
+    const refund = {
+      originalTenderId: 'tender-a',
+      deviceId: 'counter-a',
+      businessDate: new Date('2026-11-17'),
+      amountMinor: 980,
+      reason: 'Returned',
+      idempotencyKey: 'refund-123',
+      manualCashFallback: true,
+    };
+    const db = {
+      ...fixture(),
+      pharmacyMoneyIdempotencyKey: {
+        findUnique: vi.fn(async () => ({
+          id: 'key-b',
+          commandType: 'refund',
+          payloadHash: createHash('sha256').update(JSON.stringify(refund)).digest('hex'),
+          resultPayload: null,
+        })),
+        update: vi.fn(),
+      },
+      pharmacyTender: {
+        findFirst: vi.fn(async () => ({
+          id: 'tender-a',
+          saleId: 'sale-a',
+          type: 'WALLET',
+          provider: 'CUSTOMER_PREPAID',
+          amountMinor: 980,
+          providerRef: null,
+          refunds: [],
+          sale: { customerId: 'customer-a', status: 'OPEN' },
+        })),
+      },
+      pharmacySale: { findFirst: vi.fn(async () => null), count: vi.fn(async () => 1) },
+      pharmacyRefund: { create: vi.fn() },
+    };
+    await expect(refundPharmacyTender(db as never, scope, refund)).rejects.toThrow(
+      'PREPAID_REFUND_RESTORES_BALANCE'
+    );
+    expect(db.pharmacyRefund.create).not.toHaveBeenCalled();
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(mocks.move).not.toHaveBeenCalled();
   });
 });

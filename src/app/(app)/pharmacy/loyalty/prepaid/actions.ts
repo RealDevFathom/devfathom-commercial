@@ -59,6 +59,9 @@ export async function recordPrepaid(
       idempotencyKey: String(form.get('idempotencyKey')),
       kind: form.get('kind') === 'REFUND' ? 'REFUND' : 'PAYMENT',
       ...(form.get('pin') ? { pin: String(form.get('pin')) } : {}),
+      ...(form.get('kind') !== 'REFUND' && form.get('customerPin')
+        ? { customerPin: String(form.get('customerPin')) }
+        : {}),
     });
     revalidatePath('/pharmacy/loyalty/prepaid');
     return {
@@ -81,6 +84,28 @@ export async function recordPrepaid(
         error instanceof TRPCError && error.code === 'BAD_REQUEST'
           ? error.message
           : 'Payment was not confirmed. Check owner access, the open drawer and PIN for refunds. Retry with the same reference; do not collect money again.',
+    };
+  }
+}
+export async function setCustomerPrepaidPin(
+  _state: PrepaidFormState,
+  form: FormData
+): Promise<PrepaidFormState> {
+  try {
+    const caller = pharmacyPrepaidRouter.createCaller(await createTRPCContext());
+    await caller.setPin({
+      customerId: String(form.get('customerId')),
+      customerPin: String(form.get('customerPin') ?? ''),
+    });
+    return { status: 'saved', message: 'The customer’s new prepaid PIN is set.' };
+  } catch (error) {
+    unstable_rethrow(error);
+    return {
+      status: 'error',
+      message:
+        error instanceof TRPCError && error.code === 'FORBIDDEN'
+          ? 'Only the owner can set a customer’s prepaid PIN.'
+          : 'PIN not set. Ask the customer to enter 4 to 8 digits.',
     };
   }
 }

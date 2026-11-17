@@ -1,18 +1,44 @@
 # DEV-863 — prepaid tiers
 
-The owner console is `/pharmacy/loyalty/prepaid`, linked from the loyalty console and its selected customer. No tiers or earning rate are seeded. Settings publish immutable dated versions. An upfront payment uses the current version; its refund terms and awarded tier remain attributable to that version. Existing funds retain their refund terms. Thresholds accumulate within a funded cycle; reaching zero clears both the tier and qualifying total. Discounts are configurable from 0.01% to 99.99%.
+The owner console is `/pharmacy/loyalty/prepaid`, linked from the loyalty console. Only the
+organization's owner (session ADMIN) can open it, publish tiers, take upfront payments, refund
+prepaid cash or reset a customer's PIN; a delegated employee is refused even with every grant and
+their own valid PIN. No tiers or earning rate are seeded. Settings publish immutable dated versions.
+An upfront payment uses the current version; its refund terms and awarded tier stay attributable to
+that version. Reaching a zero balance clears both the tier and the qualifying total.
 
-Cash receipts use an existing open drawer, create a prepaid liability journal entry, and state whether that payment is refundable. Mixed balances spend non-refundable funds first. Cash withdrawals use the signed-in owner's fresh refund PIN, including a solo owner. Sale refunds restore the original tender's refundable share to the wallet; cash withdrawals remain a separate PIN-protected operation. No medicine details are sent by WhatsApp.
+Upfront cash goes through an open drawer, posts a `CUSTOMER_PREPAID` liability and prints whether
+it is refundable. The customer chooses a 4–8 digit spend PIN with their first payment; only its
+bcrypt hash is stored. Prepaid cash refunds need the signed-in owner's fresh PIN (a solo owner uses
+their own) and are refused for non-refundable funds.
 
-The existing WALLET tender spends customer funds without an external adapter. Every movement has an immutable ledger entry, tenant scope and idempotency key. A customer transaction lock plus a conditional balance update prevents double spending; database checks prevent negative balances and deferred triggers require account/ledger reconciliation. Tier transitions write audit records. The bill's first tender freezes the discount, including on points or split payments. Existing price floors and regulated-line discount restrictions still apply. Original stock allocations stay immutable; a separate tier allocation snapshot feeds the shared return and journal arithmetic. Receipts show tier savings separately, already included in total discounts.
+At the counter, the Wallet tender spends the linked customer's prepaid balance only with that
+customer's PIN. A wrong PIN commits a lockout strike in its own transaction (five strikes lock the
+balance for 15 minutes) and the payment re-checks the PIN under the customer lock. An untouched
+amount defaults to what the balance covers. The tier discount applies to the whole bill, respects
+every lot price floor and the regulated-line rules, stacks with points and shows as its own receipt
+line. A line added after a partial payment is priced; a line already on the bill when money was
+taken is never repriced. Prepaid refunds always return to the balance: the return panel shows no
+cash instruction and the server refuses a cash fallback. Failed deliveries restore prepaid tenders;
+cash-on-delivery amounts and batch/supplier sales reports use the discounted bill.
+
+Every movement is an immutable, numbered ledger entry. At commit the database requires the account's
+balance, refundable share, qualifying total and tier to equal its newest entry, every entry's
+post-balance to equal its running total, and every tier transition to chain from the previous
+entry. Inserted or updated sale lines carrying a tier discount must have matching allocation
+evidence at commit.
 
 ## Verification
 
-- Unit tests exercise cumulative thresholds, zero-balance loss and requalification, immutable refund terms, idempotency conflicts, tenant rejection, liability postings, wallet settlement, points earning, floor protection and exact return pricing.
-- The concurrency regression pauses both sales after reading the same balance, then lets both conditional writes race. Exactly one succeeds; the loser creates no ledger movement and the remaining balance reconciles.
-- Router tests cover denied/foreign scope, fresh PIN refusals, solo-owner approval auditing, and replay without duplicate drawer/journal entries.
-- Migration tests cover transaction framing, idempotence, tenant RLS, append-only evidence and deferred reconciliation. Existing allocation immutability is unchanged.
-- Actual shared Studio components and the new forms were rendered in a local browser fixture at 375, 768, 1024 and 1440 pixels, in light/dark themes, with normal/reduced motion: all 16 combinations had no document overflow or browser errors. Checked loaded, empty, pending, error, saved, disabled-after-payment, refund PIN/confirmation, keyboard focus, preserved input after errors and printable refund terms. Screenshots accompany this note.
-- The browser fixture stubs server actions and uses example customers. No database or signed-in tenant is available in this cloud task, so live tenant and database-backed end-to-end checks were not performed. The required database-free unit command preserves the repository's existing database-suite skipping convention.
-
-The PR's Checks section records the exact required command results and tested commit.
+- `src/lib/pharmacy/prepaid-tiers.db.test.ts` runs on a fully migrated PostgreSQL as a NOSUPERUSER
+  NOBYPASSRLS role (`TEST_DATABASE_URL` + `PHARMACY_TEST_OWNER_DATABASE_URL`; skipped without them):
+  non-negative balances, one winner for two concurrent spends, ledger reconciliation of balances,
+  tiers and entry snapshots, tenant isolation, refusal of non-refundable refunds, the hashed spend
+  PIN and insert-time line evidence. It passed twice on a local PostgreSQL 16 with the full
+  migration history; the prepaid migration also re-applied cleanly.
+- A temporary full-checkout probe on the same database (not committed) priced a tier sale,
+  refused spends without or with a wrong PIN, priced a line added after a partial payment,
+  completed the sale, refused a cash fallback on the prepaid refund and restored the balance.
+- The changed counter, return and console components were rendered in a browser fixture at 375,
+  768, 1024 and 1440 px, light and dark, normal and reduced motion: no document overflow, visible
+  focus on the PIN field, no render errors. Screenshots accompany this note.

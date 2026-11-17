@@ -1205,3 +1205,45 @@ describe('DEV-41 disabled payment explanations', () => {
     expect(screen.queryByText(/Enter the payer/)).not.toBeInTheDocument();
   });
 });
+
+describe('DEV-863 prepaid balance', () => {
+  it('defaults to what the prepaid balance covers, refuses more, and needs the customer PIN', async () => {
+    const { props } = setup({ balanceMinor: 25000, prepaidBalanceMinor: 10000 });
+    chooseTender('WALLET');
+    expect(screen.getByText(/Prepaid balance: PKR 100\.00/)).toBeVisible();
+    expect(screen.getByLabelText('Amount')).toHaveAttribute('placeholder', '100.00');
+    const take = screen.getByRole('button', { name: 'Take payment' });
+    expect(take).toBeDisabled();
+    expect(screen.getByText('Ask the customer to enter their prepaid PIN.')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '150.00' } });
+    fireEvent.change(screen.getByLabelText('Customer’s prepaid PIN'), {
+      target: { value: '4821' },
+    });
+    expect(take).toBeDisabled();
+    expect(screen.getByText('That is more than the customer’s prepaid balance.')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '' } });
+    expect(take).toBeEnabled();
+    fireEvent.click(take);
+    await screen.findByText('Payment recorded.');
+    expect(props.onTender).toHaveBeenCalledWith(
+      { type: 'WALLET', amountMinor: 10000, prepaidPin: '4821' },
+      { amount: '', cashReceived: '' }
+    );
+    // The PIN is single-use and never part of the saved draft.
+    expect(screen.getByLabelText('Customer’s prepaid PIN')).toHaveValue('');
+  });
+
+  it('pays the whole balance due from prepaid funds when they cover it', async () => {
+    const { props } = setup({ balanceMinor: 9800, prepaidBalanceMinor: 10000 });
+    chooseTender('WALLET');
+    fireEvent.change(screen.getByLabelText('Customer’s prepaid PIN'), {
+      target: { value: '4821' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment recorded.');
+    expect(props.onTender).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'WALLET', amountMinor: 9800 }),
+      expect.anything()
+    );
+  });
+});

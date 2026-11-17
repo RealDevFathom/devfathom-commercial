@@ -27,7 +27,9 @@ export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | 
   if (receipt.receiptNumber === null || !receipt.completedAt) return null;
   const strings = COUNTER_RECEIPT_STRINGS.en;
   return {
-    ...(receiptTierLines(receipt, 'en').length ? {tierDiscountLines:receiptTierLines(receipt, 'en')} : {}),
+    ...(receiptTierLines(receipt, 'en').length
+      ? { tierDiscountLines: receiptTierLines(receipt, 'en') }
+      : {}),
     branchName: receipt.branchName,
     receiptNumber: receipt.receiptNumber,
     completedAt: receipt.completedAt,

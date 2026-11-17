@@ -910,13 +910,15 @@ export async function postTenderEntry(
   if (!tender) throw new PharmacyFinanceError('NOT_FOUND');
   if (tender.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    tender.provider === PREPAID_PROVIDER ? 'CUSTOMER_PREPAID' : tender.type === 'CASH'
-      ? 'CASH'
-      : tender.type === 'CREDIT'
-        ? 'ACCOUNTS_RECEIVABLE'
-        : tender.type === 'LOYALTY'
-          ? 'LOYALTY_REDEMPTION'
-          : 'BANK';
+    tender.provider === PREPAID_PROVIDER
+      ? 'CUSTOMER_PREPAID'
+      : tender.type === 'CASH'
+        ? 'CASH'
+        : tender.type === 'CREDIT'
+          ? 'ACCOUNTS_RECEIVABLE'
+          : tender.type === 'LOYALTY'
+            ? 'LOYALTY_REDEMPTION'
+            : 'BANK';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_TENDER',
     sourceId: tender.id,
@@ -1000,13 +1002,15 @@ export async function postTenderRefundEntry(
   if (!refund) throw new PharmacyFinanceError('NOT_FOUND');
   if (refund.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    refund.originalTender.provider === PREPAID_PROVIDER ? 'CUSTOMER_PREPAID' : refund.drawerSessionId || refund.originalTender.type === 'CASH'
-      ? 'CASH'
-      : refund.originalTender.type === 'CREDIT'
-        ? 'ACCOUNTS_RECEIVABLE'
-        : refund.originalTender.type === 'LOYALTY'
-          ? 'LOYALTY_REDEMPTION'
-          : 'BANK';
+    refund.originalTender.provider === PREPAID_PROVIDER
+      ? 'CUSTOMER_PREPAID'
+      : refund.drawerSessionId || refund.originalTender.type === 'CASH'
+        ? 'CASH'
+        : refund.originalTender.type === 'CREDIT'
+          ? 'ACCOUNTS_RECEIVABLE'
+          : refund.originalTender.type === 'LOYALTY'
+            ? 'LOYALTY_REDEMPTION'
+            : 'BANK';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_REFUND',
     sourceId: refund.id,

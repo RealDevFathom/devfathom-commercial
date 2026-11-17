@@ -8,7 +8,7 @@ import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyPrepaidRouter } from '../prepaid-router';
 import { prepaidTierSettings } from '@/lib/pharmacy/prepaid-tiers';
-import { TierSettingsForm, PrepaidPaymentForm } from './forms';
+import { TierSettingsForm, PrepaidPaymentForm, PrepaidPinForm } from './forms';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 export default async function PrepaidPage({
   searchParams,
@@ -85,8 +85,18 @@ export default async function PrepaidPage({
         <PrepaidPaymentForm
           paymentReference={randomUUID()}
           drawers={data.drawers}
-          customers={data.customers}
+          customers={data.customers.map((c) => ({
+            id: c.id,
+            displayName: c.displayName,
+            pinSet: !!c.prepaidAccount?.pinSet,
+          }))}
           branches={data.branches}
+          customerId={customerId}
+        />
+      </SectionCard>
+      <SectionCard title="Customer prepaid PIN" titleLevel={2}>
+        <PrepaidPinForm
+          customers={data.customers.map((c) => ({ id: c.id, displayName: c.displayName }))}
           customerId={customerId}
         />
       </SectionCard>

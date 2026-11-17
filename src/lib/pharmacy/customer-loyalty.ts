@@ -77,7 +77,7 @@ export async function linkCustomerToSale(
       branchId: scope.branchId,
       status: 'OPEN',
     },
-    include: { tenders: {select: {id:true}} },
+    include: { tenders: { select: { id: true } } },
   });
   if (!sale || sale.tenders?.length) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   const referencedLine = await db.pharmacySaleLine.findFirst({

@@ -4,6 +4,14 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postJournalEntry } from '@/lib/finance/journal';
+import {
+  clearLockout,
+  hashOperatorCredential,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export const PREPAID_PROVIDER = 'CUSTOMER_PREPAID';
 const money = z.number().int().min(1).max(2_000_000_000);
@@ -31,6 +39,15 @@ export const prepaidTierSettings = z
   .strict();
 export type PrepaidTier = z.infer<typeof prepaidTierSettings>['tiers'][number];
 export class PrepaidError extends Error {}
+/** The customer's spend PIN was missing, wrong or locked out. Never says which. */
+export class PrepaidPinError extends PrepaidError {
+  constructor() {
+    super(PREPAID_PIN_REFUSED);
+  }
+}
+export const PREPAID_PIN_REFUSED =
+  'Prepaid balance not used. The customer must enter their prepaid PIN.';
+export const prepaidPin = z.string().regex(/^\d{4,8}$/);
 
 export function qualifyingTier(tiers: PrepaidTier[], qualifyingMinor: number) {
   return (
@@ -52,12 +69,17 @@ export async function publishPrepaidSettings(
   input: z.infer<typeof prepaidTierSettings>
 ) {
   const settings = prepaidTierSettings.parse(input);
-  await db.$queryRaw(
+  await db.$executeRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`prepaid-settings:${scope.organizationId}`},0))`
   );
   const prior = (await prepaidSettings(db, scope.organizationId))[0];
   return db.pharmacyPrepaidTierVersion.create({
-    data: { ...scope, version: (prior?.version ?? 0) + 1, ...settings },
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      version: (prior?.version ?? 0) + 1,
+      ...settings,
+    },
   });
 }
 export async function readPrepaidAccount(db: ScopedDb, organizationId: string, customerId: string) {
@@ -67,12 +89,13 @@ export async function readPrepaidAccount(db: ScopedDb, organizationId: string, c
   });
   return customer?.prepaidAccount ?? null;
 }
+/** $executeRaw: the lock function returns void, which a raw query cannot deserialize. */
 export async function lockPrepaidCustomer(
   db: ScopedDb,
   organizationId: string,
   customerId: string
 ) {
-  await db.$queryRaw(
+  await db.$executeRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`prepaid-customer:${organizationId}:${customerId}`},0))`
   );
 }
@@ -215,18 +238,28 @@ export async function movePrepaid(
     },
   });
   if (updated.count !== 1) throw new PrepaidError('Prepaid balance changed. Reload and retry.');
+  const last = await db.pharmacyPrepaidEntry.findFirst({
+    where: { organizationId: scope.organizationId, accountId: account.id },
+    orderBy: { sequence: 'desc' },
+    select: { sequence: true },
+  });
   const entry = await db.pharmacyPrepaidEntry.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       accountId: account.id,
+      sequence: (last?.sequence ?? 0) + 1,
       kind: input.kind,
       amountMinor: sign * input.amountMinor,
       refundableDeltaMinor,
       balanceAfterMinor,
+      refundableAfterMinor: account.refundableMinor + refundableDeltaMinor,
+      qualifyingAfterMinor: qualifyingMinor,
+      discountBasisPointsAfter: discountBasisPoints,
       tierBefore: account.tierName,
       tierAfter: tierName,
       tierVersionId: input.kind === 'PAYMENT' ? tierVersionId : account.tierVersionId,
+      tierVersionAfterId: tierVersionId,
       refundable,
       tenderId: input.tenderId,
       refundId: input.refundId,
@@ -284,4 +317,161 @@ export async function postPrepaidCash(
       },
     ],
   });
+}
+
+type PinAccount = {
+  id: string;
+  spendPinHash: string | null;
+  pinFailedAttempts: number;
+  pinLockedUntil: Date | null;
+};
+const pinState = (account: PinAccount) => ({
+  failedAttempts: account.pinFailedAttempts,
+  lockedUntil: account.pinLockedUntil,
+});
+
+/** Same lock order as every money movement: customer advisory lock, then the account row. */
+async function lockedPinAccount(db: ScopedDb, organizationId: string, customerId: string) {
+  await lockPrepaidCustomer(db, organizationId, customerId);
+  const rows = await db.$queryRaw<PinAccount[]>(Prisma.sql`
+    SELECT id, "spendPinHash", "pinFailedAttempts", "pinLockedUntil" FROM pharmacy_prepaid_accounts
+    WHERE "organizationId"=${organizationId} AND "customerId"=${customerId} FOR UPDATE`);
+  return rows[0] ?? null;
+}
+
+/**
+ * Sets or replaces the customer's own spend PIN. Only the bcrypt hash is stored; the PIN
+ * itself is never written, logged or audited.
+ */
+export async function setPrepaidPin(
+  db: ScopedDb,
+  scope: { organizationId: string; actorId: string },
+  input: { customerId: string; pin: string }
+) {
+  prepaidPin.parse(input.pin);
+  await lockPrepaidCustomer(db, scope.organizationId, input.customerId);
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: input.customerId, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!customer) throw new PrepaidError('Customer or branch unavailable.');
+  const account = await db.pharmacyPrepaidAccount.upsert({
+    where: {
+      organizationId_customerId: { organizationId: scope.organizationId, customerId: customer.id },
+    },
+    create: { organizationId: scope.organizationId, customerId: customer.id },
+    update: {},
+    select: { id: true },
+  });
+  await db.pharmacyPrepaidAccount.update({
+    where: { id: account.id },
+    data: {
+      spendPinHash: await hashOperatorCredential('PIN', input.pin),
+      pinFailedAttempts: 0,
+      pinLockedUntil: null,
+    },
+  });
+  await db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'TRPC',
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: 'pharmacy.prepaid.pinSet',
+      targetType: 'PharmacyCustomer',
+      targetId: customer.id,
+      metadata: { accountId: account.id },
+    },
+  });
+  return { accountId: account.id };
+}
+
+export async function prepaidPinIsSet(db: ScopedDb, organizationId: string, customerId: string) {
+  const account = await db.pharmacyPrepaidAccount.findFirst({
+    where: { organizationId, customerId },
+    select: { spendPinHash: true },
+  });
+  return !!account?.spendPinHash;
+}
+
+/**
+ * Checks the customer's spend PIN inside the caller's transaction. A refusal throws, so this
+ * never records a strike itself: callers run authenticatePrepaidPin first, which commits strikes.
+ */
+export async function assertPrepaidPin(
+  db: ScopedDb,
+  organizationId: string,
+  customerId: string,
+  pin: string | undefined,
+  now = new Date()
+) {
+  const account = await lockedPinAccount(db, organizationId, customerId);
+  if (
+    !pin ||
+    !prepaidPin.safeParse(pin).success ||
+    !account?.spendPinHash ||
+    isLockedOut(pinState(account), now) ||
+    !(await verifyOperatorCredential('PIN', pin, account.spendPinHash))
+  )
+    throw new PrepaidPinError();
+  if (account.pinFailedAttempts > 0)
+    await db.pharmacyPrepaidAccount.update({
+      where: { id: account.id },
+      data: { pinFailedAttempts: 0, pinLockedUntil: null },
+    });
+}
+
+/**
+ * Verifies the customer's spend PIN in its own tenant transaction so a wrong PIN commits its
+ * strike (five strikes lock the balance for 15 minutes) even though the payment rolls back.
+ */
+export function authenticatePrepaidPin(input: {
+  organizationId: string;
+  actorId: string;
+  customerId: string;
+  pin: string | undefined;
+}): Promise<boolean> {
+  return withTenantDb(
+    input.organizationId,
+    async (db) => {
+      const now = new Date();
+      const account = await lockedPinAccount(db, input.organizationId, input.customerId);
+      if (!account?.spendPinHash || isLockedOut(pinState(account), now)) return false;
+      if (
+        input.pin &&
+        prepaidPin.safeParse(input.pin).success &&
+        (await verifyOperatorCredential('PIN', input.pin, account.spendPinHash))
+      ) {
+        const cleared = clearLockout();
+        await db.pharmacyPrepaidAccount.update({
+          where: { id: account.id },
+          data: { pinFailedAttempts: cleared.failedAttempts, pinLockedUntil: cleared.lockedUntil },
+        });
+        return true;
+      }
+      const strike = registerFailedAttempt(pinState(account), now);
+      await db.pharmacyPrepaidAccount.update({
+        where: { id: account.id },
+        data: { pinFailedAttempts: strike.failedAttempts, pinLockedUntil: strike.lockedUntil },
+      });
+      await db.auditLog.create({
+        data: {
+          organizationId: input.organizationId,
+          actorId: input.actorId,
+          source: 'TRPC',
+          category: 'PHARMACY',
+          operation: 'EXECUTE',
+          action: 'pharmacy.prepaid.spend',
+          outcome: 'FAILURE',
+          errorCode: 'PREPAID_PIN_REFUSED',
+          targetType: 'PharmacyCustomer',
+          targetId: input.customerId,
+          metadata: { locked: strike.lockedUntil !== null },
+        },
+      });
+      return false;
+    },
+    { skipDrain: true }
+  );
 }

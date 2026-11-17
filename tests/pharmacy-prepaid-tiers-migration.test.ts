@@ -31,4 +31,24 @@ describe('DEV-863 prepaid migration', () => {
     expect(sql).toContain('SUM("amountMinor")');
     expect(sql).toContain("RAISE EXCEPTION 'Prepaid account must reconcile to its ledger'");
   });
+  it('ties tier state and every post-movement snapshot to the ledger, not only the sums', () => {
+    expect(sql).toContain('UNIQUE ("organizationId", "accountId", sequence)');
+    expect(sql).toContain("RAISE EXCEPTION 'Prepaid tier change requires a ledger entry'");
+    expect(sql).toContain("RAISE EXCEPTION 'Prepaid entry balance must match its ledger position'");
+    expect(sql).toContain('SUM(e."amountMinor") OVER w AS running_balance');
+    expect(sql).toContain('LAG(e."tierAfter") OVER w AS previous_tier');
+  });
+  it('checks tier price evidence on inserted lines as well as updated ones, at commit', () => {
+    expect(sql).toMatch(
+      /CREATE CONSTRAINT TRIGGER pharmacy_prepaid_line_evidence AFTER INSERT OR UPDATE ON pharmacy_sale_lines\s+DEFERRABLE INITIALLY DEFERRED/
+    );
+    expect(sql).toContain('("tierDiscountMinor" = 0) = ("tierName" IS NULL)');
+    expect(sql).toContain(
+      'CREATE TRIGGER pharmacy_prepaid_freeze_line BEFORE UPDATE ON pharmacy_sale_lines'
+    );
+  });
+  it('stores only a hash of the customer spend PIN', () => {
+    expect(sql).toContain('"spendPinHash" TEXT');
+    expect(sql).not.toMatch(/"spendPin"\s/);
+  });
 });

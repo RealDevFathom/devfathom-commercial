@@ -35,7 +35,9 @@ export function saleAllocationMoney<T extends Money & { id: string; canonicalUni
   return line.allocations.map((row, i) => ({
     ...row,
     grossMinor: row.grossMinor ?? historicalGross[i]!,
-    discountMinor: (row.discountMinor ?? historicalDiscount[i]!) + tierAllocationDiscount(line.tierAllocationDiscounts, row.id),
+    discountMinor:
+      (row.discountMinor ?? historicalDiscount[i]!) +
+      tierAllocationDiscount(line.tierAllocationDiscounts, row.id),
   }));
 }
 

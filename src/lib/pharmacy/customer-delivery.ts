@@ -5,6 +5,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender, saleTotalMinor } from './settlement';
+import { pricePrepaidSale } from './prepaid-discount';
+import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { changeSaleStatus, returnSaleLine } from './sales';
 import { quarantinePart } from './inventory-operations';
 import { releaseOrderReservations } from './customer-ordering';
@@ -165,7 +167,13 @@ export async function recordDeliveryCommand(
       deliveryEvidence: { orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }] },
       counterSale: {
         include: {
-          lines: { include: { allocations: true, returnLines: true } },
+          lines: {
+            include: {
+              medicine: { select: { rx: true, restricted: true, controlled: true } },
+              allocations: { include: { lot: { select: { unitCostMinor: true } } } },
+              returnLines: true,
+            },
+          },
           tenders: { include: { refunds: true } },
         },
       },
@@ -181,8 +189,13 @@ export async function recordDeliveryCommand(
     if (prior.fingerprint !== fingerprint) throw new PharmacyDeliveryError('IDEMPOTENCY_CONFLICT');
     return { evidence: prior, totals: deliveryTotals(order.deliveryEvidence), replayed: true };
   }
+  // DEV-863: the rider collects and remits the bill after the customer's prepaid tier discount.
+  // A remittance freezes it under the customer lock, exactly as its tender will.
+  const counterSale = order.counterSale
+    ? await pricePrepaidSale(db, order.counterSale, input.action === 'REMIT')
+    : null;
   const totals = validateDeliveryCommand(
-    { ...order, expectedMinor: order.counterSale ? saleTotalMinor(order.counterSale.lines) : 0 },
+    { ...order, expectedMinor: counterSale ? saleTotalMinor(counterSale.lines) : 0 },
     order.deliveryEvidence,
     input,
     scope.actorId
@@ -224,7 +237,12 @@ export async function recordDeliveryCommand(
       if (!sale) throw new PharmacyDeliveryError('ORDER_NOT_FOUND');
       // Returning custody is not permission to erase tender history. Refund actual cash first.
       if (sale.status === 'OPEN' && sale.tenders.length) {
-        if (sale.tenders.some((tender) => tender.type !== 'CASH'))
+        // DEV-863: a prepaid wallet tender is restored to the customer's balance below.
+        if (
+          sale.tenders.some(
+            (tender) => tender.type !== 'CASH' && tender.provider !== PREPAID_PROVIDER
+          )
+        )
           throw new PharmacyDeliveryError('PAYMENT_RECONCILIATION_REQUIRED');
         if (!input.deviceId || !input.businessDate)
           throw new PharmacyDeliveryError('DRAWER_REQUIRED');

@@ -16875,6 +16875,10 @@ model PharmacyPrepaidAccount {
   tierName String?
   discountBasisPoints Int @default(0)
   tierVersionId String?
+  /// bcrypt hash of the customer's own spend PIN; never the PIN itself.
+  spendPinHash String?
+  pinFailedAttempts Int @default(0)
+  pinLockedUntil DateTime?
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   entries PharmacyPrepaidEntry[]
   @@unique([organizationId, id])
@@ -16888,13 +16892,19 @@ model PharmacyPrepaidEntry {
   organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId String
   accountId String
+  /// 1, 2, 3… per account; the database checks each entry's post-state against its position.
+  sequence Int
   kind String
   amountMinor Int
   refundableDeltaMinor Int
   balanceAfterMinor Int
+  refundableAfterMinor Int
+  qualifyingAfterMinor Int
+  discountBasisPointsAfter Int
   tierBefore String?
   tierAfter String?
   tierVersionId String?
+  tierVersionAfterId String?
   refundable Boolean?
   tenderId String?
   refundId String?
@@ -16904,6 +16914,7 @@ model PharmacyPrepaidEntry {
   account PharmacyPrepaidAccount @relation(fields: [organizationId, accountId], references: [organizationId, id], onDelete: Restrict)
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, accountId, sequence])
   @@index([organizationId, accountId, createdAt])
   @@map("pharmacy_prepaid_entries")
 }

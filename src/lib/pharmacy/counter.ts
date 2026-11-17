@@ -700,7 +700,9 @@ export async function readCounterCart(
   const grossMinor = sale.lines.reduce((total, line) => total + line.grossMinor, 0);
   const discountMinor = lines.reduce((total, line) => total + line.discountMinor, 0);
   return {
-    prepaidBalanceMinor: sale.customerId ? (await readPrepaidAccount(db,scope.organizationId,sale.customerId))?.balanceMinor ?? 0 : 0,
+    prepaidBalanceMinor: sale.customerId
+      ? ((await readPrepaidAccount(db, scope.organizationId, sale.customerId))?.balanceMinor ?? 0)
+      : 0,
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,

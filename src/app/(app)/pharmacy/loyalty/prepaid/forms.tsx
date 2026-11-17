@@ -5,7 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { savePrepaid, recordPrepaid, type PrepaidFormState } from './actions';
+import {
+  savePrepaid,
+  recordPrepaid,
+  setCustomerPrepaidPin,
+  type PrepaidFormState,
+} from './actions';
 const initial: PrepaidFormState = { status: 'idle', message: '' };
 const selectClass =
   'min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring';
@@ -133,13 +138,15 @@ export function PrepaidPaymentForm({
 }: {
   paymentReference: string;
   drawers: { branchId: string; deviceId: string; label: string }[];
-  customers: { id: string; displayName: string }[];
+  customers: { id: string; displayName: string; pinSet: boolean }[];
   branches: { id: string; name: string }[];
   customerId?: string;
 }) {
   const [state, action, pending] = useActionState(recordPrepaid, initial);
   const [key] = useState(paymentReference);
   const [kind, setKind] = useState('PAYMENT');
+  const [selectedCustomer, setSelectedCustomer] = useState(customerId ?? customers[0]?.id ?? '');
+  const pinRequired = !customers.find((c) => c.id === selectedCustomer)?.pinSet;
   const [branchId, setBranchId] = useState(branches[0]?.id ?? '');
   const availableDrawers = drawers.filter((d) => d.branchId === branchId);
   const receipt = state.receipt;
@@ -153,7 +160,8 @@ export function PrepaidPaymentForm({
             <select
               name="customerId"
               className={selectClass}
-              defaultValue={customerId}
+              value={selectedCustomer}
+              onChange={(e) => setSelectedCustomer(e.target.value)}
               required
               disabled={pending}
             >
@@ -226,9 +234,26 @@ export function PrepaidPaymentForm({
               <option value="REFUND">Refund prepaid cash</option>
             </select>
           </label>
+          {kind === 'PAYMENT' && (
+            <label className="grid gap-2 text-sm">
+              {pinRequired
+                ? 'Customer’s new prepaid PIN (customer types it)'
+                : 'New prepaid PIN (optional, customer types it)'}
+              <Input
+                className="min-h-11"
+                name="customerPin"
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]{4,8}"
+                required={pinRequired}
+                autoComplete="off"
+                disabled={pending}
+              />
+            </label>
+          )}
           {kind === 'REFUND' && (
             <label className="grid gap-2 text-sm">
-              Your manager or owner PIN
+              Your owner PIN
               <Input
                 className="min-h-11"
                 name="pin"
@@ -248,8 +273,9 @@ export function PrepaidPaymentForm({
           </label>
         )}
         <p className="text-sm text-text-muted">
-          Confirm cash received before recording an upfront payment. Refunds use the signed-in
-          owner’s fresh PIN, including for a solo owner.
+          Confirm cash received before recording an upfront payment. The customer enters their own
+          prepaid PIN at the counter to spend this balance. Refunds use the signed-in owner’s fresh
+          PIN, including for a solo owner.
         </p>
         <Button
           className="min-h-11"
@@ -314,5 +340,57 @@ export function PrepaidPaymentForm({
         </SectionCard>
       )}
     </div>
+  );
+}
+
+export function PrepaidPinForm({
+  customers,
+  customerId,
+}: {
+  customers: { id: string; displayName: string }[];
+  customerId?: string;
+}) {
+  const [state, action, pending] = useActionState(setCustomerPrepaidPin, initial);
+  return (
+    <form action={action} className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="grid gap-2 text-sm">
+          Customer
+          <select
+            name="customerId"
+            className={selectClass}
+            defaultValue={customerId}
+            required
+            disabled={pending}
+          >
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-sm">
+          New prepaid PIN (customer types it)
+          <Input
+            className="min-h-11"
+            name="customerPin"
+            type="password"
+            inputMode="numeric"
+            pattern="[0-9]{4,8}"
+            required
+            autoComplete="off"
+            disabled={pending}
+          />
+        </label>
+      </div>
+      <p className="text-sm text-text-muted">
+        Use this when a customer forgets their PIN. Only the customer should type the new PIN.
+      </p>
+      <Button className="min-h-11" type="submit" disabled={pending || !customers.length}>
+        {pending ? 'Saving…' : 'Set prepaid PIN'}
+      </Button>
+      {state.message && <p role={state.status === 'error' ? 'alert' : 'status'}>{state.message}</p>}
+    </form>
   );
 }

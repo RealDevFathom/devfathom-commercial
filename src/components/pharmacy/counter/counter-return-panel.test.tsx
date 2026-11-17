@@ -373,6 +373,39 @@ describe('counter returns', () => {
     fireEvent.click(screen.getByLabelText(/No provider refund adapter/));
     expect(submit).toBeEnabled();
   });
+  it('DEV-863: restores a prepaid wallet refund to the balance without any cash instruction', async () => {
+    const data = mocks.history.data as { tenders: unknown[] };
+    data.tenders = [
+      ...data.tenders,
+      {
+        id: 'prepaid',
+        type: 'WALLET',
+        prepaid: true,
+        amountMinor: 1000,
+        refundedMinor: 0,
+        refunds: [],
+      },
+    ];
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'prepaid' } });
+    expect(
+      screen.getAllByRole('option', { name: /Prepaid balance · PKR 10\.00 remaining/ }).length
+    ).toBeGreaterThan(0);
+    expect(screen.getByText(/goes back to the customer’s prepaid balance/)).toBeVisible();
+    expect(screen.queryByLabelText(/No provider refund adapter/)).not.toBeInTheDocument();
+    enterManagerPin();
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '5.00' } });
+    const submit = screen.getByRole('button', { name: 'Confirm refund' });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(1));
+    expect(mocks.refund.mock.calls[0][0]).toMatchObject({
+      originalTenderId: 'prepaid',
+      amountMinor: 500,
+      manualCashFallback: false,
+    });
+  });
   it.each([false, true])(
     'restores an ambiguous refund (legacy=%s) with the same payload',
     async (legacy) => {
