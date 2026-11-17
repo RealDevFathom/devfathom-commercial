@@ -1813,7 +1813,7 @@ export const pharmacyInventoryRouter = router({
    * receipt, a medicine list, or a search. Prices and lot codes come only from
    * here; the operator chooses how many to print.
    */
-  shelfLabels: auditedProtectedProcedure
+  shelfLabels: inventoryControl
     .input(
       z
         .object({
