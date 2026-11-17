@@ -273,6 +273,7 @@ async function loadCloseInputs(
       amount: true,
       tipAmount: true,
       staffProfileId: true,
+      staff: { select: { displayName: true } },
       payment: { select: { provider: true } },
     },
   });
@@ -282,7 +283,12 @@ async function loadCloseInputs(
       amount: true,
       tipRefundAmount: true,
       originalTender: {
-        select: { type: true, staffProfileId: true, payment: { select: { provider: true } } },
+        select: {
+          type: true,
+          staffProfileId: true,
+          staff: { select: { displayName: true } },
+          payment: { select: { provider: true } },
+        },
       },
       taxRefundAmount: true,
       serviceChargeRefundAmount: true,

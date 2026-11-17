@@ -405,7 +405,7 @@ export function RefundPanel({
                 </Label>
                 <Input
                   id="refund-machine-reference"
-                  maxLength={120}
+                  maxLength={40}
                   value={cardMachineRefundReference}
                   onChange={(event) => setCardMachineRefundReference(event.target.value)}
                 />

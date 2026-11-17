@@ -299,7 +299,7 @@ it('submits the optional MANUAL machine reference with the refund and its retry 
     target: { value: tender.tenderId },
   });
   const reference = screen.getByLabelText('Card machine refund reference (optional)');
-  expect(reference).toHaveAttribute('maxlength', '120');
+  expect(reference).toHaveAttribute('maxlength', '40');
   fireEvent.change(reference, { target: { value: '  BANK-REFUND-123  ' } });
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Returned meal' } });
   fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });

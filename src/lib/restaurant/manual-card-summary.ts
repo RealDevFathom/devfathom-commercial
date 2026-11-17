@@ -14,7 +14,9 @@ const totalsSchema = z.object({
   netTipAmount: z.string(),
 });
 export const manualCardSummarySchema = totalsSchema.extend({
-  cashiers: z.array(totalsSchema.extend({ staffProfileId: z.string() })),
+  cashiers: z.array(
+    totalsSchema.extend({ staffProfileId: z.string(), displayName: z.string().nullish() })
+  ),
 });
 export type ManualCardSummary = z.infer<typeof manualCardSummarySchema>;
 
@@ -24,11 +26,12 @@ export type CardCollection = {
   tipAmount: Prisma.Decimal;
   payment?: { provider: string } | null;
   staffProfileId?: string;
+  staff?: { displayName: string } | null;
 };
 export type CardReturn = {
   amount: Prisma.Decimal;
   tipRefundAmount?: Prisma.Decimal;
-  originalTender?: Pick<CardCollection, 'type' | 'payment' | 'staffProfileId'>;
+  originalTender?: Pick<CardCollection, 'type' | 'payment' | 'staffProfileId' | 'staff'>;
 };
 
 /** Collection-date payments and processing-date refunds/void reversals, attributed
@@ -58,6 +61,14 @@ export function computeManualCardSummary(
       netTipAmount: formatMoney(sub(tipAmount, tipRefundAmount)),
     };
   }
+  // Names are frozen into the snapshot so a later deactivation or branch change of the
+  // cashier cannot turn a historical close into raw staff ids.
+  const names = new Map<string, string>();
+  for (const row of [...collections, ...returns.map((r) => r.originalTender!)]) {
+    if (row.staffProfileId && row.staff?.displayName) {
+      names.set(row.staffProfileId, row.staff.displayName);
+    }
+  }
   const staffIds = new Set([
     ...collections.map((row) => row.staffProfileId!),
     ...returns.map((row) => row.originalTender!.staffProfileId!),
@@ -66,6 +77,7 @@ export function computeManualCardSummary(
     ...fold(collections, returns),
     cashiers: [...staffIds].sort().map((staffProfileId) => ({
       staffProfileId,
+      displayName: names.get(staffProfileId) ?? null,
       ...fold(
         collections.filter((row) => row.staffProfileId === staffProfileId),
         returns.filter((row) => row.originalTender!.staffProfileId === staffProfileId)

@@ -429,11 +429,18 @@ describe('manual card refund reference validation', () => {
         .cardMachineRefundReference
     ).toBe('REF-42');
     expect(
-      refundBody.parse({ ...body, cardMachineRefundReference: 'x'.repeat(120) })
+      refundBody.parse({ ...body, cardMachineRefundReference: 'x'.repeat(40) })
         .cardMachineRefundReference
-    ).toHaveLength(120);
+    ).toHaveLength(40);
     expect(
-      refundBody.safeParse({ ...body, cardMachineRefundReference: 'x'.repeat(121) }).success
+      refundBody.safeParse({ ...body, cardMachineRefundReference: 'x'.repeat(41) }).success
     ).toBe(false);
+  });
+  it('rejects card-number-shaped and malformed references at the request boundary', () => {
+    for (const bad of ['4111111111111111', '4111-1111-1111-1111', 'REF 42']) {
+      expect(refundBody.safeParse({ ...body, cardMachineRefundReference: bad }).success).toBe(
+        false
+      );
+    }
   });
 });

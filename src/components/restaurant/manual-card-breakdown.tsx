@@ -54,8 +54,9 @@ export function ManualCardBreakdown({
               className="space-y-2 border-t border-border-subtle pt-3"
             >
               <p className="break-all text-sm font-medium">
-                {staff.find((person) => person.id === cashier.staffProfileId)?.displayName ??
-                  cashier.staffProfileId}
+                {cashier.displayName ??
+                  staff.find((person) => person.id === cashier.staffProfileId)?.displayName ??
+                  'Unknown cashier'}
               </p>
               {figures(cashier)}
             </div>

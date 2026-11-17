@@ -110,10 +110,20 @@ describe('manual card refund reference command', () => {
   it('rejects overlong references before any ledger writes', async () => {
     const { db, tx } = refundDb();
     await expect(
-      refundTender(db, { ...input, cardMachineRefundReference: 'x'.repeat(121) })
+      refundTender(db, { ...input, cardMachineRefundReference: 'x'.repeat(41) })
     ).rejects.toMatchObject({ reason: 'INVALID' });
     expect(tx.restaurantMoneyIdempotencyKey.create).not.toHaveBeenCalled();
     expect(tx.restaurantRefund.create).not.toHaveBeenCalled();
+  });
+  it('rejects card-number-shaped references before any ledger writes', async () => {
+    for (const bad of ['4111111111111111', '4111-1111-1111-1111', 'REF 42']) {
+      const { db, tx } = refundDb();
+      await expect(
+        refundTender(db, { ...input, cardMachineRefundReference: bad })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
+      expect(tx.restaurantMoneyIdempotencyKey.create).not.toHaveBeenCalled();
+      expect(tx.restaurantRefund.create).not.toHaveBeenCalled();
+    }
   });
   it('rejects references for non-manual providers before claiming an idempotency key', async () => {
     const { db, tx } = refundDb('MOCK');

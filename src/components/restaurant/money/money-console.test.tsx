@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { within, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -588,6 +588,31 @@ describe('MoneyConsole', () => {
 
     expect(screen.getByText('No tender totals')).toBeInTheDocument();
     expect(screen.getByText('No drawer variances')).toBeInTheDocument();
+  });
+
+  it('shows the saved manual card line, with frozen cashier names, in close detail', () => {
+    const row = {
+      count: 2,
+      amount: '41.00',
+      tipAmount: '0.00',
+      refundCount: 0,
+      refundAmount: '0.00',
+      tipRefundAmount: '0.00',
+      netAmount: '41.00',
+      netTipAmount: '0.00',
+    };
+    (mocks.close.data as Record<string, unknown>).manualCardSummary = {
+      ...row,
+      cashiers: [{ ...row, staffProfileId: 'gone_staff', displayName: 'Left The Company' }],
+    };
+    renderConsole();
+    setBranchAndDate();
+    fireEvent.click(screen.getByRole('tab', { name: 'Daily close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View close close_1' }));
+    const region = screen.getByRole('region', { name: 'Card, confirmed manually' });
+    expect(within(region).getByText('Left The Company')).toBeVisible();
+    expect(within(region).getAllByText('41.00').length).toBeGreaterThan(0);
+    delete (mocks.close.data as Record<string, unknown>).manualCardSummary;
   });
 
   it('renders list loading and retryable generic-error states', () => {

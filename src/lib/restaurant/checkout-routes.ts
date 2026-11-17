@@ -30,6 +30,7 @@ import {
   type OpenDrawerSessionResult,
 } from './drawer-sessions';
 import { PaymentAdapterError } from './payment-adapter';
+import { refundReferenceProblem } from './refund-reference';
 import { RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
@@ -187,7 +188,14 @@ export const tenderBody = z
 export const refundBody = z
   .object({
     originalTenderId: ID,
-    cardMachineRefundReference: z.string().trim().max(120).optional(),
+    cardMachineRefundReference: z
+      .string()
+      .trim()
+      .superRefine((value, ctx) => {
+        const problem = refundReferenceProblem(value);
+        if (problem) ctx.addIssue({ code: 'custom', message: problem });
+      })
+      .optional(),
     amount: MONEY,
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { refundReferenceProblem } from './refund-reference';
 import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -164,12 +165,10 @@ export async function refundTender(
   return runMoneyTransaction(db, async (tx) => {
     const reason = requireReason(input.reason);
     const cardMachineRefundReference = input.cardMachineRefundReference?.trim() || null;
-    if (cardMachineRefundReference && cardMachineRefundReference.length > 120) {
-      throw new RefundError(
-        'The card machine refund reference must be at most 120 characters.',
-        'INVALID'
-      );
-    }
+    const referenceProblem = cardMachineRefundReference
+      ? refundReferenceProblem(cardMachineRefundReference)
+      : null;
+    if (referenceProblem) throw new RefundError(referenceProblem, 'INVALID');
     const amount = money(input.amount);
     const tipRefundAmount =
       input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
