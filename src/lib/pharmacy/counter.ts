@@ -318,8 +318,7 @@ export async function searchCounterCatalog(
         // An alternative is reached through the stored ingredient graph.
         new Map(candidateIds.map((id) => [id, 'INGREDIENT' as const])),
         candidateIds,
-        at,
-        true
+        at
       )
     : { rows: [], medicines: [] };
   const alternativeById = new Map(
@@ -339,11 +338,18 @@ export async function searchCounterCatalog(
         ingredientSetKey(source.strengths) !== ingredientSetKey(medicine.strengths)
       )
         continue;
+      // The sale writer allocates FEFO across every presentation of a medicine, so
+      // the quoted row is medicine-wide. A medicine is an exact equivalent only when
+      // every presentation it could be dispensed from has the source form and route.
       const same =
         strengthComponentKey(source.strengths) === strengthComponentKey(medicine.strengths) &&
         normalizedForm(row.dosageForm) !== '' &&
-        normalizedForm(row.dosageForm) === normalizedForm(candidate.dosageForm) &&
-        normalizedForm(row.route) === normalizedForm(candidate.route);
+        medicine.presentations.length > 0 &&
+        medicine.presentations.every(
+          (presentation) =>
+            normalizedForm(presentation.dosageForm) === normalizedForm(row.dosageForm) &&
+            normalizedForm(presentation.route) === normalizedForm(row.route)
+        );
       (same ? exact : other).push(candidate);
     }
     row.stockAlternatives = {
@@ -396,8 +402,7 @@ async function hydrateCounterRows(
   scope: CounterScope,
   matches: ReadonlyMap<string, CounterMatchKind>,
   medicineIds: string[],
-  at: Date,
-  allPresentations = false
+  at: Date
 ) {
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
@@ -500,140 +505,131 @@ async function hydrateCounterRows(
 
   const rows: CounterSearchRow[] = [];
   for (const medicine of medicines) {
-    // Search retains its single preferred presentation. Alternatives inspect
-    // every presentation so a different form cannot hide an exact match.
-    for (const candidatePresentation of allPresentations ? medicine.presentations : [null]) {
-      const scope_ = { organizationId: scope.organizationId, branchId: scope.branchId, at };
-      const medicineLots = (lotsByMedicine.get(medicine.id) ?? []).filter(
-        (lot) =>
-          !candidatePresentation ||
-          presentationByPackLevel.get(lot.packLevelId) === candidatePresentation.id
-      );
+    const scope_ = { organizationId: scope.organizationId, branchId: scope.branchId, at };
+    const medicineLots = lotsByMedicine.get(medicine.id) ?? [];
 
-      let onHandUnits = 0;
-      const blocked = new Set<BlockReason>();
-      let best: { lot: LotRow; locationId: string } | null = null;
-      const sellableLots = new Map<string, LotRow>();
+    let onHandUnits = 0;
+    const blocked = new Set<BlockReason>();
+    let best: { lot: LotRow; locationId: string } | null = null;
+    const sellableLots = new Map<string, LotRow>();
 
-      for (const lot of medicineLots) {
-        for (const balance of balancesByLot.get(lot.id) ?? []) {
-          const candidate = candidateFrom(scope, lot, balance);
-          const reason = blockReasonFor(candidate, scope_);
-          if (reason !== null) {
-            // EMPTY is an exhausted bucket, not a condition an operator acts on.
-            if (reason !== 'EMPTY') blocked.add(reason);
-            continue;
-          }
-          onHandUnits += balance.onHandUnits;
-          sellableLots.set(lot.id, lot);
-          const better =
-            best === null ||
-            lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
-            (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-              lot.id.localeCompare(best.lot.id) < 0);
-          if (better) best = { lot, locationId: balance.stockLocationId };
+    for (const lot of medicineLots) {
+      for (const balance of balancesByLot.get(lot.id) ?? []) {
+        const candidate = candidateFrom(scope, lot, balance);
+        const reason = blockReasonFor(candidate, scope_);
+        if (reason !== null) {
+          // EMPTY is an exhausted bucket, not a condition an operator acts on.
+          if (reason !== 'EMPTY') blocked.add(reason);
+          continue;
         }
+        onHandUnits += balance.onHandUnits;
+        sellableLots.set(lot.id, lot);
+        const better =
+          best === null ||
+          lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
+          (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
+            lot.id.localeCompare(best.lot.id) < 0);
+        if (better) best = { lot, locationId: balance.stockLocationId };
       }
-
-      const presentationId =
-        (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
-        candidatePresentation?.id ??
-        medicine.presentations[0]?.id ??
-        null;
-      if (!presentationId) continue;
-      const presentation =
-        medicine.presentations.find((entry) => entry.id === presentationId) ??
-        medicine.presentations[0]!;
-
-      let saleUnits: SaleUnitOption[] = [];
-      let packMismatch: CounterPackMismatch | null = null;
-      if (best) {
-        // A lot whose received pack disagrees with the medicine's pack setup is
-        // still sold through that setup, priced from the same lot exactly as the
-        // server prices the line; only a setup that cannot price it reports why.
-        ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
-          packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-          lotPackLevelId: best.lot.packLevelId,
-          lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
-          lotUnitsPerPack: best.lot.unitsPerPack,
-          otherLotUnitsPerPack: [...sellableLots.values()]
-            .filter((lot) => lot.id !== best!.lot.id)
-            .map((lot) => lot.unitsPerPack),
-          dosageForm: presentation.dosageForm,
-          at,
-        }));
-      }
-
-      // The same (pack level, batch) lookup the sale writer uses, so the quoted
-      // price is the charged price even when batches carry different increments.
-      const roundingIncrementMinor = best
-        ? mrpRoundingIncrementForLot(mrps, {
-            packLevelId: best.lot.packLevelId,
-            batchNumber: best.lot.batch.batchNumber,
-          })
-        : 1;
-
-      const saleableUnits = best
-        ? saleUnits.map((option) => {
-            const preview = previewSaleLine({
-              option,
-              quantity: 1,
-              printedMrpMinor: best!.lot.printedMrpMinor,
-              unitsPerPack: best!.lot.unitsPerPack,
-              roundingIncrementMinor,
-              availableUnits: onHandUnits,
-            });
-            return {
-              kind: option.kind,
-              levelLabel: option.levelLabel,
-              canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-              wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
-              unitPriceMinor: preview.unitPriceMinor,
-              proRataCeilingMinor: preview.proRataCeilingMinor,
-            };
-          })
-        : [];
-
-      const location = best ? locationById.get(best.locationId) : undefined;
-      rows.push({
-        medicineId: medicine.id,
-        displayName: medicine.productName,
-        brandName: medicine.brandName,
-        manufacturer: medicine.manufacturer,
-        strength: renderStrength(medicine.strengths),
-        presentationId,
-        presentation: presentation.presentation,
-        dosageForm: presentation.dosageForm,
-        route: presentation.route,
-        matchedOn: matches.get(medicine.id) ?? 'NAME',
-        recommendedLotId: best?.lot.id ?? null,
-        packLevelId: best?.lot.packLevelId ?? null,
-        unitsPerPack: best?.lot.unitsPerPack ?? null,
-        printedMrpMinor: best?.lot.printedMrpMinor ?? null,
-        roundingIncrementMinor,
-        batchNumber: best?.lot.batch.batchNumber ?? null,
-        nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
-        onHandUnits,
-        saleableUnits,
-        saleUnits,
-        packMismatch,
-        restriction: {
-          rx: medicine.rx,
-          otc: medicine.otc,
-          restricted: medicine.restricted,
-          controlled: medicine.controlled,
-          highAlert: medicine.highAlert,
-          lasa: medicine.lasa,
-        },
-        storage: {
-          coldChain: medicine.coldChain,
-          locationKind: location?.kind ?? null,
-          locationCode: location?.code ?? null,
-          locationName: location?.name ?? null,
-        },
-        blocked: [...blocked].sort(),
-      });
     }
+
+    const presentationId =
+      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
+      medicine.presentations[0]?.id ??
+      null;
+    if (!presentationId) continue;
+    const presentation =
+      medicine.presentations.find((entry) => entry.id === presentationId) ??
+      medicine.presentations[0]!;
+
+    let saleUnits: SaleUnitOption[] = [];
+    let packMismatch: CounterPackMismatch | null = null;
+    if (best) {
+      // A lot whose received pack disagrees with the medicine's pack setup is
+      // still sold through that setup, priced from the same lot exactly as the
+      // server prices the line; only a setup that cannot price it reports why.
+      ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
+        packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+        lotPackLevelId: best.lot.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
+        lotUnitsPerPack: best.lot.unitsPerPack,
+        otherLotUnitsPerPack: [...sellableLots.values()]
+          .filter((lot) => lot.id !== best!.lot.id)
+          .map((lot) => lot.unitsPerPack),
+        dosageForm: presentation.dosageForm,
+        at,
+      }));
+    }
+
+    // The same (pack level, batch) lookup the sale writer uses, so the quoted
+    // price is the charged price even when batches carry different increments.
+    const roundingIncrementMinor = best
+      ? mrpRoundingIncrementForLot(mrps, {
+          packLevelId: best.lot.packLevelId,
+          batchNumber: best.lot.batch.batchNumber,
+        })
+      : 1;
+
+    const saleableUnits = best
+      ? saleUnits.map((option) => {
+          const preview = previewSaleLine({
+            option,
+            quantity: 1,
+            printedMrpMinor: best!.lot.printedMrpMinor,
+            unitsPerPack: best!.lot.unitsPerPack,
+            roundingIncrementMinor,
+            availableUnits: onHandUnits,
+          });
+          return {
+            kind: option.kind,
+            levelLabel: option.levelLabel,
+            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
+            unitPriceMinor: preview.unitPriceMinor,
+            proRataCeilingMinor: preview.proRataCeilingMinor,
+          };
+        })
+      : [];
+
+    const location = best ? locationById.get(best.locationId) : undefined;
+    rows.push({
+      medicineId: medicine.id,
+      displayName: medicine.productName,
+      brandName: medicine.brandName,
+      manufacturer: medicine.manufacturer,
+      strength: renderStrength(medicine.strengths),
+      presentationId,
+      presentation: presentation.presentation,
+      dosageForm: presentation.dosageForm,
+      route: presentation.route,
+      matchedOn: matches.get(medicine.id) ?? 'NAME',
+      recommendedLotId: best?.lot.id ?? null,
+      packLevelId: best?.lot.packLevelId ?? null,
+      unitsPerPack: best?.lot.unitsPerPack ?? null,
+      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
+      roundingIncrementMinor,
+      batchNumber: best?.lot.batch.batchNumber ?? null,
+      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
+      onHandUnits,
+      saleableUnits,
+      saleUnits,
+      packMismatch,
+      restriction: {
+        rx: medicine.rx,
+        otc: medicine.otc,
+        restricted: medicine.restricted,
+        controlled: medicine.controlled,
+        highAlert: medicine.highAlert,
+        lasa: medicine.lasa,
+      },
+      storage: {
+        coldChain: medicine.coldChain,
+        locationKind: location?.kind ?? null,
+        locationCode: location?.code ?? null,
+        locationName: location?.name ?? null,
+      },
+      blocked: [...blocked].sort(),
+    });
   }
 
   rows.sort(

@@ -199,7 +199,9 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
     expect(result.other.map((entry) => entry.medicineId)).toEqual(['form', 'swapped']);
   });
 
-  it('examines every candidate presentation and separates a different route', async () => {
+  it('quotes the lot the sale writer would allocate and never calls a mixed-form medicine exact', async () => {
+    // The add-line path allocates FEFO across every presentation of a medicine, so a
+    // tablet quote must not hide an earlier-expiring injection lot that would be sold.
     const candidate = medicine('alternative');
     candidate.presentations.push({
       ...candidate.presentations[0]!,
@@ -207,11 +209,33 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
       dosageForm: 'Injection',
       route: 'IV',
     });
-    const otherLot = { ...lot('other-lot', 'alternative'), packLevelId: 'pack-alternative-other' };
-    const f = fixture([medicine('requested'), candidate], [lot('safe', 'alternative'), otherLot]);
+    const injectionLot = {
+      ...lot('injection-lot', 'alternative', '2026-12-15', 9000),
+      packLevelId: 'pack-alternative-other',
+    };
+    const f = fixture(
+      [medicine('requested'), candidate],
+      [lot('tablet-lot', 'alternative'), injectionLot]
+    );
     const result = (await f.search()).rows[0]!.stockAlternatives!;
-    expect(result.exact.map((entry) => entry.presentationId)).toEqual(['p-alternative']);
-    expect(result.other.map((entry) => entry.presentationId)).toEqual(['p-other']);
+    expect(result.exact).toEqual([]);
+    expect(result.other).toHaveLength(1);
+    expect(result.other[0]).toMatchObject({
+      medicineId: 'alternative',
+      recommendedLotId: 'injection-lot',
+      presentationId: 'p-other',
+      printedMrpMinor: 9000,
+      onHandUnits: 60,
+    });
+  });
+
+  it('separates a different route even when the form matches', async () => {
+    const candidate = medicine('alternative');
+    candidate.presentations[0]!.route = 'Sublingual';
+    const f = fixture([medicine('requested'), candidate]);
+    const result = (await f.search()).rows[0]!.stockAlternatives!;
+    expect(result.exact).toEqual([]);
+    expect(result.other.map((entry) => entry.medicineId)).toEqual(['alternative']);
   });
 
   it('sorts FEFO first, then pack price, including brands more expensive than the source', async () => {
