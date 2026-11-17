@@ -2128,20 +2128,35 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // A retry is validated like a new request before replay, so an unknown earlier
+          // serial is refused either way.
+          const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
+          if (authorization.refSerial && !refEntry) {
+            return { blocked: 'That earlier register serial is not on this branch.' };
+          }
           // DEV-874: a retry replays only after the independent pharmacist PIN passes again,
           // so a missing or wrong PIN never returns the saved controlled line.
           const replay = await replaySaleLine(db, scope, lineInput);
           if (replay) {
             // The counter key omits the patient and dispensing authority, so a retry must
-            // carry the ones the register recorded for this line.
+            // carry every detail the register recorded for this line.
             const recorded = await db.pharmacyControlledRegisterEntry.findMany({
               where: {
                 organizationId: scope.organizationId,
                 stockMovementId: { in: replay.allocation.movementIds },
               },
-              select: { patientId: true, prescriptionLineId: true, emergency: true },
+              select: {
+                patientId: true,
+                patientAddress: true,
+                prescriptionLineId: true,
+                emergency: true,
+                prescriberName: true,
+                prescriberRegNo: true,
+                rxSerialWritten: true,
+                refEntryId: true,
+              },
             });
-            const emergency = Boolean(authorization.emergency);
+            const emergency = authorization.emergency;
             const prescriptionLineId = emergency
               ? null
               : (authorization.prescriptionLineId ?? null);
@@ -2150,8 +2165,15 @@ export const pharmacySalesRouter = router({
               recorded.some(
                 (entry) =>
                   entry.patientId !== authorization.patientId ||
+                  entry.patientAddress !== authorization.patientAddress ||
                   entry.emergency !== emergency ||
-                  entry.prescriptionLineId !== prescriptionLineId
+                  entry.prescriptionLineId !== prescriptionLineId ||
+                  entry.rxSerialWritten !== authorization.rxSerialWritten ||
+                  entry.refEntryId !== (refEntry?.id ?? null) ||
+                  // A prescription fill snapshots its prescriber from the prescription line.
+                  (emergency &&
+                    (entry.prescriberName !== (authorization.prescriberName ?? null) ||
+                      entry.prescriberRegNo !== (authorization.prescriberRegNo ?? null)))
               )
             )
               throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
@@ -2159,10 +2181,6 @@ export const pharmacySalesRouter = router({
           }
           for (const { kind, approval } of approvals)
             await confirmCounterApproval(db, scope, kind, approval);
-          const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
-          if (authorization.refSerial && !refEntry) {
-            return { blocked: 'That earlier register serial is not on this branch.' };
-          }
           if (authorization.emergency) {
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },

@@ -122,7 +122,7 @@ function callerFor(
     restaurantOperatorCredential: { findFirst: credential },
     pharmacyControlledRegisterEntry: {
       create: register,
-      findFirst: vi.fn(),
+      findFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
       aggregate: vi.fn(),
       findMany: vi.fn<(args: unknown) => Promise<unknown[]>>(async () => []),
     },
@@ -177,6 +177,21 @@ function emergencyCallerFor(
     patientConsent: { findFirst: consent },
   });
   return { ...fixture, profile, recentSupplies, openFollowUp, consent };
+}
+
+/** A register row as appendControlledSaleEntries writes it for `line`'s emergency supply. */
+function recordedEntry(change: Record<string, unknown> = {}) {
+  return {
+    patientId: 'patient-1',
+    patientAddress: '12 Mall Road, Gulberg',
+    prescriptionLineId: null,
+    emergency: true,
+    prescriberName: 'Dr Khan',
+    prescriberRegNo: null,
+    rxSerialWritten: true,
+    refEntryId: null,
+    ...change,
+  };
 }
 
 function withValidWitness(fixture: ReturnType<typeof callerFor>) {
@@ -558,8 +573,14 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         withValidWitness(f);
         f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue([
           path === 'controlled emergency'
-            ? { patientId: 'patient-1', prescriptionLineId: null, emergency: true }
-            : { patientId: 'patient-1', prescriptionLineId: 'rx-line-1', emergency: false },
+            ? recordedEntry()
+            : recordedEntry({
+                prescriptionLineId: 'rx-line-1',
+                emergency: false,
+                // Snapshotted from the prescription line, so not compared with the request.
+                prescriberName: 'Dr Prescriber',
+                prescriberRegNo: 'PMC-1',
+              }),
         ]);
       }
       const stored = {
@@ -599,7 +620,16 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         expect(verifyOperatorCredential).toHaveBeenCalledExactlyOnceWith('PIN', '1234', 'hash');
         expect(f.db.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledExactlyOnceWith({
           where: { organizationId: 'org-1', stockMovementId: { in: ['movement-1'] } },
-          select: { patientId: true, prescriptionLineId: true, emergency: true },
+          select: {
+            patientId: true,
+            patientAddress: true,
+            prescriptionLineId: true,
+            emergency: true,
+            prescriberName: true,
+            prescriberRegNo: true,
+            rxSerialWritten: true,
+            refEntryId: true,
+          },
         });
       } else expect(f.credential).not.toHaveBeenCalled();
       expect(f.register).not.toHaveBeenCalled();
@@ -650,21 +680,23 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
   );
 
   it.each([
-    [
-      'names a different patient',
-      { patientId: 'patient-2', prescriptionLineId: null, emergency: true },
-      {},
-    ],
+    ['names a different patient', recordedEntry({ patientId: 'patient-2' }), {}],
     [
       'turns an emergency supply into a prescription fill',
-      { patientId: 'patient-1', prescriptionLineId: null, emergency: true },
+      recordedEntry(),
       { emergency: false, prescriptionLineId: 'rx-line-1' },
     ],
     [
       'names a different prescription line',
-      { patientId: 'patient-1', prescriptionLineId: 'rx-line-1', emergency: false },
+      recordedEntry({ prescriptionLineId: 'rx-line-1', emergency: false }),
       { emergency: false, prescriptionLineId: 'rx-line-2' },
     ],
+    ['changes the patient address', recordedEntry({ patientAddress: '7 Canal Road' }), {}],
+    ['changes the serial-written flag', recordedEntry(), { rxSerialWritten: false }],
+    ['changes the emergency prescriber', recordedEntry(), { prescriberName: 'Dr Ahmed' }],
+    ['adds a prescriber registration', recordedEntry(), { prescriberRegNo: 'PMC-9' }],
+    ['adds an earlier register serial', recordedEntry(), { refSerial: 9 }],
+    ['drops the earlier register serial', recordedEntry({ refEntryId: 'entry-9' }), {}],
     ['has no register evidence for the saved line', null, {}],
   ])(
     'refuses a controlled retry that %s instead of replaying it',
@@ -672,6 +704,7 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
       const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
       withValidWitness(f);
       f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue(recorded ? [recorded] : []);
+      f.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue({ id: 'entry-9' });
       const { controlledAuthorization, ...plain } = line;
       f.db.pharmacySaleLine.findFirst.mockResolvedValue({
         ...plain,
@@ -702,6 +735,20 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
       expect(f.register).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses an unknown earlier register serial before replaying the saved line', async () => {
+    const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    withValidWitness(f);
+    f.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue(null);
+    await expect(
+      f.caller.addLine({
+        ...line,
+        controlledAuthorization: { ...line.controlledAuthorization, refSerial: 404 },
+      })
+    ).resolves.toEqual({ blocked: 'That earlier register serial is not on this branch.' });
+    expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
 
   it.each(['missing', 'wrong'])(
     'refuses a controlled retry with a %s pharmacist PIN instead of replaying the saved line',
