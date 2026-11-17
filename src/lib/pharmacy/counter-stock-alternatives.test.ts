@@ -172,7 +172,23 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
               AND: [{ strengths: { some: { ingredientId: 'salt-a' } } }],
             },
           ],
+          batches: {
+            some: {
+              state: 'ACTIVE',
+              expiresAt: { gt: at },
+              lots: {
+                some: {
+                  branchId: 'branch-a',
+                  receivedAt: { not: null, lte: at },
+                  balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+                },
+              },
+            },
+          },
         },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+        take: 50,
       })
     );
   });
@@ -260,6 +276,29 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
     // displayed price comes from the lot the normal add-line path will use.
     expect(exact[0]!.recommendedLotId).toBe('early-low');
     expect(exact[0]!.printedMrpMinor).toBe(3000);
+  });
+
+  it('quotes the oldest receipt first among equal-expiry lots, as the sale allocator does', async () => {
+    const older = { ...lot('z-older', 'alternative', '2027-01-01', 1800) };
+    older.receivedAt = new Date('2026-10-01T00:00:00Z');
+    const newer = { ...lot('a-newer', 'alternative', '2027-01-01', 2600) };
+    newer.receivedAt = new Date('2026-11-01T00:00:00Z');
+    const f = fixture(undefined, [newer, older]);
+    const [alternative] = (await f.search()).rows[0]!.stockAlternatives!.exact;
+    expect(alternative).toMatchObject({ recommendedLotId: 'z-older', printedMrpMinor: 1800 });
+  });
+
+  it('breaks an expiry tie on price per unit, not on the whole-pack price', async () => {
+    const f = fixture(
+      [medicine('requested'), medicine('small-pack'), medicine('large-pack')],
+      [
+        { ...lot('small', 'small-pack', '2027-01-01', 1500), unitsPerPack: 10 },
+        { ...lot('large', 'large-pack', '2027-01-01', 3000), unitsPerPack: 30 },
+      ]
+    );
+    const exact = (await f.search()).rows[0]!.stockAlternatives!.exact;
+    // 100 per unit beats 150 per unit even though its pack MRP is higher.
+    expect(exact.map((entry) => entry.medicineId)).toEqual(['large-pack', 'small-pack']);
   });
 
   it.each([

@@ -130,6 +130,8 @@ type BalanceRow = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+/** DEV-878: bound on same-ingredient candidates hydrated for one search. */
+const MAX_ALTERNATIVE_CANDIDATES = 50;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -306,8 +308,26 @@ export async function searchCounterCatalog(
             strengths: { every: { ingredientId: { in: ids } } },
             AND: ids.map((ingredientId) => ({ strengths: { some: { ingredientId } } })),
           })),
+          // Only medicines that can have sellable stock at this branch, so the cap
+          // below bounds the work without crowding out in-stock brands. The row
+          // kernel still applies the full sellability rules to each lot.
+          batches: {
+            some: {
+              state: 'ACTIVE',
+              expiresAt: { gt: at },
+              lots: {
+                some: {
+                  branchId: scope.branchId,
+                  receivedAt: { not: null, lte: at },
+                  balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+                },
+              },
+            },
+          },
         },
         select: { id: true },
+        orderBy: { id: 'asc' },
+        take: MAX_ALTERNATIVE_CANDIDATES,
       })
     : [];
   const candidateIds = candidates.map((medicine) => medicine.id);
@@ -361,6 +381,18 @@ export async function searchCounterCatalog(
   return { rows, truncated: matches.size > medicineIds.length };
 }
 
+/**
+ * The sale allocator's FEFO order (`byFefo` in inventory.ts): expiry, then the
+ * oldest receipt, then lot id, so the quoted lot is the lot the sale charges.
+ */
+function fefoBefore(lot: LotRow, best: LotRow) {
+  return (
+    (lot.batch.expiresAt.getTime() - best.batch.expiresAt.getTime() ||
+      (lot.receivedAt?.getTime() ?? 0) - (best.receivedAt?.getTime() ?? 0) ||
+      lot.id.localeCompare(best.id)) < 0
+  );
+}
+
 function hasSellableUnit(row: CounterSearchRow) {
   return row.onHandUnits > 0 && row.saleableUnits.some((unit) => unit.wholeUnits > 0);
 }
@@ -387,10 +419,18 @@ function strengthComponentKey(strengths: readonly StrengthComponent[]) {
   );
 }
 
+/** Price per canonical unit, compared exactly by cross-multiplying pack MRP and size. */
+function comparePerUnitPrice(left: CounterSearchRow, right: CounterSearchRow) {
+  return (
+    (left.printedMrpMinor ?? 0) * (right.unitsPerPack ?? 1) -
+    (right.printedMrpMinor ?? 0) * (left.unitsPerPack ?? 1)
+  );
+}
+
 function compareStockAlternatives(left: CounterSearchRow, right: CounterSearchRow) {
   return (
     (left.nearestSafeExpiry ?? '').localeCompare(right.nearestSafeExpiry ?? '') ||
-    (left.printedMrpMinor ?? 0) - (right.printedMrpMinor ?? 0) ||
+    comparePerUnitPrice(left, right) ||
     left.displayName.localeCompare(right.displayName) ||
     left.presentationId.localeCompare(right.presentationId)
   );
@@ -524,11 +564,7 @@ async function hydrateCounterRows(
         }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
-        const better =
-          best === null ||
-          lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
-          (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-            lot.id.localeCompare(best.lot.id) < 0);
+        const better = best === null || fefoBefore(lot, best.lot);
         if (better) best = { lot, locationId: balance.stockLocationId };
       }
     }
