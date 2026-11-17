@@ -9,6 +9,8 @@ const m = vi.hoisted(() => ({
   jobFindMany: vi.fn(),
   jobCreate: vi.fn(),
   lock: vi.fn(),
+  staged: [] as unknown[],
+  committed: [] as unknown[],
   verifyPin: vi.fn(),
   getUploadStream: vi.fn(),
   putUploadFile: vi.fn(),
@@ -28,11 +30,25 @@ vi.mock('@/lib/pharmacy/owner-data-export-pin', async (importOriginal) => ({
   verifyOwnerExportPin: m.verifyPin,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
-  withPlatformDb: (run: (db: unknown) => unknown) =>
-    run({
+  // Models the transaction: jobs created inside `run` are staged and only
+  // committed when `run` resolves; a rejection discards them (rollback).
+  withPlatformDb: async (run: (db: unknown) => unknown) => {
+    m.staged.length = 0;
+    const result = await run({
       $queryRawUnsafe: m.lock,
-      platformJob: { findFirst: m.jobFindFirst, findMany: m.jobFindMany, create: m.jobCreate },
-    }),
+      platformJob: {
+        findFirst: m.jobFindFirst,
+        findMany: m.jobFindMany,
+        create: async (args: unknown) => {
+          const job = await m.jobCreate(args);
+          m.staged.push(job);
+          return job;
+        },
+      },
+    });
+    m.committed.push(...m.staged);
+    return result;
+  },
 }));
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: async () => ({
@@ -99,6 +115,8 @@ const finished = (finishedAt: Date) => ({
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  m.staged.length = 0;
+  m.committed.length = 0;
   await clearRateLimit('owner-data-export-download:org-a:u-owner');
   m.session.user = { id: 'u-owner', role: 'ADMIN', isSupportSession: false };
   m.actor.mockResolvedValue({ session: m.session, organization: { id: 'org-a' } });
@@ -184,6 +202,38 @@ describe('owner data export route', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('writes the audit row before the export is committed and queues nothing when the audit fails (DEV-883)', async () => {
+    const order: string[] = [];
+    m.jobCreate.mockImplementationOnce(async () => {
+      order.push('queue');
+      return {
+        id: 'job-new',
+        status: 'QUEUED',
+        createdAt: new Date(),
+        finishedAt: null,
+        result: null,
+      };
+    });
+    m.audit.mockImplementationOnce(async () => {
+      order.push('audit');
+    });
+    const ok = await POST(post({ from: '2026-01-01', to: '2026-10-31', pin: PIN }));
+    expect(ok.status).toBe(202);
+    expect(order).toEqual(['queue', 'audit']);
+    // The audit shares the queue's transaction handle, so one rolls back with the other.
+    expect(m.audit.mock.calls[0]![1]).toHaveProperty('platformJob');
+    expect(m.committed).toHaveLength(1);
+
+    m.committed.length = 0;
+    m.audit.mockRejectedValue(new Error('audit down'));
+    const failed = await POST(post({ from: '2026-01-01', to: '2026-10-31', pin: PIN }));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).not.toHaveProperty('export');
+    // The job was inserted, but the audit failure rolled the transaction back.
+    expect(m.jobCreate).toHaveBeenCalledTimes(2);
+    expect(m.committed).toHaveLength(0);
   });
 
   it('rejects an inverted date range', async () => {

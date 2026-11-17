@@ -217,11 +217,6 @@ export function CounterSearchResults({
                   className="min-w-0 break-words text-sm font-semibold text-text-strong"
                 >
                   {counterMedicineDisplayName(row)}
-                  {row.strength ? (
-                    <span className="ms-1 font-normal text-text-body">
-                      <bdi dir="auto">{row.strength}</bdi>
-                    </span>
-                  ) : null}
                   {counterMedicineGenericName(row) ? (
                     <span dir="auto" className="block text-xs font-normal text-text-muted">
                       {counterMedicineGenericName(row)}
@@ -233,12 +228,27 @@ export function CounterSearchResults({
                   {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                 </span>
                 <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
-                  {row.presentation}
-                  {row.dosageForm ? ` · ${row.dosageForm}` : ''}
-                  {row.unitsPerPack ? ` · Pack: ${row.unitsPerPack} units` : ''}
+                  <span className="block">
+                    <span>Strength:</span>{' '}
+                    <span className="ms-1">
+                      <bdi dir="auto">{row.strength ?? 'Unavailable'}</bdi>
+                    </span>
+                  </span>
+                  <span className="block">
+                    <span>Form:</span> {row.presentation}
+                    {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                  </span>
+                  {row.unitsPerPack ? (
+                    <span className="block">
+                      <span>Pack:</span> {row.unitsPerPack} units
+                    </span>
+                  ) : null}
+                  <span className="block">
+                    <span>Stock:</span>{' '}
+                    {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
+                  </span>
                   {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
                   {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
-                  {` · ${formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}`}
                   {notes.length ? ` · ${notes.join(' · ')}` : ''}
                   {` · ${MATCH_LABEL[row.matchedOn]}`}
                 </span>

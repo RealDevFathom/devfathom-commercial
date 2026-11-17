@@ -674,3 +674,25 @@ describe('DEV-878 stock alternatives in search results', () => {
     expect(option).toHaveAccessibleDescription(reason);
   });
 });
+
+it('separates strength, form and stock into labeled lines below the medicine identity', () => {
+  render(
+    <CounterSearchResults
+      rows={[{ ...row, brandName: 'Panadol' }]}
+      state="ready"
+      query="panadol"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />
+  );
+  const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+  for (const label of ['Strength:', 'Form:', 'Stock:']) {
+    const field = within(result).getByText(label).parentElement;
+    expect(field).toHaveClass('block');
+  }
+  expect(within(result).getByText('Strength:').parentElement).toHaveTextContent('500 mg');
+  expect(within(result).getByText('Form:').parentElement).toHaveTextContent('Tablet');
+  expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
+});
