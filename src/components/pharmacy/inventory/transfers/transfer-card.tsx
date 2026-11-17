@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
   Table,
@@ -33,12 +34,15 @@ export function TransferCard({
   currentUserId,
   witnesses,
   action,
+  soloApprover = false,
 }: {
   transfer: TransferBoardRow;
   branchId: string;
   currentUserId: string;
   witnesses: ReadonlyArray<Witness>;
   action: TransferStepAction;
+  /** The signed-in owner works alone, so they approve their own allocation with a PIN. */
+  soloApprover?: boolean;
 }) {
   const reference = transferReference(transfer.id);
   const outbound = transfer.direction === 'OUTBOUND';
@@ -61,7 +65,7 @@ export function TransferCard({
             {transfer.toBranch.name ?? 'Destination branch'}
           </h3>
           <p className="mt-1 text-xs text-text-muted">
-            Allocated {when(transfer.createdAt)}
+            {transfer.status === 'DRAFT' ? 'Requested' : 'Allocated'} {when(transfer.createdAt)}
             {transfer.allocatedByName ? ` by ${transfer.allocatedByName}` : ''}
             {transfer.approvedByName ? ` · approved by ${transfer.approvedByName}` : ''}
             {transfer.dispatchedAt ? ` · dispatched ${when(transfer.dispatchedAt)}` : ''}
@@ -125,11 +129,51 @@ export function TransferCard({
         {SLIP_STATUSES.has(transfer.status) ? (
           <PackingSlipPrintButton slip={packingSlipFor(transfer)} />
         ) : null}
+        {outbound && transfer.status === 'DRAFT' ? (
+          <TransferActionForm action={action}>
+            <input name="action" type="hidden" value="allocate-request" />
+            <input name="branchId" type="hidden" value={branchId} />
+            <input name="transferId" type="hidden" value={transfer.id} />
+            <Button size="sm" type="submit" variant="secondary">
+              Allocate request {reference}
+            </Button>
+          </TransferActionForm>
+        ) : null}
+        {!outbound && transfer.status === 'DRAFT' ? (
+          <p className="text-xs text-text-muted">
+            Requested — {transfer.fromBranch.name ?? 'the source branch'} allocates it, then a
+            colleague approves it. Nothing has moved yet.
+          </p>
+        ) : null}
         {outbound && transfer.status === 'ALLOCATED' ? (
           ownAllocation ? (
-            <p className="text-xs text-text-muted">
-              Waiting for a colleague to approve — you allocated this transfer.
-            </p>
+            soloApprover ? (
+              <TransferActionForm action={action} className="flex flex-wrap items-end gap-2">
+                <input name="action" type="hidden" value="approve" />
+                <input name="branchId" type="hidden" value={branchId} />
+                <input name="transferId" type="hidden" value={transfer.id} />
+                <label className="text-sm">
+                  Your PIN
+                  <Input
+                    autoComplete="off"
+                    className="mt-1 w-32"
+                    inputMode="numeric"
+                    maxLength={8}
+                    name="soloPin"
+                    pattern="[0-9]{4,8}"
+                    required
+                    type="password"
+                  />
+                </label>
+                <Button size="sm" type="submit">
+                  Approve {reference} with PIN
+                </Button>
+              </TransferActionForm>
+            ) : (
+              <p className="text-xs text-text-muted">
+                Waiting for a colleague to approve — you allocated this transfer.
+              </p>
+            )
           ) : (
             <TransferActionForm action={action}>
               <input name="action" type="hidden" value="approve" />

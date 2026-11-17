@@ -114,6 +114,21 @@ describe('seasonal calendar uplift', () => {
     expect(() => validateSeasonalWindows([{ ...dengue2025, label: ' ' }])).toThrow(RangeError);
   });
 
+  it('words the forecast assumptions without statistics jargon', () => {
+    const result = forecastDemandEvidence({
+      scope,
+      source,
+      originDate: '2026-01-01',
+      historyStartDate: '2025-01-01',
+      horizonDays: 3,
+      method: 'RECENT_MEAN' as const,
+      days: history(),
+    });
+    const text = result.assumptions.join(' ');
+    expect(text).toContain('same weekday last week');
+    expect(text).not.toMatch(/seasonal naive/i);
+  });
+
   it('feeds the learned uplift into the demand forecast for in-window days only', () => {
     const input = {
       scope,

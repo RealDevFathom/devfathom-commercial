@@ -91,7 +91,7 @@ export function packingSlipFor(transfer: TransferBoardRow): PackingSlip {
   };
 }
 
-export type TransferAction = 'allocate' | 'approve' | 'dispatch' | 'receive';
+export type TransferAction = 'allocate' | 'allocate-request' | 'approve' | 'dispatch' | 'receive';
 
 /**
  * Domain reasons arrive as bare codes from the router. The operator gets the

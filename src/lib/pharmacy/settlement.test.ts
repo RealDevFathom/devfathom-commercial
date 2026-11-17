@@ -28,6 +28,8 @@ import {
   applyPharmacyTender,
   assertRefundWithinTender,
   computePharmacyClose,
+  DISCARDED_TENDER_COMMAND,
+  discardPharmacyTenderAttempt,
   foldExpectedCash,
   openPharmacyDrawer,
   PharmacySettlementError,
@@ -718,5 +720,150 @@ describe('openPharmacyDrawer — one open drawer per counter device', () => {
     const failure = new Error('connection reset');
     const db = fixture(null, failure);
     await expect(openPharmacyDrawer(db as never, scope, input)).rejects.toBe(failure);
+  });
+});
+
+describe('DEV-712 discardPharmacyTenderAttempt', () => {
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'cashier-1' };
+  const attempt = {
+    branchId: 'branch-1',
+    saleId: 'sale-1',
+    deviceId: 'device-1',
+    businessDate: new Date('2026-11-03T00:00:00.000Z'),
+    type: 'BANK_TRANSFER' as const,
+    amountMinor: 1_250,
+    idempotencyKey: 'counter-tender:sale-1:BANK_TRANSFER:1250',
+  };
+  const record = {
+    reason: 'Customer did not pay',
+    approvedByUserId: 'manager-1',
+    approvalPolicy: 'MANAGER_PIN',
+    selfApproved: false,
+  };
+  const digest = (value: unknown) =>
+    createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+  type Key = { commandType: string; payloadHash: string; resultPayload: unknown };
+  function fixture(existing: Key | null = null) {
+    const keys = new Map<string, Key>();
+    if (existing) keys.set(attempt.idempotencyKey, existing);
+    const db = {
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-1',
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+        }),
+      },
+      // INSERT ... ON CONFLICT DO NOTHING on (organization, device, key).
+      $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
+        const [, , , key, commandType, payloadHash, resultPayload] = query.values as string[];
+        if (keys.has(key!)) return 0;
+        keys.set(key!, {
+          commandType: commandType!,
+          payloadHash: payloadHash!,
+          resultPayload: JSON.parse(resultPayload!),
+        });
+        return 1;
+      }),
+      pharmacyMoneyIdempotencyKey: {
+        findUnique: vi.fn(
+          async ({ where }: { where: { organizationId_deviceId_key: { key: string } } }) => {
+            const found = keys.get(where.organizationId_deviceId_key.key);
+            return found
+              ? {
+                  id: 'idem-1',
+                  organizationId: 'org-1',
+                  deviceId: 'device-1',
+                  key: where.organizationId_deviceId_key.key,
+                  ...found,
+                }
+              : null;
+          }
+        ),
+      },
+      pharmacyTender: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'tender-1',
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          saleId: 'sale-1',
+          deviceId: 'device-1',
+          type: 'BANK_TRANSFER',
+          amountMinor: 1_250,
+          businessDate: new Date('2026-11-03T00:00:00.000Z'),
+          cashReceivedMinor: null,
+          changeGivenMinor: null,
+        }),
+      },
+    };
+    return { db, keys };
+  }
+
+  it('claims the attempt key with the approver and reason, so the attempt never lands', async () => {
+    const f = fixture();
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).resolves.toEqual({ status: 'DISCARDED' });
+    expect(f.keys.get(attempt.idempotencyKey)).toEqual({
+      commandType: DISCARDED_TENDER_COMMAND,
+      payloadHash: digest(attempt),
+      resultPayload: {
+        saleId: 'sale-1',
+        type: 'BANK_TRANSFER',
+        amountMinor: 1_250,
+        discardedByActorId: 'cashier-1',
+        approvedByUserId: 'manager-1',
+        approvalPolicy: 'MANAGER_PIN',
+        selfApproved: false,
+        reason: 'Customer did not pay',
+      },
+    });
+    // The in-flight tender then binds the same key and is refused; nothing is recorded.
+    await expect(applyPharmacyTender(f.db as never, scope, attempt)).rejects.toMatchObject({
+      reason: 'TENDER_ATTEMPT_DISCARDED',
+    });
+    expect(f.db.pharmacyTender.findFirst).not.toHaveBeenCalled();
+    // A second discard of the same attempt answers the same way.
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).resolves.toEqual({ status: 'DISCARDED' });
+  });
+
+  it('returns a tender that already committed under the key instead of discarding it', async () => {
+    const result = { tenderId: 'tender-1', settled: true, receiptNumber: 41, remainingMinor: 0 };
+    const f = fixture({
+      commandType: 'tender',
+      payloadHash: digest(attempt),
+      resultPayload: result,
+    });
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).resolves.toEqual({ status: 'ACCEPTED', result });
+    expect(f.keys.get(attempt.idempotencyKey)?.commandType).toBe('tender');
+  });
+
+  it('refuses when the key holds this attempt but its tender cannot be read', async () => {
+    const f = fixture({ commandType: 'tender', payloadHash: digest(attempt), resultPayload: null });
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('discards an attempt whose key was bound to a different payment', async () => {
+    const f = fixture({ commandType: 'tender', payloadHash: 'other', resultPayload: null });
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).resolves.toEqual({ status: 'DISCARDED' });
+    expect(f.keys.get(attempt.idempotencyKey)?.commandType).toBe('tender');
+  });
+
+  it('writes nothing for a sale outside the scope', async () => {
+    const f = fixture();
+    f.db.pharmacySale.findFirst.mockResolvedValue(null);
+    await expect(
+      discardPharmacyTenderAttempt(f.db as never, scope, attempt, record)
+    ).resolves.toBeNull();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
   });
 });
