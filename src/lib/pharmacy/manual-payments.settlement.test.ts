@@ -151,3 +151,36 @@ describe('DEV-713 manual card and wallet confirmation', () => {
     expect(await readPharmacyTenderOutcome(db as unknown as ScopedDb, scope, input)).toMatchObject({ status: 'UNKNOWN' });
   });
 });
+
+
+describe('DEV-875 bank transfer capture', () => {
+  it.each([undefined, '', '   ', 'x'.repeat(121), '4242424242424242', '4242 4242-4242 4242', 'REF 4111111111111111 X', '1234567890123'])(
+    'refuses a bank transfer with missing or invalid reference %j before money writes',
+    async (providerRef) => {
+      const input = { ...cardBase, type: 'BANK_TRANSFER' as const, providerRef };
+      const { db, scoped } = fixture(input);
+      await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(completePaidPharmacySale).not.toHaveBeenCalled();
+      expect(db.pharmacyMoneyIdempotencyKey.update).not.toHaveBeenCalled();
+    }
+  );
+  it('records the trimmed bank reference and signed-in confirmer without a drawer or adapter', async () => {
+    const input = { ...cardBase, type: 'BANK_TRANSFER' as const, providerRef: '  BANK/2026-001  ' };
+    const { db, scoped } = fixture(input);
+    await expect(applyPharmacyTender(scoped, scope, input)).resolves.toMatchObject({ settled: true });
+    expect(db.pharmacyTender.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      type: 'BANK_TRANSFER', providerRef: 'BANK/2026-001', confirmedById: 'cashier',
+      drawerSessionId: undefined, approvalCode: undefined,
+    }) });
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+  });
+  it.each([{ referenceSkipped: true }, { referenceSkipped: false }, { payerName: 'Ayesha' }, { approvalCode: 'A1B2' }, { cashReceivedMinor: 1000 }])(
+    'refuses mixed capture fields or a reference-skip flag %j', async (capture) => {
+      const input = { ...cardBase, type: 'BANK_TRANSFER' as const, providerRef: 'BANK-001', ...capture };
+      const { db, scoped } = fixture(input);
+      await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    }
+  );
+});

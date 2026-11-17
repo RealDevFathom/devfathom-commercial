@@ -142,6 +142,7 @@ test('charges the weighted amount, completes once, freezes receipt identity, and
     deviceId: randomUUID(),
     businessDate: day,
     type: 'BANK_TRANSFER' as const,
+    providerRef: 'BANK-001',
     amountMinor: 301,
     idempotencyKey: randomUUID(),
   };
@@ -187,6 +188,7 @@ test('records exact revenue against each mixed-MRP lot', async () => {
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER',
+      providerRef: 'BANK-001',
       amountMinor: 300,
       idempotencyKey: randomUUID(),
     })
@@ -209,6 +211,7 @@ test.each([0, 1])(
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER' as const,
+      providerRef: 'BANK-001',
       amountMinor: 300,
       idempotencyKey: randomUUID(),
     };
@@ -284,6 +287,7 @@ test('restores a free zero-cost allocation and posts one balanced marker across 
       deviceId: randomUUID(),
       businessDate: day,
       type: 'BANK_TRANSFER',
+      providerRef: 'BANK-001',
       amountMinor: 200,
       idempotencyKey: randomUUID(),
     })
@@ -350,4 +354,29 @@ test('enforces an upper MRP bound on the new billed gross in PostgreSQL', async 
       )
     )
   ).rejects.toThrow();
+});
+
+
+test.each([undefined, '   '])('DEV-875 rolls back a transfer without a reference (%j) and records valid evidence', async (providerRef) => {
+  const f = await cart();
+  const input = {
+    saleId: f.sale.id,
+    deviceId: randomUUID(),
+    businessDate: day,
+    type: 'BANK_TRANSFER' as const,
+    amountMinor: 300,
+    providerRef,
+    idempotencyKey: randomUUID(),
+  };
+  await expect(tenant((db) => applyPharmacyTender(db, scope, input))).rejects.toMatchObject({
+    reason: 'INVALID_MANUAL_CAPTURE',
+  });
+  expect(await tenant((db) => db.pharmacyTender.count({ where: { saleId: f.sale.id } }))).toBe(0);
+  expect(await tenant((db) => db.pharmacyMoneyIdempotencyKey.count({ where: { key: input.idempotencyKey } }))).toBe(0);
+  const result = await tenant((db) => applyPharmacyTender(db, scope, { ...input, providerRef: ' BANK/2026-001 ' }));
+  if (!('settled' in result)) throw new Error('Expected a newly created bank transfer');
+  expect(result.settled).toBe(true);
+  expect(await tenant((db) => db.pharmacyTender.findFirst({ where: { id: result.tenderId } }))).toMatchObject({
+    providerRef: 'BANK/2026-001', confirmedById: scope.actorId, type: 'BANK_TRANSFER', amountMinor: 300,
+  });
 });

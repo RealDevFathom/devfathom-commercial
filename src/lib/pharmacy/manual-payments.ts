@@ -80,6 +80,54 @@ export const manualCardCaptureSchema = z.object({
   approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
 }).strict();
 
+/** Bank statement reference, required for every new bank transfer. */
+export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
+/** True when the text holds a 13-19 digit run (spaces and dashes ignored): a card number. */
+export function looksLikeCardNumber(text: string): boolean {
+  const compact = text.replace(/[\s-]+/g, '');
+  const runs = compact.match(/\d{13,}/g);
+  if (!runs) return false;
+  // Any run of 13-19 digits is refused outright, so a Luhn-valid number at those lengths
+  // is covered too. Longer runs are refused when any 13-19 digit window passes Luhn.
+  return runs.some((run) => {
+    if (run.length <= 19) return true;
+    for (let size = 13; size <= 19; size += 1) {
+      for (let at = 0; at + size <= run.length; at += 1) {
+        if (passesLuhn(run.slice(at, at + size))) return true;
+      }
+    }
+    return false;
+  });
+}
+
+function passesLuhn(digits: string): boolean {
+  let sum = 0;
+  let double = false;
+  for (let i = digits.length - 1; i >= 0; i -= 1) {
+    let d = digits.charCodeAt(i) - 48;
+    if (double) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    double = !double;
+  }
+  return sum % 10 === 0;
+}
+
+export const bankTransferCaptureSchema = z.object({
+  providerRef: z.string().trim().min(1).max(BANK_TRANSFER_REFERENCE_MAX_LENGTH)
+    .refine((ref) => !looksLikeCardNumber(ref)),
+}).strict();
+
+/** Keep card-number protection on all existing wire paths; bank references have their own format. */
+export function hasValidTenderProviderReference(input: { type: string; providerRef?: string }) {
+  if (input.providerRef === undefined) return true; // Historical attempts must remain recoverable.
+  return input.type === 'BANK_TRANSFER'
+    ? bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef }).success
+    : MANUAL_CARD_REFERENCE.test(input.providerRef);
+}
+
 const confirmerSchema = z.object({
   /** The confirming user's id; absent on reports saved before it was recorded. */
   id: z.string().min(1).optional(),
