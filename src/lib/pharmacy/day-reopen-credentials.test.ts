@@ -5,6 +5,10 @@ const db = vi.hoisted(() => ({
   $queryRaw: vi.fn().mockResolvedValue([]),
   restaurantOperatorCredential: { findFirst: vi.fn(), update: vi.fn() },
   auditLog: { create: vi.fn() },
+  // The approval check reads the owner's authenticator policy: fixed PINs are allowed
+  // and this manager has enrolled no authenticator, so the PIN itself is verified.
+  organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }) },
+  approvalAuthenticator: { findFirst: vi.fn().mockResolvedValue(null) },
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_org: string, run: (tx: unknown) => unknown) => run(db)),

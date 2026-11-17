@@ -452,6 +452,8 @@ describe('POS sale voiding', () => {
   it('stops a losing add-line race before stock allocation', async () => {
     let medicineReads = 0;
     const db = {
+      $queryRaw: vi.fn(async () => []),
+      pharmacySaleLine: { findFirst: vi.fn(async () => null) },
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
         updateMany: async () => ({ count: 0 }),
@@ -580,6 +582,8 @@ describe('DEV-27 voucher scoping at the POS', () => {
     const issuerRow = options.issuer === undefined ? issuer : options.issuer;
     return {
       state,
+      $queryRaw: vi.fn(async () => []),
+      pharmacySaleLine: { findFirst: vi.fn(async () => null) },
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
         updateMany: async () => ({ count: 1 }),

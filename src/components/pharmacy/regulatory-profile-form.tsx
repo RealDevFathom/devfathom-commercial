@@ -258,6 +258,8 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const newerConfirmedRules =
+    data.selectedBranchId === branchId ? current?.newerConfirmedRuleSet : undefined;
   const pendingProvince =
     data.selectedBranchId === branchId && current
       ? current.pendingLegalReview
@@ -396,6 +398,17 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             role="status"
           >
             {provinceNotice}
+          </p>
+        ) : null}
+        {newerConfirmedRules ? (
+          <p
+            role="status"
+            className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+          >
+            A newer confirmed rule set is available: {current?.provinceName}, version{' '}
+            {newerConfirmedRules.version}, effective {day(newerConfirmedRules.effectiveFrom)}. Your
+            recorded profile still uses its original rule version. The owner must record a new
+            profile version below to adopt these rules and meet the requirements to come into force.
           </p>
         ) : null}
         {pendingProvince ? (

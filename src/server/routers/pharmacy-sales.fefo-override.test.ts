@@ -71,8 +71,9 @@ function fixture() {
     // DEV-631: a counter bill or line is refused while today's business day is closed.
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: transaction,
-    $queryRaw: vi.fn().mockResolvedValue([]),
+    $queryRaw: vi.fn(async () => []),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))

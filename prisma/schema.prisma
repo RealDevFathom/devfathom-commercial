@@ -3742,6 +3742,7 @@ model User {
   noteRevisions               NoteRevision[]                 @relation("NoteRevisionEditor")
   leaveBalances               LeaveBalance[]                 @relation("UserLeaveBalances")
   recoveryCodes               TwoFactorRecoveryCode[]
+  approvalAuthenticators      ApprovalAuthenticator[]          @relation("ApprovalAuthenticatorUser")
   webhooksCreated             Webhook[]                      @relation("WebhookCreator")
   auditLogs                   AuditLog[]                     @relation("UserAuditLogs")
   resignations                Resignation[]                  @relation("UserResignations")
@@ -5602,6 +5603,28 @@ model WebhookDelivery {
   @@map("webhook_deliveries")
 }
 
+/// DEV-879: a member's authenticator app for manager and owner approvals. The TOTP secret
+/// is AES-256-GCM encrypted at rest (src/lib/secret-crypto.ts) and is only ever decrypted
+/// on the server. `enabledAt` null means enrolment is pending; once set, that member's
+/// fixed PIN is no longer accepted for approvals. `lastUsedStep` is the last accepted
+/// 30-second time step: a code at or below it is refused, so every code is single use.
+model ApprovalAuthenticator {
+  id              String    @id @default(cuid())
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId          String
+  encryptedSecret String
+  enabledAt       DateTime?
+  lastUsedStep    Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation("ApprovalAuthenticatorUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("approval_authenticators")
+}
+
 // IMP-AUTH-02: single-use TOTP recovery codes. Only the hash is stored.
 model TwoFactorRecoveryCode {
   id             String    @id @default(cuid())
@@ -5807,6 +5830,9 @@ model Organization {
   isDemo                        Boolean                        @default(false)
   askFathomEnabled              Boolean                        @default(true)
   aiDeepStrategyEnabled         Boolean                        @default(false)
+  /// DEV-879: when true, no member's fixed PIN is accepted for an approval; every approver
+  /// must enter a code from their enrolled approval authenticator.
+  requireApprovalAuthenticator  Boolean                        @default(false)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?

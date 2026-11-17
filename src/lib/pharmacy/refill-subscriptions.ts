@@ -7,8 +7,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { activateBranchScope, reservationCandidates } from './customer-ordering';
@@ -453,7 +453,17 @@ export async function verifyRefillCyclePharmacistPin(
   ) {
     return null;
   }
-  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: approver.id,
+      credentialHash: credential.credentialHash,
+      secret: input.pin,
+      action: 'pharmacy.refillCycleApproval',
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
