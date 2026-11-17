@@ -3974,13 +3974,13 @@ function ScopedPharmacyCounterConsole({
                 disabled={busy || !branchAuthorized}
                 onChange={(event) => setCardCodeText(event.target.value)}
                 placeholder="Scan the card or type the code under the QR"
-                className="h-8 font-mono"
+                className="h-11 font-mono"
               />
             </div>
             <Button
               type="submit"
               variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
               disabled={busy || !branchAuthorized || !cardCodeText.trim()}
             >
               {pending === 'customer' ? 'Linking…' : 'Link card'}
