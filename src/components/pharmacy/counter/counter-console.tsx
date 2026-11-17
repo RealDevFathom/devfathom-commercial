@@ -1554,6 +1554,14 @@ function ScopedPharmacyCounterConsole({
         return;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
+      // The shelf-label constraint applies only while the effective batch is still the
+      // scanned lot; once the operator picks another batch, the normal FEFO/override flow applies.
+      const shelfLabelLot = row.labelLot ?? null;
+      const shelfLabelInEffect =
+        shelfLabelLot !== null &&
+        (overrideLotId
+          ? overrideLotId === shelfLabelLot.inventoryLotId
+          : shelfLabelLot.inventoryLotId === row.recommendedLotId);
       if (overrideLotId && !batchOverride?.reason.trim()) {
         setNotice({
           tone: 'warning',
@@ -1663,10 +1671,12 @@ function ScopedPharmacyCounterConsole({
             saleUnit: option.kind,
             quantity: units,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
+            ...(shelfLabelInEffect && shelfLabelLot
+              ? { shelfLabelLotId: shelfLabelLot.inventoryLotId }
+              : {}),
             // A stable key per (sale, medicine, unit, quantity) so a double-press of
             // the add chord cannot post the same line twice.
-            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${row.labelLot ? `:label:${row.labelLot.inventoryLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
+            idempotencyKey: `counter:${lineSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}${shelfLabelInEffect && shelfLabelLot ? `:label:${shelfLabelLot.inventoryLotId}` : ''}${scannedPack ? `:sn:${scannedPack.serial.toUpperCase()}` : ''}`,
             // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
             ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
             ...(overrideLotId && batchOverride
@@ -1812,7 +1822,6 @@ function ScopedPharmacyCounterConsole({
         }
         const restage =
           label.kind === 'FEFO' ||
-          Boolean(activeRow?.labelLot) ||
           activeRow?.medicineId !== row.medicineId ||
           saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
@@ -3355,17 +3364,7 @@ function ScopedPharmacyCounterConsole({
                     }
                     error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                     disabled={busy}
-                    onChange={(next) => {
-                      // An explicit batch choice replaces the scanned sticker's lot pin;
-                      // otherwise the server refuses the chosen batch as a mismatch.
-                      setActiveRow((current) =>
-                        current?.labelLot &&
-                        next?.inventoryLotId !== current.labelLot.inventoryLotId
-                          ? { ...current, labelLot: null }
-                          : current
-                      );
-                      setLotOverride(next);
-                    }}
+                    onChange={setLotOverride}
                     onRetry={() => void lotOptionsQuery.refetch()}
                   />
                 </div>
