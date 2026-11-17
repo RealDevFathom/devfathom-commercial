@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -20,7 +21,23 @@ import {
 // migration before it in the ledger, have a unique timestamp, be wrapped in
 // BEGIN/COMMIT, and be written to be safe to re-run.
 const MIGRATIONS_DIR = 'prisma/migrations';
+// DEV-865: this file is frozen permanently, independently of any Git ref.
+// Do not update these constants when adding a migration; append to the ledger instead.
+const FROZEN_LEGACY_SHA256 = '44cf63f23534e49f4b177e4072ed0530c20c2c1825312466eabc07d6e68f78a2';
+const FROZEN_LEGACY_LINE_COUNT = 270;
+const legacyText = readFileSync(LEGACY_FILE, 'utf8');
 const legacy = readList(LEGACY_FILE);
+
+function assertFrozenLegacy(text: string): void {
+  expect(text.split('\n').length - 1, `legacy line count changed. ${HOW_TO_FIX}`).toBe(
+    FROZEN_LEGACY_LINE_COUNT
+  );
+  expect(
+    createHash('sha256').update(text).digest('hex'),
+    `legacy bytes changed. ${HOW_TO_FIX}`
+  ).toBe(FROZEN_LEGACY_SHA256);
+}
+
 const ledger = readList(LEDGER_FILE);
 const legacySet = new Set(legacy);
 const newestLegacy = legacy
@@ -35,6 +52,35 @@ const all = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
 const added = all.filter((n) => !legacySet.has(n));
 
 describe('migration timestamp order and wrapping rules', () => {
+  it('keeps the legacy file at its frozen SHA-256 and line count', () => {
+    assertFrozenLegacy(legacyText);
+  });
+
+  it.each([
+    ['adding', (lines: string[]) => [...lines, '20990101000000_added']],
+    ['removing', (lines: string[]) => lines.slice(1)],
+    ['reordering', (lines: string[]) => [lines[1], lines[0], ...lines.slice(2)]],
+    ['renaming', (lines: string[]) => [`${lines[0]}_renamed`, ...lines.slice(1)]],
+  ] as const)('rejects %s legacy entries', (_mutation, mutate) => {
+    const tampered = mutate(legacy).join('\n') + '\n';
+    expect(() => assertFrozenLegacy(tampered)).toThrow(/legacy (line count|bytes) changed/);
+  });
+
+  it('rejects a back-dated migration added to the legacy exemptions', () => {
+    const backdated = '20000101000000_bypass';
+    const tamperedLegacy = [...legacy, backdated];
+    // Legacy entries are exempt from the ordering, BEGIN/COMMIT and idempotency rules,
+    // so the only thing stopping this bypass is the frozen pin.
+    expect(new Set(tamperedLegacy).has(backdated)).toBe(true);
+    expect(backdated.slice(0, 14) < newestLegacy).toBe(true);
+    expect(() => assertFrozenLegacy(tamperedLegacy.join('\n') + '\n')).toThrow(
+      /legacy line count changed/
+    );
+    // Swapping a name in place keeps the line count, so the hash must catch it.
+    const swapped = [backdated, ...legacy.slice(1)];
+    expect(() => assertFrozenLegacy(swapped.join('\n') + '\n')).toThrow(/legacy bytes changed/);
+  });
+
   it('keeps every legacy migration in place (no rename or re-stamp)', () => {
     expect(all.filter((n) => legacySet.has(n))).toEqual(legacy.slice().sort());
   });
