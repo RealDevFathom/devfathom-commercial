@@ -4193,6 +4193,13 @@ function ScopedPharmacyCounterConsole({
                     Points are not being earned: set an earn rate in Loyalty settings
                   </p>
                 ) : null}
+                {customerQuery.data.loyaltyActive === false ? (
+                  // DEV-764: a deactivated member keeps their points but cannot earn or redeem.
+                  <p role="status" className="mt-2 font-medium text-warning">
+                    Loyalty membership deactivated: points are not earned or redeemed until an owner
+                    or manager re-enrols this customer
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Label htmlFor="counter-redeem-points" className="sr-only">
