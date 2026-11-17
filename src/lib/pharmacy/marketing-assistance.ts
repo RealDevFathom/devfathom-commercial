@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { routeAI } from '@/lib/ai/router';
+import { detectReplyLocale } from '@/lib/ai/prompt';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { validateMarketingBody } from './marketing-service';
 import { containsMedicineName, readTenantMedicineNames } from './medicine-names';
@@ -20,6 +21,8 @@ type MarketingAssistanceContext = {
   branchId: string;
   /** Tenant-scoped database for the medicine-name check; defaults to the organization's. */
   db?: ScopedDb;
+  /** The workspace's stored language preference; English when absent. */
+  locale?: 'en' | 'ur';
 };
 
 export async function draftMarketingCopy(
@@ -27,19 +30,25 @@ export async function draftMarketingCopy(
   context: MarketingAssistanceContext
 ) {
   const choice = marketingAssistanceInput.parse(input);
+  const locale = context.locale === 'ur' ? 'ur' : 'en';
   try {
     const result = await routeAI({
       organizationId: context.organizationId,
       branchId: context.branchId,
       feature: 'pharmacy.marketing-assistance',
       system:
-        'Write one short generic retail WhatsApp draft. No medicines, clinical claims, health information, personal data, invented offers or discounts. Include Reply STOP to opt out. Human approval is required. Return text only.',
+        'Write one short generic retail WhatsApp draft. No medicines, clinical claims, health information, personal data, invented offers or discounts. Include Reply STOP to opt out. Human approval is required. Return text only.' +
+        (locale === 'ur'
+          ? ' Write the whole draft in Urdu script (Nastaliq, right-to-left); keep the opt-out as: STOP لکھ کر جواب دیں۔'
+          : ' Write the draft in English.'),
       prompt: `Occasion: ${choice.occasion}. Tone: ${choice.tone}.`,
       maxOutputTokens: 250,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(15_000),
     });
     const body = z.string().trim().min(1).max(1000).parse(result.text);
+    // Output-language check: the draft must be in the requested language.
+    if (detectReplyLocale(body) !== locale) throw new Error('Draft is in the wrong language.');
     validateMarketingBody(body);
     // Customer-facing text never names a drug: reject any of this tenant's medicine,
     // brand, alias or ingredient names, not only the generic clinical words above.
