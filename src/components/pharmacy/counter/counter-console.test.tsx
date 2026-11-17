@@ -577,7 +577,78 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+function stageControlledMedicine() {
+  const row = barcodeRow();
+  mocks.searchProps.mock.lastCall![0].onSelect({
+    ...row,
+    restriction: { ...row.restriction, controlled: true },
+  });
+}
+
+describe('DEV-498 counter workspace', () => {
+  it.each([undefined, 'sale-a'])(
+    'keeps controlled authorization absent for an ordinary bill (%s)',
+    (saleId) => {
+      render(<PharmacyCounterConsole initialSaleId={saleId} initialBranchId="branch-a" />);
+      expect(screen.queryByTestId('controlled-authorization')).not.toBeInTheDocument();
+      act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+      expect(screen.queryByTestId('controlled-authorization')).not.toBeInTheDocument();
+    }
+  );
+
+  it('offers authorization before a controlled line is added and removes it when an ordinary medicine is selected', () => {
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    act(stageControlledMedicine);
+    expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+    expect(screen.queryByTestId('controlled-authorization')).not.toBeInTheDocument();
+  });
+
+  it('keeps authorization available for a controlled bill while searching for an ordinary medicine', () => {
+    const bill = cart();
+    mocks.queries.counterCart!.data = cart({
+      lines: bill.lines.map((line) => ({ ...line, controlled: true })),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+    expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
+  });
+
+  it('keeps the cart in the payment rail and internal branch codes out of the counter', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      within(screen.getByLabelText('Bill total')).getByRole('region', { name: 'Cart' })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Branch')).not.toHaveTextContent('MT1');
+    expect(document.body).not.toHaveTextContent(/(?:POS|CRM)-\d|Phase 0/);
+  });
+
+  it('floats the drawer confirmation, dismisses it automatically, and keeps the header status', async () => {
+    vi.useFakeTimers();
+    mocks.queries.drawerStatus = query({ openDrawer: null });
+    mocks.mutations.openDrawer!.mockResolvedValue({ id: 'drawer-new' });
+    const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Opening cash', { exact: true }), {
+      target: { value: '0' },
+    });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open drawer' })));
+    const toast = screen
+      .getByText('Cash drawer opened for this counter.')
+      .closest('[role="status"]');
+    expect(toast).toHaveClass('fixed');
+    mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-new' } });
+    view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(screen.queryByText('Cash drawer opened for this counter.')).not.toBeInTheDocument();
+    expect(within(document.querySelector('header')!).getByText('Drawer open')).toBeInTheDocument();
+  });
+});
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
   it('shows the counter skeleton while branches load', () => {
@@ -2075,6 +2146,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(drawerStatus.refetch).not.toHaveBeenCalled();
     // DEV-725: with the drawer closed the opening step replaces the scan field.
+    // Its form keeps its own keys; F9 also remains available outside the field.
+    expect(screen.getByLabelText('Opening cash')).toHaveFocus();
+    screen.getByLabelText('Opening cash').blur();
     fireEvent.keyDown(window, { key: 'F9' });
     expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
   });
@@ -2154,7 +2228,8 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
     const details = screen.getByLabelText('Drawer details');
-    expect(within(details).getByText('Synthetic branch · MT1')).toBeInTheDocument();
+    expect(within(details).getByText('Synthetic branch')).toBeInTheDocument();
+    expect(details).not.toHaveTextContent('MT1');
     expect(within(details).getByText(/^Counter [A-Z0-9]{4}$/)).toBeInTheDocument();
     expect(within(details).getByText('Business day')).toBeInTheDocument();
 
@@ -3174,6 +3249,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
         phone: null,
       });
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(stageControlledMedicine);
       act(() => {
         const props = mocks.rxPanelProps.mock.lastCall![0];
         props.onSelectPatient('patient-a');
@@ -3408,6 +3484,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     mocks.queries.counterPatientPanel = patientPanel('patient-b');
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(stageControlledMedicine);
     act(() => authorize());
 
     scan();
@@ -3427,6 +3504,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     const view = render(
       <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
     );
+    act(stageControlledMedicine);
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.onSelectPatient('patient-a');
@@ -3439,6 +3517,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     mocks.queries.counterPatientPanel = patientPanel('patient-b');
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(stageControlledMedicine);
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.controlled!.onChange('staffProfileId', 'pharmacist-b');
@@ -3466,6 +3545,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     const view = render(
       <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
     );
+    act(stageControlledMedicine);
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.onSelectPatient('patient-a');
@@ -3476,6 +3556,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     mocks.queries.counterPatientPanel = patientPanel('patient-b');
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(stageControlledMedicine);
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.controlled!.onChange('staffProfileId', 'pharmacist-a');
@@ -3502,6 +3583,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
       <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
     );
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    act(stageControlledMedicine);
     act(() => authorize());
     mocks.queries.counterCart!.data = settled();
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -3585,11 +3667,13 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
       error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
     });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(stageControlledMedicine);
     expect(screen.queryByTestId('controlled-authorization')).toBeNull();
   });
 
   it('shows the controlled authorization panel to a dispenser', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(stageControlledMedicine);
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });
@@ -3658,6 +3742,7 @@ describe('PharmacyCounterConsole module boundaries', () => {
 
   it('asks for approving pharmacists when Pharmacy Safety is licensed', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(stageControlledMedicine);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
@@ -4343,7 +4428,7 @@ describe('DEV-618 counter composition', () => {
       });
       expect(select).toBeEnabled();
       expect(select).toHaveValue('legacySpeed');
-      expect(within(dialog).getByText('Placeholder')).toBeInTheDocument();
+      expect(within(dialog).getByText('Unconfirmed')).toBeInTheDocument();
       if (!recoveryAvailable) {
         expect(screen.getByLabelText('Scan or search')).toBeDisabled();
         expect(window.localStorage.getItem(tenderAttemptStorageKey(scope))).toBe('{');
@@ -4448,7 +4533,7 @@ describe('DEV-618 counter composition', () => {
     expect(branch.closest('header')).toContainElement(
       screen.getByRole('heading', { name: 'Counter' })
     );
-    expect(within(branch).getByRole('option', { name: 'Model Town · MT1' })).toBeInTheDocument();
+    expect(within(branch).getByRole('option', { name: 'Model Town' })).toBeInTheDocument();
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Bill open · 1 line');
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Drawer open');
     expect(screen.getByText('No safety blocks · 0 notes to pass on')).toBeInTheDocument();
