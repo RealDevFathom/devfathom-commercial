@@ -969,7 +969,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         include: {
           medicine: { select: { productName: true, controlled: true } },
           // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
-          packLevel: { select: { level: true } },
+          packLevel: { select: { level: true, parentPackLevelId: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -1021,7 +1021,12 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
-      levelLabel: line.packLevel?.level ?? null,
+      // DEV-705: a strip cut from a standalone legacy box is stored on the box level;
+      // a hierarchy strip never sits on a top level, so name the strip, not the box.
+      levelLabel:
+        line.saleUnit === 'STRIP' && line.packLevel?.parentPackLevelId === null
+          ? 'STRIP'
+          : (line.packLevel?.level ?? null),
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,
