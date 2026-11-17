@@ -51,9 +51,8 @@ function enterManagerPin(pin = '2468') {
 function recordOnly() {
   fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'none' } });
 }
-function chooseReturnChoices(reason = 'Wrong item / strip', stock = "Keep aside — don't resell") {
+function chooseReturnReason(reason = 'Wrong item / strip') {
   fireEvent.click(screen.getByRole('button', { name: reason }));
-  fireEvent.click(screen.getByRole('button', { name: stock }));
 }
 function setLooseUnits(units: string) {
   fireEvent.change(screen.getByLabelText('Return quantity (strips)'), { target: { value: '0' } });
@@ -134,7 +133,7 @@ describe('DEV-732 explicit return choices', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Damaged' }));
   }
   function keepAside() {
-    fireEvent.click(screen.getByRole('button', { name: "Keep aside — don't resell" }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside — don't resell/ }));
   }
   function expectCleared() {
     for (const group of ['Reason', 'What happens to the stock?']) {
@@ -150,9 +149,11 @@ describe('DEV-732 explicit return choices', () => {
       render(<ReturnForm {...props} />);
       chooseReceipt();
       fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: tender } });
-      enterManagerPin();
       const submit = screen.getByRole('button', {
-        name: tender === 'none' ? 'Record return' : 'Confirm return & refund',
+        name:
+          tender === 'none'
+            ? /^Keep aside.*Record return$/
+            : /^Keep aside.*Confirm return & refund$/,
       });
       expectCleared();
       expect(submit).toBeDisabled();
@@ -165,7 +166,9 @@ describe('DEV-732 explicit return choices', () => {
       fireEvent.submit(submit.closest('form')!);
       expect(mocks.returnLine).not.toHaveBeenCalled();
       expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+      // A stock action cannot bypass the missing PIN.
       keepAside();
+      enterManagerPin();
       expect(submit).toBeEnabled();
       fireEvent.click(submit);
       await waitFor(() =>
@@ -190,7 +193,7 @@ describe('DEV-732 explicit return choices', () => {
     recordOnly();
     enterManagerPin();
     keepAside();
-    const submit = screen.getByRole('button', { name: 'Record return' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Record return$/ });
     expect(submit).toBeDisabled();
     fireEvent.submit(submit.closest('form')!);
     expect(mocks.returnLine).not.toHaveBeenCalled();
@@ -217,7 +220,7 @@ describe('DEV-732 explicit return choices', () => {
     expectCleared();
     recordOnly();
     enterManagerPin();
-    expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Keep aside.*Record return$/ })).toBeDisabled();
   });
 
   it('uses plain wording without silently choosing keep aside for an unknown or unsafe batch', () => {
@@ -226,7 +229,7 @@ describe('DEV-732 explicit return choices', () => {
     expect(
       screen.getByRole('option', { name: "Can't tell which batch → keep aside (don't resell)" })
     ).toBeVisible();
-    const restock = screen.getByRole('button', { name: 'Restock — back on the shelf for sale' });
+    const restock = screen.getByRole('button', { name: /^Restock — back on the shelf for sale/ });
     expect(restock).toBeDisabled();
     expectCleared();
     fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-b' } });
@@ -236,8 +239,107 @@ describe('DEV-732 explicit return choices', () => {
     ).toBeVisible();
     expectCleared();
     fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
-    expect(restock).toBeEnabled();
     expectCleared();
+    chooseReason();
+    recordOnly();
+    enterManagerPin();
+    expect(restock).toBeEnabled();
+  });
+
+  it('requires a stock-button confirmation even when every other prerequisite is ready', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    recordOnly();
+    chooseReason();
+    enterManagerPin();
+    const keep = screen.getByRole('button', { name: /^Keep aside.*Record return$/ });
+    expect(keep).toBeEnabled();
+    expect(keep).toHaveAttribute('type', 'button');
+    expect(screen.queryByRole('button', { name: 'Record return' })).not.toBeInTheDocument();
+    expectClearedStock();
+    fireEvent.submit(keep.closest('form')!);
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+    fireEvent.click(keep);
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          reason: 'DAMAGED',
+          disposition: 'QUARANTINE',
+          quarantineLocationId: 'q',
+          managerPin: '2468',
+        })
+      )
+    );
+    await screen.findByText(/Return recorded/);
+  });
+
+  function expectClearedStock() {
+    expect(
+      screen.getByRole('group', { name: 'What happens to the stock?' }).querySelectorAll('button')
+    ).toHaveLength(2);
+    for (const button of screen
+      .getByRole('group', { name: 'What happens to the stock?' })
+      .querySelectorAll('button')) {
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+    }
+  }
+
+  it.each(['', 'lot-b'])(
+    'refuses unsafe restock of batch %s with all other prerequisites met',
+    async (lot) => {
+      render(<ReturnForm {...props} />);
+      chooseReceipt();
+      fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: lot } });
+      recordOnly();
+      chooseReason();
+      enterManagerPin();
+      const restock = screen.getByRole('button', { name: /^Restock.*Record return$/ });
+      const keep = screen.getByRole('button', { name: /^Keep aside.*Record return$/ });
+      expect(restock).toBeDisabled();
+      expect(keep).toBeEnabled();
+      fireEvent.click(restock);
+      expect(mocks.returnLine).not.toHaveBeenCalled();
+      expectClearedStock();
+      fireEvent.click(keep);
+      await waitFor(() =>
+        expect(mocks.returnLine).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            lotId: lot || undefined,
+            reason: 'DAMAGED',
+            disposition: 'QUARANTINE',
+          })
+        )
+      );
+      await screen.findByText(/Return recorded/);
+    }
+  );
+
+  it('requires a custody location for Keep aside while allowing a verified restock', async () => {
+    const history = mocks.history as { data: { locations: unknown[] } };
+    history.data.locations = [];
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
+    recordOnly();
+    chooseReason();
+    enterManagerPin();
+    const restock = screen.getByRole('button', { name: /^Restock.*Record return$/ });
+    expect(screen.getByRole('button', { name: /^Keep aside.*Record return$/ })).toBeDisabled();
+    expect(restock).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('No keep-aside (quarantine) location');
+    fireEvent.click(restock);
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          lotId: 'lot-a',
+          reason: 'DAMAGED',
+          disposition: 'RESTOCK',
+          quarantineLocationId: undefined,
+        })
+      )
+    );
+    await screen.findByText(/Return recorded/);
   });
 
   it('retains the chosen reason for a later refund after clearing fresh return choices', async () => {
@@ -247,7 +349,7 @@ describe('DEV-732 explicit return choices', () => {
     chooseReason();
     keepAside();
     enterManagerPin();
-    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Record return$/ }));
     await screen.findByText(/Return recorded/);
     expectCleared();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
@@ -317,7 +419,9 @@ describe('counter returns', () => {
     expect(match).toBeVisible();
     expect(match).toBeDisabled();
     expect(match).toHaveTextContent('Switch to this branch to record a return.');
-    expect(screen.queryByRole('button', { name: 'Record return' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^Keep aside.*Record return$/ })
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
     expect(mocks.returnLine).not.toHaveBeenCalled();
     expect(mocks.refund).not.toHaveBeenCalled();
@@ -377,7 +481,7 @@ describe('counter returns', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-    chooseReturnChoices();
+    chooseReturnReason();
     fireEvent.change(screen.getByLabelText('Keep-aside (quarantine) location'), {
       target: { value: 'q' },
     });
@@ -386,7 +490,7 @@ describe('counter returns', () => {
     });
     fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'cash' } });
     enterManagerPin();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
     await waitFor(() =>
       expect(mocks.returnAndRefund).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -402,13 +506,13 @@ describe('counter returns', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-    chooseReturnChoices();
+    chooseReturnReason();
     fireEvent.change(screen.getByLabelText('Keep-aside (quarantine) location'), {
       target: { value: 'q' },
     });
     recordOnly();
     enterManagerPin();
-    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Record return$/ }));
     await waitFor(() =>
       expect(mocks.returnLine).toHaveBeenCalledWith(
         expect.objectContaining({ branchId: 'b', managerPin: '2468' })
@@ -468,10 +572,10 @@ describe('counter returns', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
     recordOnly();
-    const submit = screen.getByRole('button', { name: 'Record return' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Record return$/ });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
     // 1 strip (10 base units) exceeds the 8 still returnable.
     fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
@@ -576,22 +680,24 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
   render(<ReturnForm {...props} />);
   chooseReceipt();
   fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-  const restock = screen.getByRole('button', { name: 'Restock — back on the shelf for sale' });
+  const restock = screen.getByRole('button', { name: /^Restock — back on the shelf for sale/ });
   expect(restock).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-b' } });
   expect(restock).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
+  chooseReturnReason('Wrong item / strip');
+  enterManagerPin();
+  fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'cash' } });
   expect(restock).not.toBeDisabled();
-  chooseReturnChoices('Wrong item / strip', 'Restock — back on the shelf for sale');
   fireEvent.change(screen.getByLabelText('Inspection and integrity decision (optional)'), {
     target: { value: 'Physical batch A verified, intact' },
   });
   recordOnly();
   enterManagerPin();
   setLooseUnits('4');
-  expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /^Restock.*Record return$/ })).toBeDisabled();
   setLooseUnits('3');
-  fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Restock.*Record return$/ }));
   await waitFor(() =>
     expect(mocks.returnLine).toHaveBeenCalledWith(
       expect.objectContaining({ lotId: 'lot-a', canonicalUnits: 3, disposition: 'RESTOCK' })
@@ -608,7 +714,7 @@ describe('controlled medicine returns', () => {
   function fillControlledReturn(refundTo = 'none') {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
-    chooseReturnChoices();
+    chooseReturnReason();
     fireEvent.change(screen.getByLabelText('Keep-aside (quarantine) location'), {
       target: { value: 'q' },
     });
@@ -631,7 +737,7 @@ describe('controlled medicine returns', () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     render(<ReturnForm {...props} />);
     fillControlledReturn();
-    const submit = screen.getByRole('button', { name: 'Record return' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Record return$/ });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
       target: { value: 'staff-w' },
@@ -672,7 +778,7 @@ describe('controlled medicine returns', () => {
       target: { value: 'staff-w' },
     });
     fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '0000' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Record return$/ }));
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
         'Return not recorded. A different pharmacist must enter a fresh witness PIN.'
@@ -733,7 +839,9 @@ describe('DEV-647 refund access', () => {
   it('hides the return and refund steps from a cashier (DEV-621)', () => {
     render(<ReturnForm {...props} refundAuthorized={false} />);
     chooseReceipt();
-    expect(screen.queryByRole('button', { name: 'Record return' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^Keep aside.*Record return$/ })
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Sold line')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Original tender')).not.toBeInTheDocument();
@@ -901,14 +1009,16 @@ describe('DEV-501 returns in six steps or fewer', () => {
     mocks.quote.mockImplementation(() => ({ isSuccess: false, isFetching: true }));
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
     expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('');
     expect(screen.getByText('Pricing the returned quantity…')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
+    ).toBeDisabled();
     // Recording the return only needs no price.
     recordOnly();
-    expect(screen.getByRole('button', { name: 'Record return' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Keep aside.*Record return$/ })).toBeEnabled();
   });
 
   it('explains a pricing failure and offers to reprice', () => {
@@ -921,10 +1031,12 @@ describe('DEV-501 returns in six steps or fewer', () => {
     }));
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
     expect(screen.getByText(/Connection failed The refund cannot be priced yet/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
+    ).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Reprice refund' }));
     expect(refetch).toHaveBeenCalledOnce();
     expect(mocks.returnAndRefund).not.toHaveBeenCalled();
@@ -962,12 +1074,12 @@ describe('DEV-501 returns in six steps or fewer', () => {
     expect(screen.getByLabelText('Refund for this return (PKR)')).toHaveValue('24.00');
     // 4. Reason.
     step(() => fireEvent.click(screen.getByRole('button', { name: 'Damaged' })));
-    // 5. Explicit stock outcome (required separately by DEV-732).
-    step(() => fireEvent.click(screen.getByRole('button', { name: "Keep aside — don't resell" })));
-    // 6. Manager or owner PIN.
+    // 5. Manager or owner PIN.
     step(() => enterManagerPin());
-    // 7. One confirm records the return and refunds it.
-    step(() => fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' })));
+    // 6. Explicitly choose Keep aside and confirm the return and refund in one action.
+    step(() =>
+      fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }))
+    );
     expect(steps).toBeLessThanOrEqual(6);
     await waitFor(() => expect(mocks.returnAndRefund).toHaveBeenCalledOnce());
     const sent = mocks.returnAndRefund.mock.calls[0][0];
@@ -1008,13 +1120,15 @@ describe('DEV-501 returns in six steps or fewer', () => {
     fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
       target: { value: '3' },
     });
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
-    expect(screen.getByRole('button', { name: 'Confirm return & refund' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
+    ).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Return quantity (strips)'), {
       target: { value: '1' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
     await waitFor(() =>
       expect(mocks.returnAndRefund).toHaveBeenCalledWith(
         expect.objectContaining({ canonicalUnits: 15 })
@@ -1042,10 +1156,10 @@ describe('DEV-501 returns in six steps or fewer', () => {
     singleLineReceipt();
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
     const amount = screen.getByLabelText('Refund for this return (PKR)');
-    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ });
     expect(amount).toHaveValue('12.00');
     expect(screen.getByText(/You can lower it, up to PKR 12.00/)).toBeVisible();
     fireEvent.change(amount, { target: { value: '12.01' } });
@@ -1075,10 +1189,10 @@ describe('DEV-501 returns in six steps or fewer', () => {
     ];
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
     // A mixed payment needs its tender chosen.
-    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ });
     expect(screen.getByLabelText('Refund to')).toHaveValue('');
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Refund to'), { target: { value: 'cash' } });
@@ -1101,9 +1215,9 @@ describe('DEV-501 returns in six steps or fewer', () => {
     ];
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
-    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ });
     expect(submit).toBeDisabled();
     fireEvent.click(screen.getByLabelText(/No provider refund adapter/));
     expect(submit).toBeEnabled();
@@ -1114,7 +1228,7 @@ describe('DEV-501 returns in six steps or fewer', () => {
     render(<ReturnForm {...props} refundAuthorized={false} />);
     chooseReceipt();
     expect(
-      screen.queryByRole('button', { name: 'Confirm return & refund' })
+      screen.queryByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Refund to')).not.toBeInTheDocument();
     expect(mocks.returnAndRefund).not.toHaveBeenCalled();
@@ -1125,9 +1239,9 @@ describe('DEV-501 returns in six steps or fewer', () => {
     mocks.returnAndRefund.mockResolvedValueOnce({ blocked: 'Enter your manager or owner PIN.' });
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
         'Return not recorded. Enter your manager or owner PIN.'
@@ -1143,9 +1257,9 @@ describe('DEV-501 returns in six steps or fewer', () => {
     mocks.returnAndRefund.mockRejectedValueOnce(new Error('Disconnected'));
     const view = render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin('9753');
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
     await screen.findByRole('button', { name: 'Retry saved return and refund' });
     const first = mocks.returnAndRefund.mock.calls[0][0];
     const saved = localStorage.getItem(key)!;
@@ -1168,9 +1282,9 @@ describe('DEV-501 returns in six steps or fewer', () => {
     mocks.returnAndRefund.mockRejectedValueOnce(new Error('Disconnected'));
     const view = render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm return & refund' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
     await screen.findByRole('button', { name: 'Retry saved return and refund' });
     view.unmount();
     render(<ReturnForm {...base} />);
@@ -1188,9 +1302,9 @@ describe('DEV-501 returns in six steps or fewer', () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     render(<ReturnForm {...props} />);
     chooseReceipt();
-    chooseReturnChoices();
+    chooseReturnReason();
     enterManagerPin();
-    const submit = screen.getByRole('button', { name: 'Confirm return & refund' });
+    const submit = screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
       target: { value: 'staff-w' },

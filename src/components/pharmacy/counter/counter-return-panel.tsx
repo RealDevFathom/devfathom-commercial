@@ -130,12 +130,14 @@ function ChoiceGroup<T extends string>({
   value,
   options,
   onChange,
+  confirmation,
 }: {
   id: string;
   label: string;
   value: T | '';
   options: ReadonlyArray<{ value: T; label: string; disabled?: boolean }>;
   onChange: (value: T) => void;
+  confirmation?: string;
 }) {
   return (
     <div role="group" aria-labelledby={id} className="space-y-2">
@@ -148,12 +150,14 @@ function ChoiceGroup<T extends string>({
             key={option.value}
             type="button"
             variant={value === option.value ? 'default' : 'outline'}
-            className="h-auto min-h-11 w-full whitespace-normal"
+            className="h-auto min-h-11 w-full flex-col gap-1 whitespace-normal py-3"
+            aria-label={confirmation ? `${option.label} — ${confirmation}` : undefined}
             aria-pressed={value === option.value}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
           >
-            {option.label}
+            <span>{option.label}</span>
+            {confirmation && <span className="text-xs font-normal">{confirmation}</span>}
           </Button>
         ))}
       </div>
@@ -368,10 +372,7 @@ export function ReturnForm({
   const returnReady =
     !!line &&
     !!reason &&
-    !!disposition &&
     unitsValid &&
-    !(disposition === 'RESTOCK' && !selectedLot?.restockAllowed) &&
-    !(disposition === 'QUARANTINE' && !location) &&
     witnessReady &&
     managerPinReady &&
     (returnTenderId === 'none' ||
@@ -381,6 +382,16 @@ export function ReturnForm({
         returnAmountMinor > 0 &&
         returnAmountMinor <= returnRefundMax &&
         !(returnManualRequired && !returnManual)));
+
+  function canConfirmReturn(choice: 'RESTOCK' | 'QUARANTINE') {
+    return (
+      returnReady &&
+      !locked &&
+      !stale &&
+      refundAuthorized &&
+      (choice === 'RESTOCK' ? !!selectedLot?.restockAllowed : !!location)
+    );
+  }
 
   function resetReturn() {
     setLineId('');
@@ -500,15 +511,17 @@ export function ReturnForm({
     }
   }
 
-  function confirmReturn() {
-    if (!returnReady || !line || !reason || !disposition) return;
+  function confirmReturn(choice: 'RESTOCK' | 'QUARANTINE') {
+    if (!canConfirmReturn(choice) || !line || !reason) return;
+    // The clicked outcome is the explicit confirmation; there is no default submit.
+    setDisposition(choice);
     const input = {
       branchId,
       saleLineId: line.id,
       lotId: lotId || undefined,
       canonicalUnits: units,
-      disposition,
-      quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
+      disposition: choice,
+      quarantineLocationId: choice === 'QUARANTINE' ? location : undefined,
       reason,
       integrityDecision,
       idempotencyKey: browserUuid(),
@@ -794,7 +807,7 @@ export function ReturnForm({
               noValidate
               onSubmit={(event) => {
                 event.preventDefault();
-                confirmReturn();
+                // Enter or a programmatic submit cannot pick a stock outcome.
               }}
             >
               <fieldset
@@ -803,7 +816,7 @@ export function ReturnForm({
               >
                 <legend className="px-1 font-semibold">Return and refund</legend>
                 <p className="text-sm text-text-muted">
-                  Choose a reason and what happens to the stock before confirming.
+                  Choose a reason, enter your PIN, then choose Restock or Keep aside to confirm.
                 </p>
                 <Label htmlFor="return-line">Sold line</Label>
                 <select
@@ -928,48 +941,34 @@ export function ReturnForm({
                     setRefundReason(next);
                   }}
                 />
-                <ChoiceGroup<'RESTOCK' | 'QUARANTINE'>
-                  id="return-disposition"
-                  label="What happens to the stock?"
-                  value={disposition}
-                  options={[
-                    {
-                      value: 'RESTOCK',
-                      label: 'Restock — back on the shelf for sale',
-                      disabled: !selectedLot?.restockAllowed,
-                    },
-                    { value: 'QUARANTINE', label: "Keep aside — don't resell" },
-                  ]}
-                  onChange={setDisposition}
-                />
                 {lotId && !selectedLot?.restockAllowed && (
                   <p className="text-sm text-text-muted">
                     This batch cannot be restocked. Keep it aside for review.
                   </p>
                 )}
-                {disposition === 'QUARANTINE' && (
-                  <>
-                    <Label htmlFor="return-location">Keep-aside (quarantine) location</Label>
-                    <select
-                      id="return-location"
-                      className={selectClass}
-                      value={location}
-                      onChange={(event) => setLocation(event.target.value)}
-                    >
-                      <option value="">Choose location</option>
-                      {data.locations.map((row) => (
-                        <option key={row.id} value={row.id}>
-                          {row.name}
-                        </option>
-                      ))}
-                    </select>
-                    {data.locations.length === 0 && (
-                      <p role="alert">
-                        No keep-aside (quarantine) location is configured for this branch. Ask a
-                        supervisor to configure one.
-                      </p>
-                    )}
-                  </>
+                <Label htmlFor="return-location">Keep-aside (quarantine) location</Label>
+                <p className="text-sm text-text-muted">
+                  Used only for Keep aside. Restock goes back to the verified batch’s original
+                  shelf.
+                </p>
+                <select
+                  id="return-location"
+                  className={selectClass}
+                  value={location}
+                  onChange={(event) => setLocation(event.target.value)}
+                >
+                  <option value="">Choose location</option>
+                  {data.locations.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                    </option>
+                  ))}
+                </select>
+                {data.locations.length === 0 && (
+                  <p role="alert">
+                    No keep-aside (quarantine) location is configured for this branch. Ask a
+                    supervisor to configure one.
+                  </p>
                 )}
                 <Label htmlFor="return-integrity">
                   Inspection and integrity decision (optional)
@@ -1056,24 +1055,37 @@ export function ReturnForm({
                 {!attempt && witnessRequired && witnessFields}
                 {/* DEV-621: one PIN entry approves the next return or refund; it clears after each. */}
                 {!attempt && managerPinField}
-                {line && unitsValid && reason && disposition && (
+                {line && unitsValid && reason && (
                   <p className="text-sm text-text-muted">
-                    Confirming records {quantitySummary} of {line.name} as inspected (
-                    {disposition === 'RESTOCK' ? 'restock' : "keep aside — don't resell"})
+                    Choose a stock outcome below to record {quantitySummary} of {line.name} as
+                    inspected
                     {returnTender && returnAmountMinor > 0
-                      ? ` and refunds PKR ${formatMinor(returnAmountMinor)} to ${returnTender.type}`
+                      ? ` and refund PKR ${formatMinor(returnAmountMinor)} to ${returnTender.type}`
                       : ''}
                     .
                   </p>
                 )}
-                <Button
-                  type="submit"
-                  className="h-11"
-                  variant="destructive"
-                  disabled={!returnReady}
-                >
-                  {returnTenderId === 'none' ? 'Record return' : 'Confirm return & refund'}
-                </Button>
+                <ChoiceGroup<'RESTOCK' | 'QUARANTINE'>
+                  id="return-disposition"
+                  label="What happens to the stock?"
+                  value={disposition}
+                  options={[
+                    {
+                      value: 'RESTOCK',
+                      label: 'Restock — back on the shelf for sale',
+                      disabled: !canConfirmReturn('RESTOCK'),
+                    },
+                    {
+                      value: 'QUARANTINE',
+                      label: "Keep aside — don't resell",
+                      disabled: !canConfirmReturn('QUARANTINE'),
+                    },
+                  ]}
+                  confirmation={
+                    returnTenderId === 'none' ? 'Record return' : 'Confirm return & refund'
+                  }
+                  onChange={confirmReturn}
+                />
               </fieldset>
             </form>
           )}
