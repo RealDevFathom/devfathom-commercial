@@ -877,6 +877,10 @@ export async function approveTransfer(
     (transfer.allocatedById === scope.actorId && !options.soloSelfApproval)
   )
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  // The solo path is self-approval only; a colleague's allocation is approved
+  // the ordinary way, so its audit never records a self-approval.
+  if (options.soloSelfApproval && transfer.allocatedById !== scope.actorId)
+    throw new PharmacyInventoryError('INVALID_STATE');
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
     data: { status: 'APPROVED', approvedById: scope.actorId },

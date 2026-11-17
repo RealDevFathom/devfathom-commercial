@@ -324,6 +324,24 @@ describe('buildLostDemandAdvice', () => {
     currency: 'PKR',
   });
 
+  it('sizes a transfer exactly like an order: lead-time demand and safety stock rounded apart', () => {
+    const fractional = buildLostDemandAdvice({
+      trigger: { ...trigger, lostCanonicalUnits: 0 },
+      config: DEFAULT_LOST_DEMAND_TRIGGERS,
+      medicineId: 'med_a',
+      // 1.5/day: ceil(4.5) + ceil(10.5) = 16, where ceil(1.5 x 10) would give 15.
+      dailyDemandUnits: 1.5,
+      onHandUnits: 0,
+      onOrderUnits: 0,
+      distributors: [distributor({ leadTimeDays: null })],
+      alternates: [],
+      donors: [{ branchId: 'b2', branchName: 'South', availableUnits: 500, dailyDemandUnits: 0 }],
+      currency: 'PKR',
+    });
+    expect(fractional.distributors[0]!.quantity.netRequiredUnits).toBe(16);
+    expect(fractional.transfer).toMatchObject({ quantityUnits: 16 });
+  });
+
   it('computes each distributor with its own lead time, scheme and last price', () => {
     expect(advice.safetyStockUnits).toBe(70);
     const alpha = advice.distributors.find((row) => row.supplierId === 'sup_a')!;

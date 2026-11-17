@@ -1144,8 +1144,11 @@ const purchasingRouter = router({
           );
           if (lostDemandKey && input.branchId) {
             const scope = await assertProcurementBranch(ctx, input.branchId, db);
+            // Serializes competing advice drafts for this branch. NO KEY UPDATE does
+            // not block the KEY SHARE lock every foreign-key insert (a sale, a stock
+            // movement) takes on the branch row, so counter work is never held up.
             await db.$queryRaw(
-              Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR UPDATE`
+              Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR NO KEY UPDATE`
             );
             const advice = await currentLostDemandAdvice(db, scope, lostDemandKey);
             const option = advice.distributors.find((row) => row.supplierId === input.supplierId);
@@ -2952,8 +2955,9 @@ const purchasingRouter = router({
         const db = txDb(tx);
         const at = new Date();
         await assertProcurementBranch(ctx, input.fromBranchId, db);
+        // Same lock as the advice draft PO: serializes drafts, never blocks sales.
         await db.$queryRaw(
-          Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR UPDATE`
+          Prisma.sql`SELECT id FROM pharmacy_branches WHERE "organizationId"=${scope.organizationId} AND id=${scope.branchId} FOR NO KEY UPDATE`
         );
         const advice = await currentLostDemandAdvice(
           db,
@@ -3067,7 +3071,9 @@ const purchasingRouter = router({
           });
           remaining -= units;
         }
-        if (!lines.length)
+        // Every advised unit must come from eligible stock; a shorter request would
+        // be recorded as if it covered the advice.
+        if (!lines.length || remaining > 0)
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_TRANSFER' });
         const draft = await db.pharmacyInterbranchTransfer.create({
           data: {

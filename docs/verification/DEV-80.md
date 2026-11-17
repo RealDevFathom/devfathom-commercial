@@ -25,6 +25,19 @@ trigger engine, advice reader, or advice actions. This change adds that missing 
 | No auto-send or medicine outreach | Advice actions are draft/ignore only; no WhatsApp payload or sender introduced                                                                                                                                                    | Advice panel offers no approve/send control; existing message safeguards retained                                                   |
 | Tenant settings and audit         | `20261117090600_pharmacy_lost_demand_advice`: transaction, idempotent DDL, ENABLE/FORCE RLS, value checks, append-only decisions                                                                                                  | Isolated in-memory PostgreSQL-compatible migration validation; repository migration ordering checks                                 |
 
+## Review follow-up
+
+- Decisions stay append-only, but the tenant purge (`app.purging_organization_id`) can delete them.
+  Covered by `tests/pharmacy-lost-demand-advice-migration.test.ts` and `lost-demand-advice.db.test.ts`.
+- Advice drafts lock the branch row `FOR NO KEY UPDATE`, so counter sales are never blocked.
+- Forecast demand is summed in the database (`groupBy`), not loaded line by line.
+- Distributor terms come from this branch's own orders. Open DRAFT orders and transfers already in
+  motion count as on order. A donor's undispatched requests are not offered again, and each donor keeps
+  its own configured cover.
+- Transfer need is rounded like the order quantity. A transfer request must be fully covered by
+  eligible stock. The solo PIN path accepts only the approver's own allocation.
+- Alternate margins are net of the recorded line discount.
+
 ## Negative controls
 
 - Existing baseline: 4 focused files, 422 tests passed before implementation.

@@ -20,8 +20,21 @@ import {
 const DAY_MS = 86_400_000;
 const MAX_EVENTS = 5_000;
 const MAX_GROUPS = 25;
-/** Statuses of orders that have left the draft stage and still count as inbound. */
-const OPEN_ORDER_STATUSES = ['SUBMITTED', 'APPROVED', 'SENT', 'RECEIVING'] as const;
+/**
+ * Statuses of orders that still count as inbound. An open DRAFT counts too, so a
+ * draft already raised from this advice is not suggested a second time.
+ */
+const OPEN_ORDER_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'SENT', 'RECEIVING'] as const;
+/** Transfers not yet dispatched: requested or allocated stock still at the donor. */
+const UNDISPATCHED_TRANSFER_STATUSES = ['DRAFT', 'ALLOCATED', 'APPROVED'] as const;
+/** Transfers still owed to their destination. */
+const OPEN_TRANSFER_STATUSES = [
+  ...UNDISPATCHED_TRANSFER_STATUSES,
+  'DISPATCHED',
+  'PARTIALLY_RECEIVED',
+  'EXCEPTION',
+] as const;
+const MAX_PENDING_TRANSFER_LINES = 500;
 /** Statuses of orders whose terms a distributor actually agreed to supply. */
 const PLACED_ORDER_STATUSES = ['APPROVED', 'SENT', 'RECEIVING'] as const;
 
@@ -89,7 +102,9 @@ async function dailyDemand(
   windowDays: number,
   now: Date
 ) {
-  const lines = await db.pharmacySaleLine.findMany({
+  // Summed in the database: one row per branch, however long the window.
+  const sums = await db.pharmacySaleLine.groupBy({
+    by: ['branchId'],
     where: {
       organizationId,
       branchId: { in: [...branchIds] },
@@ -97,12 +112,56 @@ async function dailyDemand(
       createdAt: { gte: since, lte: now },
       sale: { status: 'COMPLETED' },
     },
-    select: { branchId: true, canonicalUnits: true },
+    _sum: { canonicalUnits: true },
   });
   const totals = new Map<string, number>(branchIds.map((id) => [id, 0]));
-  for (const line of lines)
-    totals.set(line.branchId, (totals.get(line.branchId) ?? 0) + line.canonicalUnits);
+  for (const row of sums) totals.set(row.branchId, row._sum.canonicalUnits ?? 0);
   return new Map([...totals].map(([id, units]) => [id, units / windowDays]));
+}
+
+/**
+ * Transfers already in motion for one medicine: units still owed to this branch
+ * (requested, allocated, approved or in transit) count as on order, and units a
+ * donor has been asked for but not yet dispatched are not offered again.
+ */
+async function pendingTransfers(
+  db: ScopedDb,
+  scope: LostDemandScope,
+  medicineId: string,
+  donorBranchIds: readonly string[]
+) {
+  const lines = await db.pharmacyInterbranchTransferLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      sourceLot: { batch: { medicineId } },
+      transfer: {
+        status: { in: [...OPEN_TRANSFER_STATUSES] },
+        OR: [{ toBranchId: scope.branchId }, { fromBranchId: { in: [...donorBranchIds] } }],
+      },
+    },
+    take: MAX_PENDING_TRANSFER_LINES + 1,
+    select: {
+      quantityUnits: true,
+      receivedUnits: true,
+      transfer: { select: { fromBranchId: true, toBranchId: true, status: true } },
+    },
+  });
+  // Never present a truncated set of transfers as the whole picture.
+  if (lines.length > MAX_PENDING_TRANSFER_LINES)
+    throw new Error('Pending transfers exceed the supported window.');
+  let inboundUnits = 0;
+  const committedByDonor = new Map<string, number>();
+  const undispatched = new Set<string>(UNDISPATCHED_TRANSFER_STATUSES);
+  for (const line of lines) {
+    if (line.transfer.toBranchId === scope.branchId)
+      inboundUnits += Math.max(0, line.quantityUnits - line.receivedUnits);
+    if (line.transfer.fromBranchId !== scope.branchId && undispatched.has(line.transfer.status))
+      committedByDonor.set(
+        line.transfer.fromBranchId,
+        (committedByDonor.get(line.transfer.fromBranchId) ?? 0) + line.quantityUnits
+      );
+  }
+  return { inboundUnits, committedByDonor };
 }
 
 async function onOrderUnits(db: ScopedDb, scope: LostDemandScope, medicineId: string) {
@@ -130,16 +189,18 @@ async function onOrderUnits(db: ScopedDb, scope: LostDemandScope, medicineId: st
   }, 0);
 }
 
+/** The terms this branch itself was last supplied on; another branch's never leak in. */
 async function distributorFacts(
   db: ScopedDb,
-  organizationId: string,
+  scope: LostDemandScope,
   medicineId: string
 ): Promise<DistributorFact[]> {
   const lines = await db.pharmacyPurchaseOrderLine.findMany({
     where: {
-      organizationId,
+      organizationId: scope.organizationId,
       medicineId,
       purchaseOrder: {
+        branchId: scope.branchId,
         status: { in: [...PLACED_ORDER_STATUSES] },
         supplier: { active: true },
       },
@@ -436,7 +497,7 @@ export async function readLostDemandAdvice(
       continue;
     }
     const branchIds = [scope.branchId, ...donorBranches.map((branch) => branch.id)];
-    const [stock, demand, inbound, distributors, alternates] = await Promise.all([
+    const [stock, demand, inbound, distributors, alternates, transfers] = await Promise.all([
       availableUnits(db, scope.organizationId, primary.id, branchIds, now),
       dailyDemand(
         db,
@@ -448,13 +509,22 @@ export async function readLostDemandAdvice(
         now
       ),
       onOrderUnits(db, scope, primary.id),
-      distributorFacts(db, scope.organizationId, primary.id),
+      distributorFacts(db, scope, primary.id),
       alternateFacts(db, scope, primary, now),
+      pendingTransfers(
+        db,
+        scope,
+        primary.id,
+        donorBranches.map((branch) => branch.id)
+      ),
     ]);
     const donors: BranchStockFact[] = donorBranches.map((branch) => ({
       branchId: branch.id,
       branchName: branch.name,
-      availableUnits: stock.get(branch.id) ?? 0,
+      availableUnits: Math.max(
+        0,
+        (stock.get(branch.id) ?? 0) - (transfers.committedByDonor.get(branch.id) ?? 0)
+      ),
       dailyDemandUnits: demand.get(branch.id) ?? 0,
       coverageDays: donorCoverage.get(branch.id),
     }));
@@ -465,7 +535,7 @@ export async function readLostDemandAdvice(
         medicineId: primary.id,
         dailyDemandUnits: demand.get(scope.branchId) ?? 0,
         onHandUnits: stock.get(scope.branchId) ?? 0,
-        onOrderUnits: inbound,
+        onOrderUnits: inbound + transfers.inboundUnits,
         distributors,
         alternates,
         donors,

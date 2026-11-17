@@ -56,7 +56,8 @@ export async function draftLostDemandOrder(form: FormData): Promise<string> {
           rebateBps: option.lastRebateBps ?? 0,
           taxBps: option.lastTaxBps ?? 0,
           taxCreditable: option.lastTaxCreditable ?? false,
-          leadTimeDays: option.effectiveLeadTimeDays,
+          // No lead time: the order line keeps none unless a quote states it, so a
+          // branch default is never later read back as a recorded delivery time.
         },
       ],
     });

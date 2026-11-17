@@ -441,7 +441,10 @@ export function buildLostDemandAdvice(input: LostDemandAdviceInput): LostDemandA
 
   const neededUnits = Math.max(
     0,
-    Math.ceil(input.dailyDemandUnits * (config.defaultLeadTimeDays + config.safetyStockDays)) -
+    // Rounded the same way as the order quantity: lead-time demand and safety
+    // stock separately, so a transfer never covers one unit less than a PO would.
+    Math.ceil(input.dailyDemandUnits * config.defaultLeadTimeDays) +
+      safetyStockUnits -
       input.onHandUnits -
       input.onOrderUnits,
     trigger.lostCanonicalUnits - input.onHandUnits - input.onOrderUnits

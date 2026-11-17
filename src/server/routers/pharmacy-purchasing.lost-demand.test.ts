@@ -91,6 +91,15 @@ function makeDb() {
   return proxy as typeof db;
 }
 const m = (name: string) => (db as unknown as Record<string, Model>)[name]!;
+/** The SQL text of every raw query the procedure ran, tagged template or Prisma.sql. */
+function rawSql(): string[] {
+  const calls = (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+  return calls.map(([query]) => {
+    const sql = (query as { sql?: unknown }).sql;
+    if (typeof sql === 'string') return sql;
+    return Array.isArray(query) ? query.join('?') : String(query);
+  });
+}
 
 function caller(userId: string) {
   return pharmacyPurchasingRouter.createCaller({
@@ -247,6 +256,14 @@ describe('Draft PO from lost-demand advice', () => {
     expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
   });
 
+  it('locks the branch row without blocking sales while it re-reads the advice', async () => {
+    withAdvice(advice());
+    await caller('buyer').createPurchaseOrder(ORDER);
+    const branchLocks = rawSql().filter((sql) => sql.includes('pharmacy_branches'));
+    expect(branchLocks).toHaveLength(1);
+    expect(branchLocks[0]).toContain('FOR NO KEY UPDATE');
+  });
+
   it('refuses an order for a different item than the advice', async () => {
     withAdvice(advice());
     await expect(
@@ -376,6 +393,34 @@ describe('Transfer request from lost-demand advice', () => {
         fromBranchId: 'branch_b',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_RECALLED' });
+  });
+
+  it('refuses a request that eligible stock cannot fully cover', async () => {
+    withAdvice(advice());
+    // The advice asks for 25 units; only 10 are eligible at the donor.
+    ledger(candidate('lot_a', 10));
+    await expect(
+      caller('buyer').requestLostDemandTransfer({
+        branchId: 'branch_a',
+        demandKey: 'sku:medicine_a',
+        fromBranchId: 'branch_b',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'LOST_DEMAND_NO_TRANSFER' });
+    expect(m('pharmacyInterbranchTransfer').create).not.toHaveBeenCalled();
+    expect(m('pharmacyLostDemandAdviceDecision').create).not.toHaveBeenCalled();
+  });
+
+  it('serializes on the branch row without blocking foreign-key inserts', async () => {
+    withAdvice(advice());
+    ledger(candidate('lot_a', 50));
+    await caller('buyer').requestLostDemandTransfer({
+      branchId: 'branch_a',
+      demandKey: 'sku:medicine_a',
+      fromBranchId: 'branch_b',
+    });
+    const branchLocks = rawSql().filter((sql) => sql.includes('pharmacy_branches'));
+    expect(branchLocks).toHaveLength(1);
+    expect(branchLocks[0]).toContain('FOR NO KEY UPDATE');
   });
 
   it('refuses a donor branch the advice did not name', async () => {

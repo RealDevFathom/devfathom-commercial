@@ -64,9 +64,22 @@ CREATE TABLE IF NOT EXISTS "pharmacy_lost_demand_advice_decisions" (
 CREATE INDEX IF NOT EXISTS "pharmacy_lost_demand_advice_decisions_key_idx"
   ON "pharmacy_lost_demand_advice_decisions"("organizationId", "branchId", "demandKey", "createdAt");
 
+-- Append-only, except when the row's own tenant is destroyed: the retention
+-- worker's purge (transaction-local "app.purging_organization_id" naming this
+-- tenant) or the organization row already being gone. UPDATE is always refused.
 CREATE OR REPLACE FUNCTION pharmacy_lost_demand_decisions_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
-BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '23514'; END $$;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId" THEN
+      RETURN OLD;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
+      RETURN OLD;
+    END IF;
+  END IF;
+  RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '23514';
+END $$;
 
 DROP TRIGGER IF EXISTS pharmacy_lost_demand_decisions_append_only ON "pharmacy_lost_demand_advice_decisions";
 CREATE TRIGGER pharmacy_lost_demand_decisions_append_only

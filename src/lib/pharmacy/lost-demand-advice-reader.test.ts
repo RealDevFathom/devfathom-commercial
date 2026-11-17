@@ -54,6 +54,7 @@ beforeEach(() => {
   const model = () => ({
     findFirst: vi.fn().mockResolvedValue(null),
     findMany: vi.fn().mockResolvedValue([]),
+    groupBy: vi.fn().mockResolvedValue([]),
     count: vi.fn().mockResolvedValue(0),
   });
   db = new Proxy({} as typeof db, {
@@ -83,9 +84,9 @@ beforeEach(() => {
             candidate('b2', 0),
           ]
   );
-  db.pharmacySaleLine!.findMany!.mockResolvedValue([
-    { branchId: 'b1', canonicalUnits: 300 },
-    { branchId: 'b2', canonicalUnits: 30 },
+  db.pharmacySaleLine!.groupBy!.mockResolvedValue([
+    { branchId: 'b1', _sum: { canonicalUnits: 300 } },
+    { branchId: 'b2', _sum: { canonicalUnits: 30 } },
   ]);
   db.pharmacyBranch!.findMany!.mockResolvedValue([{ id: 'b2', name: 'South' }]);
   db.pharmacyPurchaseOrderLine!.findMany!.mockImplementation(
@@ -266,5 +267,48 @@ describe('readLostDemandAdvice', () => {
     expect(salt.alternates).toEqual([
       expect.objectContaining({ medicineId: 'brand_c', marginPerUnitMinor: 10 }),
     ]);
+  });
+
+  it('sums forecast demand in the database rather than loading every sale line', async () => {
+    await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    expect(db.pharmacySaleLine!.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ by: ['branchId'], _sum: { canonicalUnits: true } })
+    );
+    expect(db.pharmacySaleLine!.findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads distributor terms from the branch own orders only', async () => {
+    await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    const termsRead = db.pharmacyPurchaseOrderLine!.findMany!.mock.calls.find(
+      ([args]) => !args.where.purchaseOrder.status.in.includes('SUBMITTED')
+    )!;
+    expect(termsRead[0].where.purchaseOrder).toMatchObject({ branchId: 'b1' });
+  });
+
+  it('counts open drafts and transfers already in motion, so advice is not repeated', async () => {
+    db.pharmacyInterbranchTransferLine!.findMany!.mockResolvedValue([
+      // Owed to this branch: 25 requested, 5 already received.
+      {
+        quantityUnits: 25,
+        receivedUnits: 5,
+        transfer: { fromBranchId: 'b2', toBranchId: 'b1', status: 'DISPATCHED' },
+      },
+      // Already asked of the donor but not dispatched: not offered again.
+      {
+        quantityUnits: 40,
+        receivedUnits: 0,
+        transfer: { fromBranchId: 'b2', toBranchId: 'b1', status: 'DRAFT' },
+      },
+    ]);
+    const { advice } = await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    const salt = advice.find((row) => row.demandKey === `salt:${saltStrengthKey(PARACETAMOL)}`)!;
+    // 20 from the open orders fixture + 20 still owed in transit + 40 requested.
+    expect(salt.onOrderUnits).toBe(80);
+    // South: 300 sellable - 40 already requested - 10 days of cover.
+    expect(salt.transfer).toMatchObject({ fromBranchId: 'b2', surplusUnits: 250 });
+    const onOrderRead = db.pharmacyPurchaseOrderLine!.findMany!.mock.calls.find(([args]) =>
+      args.where.purchaseOrder.status.in.includes('SUBMITTED')
+    )!;
+    expect(onOrderRead[0].where.purchaseOrder.status.in).toContain('DRAFT');
   });
 });

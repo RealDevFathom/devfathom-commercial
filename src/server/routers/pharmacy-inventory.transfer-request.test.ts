@@ -274,3 +274,14 @@ describe('DEV-80 approving the allocated request', () => {
     expect(mocks.soloOwnerApprovalAllowed).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-80 the solo PIN path is self-approval only', () => {
+  it('refuses the PIN path on a colleague allocation, and writes no self-approval audit', async () => {
+    allocatedBy('user_b');
+    await expect(approve({ soloPin: '1234' })).rejects.toMatchObject({
+      message: 'INVALID_STATE',
+    });
+    expect(db.pharmacyInterbranchTransfer.update).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+});
