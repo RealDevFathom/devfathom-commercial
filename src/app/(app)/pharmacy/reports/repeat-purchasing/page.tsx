@@ -7,7 +7,13 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { REPEAT_DEFINITION, REPEAT_LIMITS } from '@/lib/pharmacy/repeat-purchasing';
-import { formatUtcInstant, toUtcMinuteInput, utcInstantFromInput } from '@/lib/utc-instant';
+import {
+  formatWorkspaceDateTime,
+  workspaceInstantFromInput,
+  workspaceMinuteInput,
+  workspaceDateOffset,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -22,14 +28,17 @@ export default async function RepeatPurchasingPage({
 }) {
   const query = await searchParams;
   const now = new Date();
+  const ctx = await createTRPCContext();
+  const timeZone = ctx.organization?.timezone;
+  const zone = workspaceZoneLabel(timeZone);
   const rawAsOf = scalar(query.asOf);
-  // The picker is minute precision; default to the current minute so the frozen
-  // cutoff round-trips through the form unchanged.
-  const asOf = rawAsOf ? utcInstantFromInput(rawAsOf) : `${now.toISOString().slice(0, 16)}:00Z`;
-  const from =
-    scalar(query.from) ?? new Date(now.getTime() - 179 * 86_400_000).toISOString().slice(0, 10);
-  const to =
-    scalar(query.to) ?? new Date(now.getTime() - 90 * 86_400_000).toISOString().slice(0, 10);
+  // The picker is minute precision and read on the organization's clock; default
+  // to the current minute so the frozen cutoff round-trips through the form.
+  const asOf = rawAsOf
+    ? workspaceInstantFromInput(rawAsOf, timeZone)
+    : `${now.toISOString().slice(0, 16)}:00Z`;
+  const from = scalar(query.from) ?? workspaceDateOffset(timeZone, -179, now);
+  const to = scalar(query.to) ?? workspaceDateOffset(timeZone, -90, now);
   const branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
   let result: Awaited<
@@ -37,7 +46,7 @@ export default async function RepeatPurchasingPage({
   > | null = null;
   let error: string | null = null;
   try {
-    const caller = pharmacyReportsRouter.createCaller(await createTRPCContext());
+    const caller = pharmacyReportsRouter.createCaller(ctx);
     branches = (await caller.branches()).branches;
     result = await caller.repeatPurchasing({ from, to, asOf, ...(branchId ? { branchId } : {}) });
   } catch (cause) {
@@ -65,20 +74,20 @@ export default async function RepeatPurchasingPage({
       <SectionCard title="Enrollment and observation" titleLevel={2}>
         <form className="grid gap-4 md:grid-cols-2" action="/pharmacy/reports/repeat-purchasing">
           <label className="text-sm text-text-body">
-            Enrollment from (UTC)
+            Enrollment from ({zone})
             <Input className="mt-1 min-h-11" type="date" name="from" defaultValue={from} required />
           </label>
           <label className="text-sm text-text-body">
-            Enrollment through (UTC)
+            Enrollment through ({zone})
             <Input className="mt-1 min-h-11" type="date" name="to" defaultValue={to} required />
           </label>
           <label className="text-sm text-text-body">
-            As-of cutoff (UTC)
+            As-of cutoff ({zone})
             <Input
               className="mt-1 min-h-11"
               type="datetime-local"
               name="asOf"
-              defaultValue={toUtcMinuteInput(asOf)}
+              defaultValue={workspaceMinuteInput(asOf, timeZone)}
               required
               aria-describedby="repeat-window-help"
             />
@@ -123,7 +132,7 @@ export default async function RepeatPurchasingPage({
           <SectionCard title="Identity coverage" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">
               Completed original receipts in enrollment window, before purchase exclusions. Frozen
-              cutoff: {formatUtcInstant(result.asOf)}.
+              cutoff: {formatWorkspaceDateTime(result.asOf, timeZone)}.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
@@ -164,7 +173,10 @@ export default async function RepeatPurchasingPage({
               Across all selected data through cutoff: {result.missingTimestamp} completed originals
               missing completion timestamps; {result.missingReceipt} timestamped originals missing
               receipt numbers. Earliest available completion:{' '}
-              {result.earliestObservedAt ?? 'Unavailable'}. This is not a verified data-start date.
+              {result.earliestObservedAt
+                ? formatWorkspaceDateTime(result.earliestObservedAt, timeZone)
+                : 'Unavailable'}
+              . This is not a verified data-start date.
             </p>
           </SectionCard>
         </>

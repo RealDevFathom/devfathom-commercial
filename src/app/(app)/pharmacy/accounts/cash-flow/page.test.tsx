@@ -183,7 +183,7 @@ describe('cash-flow page', () => {
 
   it('shows date guidance for malformed dates without reading financial data', async () => {
     await show({ ...filters, from: 'invalid' });
-    expect(screen.getByRole('alert')).toHaveTextContent(/valid UTC window of at most 92 days/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/valid date window of at most 92 days/);
     expect(mocks.financialStatements).not.toHaveBeenCalled();
     expect(mocks.projection).not.toHaveBeenCalled();
   });
@@ -191,7 +191,7 @@ describe('cash-flow page', () => {
   it('shows date guidance for a rejected report window', async () => {
     mocks.financialStatements.mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST' }));
     await show();
-    expect(screen.getByRole('alert')).toHaveTextContent(/valid UTC window of at most 92 days/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/valid date window of at most 92 days/);
     expect(mocks.projection).not.toHaveBeenCalled();
   });
 
@@ -202,7 +202,7 @@ describe('cash-flow page', () => {
       await show();
       const alert = screen.getByRole('alert');
       expect(alert).toHaveTextContent('The cash-flow projection could not be read. Please retry.');
-      expect(alert).not.toHaveTextContent(/valid UTC window|private database detail/);
+      expect(alert).not.toHaveTextContent(/valid date window|private database detail/);
       expect(screen.queryByRole('table')).toBeNull();
     }
   );
@@ -221,5 +221,19 @@ describe('cash-flow page', () => {
     mocks.actor.mockImplementation(() => redirect('/login'));
     await expect(show()).rejects.toThrow('NEXT_REDIRECT');
     expect(mocks.projection).not.toHaveBeenCalled();
+  });
+
+  it('reads the picked days on the organization clock at the day boundary', async () => {
+    mocks.actor.mockResolvedValue({
+      session: {},
+      organization: { id: scope.organizationId, timezone: 'Asia/Karachi' },
+    });
+    await show();
+    // 1 Oct 00:00 PKT is 30 Sep 19:00 UTC.
+    expect(mocks.projection.mock.calls[0][2]).toEqual({
+      from: new Date('2026-09-30T19:00:00Z'),
+      to: new Date('2026-10-30T19:00:00Z'),
+    });
+    expect(screen.getByText('Scope and period (PKT)')).toBeVisible();
   });
 });

@@ -24,6 +24,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
 import { writeOffWitnessOptions } from '@/lib/pharmacy/write-off-witness';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
@@ -66,6 +67,8 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 const SUCCESS: Record<TransferAction, string> = {
   allocate: 'Transfer allocated. A colleague must approve it before dispatch.',
+  'allocate-request':
+    'Transfer request allocated. A colleague must approve it before dispatch; nothing has moved yet.',
   approve: 'Transfer approved. Print the packing slip and dispatch it.',
   dispatch: 'Transfer dispatched. The stock is now in transit.',
   receive: 'Transfer received and closed.',
@@ -149,7 +152,7 @@ export default async function PharmacyTransfersPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const transfers = await caller.transferBoard({ branchId: branch.id });
-  const [balances, destinationLocations, witnessOptions] = await Promise.all([
+  const [balances, destinationLocations, witnessOptions, soloApprover] = await Promise.all([
     ctx.db.pharmacyStockBalance.findMany({
       where: {
         organizationId,
@@ -183,6 +186,9 @@ export default async function PharmacyTransfersPage({
     // receipt will accept: colleagues assigned to this branch with a PIN, or the
     // solo owner/pharmacist themself.
     writeOffWitnessOptions(ctx.db, { organizationId, branchId: branch.id, actorId: currentUserId }),
+    // Solo-pharmacy rule: a sole owner approves their own allocation with a fresh PIN.
+    // Display only; the approval procedure re-checks it on the server.
+    soloOwnerApprovalAllowed(ctx.db, organizationId, currentUserId, branch.id).catch(() => false),
   ]);
   const witnesses = witnessOptions.soloSelfWitness
     ? [{ id: currentUserId, name: 'You (solo witness)', title: null }]
@@ -214,8 +220,16 @@ export default async function PharmacyTransfersPage({
       const transferId = String(data.get('transferId') ?? '').trim();
       if (action === 'allocate')
         await actionCaller.allocateTransfer(allocateInput(data, ALLOCATE_ROWS));
-      else if (action === 'approve') await actionCaller.approveTransfer({ branchId, transferId });
-      else if (action === 'dispatch')
+      else if (action === 'allocate-request')
+        await actionCaller.allocateRequestedTransfer({ branchId, transferId });
+      else if (action === 'approve') {
+        const soloPin = String(data.get('soloPin') ?? '').trim();
+        await actionCaller.approveTransfer({
+          branchId,
+          transferId,
+          ...(soloPin ? { soloPin } : {}),
+        });
+      } else if (action === 'dispatch')
         await actionCaller.dispatchTransfer({
           branchId,
           transferId,
@@ -269,7 +283,12 @@ export default async function PharmacyTransfersPage({
         </form>
       </SectionCard>
 
-      <section aria-label="Transfer summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Transfer summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <Stat
+          label="Requested"
+          sub="Outbound, to allocate"
+          value={outbound.filter((t) => t.status === 'DRAFT').length}
+        />
         <Stat
           label="Awaiting approval"
           sub="Outbound, second person"
@@ -337,6 +356,7 @@ export default async function PharmacyTransfersPage({
                 branchId={branch.id}
                 currentUserId={currentUserId}
                 key={transfer.id}
+                soloApprover={soloApprover}
                 transfer={transfer}
                 witnesses={witnesses}
               />

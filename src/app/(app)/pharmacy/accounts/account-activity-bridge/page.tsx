@@ -14,6 +14,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { workspaceDateOffset, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 import { AccountActivityExportButton } from './export-button';
 
 export const metadata: Metadata = { title: screenCopy.accountActivity.accountActivityBridge };
@@ -89,9 +90,11 @@ export default async function AccountActivityBridgePage({
       </State>
     );
 
+  const timeZone = ctx.organization?.timezone;
+  const zone = workspaceZoneLabel(timeZone);
   const now = new Date();
-  const fallbackTo = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
-  const fallbackFrom = new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const fallbackTo = workspaceDateOffset(timeZone, 1, now);
+  const fallbackFrom = workspaceDateOffset(timeZone, -30, now);
   const from = query.from ?? fallbackFrom;
   const to = query.to ?? fallbackTo;
   if (!validDate(from) || !validDate(to) || from >= to)
@@ -109,10 +112,15 @@ export default async function AccountActivityBridgePage({
 
   let statement;
   try {
+    // The picked days are read on the organization's clock.
+    const window = {
+      from: workspaceDateRange(from, from, timeZone).from,
+      to: workspaceDateRange(to, to, timeZone).from,
+    };
     statement = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
       branchId: branch.id,
-      from: `${from}T00:00:00Z`,
-      to: `${to}T00:00:00Z`,
+      from: window.from.toISOString(),
+      to: window.to.toISOString(),
       page: 1,
     });
     assertAccountActivityScope(statement.scope, { organizationId, branchId: branch.id });
@@ -168,11 +176,11 @@ export default async function AccountActivityBridgePage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.accountActivity.from500AmPkt}
+            {screenCopy.dateWindow.from} ({zone})
             <Input name="from" type="date" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.accountActivity.until500AmPktNotIncluded}
+            {screenCopy.dateWindow.toExclusive} ({zone})
             <Input name="to" type="date" defaultValue={to} required />
           </label>
           <label className="grid gap-2 text-sm">

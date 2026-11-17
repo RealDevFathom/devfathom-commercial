@@ -17,6 +17,7 @@
  * scanned (oldest due first). A larger branch is reported as an incomplete
  * view, never as complete totals. The page and its CSV render the same view.
  */
+import { workspaceDateRange, workspaceToday } from '@/lib/timezone';
 import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { PharmacyApInvoiceError } from './ap-invoices';
@@ -50,16 +51,19 @@ export function agingBucket(daysPastDue: number): ApAgingBucket {
   return 'DAYS_OVER_90';
 }
 
-/** The as-of calendar day (UTC midnight) and its exclusive end instant. */
-export function apAgingWindow(asOf: string, now: Date) {
+/**
+ * The as-of calendar day (UTC midnight, for due-date arithmetic) and its exclusive
+ * end instant: the start of the next day on the organization's clock.
+ */
+export function apAgingWindow(asOf: string, now: Date, timeZone?: string | null) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new PharmacyApInvoiceError('INVALID_DATE');
   const day = new Date(`${asOf}T00:00:00.000Z`);
   if (Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== asOf) {
     throw new PharmacyApInvoiceError('INVALID_DATE');
   }
-  const today = new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const today = new Date(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
   if (day < EARLIEST || day > today) throw new PharmacyApInvoiceError('INVALID_DATE');
-  return { day, cutoff: new Date(day.getTime() + DAY_MS) };
+  return { day, cutoff: workspaceDateRange(asOf, asOf, timeZone).to };
 }
 
 export type ApAgingInvoiceInput = {
@@ -180,9 +184,10 @@ export async function readApAging(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
   asOf: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  timeZone?: string | null
 ): Promise<ApAgingView> {
-  const window = apAgingWindow(asOf, now);
+  const window = apAgingWindow(asOf, now, timeZone);
   const invoices = await db.pharmacyApInvoice.findMany({
     where: {
       organizationId: scope.organizationId,

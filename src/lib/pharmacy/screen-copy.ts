@@ -1,5 +1,10 @@
 /** English catalog for the shop-language sweep; stable keys keep display copy ready for translation. */
 export const SHOP_SCREEN_COPY = {
+  dateWindow: {
+    from: 'From',
+    toExclusive: 'To, exclusive',
+    scopeAndPeriod: 'Scope and period',
+  },
   reports: {
     pharmacyOperations: 'Pharmacy operations',
     reports: 'Reports',
@@ -314,7 +319,7 @@ export const SHOP_SCREEN_COPY = {
     noActiveBranch: 'No active branch',
     createAnActivePharmacyBranchFirst: 'Create an active pharmacy branch first.',
     invalidDateWindow: 'Invalid date window',
-    chooseAValidUtcDateWindowWithAn: 'Choose a valid UTC date window with an exclusive end.',
+    chooseAValidUtcDateWindowWithAn: 'Choose a valid date window with an exclusive end.',
     chooseADateWindowOfAtMost92: 'Choose a date window of at most 92 days.',
     pharmacyAccounts: 'Pharmacy accounts',
     accountActivityBridge: 'Account activity',

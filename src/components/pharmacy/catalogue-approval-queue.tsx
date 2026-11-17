@@ -1,0 +1,278 @@
+'use client';
+
+import { useState } from 'react';
+import { trpc } from '@/lib/trpc';
+import { Button } from '@/components/ui/button';
+import { SectionCard } from '@/components/ui/section-card';
+import { Input } from '@/components/ui/input';
+import { StatusPill } from '@/components/ui/status-pill';
+
+const editLabels: Record<string, string> = {
+  productName: 'Product name',
+  brandName: 'Brand',
+  manufacturer: 'Manufacturer',
+  retailPriceMinor: 'Retail price (minor units)',
+  retailCategory: 'Retail category',
+  marketingAuthorizationHolder: 'Marketing authorization holder',
+  drapRegistrationNumber: 'Registration number',
+  drapRegistrationStatus: 'Registration status',
+  rx: 'Prescription required',
+  otc: 'Over the counter',
+  restricted: 'Restricted',
+  controlled: 'Controlled',
+  highAlert: 'High alert',
+  lasa: 'Look alike / sound alike',
+  coldChain: 'Cold chain',
+  code: 'Barcode',
+  type: 'Type',
+  level: 'Pack type',
+  unitsPerParent: 'Individual units per pack',
+  effectiveFrom: 'Effective from',
+  batchReference: 'Batch reference',
+  printedMrpMinor: 'Printed MRP (minor units)',
+  roundingIncrementMinor: 'Rounding increment (minor units)',
+  value: 'Alias',
+};
+const operationLabels: Record<string, string> = {
+  UPDATE_MEDICINE: 'Product details',
+  createPackLevel: 'Add pack',
+  revisePackLevel: 'Revise pack',
+  recordPrintedMrp: 'Record printed MRP',
+  addBarcode: 'Add barcode',
+  setPackBarcode: 'Attach pack barcode',
+  addAlias: 'Add alias',
+};
+
+function displayChange(field: string, value: unknown): string {
+  if (value === null) return 'Clear value';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (field === 'effectiveFrom' && typeof value === 'string') {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime()))
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+        date
+      );
+  }
+  return typeof value === 'object' ? (JSON.stringify(value) ?? '—') : String(value);
+}
+
+function decisionMessage(result?: { status: string; staleEdits?: number }): string {
+  if (!result) return '';
+  if (result.status !== 'APPROVED') return 'Edit rejected.';
+  const stale = result.staleEdits ?? 0;
+  if (!stale) return 'Edit approved.';
+  return stale === 1
+    ? 'Edit approved. 1 other pending edit on this item is now out of date and must be rejected and resubmitted.'
+    : `Edit approved. ${stale} other pending edits on this item are now out of date and must be rejected and resubmitted.`;
+}
+
+export function CatalogueApprovalQueue() {
+  const [pin, setPin] = useState('');
+  const [query, setQuery] = useState('');
+  const [medicineId, setMedicineId] = useState('');
+  const [productName, setProductName] = useState('');
+  const [decisionNotice, setDecisionNotice] = useState('');
+  const search = trpc.pharmacyMedicine.search.useQuery(
+    { query: query || ' ', limit: 25 },
+    { enabled: query.trim().length > 1, retry: false }
+  );
+  const utils = trpc.useUtils();
+  const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, {
+    retry: false,
+  });
+  const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
+    onSuccess: async (result) => {
+      setPin('');
+      setDecisionNotice(decisionMessage(result));
+      await utils.pharmacyMedicine.catalogueEdits.invalidate();
+    },
+    onError: () => {
+      setPin('');
+      setDecisionNotice('');
+      // A refused approval may mean the item changed; refresh so stale edits show.
+      void utils.pharmacyMedicine.catalogueEdits.invalidate();
+    },
+  });
+  const propose = trpc.pharmacyMedicine.proposeCatalogueEdit.useMutation({
+    onSuccess: async () => {
+      setProductName('');
+      await utils.pharmacyMedicine.catalogueEdits.invalidate();
+    },
+  });
+  return (
+    <SectionCard title="Catalogue edits awaiting approval" titleLevel={2}>
+      <p className="mb-4 text-sm text-text-muted">
+        Edits stay pending until another catalogue administrator approves them. A solo owner may
+        approve their own edit by entering their own fresh PIN. Every approval is audited.
+      </p>
+      <form
+        className="mb-6 space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          propose.mutate({ medicineId, changes: { productName } });
+        }}
+      >
+        <label className="block max-w-sm space-y-2 text-sm">
+          <span>Find catalogue item to edit</span>
+          <Input
+            className="min-h-11"
+            value={query}
+            maxLength={200}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setMedicineId('');
+            }}
+          />
+        </label>
+        {search.isFetching ? <p role="status">Finding items…</p> : null}
+        {search.error ? (
+          <p role="alert" className="text-destructive">
+            {search.error.message}
+          </p>
+        ) : null}
+        {search.data?.length === 0 ? <p>No matching catalogue items.</p> : null}
+        {search.data?.length ? (
+          <label className="block max-w-sm space-y-2 text-sm">
+            <span>Catalogue item</span>
+            <select
+              className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+              required
+              value={medicineId}
+              onChange={(event) => setMedicineId(event.target.value)}
+            >
+              <option value="">Choose an item</option>
+              {search.data.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.productName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label className="block max-w-sm space-y-2 text-sm">
+          <span>Proposed product name</span>
+          <Input
+            className="min-h-11"
+            required
+            maxLength={300}
+            value={productName}
+            onChange={(event) => setProductName(event.target.value)}
+          />
+        </label>
+        <Button
+          size="touch"
+          disabled={!medicineId || !productName.trim() || propose.isPending}
+          type="submit"
+        >
+          {propose.isPending ? 'Submitting…' : 'Submit edit for review'}
+        </Button>
+        {propose.error ? (
+          <p role="alert" className="text-destructive">
+            {propose.error.message}
+          </p>
+        ) : null}
+        {propose.isSuccess ? (
+          <p role="status">Edit submitted for review. The published item changes after approval.</p>
+        ) : null}
+      </form>
+      <label className="mb-4 block max-w-sm space-y-2 text-sm">
+        <span>Solo owner PIN (for self-approval)</span>
+        <Input
+          className="min-h-11"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={64}
+          value={pin}
+          onChange={(event) => setPin(event.target.value)}
+        />
+      </label>
+      {queue.isPending ? <p role="status">Loading catalogue edits…</p> : null}
+      {queue.error ? (
+        <p role="alert" className="text-destructive">
+          {queue.error.message}
+        </p>
+      ) : null}
+      {decide.error ? (
+        <p role="alert" className="mb-4 text-destructive">
+          {decide.error.message}
+        </p>
+      ) : null}
+      {decisionNotice && !decide.error ? (
+        <p role="status" className="mb-4 text-sm">
+          {decisionNotice}
+        </p>
+      ) : null}
+      {!queue.isPending && !queue.error && queue.data?.length === 0 ? (
+        <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
+      ) : null}
+      <div className="space-y-4">
+        {queue.data?.map((edit) => (
+          <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
+            <h3 className="mb-2 break-words font-semibold">{edit.medicine.productName}</h3>
+            <p className="mb-2 text-sm text-text-muted">
+              {operationLabels[edit.operation] ?? 'Catalogue edit'}
+            </p>
+            {edit.stale ? (
+              <>
+                <StatusPill status="blocked" label="Out of date" />
+                <p className="my-2 text-sm">
+                  This item changed after the edit was submitted, so it can no longer be approved.
+                  Reject it and submit a new edit.
+                </p>
+              </>
+            ) : (
+              <StatusPill status="pending" label="Pending review" />
+            )}
+            <p className="mb-2 break-words text-sm text-text-muted">
+              Submitted by {edit.editor.name}
+            </p>
+            <dl className="my-4 grid gap-2 text-sm">
+              {edit.targets.map((target, index) => (
+                <div key={`${target.label}-${index}`} className="flex min-w-0 flex-wrap gap-2">
+                  <dt className="font-semibold">{target.label}</dt>
+                  <dd className="break-words">{target.value}</dd>
+                </div>
+              ))}
+              {Object.entries(
+                (edit.operation === 'UPDATE_MEDICINE'
+                  ? edit.changes
+                  : (edit.changes as { json: unknown }).json) as Record<string, unknown>
+              )
+                .filter(([field]) => field !== 'id' && !field.endsWith('Id'))
+                .map(([field, value]) => (
+                  <div key={field} className="flex min-w-0 flex-wrap gap-2">
+                    <dt className="font-semibold">{editLabels[field] ?? field}</dt>
+                    <dd className="break-all">{displayChange(field, value)}</dd>
+                  </div>
+                ))}
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="touch"
+                disabled={decide.isPending || edit.stale}
+                onClick={() =>
+                  decide.mutate({
+                    editId: edit.id,
+                    decision: 'APPROVE',
+                    soloPin: pin || undefined,
+                  })
+                }
+              >
+                {decide.isPending ? 'Saving…' : 'Approve edit'}
+              </Button>
+              <Button
+                size="touch"
+                variant="destructive"
+                disabled={decide.isPending}
+                onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
+              >
+                Reject edit
+              </Button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}

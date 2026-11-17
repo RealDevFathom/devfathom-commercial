@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
+import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
@@ -110,6 +111,9 @@ export type CounterTenderPanelProps = {
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
   onCheckOutcome?: () => Promise<CounterTenderResult>;
+  /** DEV-712: a manager or owner discards the unknown attempt with their PIN and a reason. */
+  onDiscardAttempt?: (input: CounterTenderDiscardInput) => Promise<CounterTenderResult>;
+  loadDiscardApprovers?: () => Promise<KhataApprover[]>;
   onRetry: () => void;
   onTender: (
     input: {
@@ -173,6 +177,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       recoveryOutcome,
       checkingOutcome = false,
       onCheckOutcome,
+      onDiscardAttempt,
+      loadDiscardApprovers,
       loadKhataAccounts,
       reauthenticateOwner,
       loadKhataApprovers,
@@ -740,6 +746,22 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           >
             {checkingOutcome ? 'Checking payment outcome…' : 'Check payment outcome'}
           </Button>
+        ) : null}
+        {onCheckOutcome && onDiscardAttempt && loadDiscardApprovers ? (
+          <CounterTenderDiscard
+            disabled={checkingOutcome || takingPayment}
+            loadApprovers={loadDiscardApprovers}
+            onDiscard={async (input) => {
+              const result = await onDiscardAttempt(input);
+              if (result.status !== 'unknown') {
+                setOutcome(result);
+                setAmount('');
+                setCashReceived(null);
+                statusRef.current?.focus();
+              }
+              return result;
+            }}
+          />
         ) : null}
         {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
           <Button type="button" variant="outline" className="min-h-11 rounded-sm" onClick={onRetry}>
