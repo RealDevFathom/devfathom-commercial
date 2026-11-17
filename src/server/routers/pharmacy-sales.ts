@@ -396,12 +396,13 @@ type CounterLineRequest = Omit<
 
 /**
  * DEV-843: a scanned pack taken out of FEFO order is labelled on the audit row like a typed
- * batch override (PH-A4), whether it sold with a manager's approval or was refused without one.
+ * batch override (PH-A4): sold with a manager's approval, refused without one, or refused
+ * because the manager PIN sent for it was wrong or ineligible.
  */
 function labelScannedPackFefo(
   ctx: TRPCContext,
   input: { branchId: string; saleId: string; medicineId: string },
-  outcome: 'sold' | 'refused'
+  outcome: 'sold' | 'refused' | 'pin_refused'
 ) {
   annotateAudit(ctx, {
     category: 'PHARMACY_SAFETY',
@@ -411,7 +412,10 @@ function labelScannedPackFefo(
     description:
       outcome === 'sold'
         ? 'Counter sold a scanned pack out of FEFO order.'
-        : 'Counter refused a scanned pack out of FEFO order without a manager approval.',
+        : outcome === 'refused'
+          ? 'Counter refused a scanned pack out of FEFO order without a manager approval.'
+          : // Refused before the pack was resolved, so this does not claim it was out of order.
+            'Counter refused the manager PIN sent to approve a scanned pack out of FEFO order.',
     metadata: { branchId: input.branchId, medicineId: input.medicineId, scannedPack: true },
   });
 }
@@ -2027,6 +2031,12 @@ export const pharmacySalesRouter = router({
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
+        // DEV-843: a scanned pack decides its own batch, so a typed batch override (and its
+        // pharmacist approval and reason) never travels with one.
+        .refine((line) => !(line.scannedPack && line.override), {
+          message: 'A scanned pack sets its own batch; send it without a batch override.',
+          path: ['override'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       // The input stays out of the audit row (it can carry a controlled PIN), but
@@ -2433,6 +2443,12 @@ export const pharmacySalesRouter = router({
           error.reason === 'SERIAL_FEFO_APPROVAL_REQUIRED'
         )
           labelScannedPackFefo(ctx, input, 'refused');
+        else if (
+          input.scannedPack?.approval &&
+          error instanceof CounterApprovalDenied &&
+          error.kind === 'SCANNED_PACK_FEFO'
+        )
+          labelScannedPackFefo(ctx, input, 'pin_refused');
         fail(error);
       }
     }),

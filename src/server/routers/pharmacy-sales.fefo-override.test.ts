@@ -325,6 +325,16 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
     });
     expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    // Labelled as a refused approval, without claiming the pack was out of order.
+    expect(lastAudit()).toMatchObject({
+      outcome: 'FAILURE',
+      detail: {
+        category: 'PHARMACY_SAFETY',
+        action: 'fefo_override',
+        description:
+          'Counter refused the manager PIN sent to approve a scanned pack out of FEFO order.',
+      },
+    });
   });
 
   it('refuses an unapproved later-expiry scan as FORBIDDEN and labels the refusal', async () => {
@@ -347,18 +357,14 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
     });
   });
 
-  it('does not turn a pharmacist-approved batch override into a scan approval', async () => {
+  it('refuses a scanned pack sent with a typed batch override before any approval or stock', async () => {
     const f = fixture();
-    vi.mocked(addSaleLine).mockResolvedValue({
-      line: { id: 'line-1' },
-      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
-    } as never);
-
-    await f.caller.addLine({ ...packLine, scannedPack, override });
-
-    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
-    expect(input.scannedPack).toEqual({ payload: scannedPack.payload });
-    expect(input.override).toEqual({ ...override, approvalPolicy: 'PHARMACIST_ON_DUTY' });
+    await expect(f.caller.addLine({ ...packLine, scannedPack, override })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(authorizeCounterApproval).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 
   it('refuses a caller-supplied scanned-pack approval policy before any stock is touched', async () => {
