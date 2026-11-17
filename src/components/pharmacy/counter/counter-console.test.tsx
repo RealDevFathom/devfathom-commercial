@@ -2062,7 +2062,12 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     mocks.queries.drawerStatus = drawerStatus;
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(drawerStatus.refetch).not.toHaveBeenCalled();
-    // DEV-725: with the drawer closed the opening step replaces the scan field.
+    // The opening field now receives focus after drawer checks. Fields keep
+    // F-keys; tabbing to the button restores the counter's global shortcuts.
+    expect(screen.getByLabelText('Opening cash')).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(drawerStatus.refetch).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'Open drawer' }).focus();
     fireEvent.keyDown(window, { key: 'F9' });
     expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
   });
@@ -2125,8 +2130,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.create).not.toHaveBeenCalled();
   });
 
-  it('records the opening cash the cashier counted, in minor units (DEV-725)', async () => {
+  it('records the opening cash the manager counted, in minor units (DEV-725)', async () => {
     closeDrawer();
+    mocks.queries.refundAccess = query({ authorized: true });
     mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Opening cash'), { target: { value: '5000.50' } });
@@ -2139,6 +2145,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
 
   it('shows where the drawer opens and fills a quick amount without opening it (DEV-508)', async () => {
     closeDrawer();
+    mocks.queries.refundAccess = query({ authorized: true });
     mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
     const details = screen.getByLabelText('Drawer details');
@@ -2167,6 +2174,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     'refuses to open the drawer without a valid opening cash amount: %j (DEV-725)',
     (value) => {
       closeDrawer();
+      mocks.queries.refundAccess = query({ authorized: true });
       render(<PharmacyCounterConsole initialBranchId="branch-a" />);
       const field = screen.getByLabelText('Opening cash');
       fireEvent.change(field, { target: { value } });
@@ -2176,6 +2184,54 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['cashier', 'loading', 'failed'])(
+    'DEV-873: %s access never invites an opening float',
+    async (access) => {
+      closeDrawer();
+      mocks.queries.refundAccess =
+        access === 'cashier'
+          ? query({ authorized: false })
+          : access === 'loading'
+            ? { ...query(), isSuccess: false, isLoading: true }
+            : { ...query({ authorized: true }), isError: true };
+      mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const field = screen.getByLabelText('Opening cash');
+      expect(field).toHaveValue('0');
+      expect(field).toHaveAttribute('readonly');
+      expect(screen.queryByRole('group', { name: 'Quick amounts' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Count the cash in the drawer/)).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/Ask a manager or owner to declare any opening float/)
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      await screen.findByText('Cash drawer opened for this counter.');
+      expect(mocks.mutations.openDrawer).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ openingFloatMinor: 0 })
+      );
+    }
+  );
+
+  it('DEV-873: a server float refusal does not claim the cashier cannot take payments', async () => {
+    closeDrawer();
+    // Permission may have changed since this presentation-only query succeeded.
+    mocks.queries.refundAccess = query({ authorized: true });
+    mocks.mutations.openDrawer!.mockRejectedValue(
+      Object.assign(new Error('You do not have permission for this action.'), {
+        data: { code: 'FORBIDDEN' },
+      })
+    );
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Opening cash'), { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('does not take payments');
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('5000');
+    await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
 
   it('starts a bill only on this device’s open drawer, naming the device (DEV-725)', async () => {
     openTheDrawer();

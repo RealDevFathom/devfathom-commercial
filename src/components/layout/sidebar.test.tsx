@@ -604,28 +604,34 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     expect(currentLinks()[0]).toHaveAccessibleName(expect.stringMatching(new RegExp(`${label}$`)));
   });
 
-  it('marks exactly one destination current on every pharmacy page (DEV-497)', () => {
-    const root = join(process.cwd(), 'src/app/(app)');
-    const routes = readdirSync(join(root, 'pharmacy'), { recursive: true, encoding: 'utf8' })
-      .filter((file) => file.endsWith('page.tsx'))
-      .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
-    expect(routes).toContain('/pharmacy');
-    expect(routes).toContain('/pharmacy/accounts/profit-loss');
+  const pharmacyPageRoot = join(process.cwd(), 'src/app/(app)');
+  const pharmacyPageRoutes = readdirSync(join(pharmacyPageRoot, 'pharmacy'), {
+    recursive: true,
+    encoding: 'utf8',
+  })
+    .filter((file) => file.endsWith('page.tsx'))
+    .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
+
+  it('discovers the pharmacy root and account statement routes (DEV-497)', () => {
+    expect(pharmacyPageRoutes).toContain('/pharmacy');
+    expect(pharmacyPageRoutes).toContain('/pharmacy/accounts/profit-loss');
+  });
+
+  // Each discovered route retains its assertion and gets its own render lifecycle.
+  it.each(pharmacyPageRoutes)('marks the expected destination current at %s (DEV-497)', (route) => {
     pharmacyRailQuery.safety = true;
     pharmacyRailQuery.sop = true;
     try {
-      for (const route of routes) {
-        // DEV-502: the not-found catch-all is not a destination. Render it at a
-        // real unknown address; it must mark no entry current.
-        const notFound = route === '/pharmacy/[...missing]';
-        const pathname = notFound ? '/pharmacy/does-not-exist' : route;
-        cleanup();
-        renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
-        expect({ pathname, current: currentLinks().length }).toEqual({
-          pathname,
-          current: notFound ? 0 : 1,
-        });
-      }
+      // DEV-502: the not-found catch-all is not a destination. Render it at a
+      // real unknown address; it must mark no entry current.
+      const notFound = route === '/pharmacy/[...missing]';
+      const pathname = notFound ? '/pharmacy/does-not-exist' : route;
+      cleanup();
+      renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
+      expect({ pathname, current: currentLinks().length }).toEqual({
+        pathname,
+        current: notFound ? 0 : 1,
+      });
     } finally {
       pharmacyRailQuery.safety = false;
       pharmacyRailQuery.sop = false;
