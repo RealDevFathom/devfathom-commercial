@@ -41,22 +41,66 @@ import {
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
-const KARACHI_OFFSET_MS = 5 * 60 * 60 * 1000;
+/** The zone weekly keys use when no workspace zone is known (the platform's home market). */
+const DEFAULT_REMINDER_ZONE = 'Asia/Karachi';
 
-/** ISO Monday-to-Monday week on the Karachi calendar, including its UTC bounds. */
-function karachiReminderWeek(now: Date) {
-  const localDay = new Date(Math.floor((now.getTime() + KARACHI_OFFSET_MS) / DAY_MS) * DAY_MS);
-  const monday = localDay.getTime() - ((localDay.getUTCDay() + 6) % 7) * DAY_MS;
-  const thursday = new Date(monday + 3 * DAY_MS);
+/** Milliseconds `timeZone` is ahead of UTC at `instant` (DST-aware, whole seconds). */
+function zoneOffsetMs(instant: number, timeZone: string): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    })
+      .formatToParts(new Date(instant))
+      .map((part) => [part.type, Number(part.value)])
+  );
+  const local = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  return local - Math.floor(instant / 1000) * 1000;
+}
+
+/** The UTC instant at which the calendar day `dayUtc` (a UTC-midnight stand-in) starts in `timeZone`. */
+function zonedDayStart(dayUtc: number, timeZone: string): number {
+  let guess = dayUtc - zoneOffsetMs(dayUtc, timeZone);
+  guess = dayUtc - zoneOffsetMs(guess, timeZone);
+  return guess;
+}
+
+/**
+ * ISO Monday-to-Monday week on the workspace calendar, including its UTC bounds
+ * and the old UTC epoch-week buckets it overlaps (for rollout compatibility).
+ */
+function reminderWeek(now: Date, timeZone: string) {
+  const zone = workspaceTimezone(timeZone);
+  const localDay = new Date(
+    Math.floor((now.getTime() + zoneOffsetMs(now.getTime(), zone)) / DAY_MS) * DAY_MS
+  );
+  const mondayUtc = localDay.getTime() - ((localDay.getUTCDay() + 6) % 7) * DAY_MS;
+  const thursday = new Date(mondayUtc + 3 * DAY_MS);
   const year = thursday.getUTCFullYear();
   const week = Math.ceil((thursday.getTime() - Date.UTC(year, 0, 1) + DAY_MS) / WEEK_MS);
-  const start = new Date(monday - KARACHI_OFFSET_MS);
-  const end = new Date(start.getTime() + WEEK_MS);
-  // A Karachi calendar week overlaps two old Thursday-based UTC epoch buckets.
-  const legacyPeriods = [
-    Math.floor(start.getTime() / WEEK_MS),
-    Math.floor((end.getTime() - 1) / WEEK_MS),
-  ];
+  const start = new Date(zonedDayStart(mondayUtc, zone));
+  const end = new Date(zonedDayStart(mondayUtc + WEEK_MS, zone));
+  // A local week overlaps two (rarely three, across a DST change) Thursday-based UTC epoch buckets.
+  const legacyPeriods: number[] = [];
+  for (
+    let period = Math.floor(start.getTime() / WEEK_MS);
+    period <= Math.floor((end.getTime() - 1) / WEEK_MS);
+    period += 1
+  )
+    legacyPeriods.push(period);
   return { period: `w${year}-${week}`, start, end, legacyPeriods };
 }
 
@@ -80,13 +124,14 @@ export type KhataReminderCandidate = {
  * floor. The dedupe key buckets by account x the branch's owner-configured
  * cadence (weekly by default), so the scheduled job nudges an overdue payer at
  * most once per period until the balance clears — never a promotion, only the
- * utility fact that money is owed. Weekly keys follow the Karachi ISO calendar.
+ * utility fact that money is owed. Weekly keys follow the workspace's ISO calendar (Asia/Karachi until a zone is given).
  */
 export function planKhataReminder(
   candidate: KhataReminderCandidate,
   now: Date,
   minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR,
-  cadenceDays: number = DEFAULT_CADENCE_DAYS
+  cadenceDays: number = DEFAULT_CADENCE_DAYS,
+  timeZone: string = DEFAULT_REMINDER_ZONE
 ) {
   const floor = Math.max(1, Number.isSafeInteger(minBalanceMinor) ? minBalanceMinor : 1);
   const due =
@@ -97,7 +142,7 @@ export function planKhataReminder(
   const cadence = cadenceDaysOrDefault(cadenceDays);
   const period =
     cadence === 7
-      ? karachiReminderWeek(now).period
+      ? reminderWeek(now, timeZone).period
       : `c${cadence}:${Math.floor(now.getTime() / (cadence * DAY_MS))}`;
   return {
     due,
@@ -304,6 +349,7 @@ export async function processDueWhatsAppKhataReminders(
       continue;
     }
 
+    let dedupeKey = plan.dedupeKey;
     const recipient = await withTenantDb<KhataRecipientResult | null>(
       account.organizationId,
       async (db) => {
@@ -336,6 +382,18 @@ export async function processDueWhatsAppKhataReminders(
         const timeZone = workspaceTimezone(organization.timezone);
         if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone)))
           return { kind: 'quiet-hours' };
+        // The weekly period follows this workspace's calendar, known only here.
+        dedupeKey = planKhataReminder(
+          {
+            familyAccountId: account.familyAccountId,
+            balanceMinor,
+            oldestOverdueAt: account.oldestOverdueAt,
+          },
+          now,
+          options.minBalanceMinor ?? account.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR,
+          account.cadenceDays,
+          timeZone
+        ).dedupeKey;
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -365,7 +423,7 @@ export async function processDueWhatsAppKhataReminders(
           select: { granted: true, revokedAt: true, recordedAt: true },
         });
         if (cadenceDaysOrDefault(account.cadenceDays) === 7) {
-          const week = karachiReminderWeek(now);
+          const week = reminderWeek(now, timeZone);
           // Keep persisted claims effective across the namespace change, on both
           // channels. The consent lock serializes this check with other sends.
           // Include FAILED claims: the old unique key also prevented their replay.
@@ -443,7 +501,7 @@ export async function processDueWhatsAppKhataReminders(
           direction: 'OUTBOUND',
           status: 'PENDING',
           kind: 'KHATA_REMINDER',
-          dedupeKey: plan.dedupeKey,
+          dedupeKey,
           customerDayKey: `khata:${customer.id}:${day}`,
           branchId: account.branchId,
           customerId: customer.id,
@@ -482,7 +540,7 @@ export async function processDueWhatsAppKhataReminders(
           organizationId: account.organizationId,
           branchId: account.branchId,
           customerId,
-          dedupeKey: plan.dedupeKey,
+          dedupeKey,
           content: {
             kind: 'KHATA_REMINDER',
             balance: formatMinor(balanceMinor),
@@ -517,7 +575,7 @@ export async function processDueWhatsAppKhataReminders(
       {
         organizationId: account.organizationId,
         kind: 'KHATA_REMINDER',
-        dedupeKey: plan.dedupeKey,
+        dedupeKey,
         branchId: account.branchId,
         customerId: recipient.customerId,
         patientId: recipient.patientId,

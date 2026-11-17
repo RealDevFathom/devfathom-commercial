@@ -224,6 +224,26 @@ describe('planKhataReminder', () => {
       ).dedupeKey
     ).toBe(`khata:f:${week}`);
   });
+
+  it.each([
+    ['America/New_York', '2026-10-26T03:59:59.999Z', 'w2026-43'],
+    ['America/New_York', '2026-10-26T04:00:00.000Z', 'w2026-44'],
+    ['Europe/London', '2026-10-25T23:59:59.999Z', 'w2026-43'],
+    ['Europe/London', '2026-10-26T00:00:00.000Z', 'w2026-44'],
+    ['UTC', '2026-10-26T00:00:00.000Z', 'w2026-44'],
+    // A zone Intl refuses falls back to UTC, as the other workspace readers do.
+    ['PKT', '2026-10-25T23:59:59.999Z', 'w2026-43'],
+  ])('uses the %s workspace week at %s', (timeZone, at, week) => {
+    expect(
+      planKhataReminder(
+        { familyAccountId: 'f', balanceMinor: 50_000, oldestOverdueAt: NOW },
+        new Date(at),
+        10_000,
+        7,
+        timeZone
+      ).dedupeKey
+    ).toBe(`khata:f:${week}`);
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
@@ -263,6 +283,22 @@ describe('processDueWhatsAppKhataReminders', () => {
       expect(store.logs).toHaveLength(1);
     }
   );
+
+  it('claims the weekly key on the workspace week, not the Karachi week', async () => {
+    store.timezone = 'America/New_York';
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    // Sunday 9 pm in New York is already Monday morning in Karachi.
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-26T01:00:00Z'),
+      config,
+      provider,
+    });
+    expect(result).toMatchObject({ prepared: 1 });
+    expect(store.logs[0].dedupeKey).toBe('khata:family-1:w2026-43');
+  });
 
   it('does not let an earlier-week or another-tenant legacy claim block this week', async () => {
     store.accounts = [account()];
