@@ -148,7 +148,7 @@ export type ProfileContext = {
   /**
    * Column-mapping choice: what the quantity column counts. No choice leaves
    * canonical quantities null and raises UNIT_AMBIGUOUS. PACKS converts by
-   * the row's pack factor. A recorded choice is retained as __quantity_unit.
+   * the row's pack factor. The choice is stored on the batch, never in row evidence.
    */
   quantityUnit?: QuantityUnit;
 };
@@ -209,9 +209,6 @@ function buildRow(
   table.headers.forEach((header, position) => {
     rawPayload[header] = cells[position] ?? '';
   });
-  // Reserved metadata cannot be supplied by an uploaded column.
-  delete rawPayload.__quantity_unit;
-  if (quantityUnit) rawPayload.__quantity_unit = quantityUnit;
 
   const productName = readText(cellAt(columnMap, cells, 'product'));
   const packLabel = readText(cellAt(columnMap, cells, 'pack'));
@@ -338,6 +335,10 @@ function deriveExceptions(
   profiler?: Pick<SourceProfiler, 'duplicateDiscriminator'>
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
+  const quantityUnit =
+    context.quantityUnit === 'PACKS' || context.quantityUnit === 'UNITS'
+      ? context.quantityUnit
+      : null;
   const raise = (rowIndex: number | null, bucket: ExceptionBucket, detail: string) => {
     exceptions.push({ rowIndex, bucket, severity: EXCEPTION_SEVERITY[bucket], detail });
   };
@@ -376,13 +377,13 @@ function deriveExceptions(
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
       }
       const quantityRaw = rawOf(columnMap, cells, 'quantity');
-      if ((quantityRaw || !row.rawPayload.__quantity_unit) && row.quantityCanonical === null) {
+      if ((quantityRaw || !quantityUnit) && row.quantityCanonical === null) {
         raise(
           index,
           'UNIT_AMBIGUOUS',
-          !row.rawPayload.__quantity_unit
+          !quantityUnit
             ? `Choose whether quantity counts PACKS or UNITS for ${where}.`
-            : row.rawPayload.__quantity_unit === 'PACKS' &&
+            : quantityUnit === 'PACKS' &&
                 readQuantity(quantityRaw ?? undefined) !== null
               ? `Quantity "${quantityRaw}" packs for ${where} cannot be converted: no countable pack factor.`
               : `Quantity "${quantityRaw}" for ${where} is not a whole count of a canonical unit.`

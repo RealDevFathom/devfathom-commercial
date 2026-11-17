@@ -327,14 +327,12 @@ describe('Quantity column meaning is chosen in the column mapping', () => {
   it('keeps base units when explicitly chosen', () => {
     const { rows } = profileTable(excelCsvProfiler, table(), { quantityUnit: 'UNITS' });
     expect(rows[0]!.quantityCanonical).toBe(BigInt(29));
-    expect(rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
   });
   it('converts packs to units: 29 packs of 30 is 870', () => {
     const { rows, exceptions } = profileTable(excelCsvProfiler, table(), {
       quantityUnit: 'PACKS',
     });
     expect(rows[0]!.quantityCanonical).toBe(BigInt(870));
-    expect(rows[0]!.rawPayload.__quantity_unit).toBe('PACKS');
     // No pack factor: never assume 1; flagged instead.
     expect(rows[1]!.quantityCanonical).toBeNull();
     expect(exceptions.some((e) => e.rowIndex === 1 && e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
@@ -364,6 +362,15 @@ describe('unrecorded quantity mapping', () => {
       parseDelimitedText('Product,Pack,Qty,__quantity_unit\nExample,30,29,UNITS')
     );
     expect(result.rows[0]!.quantityCanonical).toBeNull();
-    expect(result.rows[0]!.rawPayload.__quantity_unit).toBeUndefined();
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
+  });
+  it('keeps an uploaded __quantity_unit column intact even with a recorded choice', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty,__quantity_unit\nExample,30,29,UNITS'),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBe(BigInt(870));
+    expect(result.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
   });
 });

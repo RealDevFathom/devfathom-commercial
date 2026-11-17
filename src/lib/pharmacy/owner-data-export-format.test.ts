@@ -80,7 +80,7 @@ describe('owner data export format', () => {
     const lots = reimport('stockLots');
     expect(lots.rows).toHaveLength(SEEDED.stockLots.length);
     expect(lots.rows[0]!.quantityCanonical).toBe(BigInt(120));
-    expect(lots.rows[0]!.rawPayload.__quantity_unit).toBe('UNITS');
+    expect(lots.quantityUnit).toBe('UNITS');
     expect(Object.keys(lots.columnMap).sort()).toEqual(
       [
         'sourceKey',

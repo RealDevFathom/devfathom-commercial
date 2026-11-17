@@ -132,9 +132,9 @@ describe('staged medicine evidence', () => {
       ...fixture(),
       packFactor: BigInt(30),
       quantityCanonical: BigInt(870),
-      rawPayload: { QTY: '29', __quantity_unit: 'PACKS' },
+      rawPayload: { QTY: '29' },
     };
-    const view = stagedReference(row, source, 'batch_1');
+    const view = stagedReference(row, source, 'batch_1', 'PACKS');
     expect(view.quantityReview).toMatchObject({ unit: 'PACKS', packs: '29', units: '870' });
     expect(view.quantityReview.label).toBe('29 packs × 30 = 870 units');
   });
@@ -143,23 +143,25 @@ describe('staged medicine evidence', () => {
       {
         ...fixture(),
         quantityCanonical: BigInt(29),
-        rawPayload: { QTY: '29', __quantity_unit: 'UNITS' },
+        rawPayload: { QTY: '29' },
       },
       source,
-      'batch_1'
+      'batch_1',
+      'UNITS'
     );
     expect(view.quantityReview).toMatchObject({ unit: 'UNITS', packs: null, units: '29' });
   });
 });
 
-it.each([undefined, 'unknown'])(
+it.each([undefined, 'PACKS', 'unknown'])(
   'preserves legacy raw counts without claiming a recorded choice (%s)',
   (unit) => {
     const row: ReviewRow = {
       ...fixture(),
       packFactor: BigInt(30),
       quantityCanonical: BigInt(29),
-      rawPayload: { QTY: '29', ...(unit ? { __quantity_unit: unit } : {}) },
+      // A source column named __quantity_unit must never count as a recorded choice.
+      rawPayload: { QTY: '29', __quantity_unit: unit ?? 'PACKS' },
     };
     const before = structuredClone(row);
     const view = stagedReference(row, source, 'batch_legacy');
@@ -170,3 +172,31 @@ it.each([undefined, 'unknown'])(
     expect(row).toEqual(before);
   }
 );
+
+describe('unresolved supplied quantities', () => {
+  const unresolved = (unit: string | null) =>
+    stagedReference(
+      {
+        ...fixture(),
+        packFactor: null,
+        quantityCanonical: null,
+        rawPayload: { QTY: '29' },
+      },
+      source,
+      'batch_1',
+      unit
+    ).quantityReview.label;
+  it('labels a pack count without a factor as unresolved, not missing', () => {
+    expect(unresolved('PACKS')).toBe('Unresolved: "29" packs (no countable pack factor)');
+    expect(unresolved(null)).toBe('Unresolved: "29" (choose packs or units)');
+  });
+  it('reserves a null label for an empty quantity cell', () => {
+    const view = stagedReference(
+      { ...fixture(), quantityCanonical: null, rawPayload: { QTY: '' } },
+      source,
+      'batch_1',
+      'PACKS'
+    );
+    expect(view.quantityReview.label).toBeNull();
+  });
+});

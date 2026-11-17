@@ -19,6 +19,8 @@ export const SOURCE_REFERENCE_COLUMNS = [
   'StockValue',
 ] as const;
 
+const QUANTITY_HEADERS = ['qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty'];
+
 export function exceptionWorkflow(bucket: ExceptionBucket) {
   if (bucket === 'MISSING_BATCH' || bucket === 'MISSING_EXPIRY') return 'Opening stock';
   if (bucket === 'MISSING_MRP') return 'Verified price';
@@ -42,7 +44,9 @@ export type ReviewRow = {
 export function stagedReference(
   row: ReviewRow,
   source: { id: string; contentHash: string },
-  batchId: string
+  batchId: string,
+  /** The batch's recorded mapping choice; null means a legacy batch that recorded none. */
+  batchQuantityUnit: string | null = null
 ) {
   const raw =
     row.rawPayload && typeof row.rawPayload === 'object' && !Array.isArray(row.rawPayload)
@@ -55,8 +59,13 @@ export function stagedReference(
   ) as Record<(typeof SOURCE_REFERENCE_COLUMNS)[number], string | null>;
   const sourceHash = cell('__source_sha256');
   const sourceRow = cell('__source_row');
-  const recordedUnit = cell('__quantity_unit');
-  const quantityUnit = recordedUnit === 'PACKS' || recordedUnit === 'UNITS' ? recordedUnit : null;
+  // Only the batch is authoritative; row JSON (an uploaded column) never records a choice.
+  const quantityUnit =
+    batchQuantityUnit === 'PACKS' || batchQuantityUnit === 'UNITS' ? batchQuantityUnit : null;
+  const quantityKey = Object.keys(raw).find((key) =>
+    QUANTITY_HEADERS.includes(key.toLowerCase().replace(/[^a-z]/g, ''))
+  );
+  const suppliedQuantity = (quantityKey ? cell(quantityKey) : null)?.trim() ?? '';
   const canonical = row.quantityCanonical;
   const packFactor = row.packFactor;
   const quantityReview = {
@@ -76,7 +85,11 @@ export function stagedReference(
     unitsPerPack: packFactor?.toString() ?? null,
     label:
       canonical === null
-        ? null
+        ? suppliedQuantity && quantityUnit
+          ? `Unresolved: "${suppliedQuantity}" ${quantityUnit === 'PACKS' ? 'packs' : 'units'} (no countable ${quantityUnit === 'PACKS' ? 'pack factor' : 'whole count'})`
+          : suppliedQuantity
+            ? `Unresolved: "${suppliedQuantity}" (choose packs or units)`
+            : null
         : quantityUnit === null
           ? `${canonical} (staged as raw count)`
           : quantityUnit === 'PACKS' && packFactor

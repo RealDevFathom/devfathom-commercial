@@ -245,6 +245,5 @@ describe('parseDelimitedRecords', () => {
 it('leaves Marg Qty unresolved until its pack meaning is explicitly chosen', () => {
   const result = profileTable(margBatchStockProfiler, parseMargBatchStockText(SYNTHETIC).table);
   expect(result.rows[0]!.quantityCanonical).toBeNull();
-  expect(result.rows[0]!.rawPayload.__quantity_unit).toBeUndefined();
   expect(bucketsOf(result)).toContain('UNIT_AMBIGUOUS');
 });

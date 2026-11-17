@@ -222,7 +222,7 @@ const staging = {
 };
 describe('production batch staging', () => {
   it.each(['PACKS', 'UNITS'] as const)(
-    'persists the explicit %s choice on the batch and rows',
+    'persists the explicit %s choice on the batch',
     async (quantityUnit) => {
       const saved = await caller().stageBatch({ ...staging, quantityUnit });
       expect(saved.batchId).toBe('batch_new');
@@ -233,7 +233,7 @@ describe('production batch staging', () => {
         data: [
           expect.objectContaining({
             quantityCanonical: BigInt(quantityUnit === 'PACKS' ? 870 : 29),
-            rawPayload: expect.objectContaining({ __quantity_unit: quantityUnit, Qty: '29' }),
+            rawPayload: expect.objectContaining({ Qty: '29' }),
           }),
         ],
       });
