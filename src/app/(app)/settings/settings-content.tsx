@@ -54,6 +54,7 @@ import { supportsRestaurantPrintSettings, type EntitlementView } from '@/lib/mod
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+import { AuthenticatorQr } from '@/components/ui/authenticator-qr';
 import {
   usePreferences,
   type Density,
@@ -1251,14 +1252,16 @@ function TwoFactorSection() {
                 Authenticator.
               </li>
               <li>
-                Add an account using a setup key. Give it a name you recognize, enter the key below,
-                and choose &quot;Time based&quot; if asked.
+                Add an account by scanning the QR code below. If you cannot scan it, add the account
+                using a setup key instead: give it a name you recognize, enter the key below, and
+                choose &quot;Time based&quot; if asked.
               </li>
               <li>
                 Enter the 6-digit code shown in the app below, then select &quot;Verify &amp;
                 enable&quot;.
               </li>
             </ol>
+            <AuthenticatorQr uri={enrolling.otpauthUri} />
             <div>
               <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 Setup key

@@ -29,7 +29,12 @@ export default async function ReplenishmentPage({
     });
     const caller = pharmacyReportsRouter.createCaller(ctx);
     const [scope, catalog] = await Promise.all([caller.branches(), caller.catalog()]);
-    const branchId = typeof query.branch === 'string' ? query.branch : '';
+    const branchId =
+      typeof query.branch === 'string'
+        ? query.branch
+        : query.branch === undefined && scope.branches.length === 1
+          ? scope.branches[0]!.id
+          : '';
     const invalidBranch =
       query.branch !== undefined &&
       (!branchId || !scope.branches.some((branch) => branch.id === branchId));
@@ -52,7 +57,11 @@ export default async function ReplenishmentPage({
         description="Inspect recorded consumption and supply, then compare explicit planning assumptions."
       />
       <Link
-        href="/pharmacy/reports"
+        href={
+          typeof query.branch === 'string'
+            ? `/pharmacy/reports?${new URLSearchParams({ branch: query.branch })}`
+            : '/pharmacy/reports'
+        }
         className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
       >
         Back to reports
