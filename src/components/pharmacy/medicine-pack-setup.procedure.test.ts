@@ -49,6 +49,7 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
     const db = {
       presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
       packLevel: {
+        findFirst: vi.fn(async () => null),
         create: vi.fn(async ({ data }: { data: object }) => {
           const pack = { id: 'new-pack', parentPackLevelId: null, effectiveTo: null, ...data };
           packs.push(pack);
@@ -125,5 +126,41 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       code: 'FORBIDDEN',
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second identical open pack and never writes it', async () => {
+    const create = vi.fn();
+    const findFirst = vi.fn(async () => ({ id: 'existing' }));
+    await expect(
+      caller({
+        presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
+        packLevel: { findFirst, create },
+      }).createPackLevel(input)
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('already exists'),
+    });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        presentationId: input.presentationId,
+        parentPackLevelId: null,
+        level: 'STRIP',
+        unitsPerParent: 10,
+        effectiveTo: null,
+      }),
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('maps a unique-index race to the same conflict', async () => {
+    const create = vi.fn(async () => {
+      throw Object.assign(new Error('unique'), { code: 'P2002' });
+    });
+    await expect(
+      caller({
+        presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
+        packLevel: { findFirst: vi.fn(async () => null), create },
+      }).createPackLevel(input)
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 });
