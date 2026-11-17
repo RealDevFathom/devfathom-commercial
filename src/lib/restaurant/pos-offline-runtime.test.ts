@@ -527,3 +527,89 @@ describe('PosOfflineRuntime across tabs of one terminal', () => {
     expect(await driver.read(posScopeKey(scope))).toBeUndefined();
   });
 });
+
+describe('persisted server review creation', () => {
+  const menu = (price = '4.00') => ({
+    version: 'same-version',
+    branchId: scope.branchId,
+    channel: input.open.channel,
+    publicationId: input.open.publicationId,
+    channelOpen: true,
+    menu: { id: 'menu-1', name: 'All day' },
+    sections: [
+      {
+        id: 'section-1',
+        name: 'Drinks',
+        sortOrder: 1,
+        items: [
+          {
+            id: 'menu-item-1',
+            productId: 'product-1',
+            variantId: null,
+            displayName: 'Coffee',
+            modifierGroups: [],
+            product: { name: 'Coffee' },
+            price,
+            available: true,
+            priceSource: 'BASE_LIST',
+            sortOrder: 1,
+          },
+        ],
+      },
+    ],
+  });
+
+  it('persists the 409 identity, survives reload/menu refresh, then approves once', async () => {
+    const driver = createMemoryDriver();
+    const tabA = new PosOfflineRuntime(scope, driver);
+    await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await tabA.enqueue(input);
+    let calls = 0;
+    const send = vi.fn(async () =>
+      ++calls === 1 ? { status: 201, serverRef: 'order-1' } : { status: 409 }
+    );
+    await tabA.replay('staff-1', send);
+    expect(send).toHaveBeenCalledTimes(2);
+    const displayed = tabA.snapshot().queue!.drafts[0];
+    expect(displayed.review?.catalog?.line).toMatchObject({
+      name: 'Coffee',
+      currentPrice: '4.00',
+      quotedPrice: '4.00',
+    });
+    const tabB = new PosOfflineRuntime(scope, driver);
+    await tabB.hydrate();
+    await tabB.cacheCatalog(menu(), '2026-11-17T01:00:00Z');
+    expect(tabB.snapshot().queue!.drafts[0]).toEqual(displayed);
+    expect(await tabB.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe('APPLIED');
+    const retry = vi.fn(async () => ({ status: 201, serverRef: 'item-1' }));
+    await tabB.replay('staff-1', retry);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(tabB.snapshot().queue!.drafts[0].status).toBe('COMPLETED');
+  });
+
+  it('captures fresh values when another tab changes the catalog during the HTTP request', async () => {
+    const driver = createMemoryDriver();
+    const tabA = new PosOfflineRuntime(scope, driver);
+    const tabB = new PosOfflineRuntime(scope, driver);
+    await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await tabA.enqueue(input);
+    let calls = 0;
+    await tabA.replay('staff-1', async () => {
+      if (++calls === 1) return { status: 201, serverRef: 'order-1' };
+      await tabB.cacheCatalog(menu('5.00'), '2026-11-17T01:00:00Z');
+      return { status: 409 };
+    });
+    const displayed = tabA.snapshot().queue!.drafts[0];
+    expect(displayed.review?.catalog?.line?.currentPrice).toBe('5.00');
+    await tabB.cacheCatalog(menu('7.00'), '2026-11-17T02:00:00Z');
+    expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe('STALE');
+    expect(tabA.snapshot().queue!.drafts[0].commands).toEqual(displayed.commands);
+    const send = vi.fn(async () => ({ status: 201, serverRef: 'item-1' }));
+    await tabA.replay('staff-1', send);
+    expect(send).not.toHaveBeenCalled();
+    const fresh = tabA.snapshot().queue!.drafts[0];
+    expect(await tabA.resolveReview(fresh.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+    await tabA.replay('staff-1', send);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});

@@ -245,6 +245,7 @@ export class PosOfflineRuntime {
           commandId: step.commandId,
           outcome,
           serverRef: response.serverRef,
+          catalog: this.state.catalog,
         });
         this.state = { ...this.state, queue: result.snapshot };
         if (result.snapshot.replay === 'STOPPED_REVOKED') {

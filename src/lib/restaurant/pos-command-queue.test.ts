@@ -1259,3 +1259,61 @@ describe('review before a stale submission (criterion 5)', () => {
     }
   );
 });
+
+describe('server review identity before display', () => {
+  it.each(['c1', 'c2'])('captures an unchanged 409 on %s for first-click approval', (commandId) => {
+    const original = seeded([draftInput()]);
+    const current = catalog();
+    const reviewed = applyReplayOutcome(original, {
+      draftId: original.drafts[0].draftId,
+      commandId,
+      outcome: classifyReplayOutcome({ status: 409 }),
+      catalog: current,
+    }).snapshot;
+    const displayed = reviewed.drafts[0].review;
+    expect(displayed?.catalog).toMatchObject({ menuName: 'All day', channel: 'DINE_IN' });
+    const refreshed = markDraftsForCatalogReview(reviewed, current).snapshot;
+    expect(refreshed.drafts[0].status).toBe('NEEDS_REVIEW');
+    expect(refreshed.drafts[0].review).toEqual(displayed);
+    expect(nextReplayCommand(refreshed, DEVICE, OPERATOR).status).toBe('IDLE');
+    const approved = resolveReviewedDraft(
+      refreshed,
+      original.drafts[0].draftId,
+      'REPLAY',
+      displayed,
+      current.version,
+      current
+    );
+    expect(approved.status).toBe('APPLIED');
+    expect(approved.snapshot.drafts[0].status).toBe('QUEUED');
+  });
+
+  it('rejects changed values after a server review without modifying its quotes', () => {
+    const original = seeded([draftInput()]);
+    const current = catalog();
+    const reviewed = applyReplayOutcome(original, {
+      draftId: original.drafts[0].draftId,
+      commandId: 'c2',
+      outcome: classifyReplayOutcome({ status: 409 }),
+      catalog: current,
+    }).snapshot;
+    const changed = catalog({
+      sections: [
+        { ...current.sections[0], items: [{ ...current.sections[0].items[0], price: '700.00' }] },
+      ],
+    });
+    const blocked = resolveReviewedDraft(
+      reviewed,
+      original.drafts[0].draftId,
+      'REPLAY',
+      reviewed.drafts[0].review,
+      changed.version,
+      changed
+    );
+    expect(blocked.status).toBe('STALE');
+    expect(blocked.snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+    expect(blocked.snapshot.drafts[0].commands).toEqual(reviewed.drafts[0].commands);
+    expect(blocked.snapshot.drafts[0].review?.catalog?.line?.currentPrice).toBe('700.00');
+    expect(nextReplayCommand(blocked.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
+  });
+});

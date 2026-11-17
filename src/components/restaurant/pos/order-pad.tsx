@@ -757,22 +757,46 @@ function PosShell({
 }
 
 function ReviewDetails({ review }: { review: PosDraftReview | null }) {
-  const line = review?.catalog?.line;
-  if (!line) return null;
+  const catalog = review?.catalog;
+  if (!catalog) return null;
+  const line = catalog.line;
+  const channelName = (channel: string | null) =>
+    channel === 'DINE_IN' ? 'Dine in' : channel === 'TAKEAWAY' ? 'Takeaway' : 'Delivery';
   return (
     <div className="mt-2 space-y-1 text-sm text-text-body">
-      <p className="font-medium">
-        Line {line.number} · {line.name ?? 'Item no longer on the menu'}
-      </p>
       <p>
-        Price: {line.quotedPrice ?? 'not recorded'} → {line.currentPrice ?? 'unavailable'}
+        Menu: {catalog.menuName} · {channelName(catalog.channel)}
       </p>
-      {line.modifiers.map((modifier, index) => (
-        <p key={modifier.optionId}>
-          {modifier.name ?? `Selected modifier ${index + 1}`}:{' '}
-          {modifier.quotedPrice ?? 'not recorded'} → {modifier.currentPrice ?? 'unavailable'}
+      <p>Channel: {catalog.channelOpen ? 'Open' : 'Closed'}</p>
+      <p>
+        Publication:{' '}
+        {catalog.publicationMatchesOrder
+          ? 'Same as the saved order'
+          : 'Different from the saved order'}
+      </p>
+      {(catalog.channel !== catalog.orderChannel || !catalog.publicationMatchesOrder) && (
+        <p>
+          This menu is for a different channel or publication. Sending keeps the order’s original{' '}
+          {channelName(catalog.orderChannel)} channel and publication; these menu prices will not
+          replace its saved prices.
         </p>
-      ))}
+      )}
+      {line && (
+        <>
+          <p className="font-medium">
+            Line {line.number} · {line.name ?? 'Item no longer on the menu'}
+          </p>
+          <p>
+            Price: {line.quotedPrice ?? 'not recorded'} → {line.currentPrice ?? 'unavailable'}
+          </p>
+          {line.modifiers.map((modifier, index) => (
+            <p key={modifier.optionId}>
+              {modifier.name ?? `Selected modifier ${index + 1}`}:{' '}
+              {modifier.quotedPrice ?? 'not recorded'} → {modifier.currentPrice ?? 'unavailable'}
+            </p>
+          ))}
+        </>
+      )}
     </div>
   );
 }

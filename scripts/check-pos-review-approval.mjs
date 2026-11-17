@@ -76,12 +76,14 @@ function catalog({
   coffee = true,
   tea = true,
   version = 'A',
+  channel = 'DINE_IN',
+  publicationId = input.open.publicationId,
 } = {}) {
   return {
     version,
     branchId: scope.branchId,
-    channel: 'DINE_IN',
-    publicationId: input.open.publicationId,
+    channel,
+    publicationId,
     channelOpen: true,
     menu: { id: 'synthetic-menu', name: 'Synthetic menu' },
     sections: [
@@ -168,6 +170,32 @@ const scenarios = [
     before: 'Price: 4.00 → 5.00',
     stale: false,
   },
+  ...['first-click', 'reload-first-click', 'changed', 'open-first-click'].map((test) => ({
+    name: `server-409-${test}`,
+    server409: test === 'open-first-click' ? 'open' : 'add-item',
+    reloadBeforeApproval: test === 'reload-first-click',
+    a: catalog({ price: '4.00' }),
+    b: catalog({ price: test === 'changed' ? '7.00' : '4.00' }),
+    before: 'Needs review',
+    after: 'Price: 4.00 → 7.00',
+    stale: test === 'changed',
+  })),
+  ...['channel', 'publication', 'channel-and-publication'].map((change) => ({
+    name: `visible-${change}-scope`,
+    selector: change !== 'publication',
+    a: catalog(),
+    b: catalog({
+      channel: change === 'publication' ? 'DINE_IN' : 'TAKEAWAY',
+      publicationId: change === 'channel' ? input.open.publicationId : 'replacement-publication',
+    }),
+    before: 'Price: 4.00 → 5.00',
+    after:
+      change === 'channel'
+        ? 'Menu: Synthetic menu · Takeaway'
+        : 'Publication: Different from the saved order',
+    scopeChange: true,
+    stale: true,
+  })),
 ];
 let browser;
 const results = [];
@@ -186,6 +214,7 @@ try {
     const errors = [];
     const requests = [];
     let activeCatalog = scenario.a;
+    let conflictSent = false;
     try {
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
@@ -193,6 +222,7 @@ try {
         if (!url.pathname.startsWith('/api/')) return route.continue();
         const path = url.pathname;
         let data;
+        let status = 200;
         if (path.endsWith('/terminal/establish'))
           data = {
             sessionToken: 'synthetic-session-token',
@@ -226,35 +256,54 @@ try {
             ],
           };
         else if (path.endsWith('/terminal/layout')) data = { floors: [], sections: [] };
-        else if (path.endsWith('/orders/effective-menu')) data = activeCatalog;
-        else if (path.endsWith('/orders/open-orders')) data = { orders: [] };
+        else if (path.endsWith('/orders/effective-menu')) {
+          // Serve the requested channel, as the production endpoint does. A reload
+          // starts on Dine in; the operator selects Takeaway again below.
+          data =
+            scenario.selector && url.searchParams.get('channel') !== activeCatalog.channel
+              ? scenario.a
+              : activeCatalog;
+        } else if (path.endsWith('/orders/open-orders')) data = { orders: [] };
         else if (path.endsWith('/orders/commercial-terms'))
           data = { profiles: [], rules: [], serviceChargeRate: null };
         else if (path.endsWith('/terminal/renew-composer-proof'))
           data = { composerProof: input.composerProof };
         else if (/\/orders\/(open|add-item)$/.test(path)) {
           requests.push({ path, body: route.request().postDataJSON() });
+          if (scenario.server409 && !conflictSent && path.endsWith(`/${scenario.server409}`)) {
+            conflictSent = true;
+            status = 409;
+          }
           data = path.endsWith('/open')
             ? { orderId: 'synthetic-order' }
             : { itemId: `synthetic-item-${requests.length}` };
         } else throw new Error(`Unexpected synthetic API request: ${path}`);
         await route.fulfill({
-          status: 200,
+          status,
           contentType: 'application/json',
-          body: JSON.stringify(data),
+          body: JSON.stringify(
+            status === 409 ? { error: 'Review the server price conflict.' } : data
+          ),
         });
       });
       const [tab1, tab2] = await Promise.all([context.newPage(), context.newPage()]);
       for (const page of [tab1, tab2]) {
         page.on('pageerror', (error) => errors.push(error.message));
         page.on('console', (message) => {
-          if (message.type() === 'error') errors.push(message.text());
+          if (message.type() === 'error') {
+            // Chromium logs the deliberately supplied HTTP 409 as a resource error.
+            if (scenario.server409 && /Failed to load resource:.*409/.test(message.text())) return;
+            errors.push(message.text());
+          }
         });
         await page.goto(origin);
         assert.deepEqual(errors, [], 'Fixture must load without browser errors');
         await page.waitForFunction(() => Boolean(window.posReviewFixture));
         assert.equal(await page.evaluate(() => Boolean(navigator.locks && indexedDB)), true);
       }
+      await tab2.evaluate(() => window.posReviewFixture.mount());
+      await expect(tab2.getByLabel('Channel', { exact: true })).toBeEnabled();
+      await expect(tab2.getByRole('button', { name: 'Lock terminal', exact: true })).toBeEnabled();
       await tab2.evaluate((draft) => window.posReviewFixture.seed(draft), {
         ...input,
         lines: scenario.lines ?? input.lines,
@@ -266,19 +315,50 @@ try {
       await expect(send).toBeEnabled();
       await expect(card).toContainText(scenario.before);
       evidence.displayedA = await card.innerText();
-      const before = await tab2.evaluate(() => window.posReviewFixture.read());
+      let before = await tab2.evaluate(() => window.posReviewFixture.read());
+      const initialRequests = [...requests];
+      if (scenario.server409) {
+        assert.equal(conflictSent, true);
+        assert.equal(requests.length, scenario.server409 === 'open' ? 1 : 2);
+        assert.equal(before.queue.drafts[0].review.reason, 'CATALOG_CONFLICT');
+        evidence.createdServerReview = before.queue.drafts[0].review;
+      } else {
+        assert.equal(requests.length, 0, 'Catalog review setup must never replay');
+      }
+      if (scenario.reloadBeforeApproval) {
+        await tab1.reload();
+        await tab1.waitForFunction(() => Boolean(window.posReviewFixture));
+        await tab1.evaluate(() => window.posReviewFixture.mount());
+        await expect(send).toBeEnabled();
+        await expect(card).toContainText(scenario.before);
+        const reloaded = await tab2.evaluate(() => window.posReviewFixture.read());
+        assert.deepEqual(reloaded.queue.drafts[0], before.queue.drafts[0]);
+        assert.deepEqual(requests, initialRequests, 'Reload must not approve a server conflict');
+        evidence.serverReviewSurvivedReload = true;
+        before = reloaded;
+      }
       assert.equal(before.queue.drafts[0].status, 'NEEDS_REVIEW');
-      assert.equal(requests.length, 0);
+      assert.equal(requests.length - initialRequests.length, 0);
       // Hold the real native lock, queue B's production cache write, then queue A's click.
       await tab2.evaluate(() => window.posReviewFixture.holdLock());
       await tab2.waitForFunction(() => window.posReviewFixture.lockHeld);
       activeCatalog = scenario.b;
-      await tab2.evaluate((menu) => window.posReviewFixture.startUpdate(menu), scenario.b);
+      if (scenario.selector) {
+        await tab2.getByLabel('Channel', { exact: true }).selectOption('TAKEAWAY');
+      } else {
+        await tab2.evaluate((menu) => window.posReviewFixture.startUpdate(menu), scenario.b);
+      }
       await tab2.waitForFunction(async () => (await navigator.locks.query()).pending.length === 1);
       await send.click();
       await tab2.waitForFunction(async () => (await navigator.locks.query()).pending.length === 2);
       await expect(send).toBeDisabled();
       await tab2.evaluate(() => window.posReviewFixture.releaseLock());
+      await expect(tab1.getByRole('button', { name: 'Lock terminal', exact: true })).toBeEnabled();
+      evidence.afterFirstClick = {
+        state: await tab2.evaluate(() => window.posReviewFixture.read()),
+        additionalRequests: requests.length - initialRequests.length,
+        falseStaleFeedback: await tab1.getByRole('alert').filter({ hasText: feedback }).count(),
+      };
       if (scenario.stale) {
         await expect(
           tab1.getByRole('button', { name: 'Lock terminal', exact: true })
@@ -287,17 +367,34 @@ try {
         evidence.afterStaleClick = { draft: after.queue.drafts[0], replayRequests: [...requests] };
         assert.equal(after.queue.drafts[0].status, 'NEEDS_REVIEW');
         assert.deepEqual(after.queue.drafts[0].commands, before.queue.drafts[0].commands);
-        assert.equal(requests.length, 0, 'Stale approval must send zero replay requests');
+        assert.equal(
+          requests.length - initialRequests.length,
+          0,
+          'Stale approval must send zero replay requests'
+        );
         await expect(send).toBeEnabled();
         await expect(tab1.getByRole('alert').filter({ hasText: feedback })).toBeVisible();
         await expect(card).toContainText(scenario.after);
+        if (scenario.scopeChange) {
+          await expect(card).toContainText(
+            'Sending keeps the order’s original Dine in channel and publication'
+          );
+          await expect(card).toContainText('these menu prices will not replace its saved prices');
+          assert.equal((await card.innerText()).includes('replacement-publication'), false);
+          assert.equal((await card.innerText()).includes('synthetic-publication'), false);
+          if (scenario.selector)
+            await expect(card).toContainText('Menu: Synthetic menu · Takeaway');
+        }
         evidence.displayedB = await card.innerText();
         assert.notEqual(evidence.displayedB, evidence.displayedA);
         await expect(send).toHaveAccessibleDescription(
           new RegExp(scenario.after.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
         );
         await tab1.screenshot({ path: resolve(artifacts, `${scenario.name}.png`), fullPage: true });
-        if (scenario.name === 'same-line-price-lock-reload') {
+        if (
+          scenario.name === 'same-line-price-lock-reload' ||
+          scenario.name === 'visible-channel-and-publication-scope'
+        ) {
           evidence.visualMatrix = [];
           for (const width of [375, 768, 1024, 1440]) {
             for (const theme of ['light', 'dark']) {
@@ -319,7 +416,10 @@ try {
                 const bounds = await card.boundingBox();
                 assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
                 await tab1.screenshot({
-                  path: resolve(artifacts, `review-${width}-${theme}-${reducedMotion}.png`),
+                  path: resolve(
+                    artifacts,
+                    `${scenario.name}-${width}-${theme}-${reducedMotion}.png`
+                  ),
                   fullPage: true,
                 });
                 evidence.visualMatrix.push({ width, theme, reducedMotion, result: 'PASS' });
@@ -336,18 +436,30 @@ try {
         await tab1.waitForFunction(() => Boolean(window.posReviewFixture));
         await tab1.evaluate(() => window.posReviewFixture.mount());
         await expect(send).toBeEnabled();
+        if (scenario.selector) {
+          await tab1.getByLabel('Channel', { exact: true }).selectOption('TAKEAWAY');
+          await expect(send).toBeEnabled();
+        }
         await expect(card).toContainText(scenario.after);
-        assert.equal(requests.length, 0);
+        assert.equal(requests.length - initialRequests.length, 0);
         await send.focus();
         await expect(send).toBeFocused();
         await send.press('Enter');
       }
-      const expected = (scenario.lines ?? input.lines).length + 1;
+      const expected = (scenario.lines ?? input.lines).length + 1 + (scenario.server409 ? 1 : 0);
       await expect.poll(() => requests.length).toBe(expected);
       await expect(send).toHaveCount(0);
+      if (!scenario.stale)
+        await expect(tab1.getByRole('alert').filter({ hasText: feedback })).toHaveCount(0);
       const completed = await tab2.evaluate(() => window.posReviewFixture.read());
       assert.equal(completed.queue.drafts[0].status, 'COMPLETED');
       assert.equal(errors.length, 0, errors.join('\n'));
+      if (scenario.server409) {
+        assert.ok(
+          evidence.createdServerReview.catalog,
+          'Server review must have catalog identity before display'
+        );
+      }
       evidence.completed = completed.queue.drafts[0];
       evidence.replayRequests = requests;
       evidence.result = 'PASS';

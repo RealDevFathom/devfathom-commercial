@@ -130,6 +130,9 @@ type PosReviewCatalog = {
   channel: PosOrderChannel;
   publicationId: string;
   menuId: string;
+  menuName: string;
+  orderChannel: PosOrderChannel | null;
+  publicationMatchesOrder: boolean;
   channelOpen: boolean;
   line: {
     number: number;
@@ -571,6 +574,8 @@ export function applyReplayOutcome(
     outcome: TerminalReplayOutcome;
     /** The id the server returned (order id for OPEN_ORDER, item/ticket id otherwise). */
     serverRef?: string | null;
+    /** Fresh catalog read under the same lock as the response's queue mutation. */
+    catalog?: PosCatalogSnapshot | null;
   }
 ): ApplyReplayResult {
   const { outcome } = input;
@@ -593,15 +598,19 @@ export function applyReplayOutcome(
 
   if (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE') {
     return {
-      snapshot: mapDraft(snapshot, input.draftId, (draft) => ({
-        ...mapCommand(draft, input.commandId, (command) => ({ ...command, status: 'PENDING' })),
-        status: outcome.action === 'REVIEW' ? 'NEEDS_REVIEW' : 'QUARANTINED',
-        review: {
+      snapshot: mapDraft(snapshot, input.draftId, (draft) => {
+        const review: PosDraftReview = {
           reason: outcome.reason === 'CATALOG_CONFLICT' ? 'CATALOG_CONFLICT' : 'REJECTED',
           message: outcome.message,
           atCommandId: input.commandId,
-        },
-      })),
+        };
+        return {
+          ...mapCommand(draft, input.commandId, (command) => ({ ...command, status: 'PENDING' })),
+          status: outcome.action === 'REVIEW' ? 'NEEDS_REVIEW' : 'QUARANTINED',
+          // Capture before persistence/display, never for the first time on approval.
+          review: input.catalog ? withReviewCatalog(draft, input.catalog, review) : review,
+        };
+      }),
       discarded: null,
     };
   }
@@ -787,6 +796,7 @@ function withReviewCatalog(
   catalog: PosCatalogSnapshot,
   review: PosDraftReview
 ): PosDraftReview {
+  const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
   const lines = draft.commands.filter((command) => command.kind === 'ADD_ITEM');
   const index = lines.findIndex((command) => command.commandId === review.atCommandId);
   const command = lines[index];
@@ -803,6 +813,10 @@ function withReviewCatalog(
       channel: catalog.channel,
       publicationId: catalog.publicationId,
       menuId: catalog.menuId,
+      menuName: catalog.menuName,
+      orderChannel: open?.body.channel ?? null,
+      publicationMatchesOrder:
+        !open?.body.publicationId || open.body.publicationId === catalog.publicationId,
       channelOpen: catalog.channelOpen,
       line: command
         ? {
@@ -844,6 +858,11 @@ export function markDraftsForCatalogReview(
     if (review) {
       flagged += 1;
       return { ...draft, status: 'NEEDS_REVIEW' as const, review };
+    }
+    // A successful menu fetch cannot settle a conflict returned by the server.
+    // In particular, reloading the UI must not silently replay a saved 409 review.
+    if (draft.review?.reason === 'CATALOG_CONFLICT' || draft.review?.reason === 'REJECTED') {
+      return { ...draft, review: withReviewCatalog(draft, catalog, draft.review) };
     }
     if (draft.status === 'NEEDS_REVIEW')
       return { ...draft, status: 'QUEUED' as const, review: null };
