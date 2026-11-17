@@ -1,5 +1,7 @@
 'use client';
 
+import { useId } from 'react';
+
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -14,6 +16,7 @@ export function CounterUpsellList({
   state,
   error,
   disabled,
+  disabledReason,
   onChoose,
   onRetry,
 }: {
@@ -21,9 +24,14 @@ export function CounterUpsellList({
   state: 'loading' | 'ready' | 'error';
   error?: string | null;
   disabled: boolean;
+  disabledReason?: string | null;
   onChoose: (suggestion: UpsellSuggestion) => void;
   onRetry: () => void;
 }) {
+  const reasonId = useId();
+  const reason = disabled
+    ? (disabledReason ?? 'Wait for the current counter action to finish.')
+    : null;
   if (state === 'loading') {
     return (
       <p className="text-sm text-text-muted" role="status">
@@ -50,6 +58,11 @@ export function CounterUpsellList({
   }
   return (
     <div className="space-y-3">
+      {reason ? (
+        <p id={reasonId} className="text-sm text-text-muted">
+          {reason}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill status="suggestion" tone="info" label="Suggestion only" />
         <p className="text-xs text-text-muted">
@@ -80,6 +93,7 @@ export function CounterUpsellList({
               variant="outline"
               className="h-11"
               disabled={disabled}
+              aria-describedby={reason ? reasonId : undefined}
               onClick={() => onChoose(suggestion)}
             >
               Find item
@@ -99,11 +113,13 @@ export function CounterUpsellSuggestions({
   branchId,
   medicineIds,
   disabled,
+  disabledReason,
   onChoose,
 }: {
   branchId: string;
   medicineIds: readonly string[];
   disabled: boolean;
+  disabledReason?: string | null;
   onChoose: (suggestion: UpsellSuggestion) => void;
 }) {
   const ids = [...new Set(medicineIds)].sort().slice(0, 50);
@@ -121,6 +137,7 @@ export function CounterUpsellSuggestions({
         state={query.isLoading ? 'loading' : query.isError ? 'error' : 'ready'}
         error={query.error ? counterErrorMessage(query.error) : null}
         disabled={disabled}
+        disabledReason={disabledReason}
         onChoose={onChoose}
         onRetry={() => void query.refetch()}
       />
