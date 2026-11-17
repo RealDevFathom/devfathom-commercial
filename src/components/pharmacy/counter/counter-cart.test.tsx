@@ -330,3 +330,21 @@ describe('CounterLotOverride', () => {
     expect(props.onRetry).toHaveBeenCalledOnce();
   });
 });
+
+it('DEV-705 displays a loose tablet line with its quantity and exact price', () => {
+  const value = cart([inDays(400)]);
+  value.lines[0] = {
+    ...value.lines[0]!,
+    dosageForm: 'Tablet',
+    saleUnit: 'UNIT',
+    quantity: 1,
+    canonicalUnits: 1,
+    unitPriceMinor: 250,
+    proRataCeilingMinor: 250,
+    lineTotalMinor: 250,
+  };
+  render(<CounterCartPanel cart={value} state="ready" onRetry={vi.fn()} now={NOW} />);
+  expect(screen.getByText('1 × tablet')).toBeVisible();
+  expect(screen.getByText('1 tablet')).toBeVisible();
+  expect(screen.getByRole('rowheader')).toHaveTextContent('Tablet · tablet · 1 tablet @ 2.50');
+});

@@ -108,6 +108,8 @@ function isSensitiveKey(key: string): boolean {
     k.endsWith('pin') ||
     k === 'previousgrantid' ||
     k === 'baseurl' ||
+    // DEV-875: a rejected bank-transfer reference may be a card number typed by mistake.
+    k === 'providerref' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }
