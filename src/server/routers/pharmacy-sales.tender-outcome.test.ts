@@ -10,7 +10,8 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
-  annotateAudit: (ctx: { audit: { detail: object } }, detail: object) => Object.assign(ctx.audit.detail, detail),
+  annotateAudit: (ctx: { audit: { detail: object } }, detail: object) =>
+    Object.assign(ctx.audit.detail, detail),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -171,7 +172,8 @@ describe('pharmacySales.tenderOutcome', () => {
     await expect(f.caller().tenderOutcome(named)).resolves.toMatchObject({ status: 'ACCEPTED' });
     expect(f.context.audit?.detail.skipInput).toBe(true);
     await expect(f.caller().tenderOutcome({ ...named, buyerName: 'Different Buyer' })).resolves.toEqual({
-      status: 'UNKNOWN', replayUnsafe: true,
+      status: 'UNKNOWN',
+      replayUnsafe: true,
     });
     expect(f.transaction).not.toHaveBeenCalled();
     expect(f.unexpected).not.toHaveBeenCalled();
