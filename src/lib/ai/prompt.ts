@@ -13,8 +13,29 @@ export function detectReplyLocale(text: string | null | undefined): AssistantRep
   return urdu / letters.length >= 0.3 ? 'ur' : 'en';
 }
 
+/** Language subtag of a stored locale: `ur-PK` and `UR` are Urdu, anything else English. */
+export function normalizeStoredLocale(locale: string | null | undefined): AssistantReplyLocale {
+  return locale?.toLowerCase().split(/[-_]/)[0] === 'ur' ? 'ur' : 'en';
+}
+
+/**
+ * Urdu-script text from the user wins; otherwise the workspace's stored locale is the
+ * default, and the prompt lets an explicit English message or request override it.
+ */
+export function resolveReplyLocale(
+  latestUserText: string | null | undefined,
+  storedLocale: string | null | undefined
+): { locale: AssistantReplyLocale; workspaceDefault: boolean } {
+  if (detectReplyLocale(latestUserText) === 'ur') return { locale: 'ur', workspaceDefault: false };
+  return normalizeStoredLocale(storedLocale) === 'ur'
+    ? { locale: 'ur', workspaceDefault: true }
+    : { locale: 'en', workspaceDefault: false };
+}
+
 /** Applies to every tool (finance, work packs, marketing, insights), not one tool. */
-export function localeInstruction(locale: AssistantReplyLocale): string {
+export function localeInstruction(locale: AssistantReplyLocale, workspaceDefault = false): string {
+  if (locale === 'ur' && workspaceDefault)
+    return '- This workspace’s language is Urdu. Write every sentence of the reply, including summaries of finance, work-pack, marketing and insight tool results, in Urdu (Nastaliq script, right-to-left), unless the user’s latest message is written in English or explicitly asks for another language; then reply in the language they chose. Keep figures, currency, dates, ids, names, links and tool-returned labels exactly as returned.';
   return locale === 'ur'
     ? '- The user is writing in Urdu. Write every sentence of the reply, including summaries of finance, work-pack, marketing and insight tool results, in Urdu (Nastaliq script, right-to-left). Keep figures, currency, dates, ids, names, links and tool-returned labels exactly as returned. Do not answer in English unless the user asks.'
     : '- Reply in the language of the user’s latest message (English or Roman Urdu); if they switch to Urdu script, reply in Urdu. Keep figures, ids and links exactly as returned.';
@@ -28,7 +49,8 @@ export function assistantSystemPrompt(
     vertical?: string | null;
   },
   exposedToolNames: readonly string[] = [],
-  locale: AssistantReplyLocale = 'en'
+  locale: AssistantReplyLocale = 'en',
+  workspaceDefault = false
 ) {
   const vertical = ALL_VERTICALS.find((value) => value === ctx.vertical);
   const today = workspaceToday('Asia/Karachi');
@@ -62,6 +84,6 @@ AUTHORIZATION AND ACTIONS
 - Check the target and details before high-impact actions. If approval is denied, acknowledge and stop. After execution, state the actual success or refusal; never imply success from approval alone.
 
 VOICE
-${localeInstruction(locale)}
+${localeInstruction(locale, workspaceDefault)}
 Be concise, precise and understated. Lead with the answer. Use short Markdown when helpful. No filler or hype.`;
 }
