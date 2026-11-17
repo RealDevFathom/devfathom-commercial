@@ -252,6 +252,36 @@ describeDb('DEV-877 database period backstop', () => {
     ).resolves.toMatchObject({ id: original.id });
   });
 
+  it('lets two postings on one ledger proceed while each holds a lock the other needs', async () => {
+    // The Codex P1 shape: a tender holds the ledger and then wants the customer,
+    // while a loyalty redemption holds the customer and then posts. An exclusive
+    // posting lock makes PostgreSQL abort one of them as a deadlock.
+    const customerLock = `dev877-customer-${suffix}`;
+    const takeCustomer = (db: ScopedDb) =>
+      db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${customerLock}, 0))`;
+    let redemptionHoldsCustomer!: () => void;
+    const customerHeld = new Promise<void>((resolve) => (redemptionHoldsCustomer = resolve));
+    let tenderPosted!: () => void;
+    const posted = new Promise<void>((resolve) => (tenderPosted = resolve));
+
+    const redemption = inTenant(async (db) => {
+      await takeCustomer(db);
+      redemptionHoldsCustomer();
+      await posted;
+      return deps.journal.postJournalEntry(db, scope, posting(at, otherBranchId));
+    });
+    const tender = inTenant(async (db) => {
+      await customerHeld;
+      const entry = await deps.journal.postJournalEntry(db, scope, posting(at, otherBranchId));
+      tenderPosted();
+      await takeCustomer(db);
+      return entry;
+    });
+
+    const results = await Promise.allSettled([redemption, tender]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+  });
+
   it('serializes a raw posting behind an uncommitted period close', async () => {
     const closer = await tenantClient();
     const writer = await tenantClient();

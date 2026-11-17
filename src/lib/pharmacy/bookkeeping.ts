@@ -129,16 +129,24 @@ export function isNativeApSettlementTransaction(transaction: { idempotencyKey: s
 /** Internal capability passed only by the native AP settlement commands. */
 export type NativeApSettlementCapability = { nativeApSettlement?: true };
 
+/**
+ * DEV-877: an operational caller that already serializes on its own row lock
+ * (khata repayment, under the family account) posts with the SHARED ledger lock
+ * like every other operational posting. It reaches this call holding drawer and
+ * customer locks, so an exclusive wait here could deadlock with a counter tender.
+ */
+export type OperationalPostingOption = { sharedLedgerLock?: true };
+
 export async function postBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
   input: PostBookkeepingInput,
-  options: NativeApSettlementCapability = {}
+  options: NativeApSettlementCapability & OperationalPostingOption = {}
 ) {
   if (isNativeApSettlementTransaction(input) && !options.nativeApSettlement)
     throw new PharmacyBookkeepingError('NATIVE_AP_SETTLEMENT');
   positiveMinor(input.amountMinor);
-  await lockPharmacyLedgerScope(db, scope);
+  await lockPharmacyLedgerScope(db, scope, options.sharedLedgerLock ? 'shared' : 'exclusive');
   await assertPeriodOpen(db, scope, input.occurredAt);
   if (input.kind === 'CHEQUE' && !input.chequeNumber?.trim())
     throw new PharmacyBookkeepingError('INVALID_CHEQUE');

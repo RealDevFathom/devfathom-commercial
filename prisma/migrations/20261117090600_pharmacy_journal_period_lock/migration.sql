@@ -2,12 +2,15 @@ BEGIN;
 
 -- Same org+branch lock as the application. Keep this SECURITY INVOKER so all
 -- period reads obey the caller's tenant RLS. No historical entry is changed.
+-- Postings take the lock SHARED: they never wait for each other, only for an
+-- exclusive period close/reopen, so the lock cannot join a deadlock with the
+-- row locks that posting transactions take in differing orders.
 CREATE OR REPLACE FUNCTION pharmacy_assert_journal_period_open(
   organization_id text, branch_id text, occurred_at timestamp
 ) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   IF branch_id IS NULL THEN RETURN; END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended(
+  PERFORM pg_advisory_xact_lock_shared(hashtextextended(
     'pharmacy-ledger:' || organization_id || ':' || branch_id, 0
   ));
   IF EXISTS (

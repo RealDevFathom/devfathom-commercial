@@ -147,8 +147,10 @@ export function signedMinor(line: {
 /**
  * Pharmacy periods are per branch and half open [startsAt, endsAt). Transfers
  * affect more than the header branch. Lock every affected ledger in stable
- * order before reading any period, using the same lock as close/reopen. The
- * database triggers backstop writers that bypass this primitive.
+ * order before reading any period. The lock is SHARED: postings never wait for
+ * each other (so it cannot deadlock with customer, drawer or stock locks), but
+ * they do wait for an exclusive close/reopen. The database triggers backstop
+ * writers that bypass this primitive.
  */
 export async function assertPostingPeriodsOpen(
   db: ScopedDb,
@@ -161,7 +163,7 @@ export async function assertPostingPeriodsOpen(
     .filter((id): id is string => id != null)
     .sort();
   for (const id of branches) {
-    await lockPharmacyLedgerScope(db, { organizationId, branchId: id });
+    await lockPharmacyLedgerScope(db, { organizationId, branchId: id }, 'shared');
   }
   for (const id of branches) {
     const closed = await db.pharmacyAccountingPeriod.findFirst({

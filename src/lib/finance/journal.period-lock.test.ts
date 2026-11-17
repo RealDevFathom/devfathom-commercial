@@ -21,10 +21,12 @@ const input: PostJournalEntryInput = {
 
 function fixture(options: { replay?: boolean; periodBranch?: string; status?: string } = {}) {
   const calls: string[] = [];
+  const lockSql: string[] = [];
   const original = { id: 'original', ...input, ...scope, currency: 'PKR', lines: input.lines };
   const db = {
-    $queryRaw: vi.fn(async (sql: { values: unknown[] }) => {
+    $queryRaw: vi.fn(async (sql: { strings: readonly string[]; values: unknown[] }) => {
       calls.push(`lock:${sql.values[0]}`);
+      lockSql.push(sql.strings.join('?'));
       return [];
     }),
     pharmacyAccountingPeriod: {
@@ -51,7 +53,7 @@ function fixture(options: { replay?: boolean; periodBranch?: string; status?: st
     },
     financeJournalLine: { create: vi.fn() },
   };
-  return { db, scoped: db as unknown as ScopedDb, calls };
+  return { db, scoped: db as unknown as ScopedDb, calls, lockSql };
 }
 
 describe('DEV-877 operational accounting period lock', () => {
@@ -120,6 +122,20 @@ describe('DEV-877 operational accounting period lock', () => {
       'period:branch_z',
     ]);
     expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('takes the ledger lock SHARED so concurrent postings never wait for each other', async () => {
+    // An exclusive posting lock deadlocks a counter tender (ledger, then customer)
+    // against a loyalty redemption (customer, then ledger) on the same branch.
+    const { scoped, lockSql } = fixture({ periodBranch: 'none' });
+    await expect(
+      postJournalEntry(scoped, scope, {
+        ...input,
+        lines: input.lines.map((line) => ({ ...line, branchId: 'branch_b' })),
+      })
+    ).resolves.toMatchObject({ id: 'new' });
+    expect(lockSql).toHaveLength(2);
+    for (const sql of lockSql) expect(sql).toContain('pg_advisory_xact_lock_shared(');
   });
 
   it('checks line branches even when the entry header has no branch', async () => {

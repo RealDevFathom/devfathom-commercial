@@ -135,7 +135,10 @@ describe('K4 counter khata repayment (DEV-731)', () => {
             amountMinor: 3_000,
           }),
         ],
-      })
+      }),
+      // DEV-877: serialized by the family account lock, so it posts with the shared
+      // ledger lock and cannot deadlock against a counter tender for the same customer.
+      { sharedLedgerLock: true }
     );
     expect(slip).toMatchObject({
       receiptReference: expect.stringMatching(/^KP-[0-9A-F]{10}$/),
@@ -160,7 +163,8 @@ describe('K4 counter khata repayment (DEV-731)', () => {
     expect(postBookkeepingTransaction).toHaveBeenCalledWith(
       db,
       scope,
-      expect.objectContaining({ fundingAccount: 'BANK', bankReference: 'TXN-88231' })
+      expect.objectContaining({ fundingAccount: 'BANK', bankReference: 'TXN-88231' }),
+      { sharedLedgerLock: true }
     );
   });
 
