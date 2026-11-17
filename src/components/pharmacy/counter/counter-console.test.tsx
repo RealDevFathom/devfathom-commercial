@@ -174,6 +174,8 @@ vi.mock('@/lib/trpc', async () => {
         'setDemandOutcome',
         'declineSubstitute',
         'linkCustomer',
+        // DEV-748: a scanned loyalty card links its customer.
+        'scanLoyaltyCard',
         'khataSignup',
         'redeemPoints',
         'authenticatePack',
@@ -524,6 +526,7 @@ beforeEach(() => {
     'setDemandOutcome',
     'declineSubstitute',
     'linkCustomer',
+    'scanLoyaltyCard',
     'khataSignup',
     'redeemPoints',
     'authenticatePack',
@@ -2198,6 +2201,38 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       quotation: false,
       deviceId,
     });
+  });
+
+  it('links a scanned loyalty card to the bill instead of searching for it (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-new' });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({
+      id: 'customer-a',
+      displayName: 'Ayesha',
+    });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    // A scanner with caps lock off types the code in lower case.
+    fireEvent.change(search, { target: { value: 'dflcabcdefghijklmnopqrstuvwxyz' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-new',
+      cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+    expect(
+      await screen.findByText('Loyalty card: Ayesha linked to this bill.')
+    ).toBeInTheDocument();
+    expect(search).toHaveValue('');
+    // The card code is never sent to the medicine search.
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+    expect(
+      mocks.queryInputs.mock.calls.filter(([, input]) =>
+        JSON.stringify(input ?? '').includes('DFLC')
+      )
+    ).toEqual([]);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
   it.each([

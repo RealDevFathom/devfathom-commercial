@@ -102,6 +102,10 @@ import {
   counterErrorTone,
   counterPaymentErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  looksLikeLoyaltyCardCode,
+  normalizeLoyaltyCardCode,
+} from '@/lib/pharmacy/loyalty-card-code';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
@@ -522,6 +526,8 @@ function ScopedPharmacyCounterConsole({
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
+  // DEV-748: a card code typed by hand when the scanner cannot read the card.
+  const [cardCodeText, setCardCodeText] = useState('');
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   // DEV-742: a cashier's paper choice overrides the branch's saved paper for this session only.
   const [receiptFormatChoice, setReceiptFormatChoice] = useState<{
@@ -738,7 +744,8 @@ function ScopedPharmacyCounterConsole({
   const trimmedQuery = query.trim();
   // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
   // being typed never fires a search per digit; Enter submits it.
-  const scannerQuery = looksLikeScannedCode(trimmedQuery);
+  // DEV-748: a loyalty card code is never sent to the medicine search either.
+  const scannerQuery = looksLikeScannedCode(trimmedQuery) || looksLikeLoyaltyCardCode(trimmedQuery);
   const searchCurrent =
     branchAuthorized &&
     trimmedQuery.length >= 2 &&
@@ -887,6 +894,7 @@ function ScopedPharmacyCounterConsole({
   const setDemandOutcome = trpc.pharmacySales.setDemandOutcome.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const scanLoyaltyCard = trpc.pharmacySales.scanLoyaltyCard.useMutation({ retry: false });
   const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
@@ -2272,6 +2280,44 @@ function ScopedPharmacyCounterConsole({
     }
   }, [branchId, busy, ensureSale, linkCustomer, patient]);
 
+  // DEV-748: a scanned or typed loyalty card links its customer to the bill (opening one if
+  // needed), so the bill earns points when paid and the customer can redeem on it.
+  const linkLoyaltyCard = useCallback(
+    async (text: string) => {
+      if (busy) return false;
+      const cardToken = normalizeLoyaltyCardCode(text);
+      if (!cardToken) {
+        setNotice({
+          tone: 'warning',
+          message: 'That is not a loyalty card code. Check the code printed under the QR.',
+        });
+        return false;
+      }
+      setPending('customer');
+      try {
+        const activeSaleId = await ensureSale();
+        const linked = await scanLoyaltyCard.mutateAsync({
+          branchId,
+          saleId: activeSaleId,
+          cardToken,
+        });
+        setCustomerId(linked.id);
+        setRedeemPoints(0);
+        setNotice({
+          tone: 'success',
+          message: `Loyalty card: ${linked.displayName} linked to this bill.`,
+        });
+        return true;
+      } catch (error) {
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+        return false;
+      } finally {
+        setPending(null);
+      }
+    },
+    [branchId, busy, ensureSale, scanLoyaltyCard]
+  );
+
   const redeemCustomerPoints = useCallback(async () => {
     if (!saleId || redeemPoints <= 0 || busy) return;
     setPending('redeem');
@@ -3164,6 +3210,13 @@ function ScopedPharmacyCounterConsole({
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
+                          if (looksLikeLoyaltyCardCode(trimmed)) {
+                            // DEV-748: a loyalty card scanned into the search field.
+                            scannerRevision.current += 1;
+                            setQuery('');
+                            void linkLoyaltyCard(trimmed);
+                            return;
+                          }
                           if (looksLikeScannedCode(trimmed)) {
                             void addBarcode(trimmed);
                             return;
@@ -3797,6 +3850,39 @@ function ScopedPharmacyCounterConsole({
             </Button>
           }
         >
+          <form
+            className="mb-4 flex flex-wrap items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void linkLoyaltyCard(cardCodeText).then((linked) => {
+                if (linked) setCardCodeText('');
+              });
+            }}
+          >
+            <div className="grid min-w-0 flex-1 gap-1.5">
+              <Label htmlFor="counter-loyalty-card" className="text-sm">
+                Loyalty card code
+              </Label>
+              <Input
+                id="counter-loyalty-card"
+                autoComplete="off"
+                spellCheck={false}
+                value={cardCodeText}
+                disabled={busy || !branchAuthorized}
+                onChange={(event) => setCardCodeText(event.target.value)}
+                placeholder="Scan the card or type the code under the QR"
+                className="h-8 font-mono"
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="outline"
+              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              disabled={busy || !branchAuthorized || !cardCodeText.trim()}
+            >
+              {pending === 'customer' ? 'Linking…' : 'Link card'}
+            </Button>
+          </form>
           {customerQuery.data ? (
             <div className="space-y-4 text-sm text-text-body">
               <div>
@@ -3885,7 +3971,8 @@ function ScopedPharmacyCounterConsole({
             </div>
           ) : (
             <p className="text-sm text-text-muted">
-              Select a patient, open a bill, then link. Current loyalty consent is required.
+              Scan the customer’s loyalty card, or select a patient, open a bill, then link. Current
+              loyalty consent is required.
             </p>
           )}
         </SectionCard>
