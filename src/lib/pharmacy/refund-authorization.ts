@@ -90,6 +90,9 @@ export function authenticateRefundPin(input: {
   pin: string;
   /** The refunding procedure, for the audit row. */
   action: string;
+  /** DEV-881: another manager-PIN control reusing this check names its own policy. */
+  policy?: string;
+  errorCode?: string;
 }): Promise<{ verified: true } | { blocked: string }> {
   return withTenantDb(
     input.organizationId,
@@ -105,8 +108,8 @@ export function authenticateRefundPin(input: {
             operation: 'EXECUTE',
             action: input.action,
             outcome: 'FAILURE',
-            errorCode: 'REFUND_PIN_REFUSED',
-            metadata: { policy: REFUND_PIN_POLICY, pinVerified: false },
+            errorCode: input.errorCode ?? 'REFUND_PIN_REFUSED',
+            metadata: { policy: input.policy ?? REFUND_PIN_POLICY, pinVerified: false },
           },
         });
       return result;

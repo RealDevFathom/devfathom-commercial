@@ -49,6 +49,7 @@ export class PharmacyLoyaltyError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_ADJUSTMENT'
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
+      | 'MANAGER_ADJUSTMENT_LIMIT'
   ) {
     super(reason);
   }
@@ -637,10 +638,33 @@ export const LOYALTY_MAX_ADJUSTMENT_POINTS = 1_000_000;
  * removal may not take the balance below zero. The caller has authorized the actor and records
  * the audit; this runs in the caller's tenant transaction.
  */
+const PAKISTAN_OFFSET_MS = 5 * 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * DEV-881: the Pakistan calendar day (Asia/Karachi, UTC+05:00, no daylight saving) holding
+ * `now`, as a half-open UTC range. A manager's adjustment allowance resets at local midnight.
+ */
+export function loyaltyAdjustmentDay(now: Date): { from: Date; to: Date } {
+  const local = new Date(now.getTime() + PAKISTAN_OFFSET_MS);
+  const start =
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - PAKISTAN_OFFSET_MS;
+  return { from: new Date(start), to: new Date(start + DAY_MS) };
+}
+
+/**
+ * DEV-764: a manual adjustment. DEV-881: with `managerLimit`, the owner's ceiling applies to the
+ * total of every adjustment (added and removed points both count) to this customer in the
+ * current Pakistan calendar day, across branches, this one included, so a large grant cannot be
+ * split into entries that are each under the ceiling. Checked under the customer lock, after an
+ * idempotent replay is recognised, so concurrent entries cannot both pass and a retry is never
+ * refused.
+ */
 export async function adjustLoyaltyPoints(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { customerId: string; points: number; reason: string; idempotencyKey: string }
+  input: { customerId: string; points: number; reason: string; idempotencyKey: string },
+  options: { managerLimit?: number; now?: Date } = {}
 ) {
   const reason = input.reason.trim();
   if (
@@ -676,6 +700,28 @@ export async function adjustLoyaltyPoints(
     )
       throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
     return { entry: prior, balanceBefore: null, balanceAfter: null, replayed: true };
+  }
+  if (options.managerLimit !== undefined) {
+    const day = loyaltyAdjustmentDay(options.now ?? new Date());
+    const today = {
+      organizationId: scope.organizationId,
+      customerId: customer.id,
+      kind: 'ADJUSTMENT' as const,
+      occurredAt: { gte: day.from, lt: day.to },
+    };
+    const [added, removed] = await Promise.all([
+      db.pharmacyLoyaltyPointsEntry.aggregate({
+        where: { ...today, points: { gt: 0 } },
+        _sum: { points: true },
+      }),
+      db.pharmacyLoyaltyPointsEntry.aggregate({
+        where: { ...today, points: { lt: 0 } },
+        _sum: { points: true },
+      }),
+    ]);
+    const adjustedToday = (added._sum.points ?? 0) - (removed._sum.points ?? 0);
+    if (adjustedToday + Math.abs(input.points) > options.managerLimit)
+      throw new PharmacyLoyaltyError('MANAGER_ADJUSTMENT_LIMIT');
   }
   const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
     where: {

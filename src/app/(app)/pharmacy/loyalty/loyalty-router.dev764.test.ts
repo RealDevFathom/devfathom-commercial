@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   queryRaw: vi.fn(),
   managerGate: vi.fn(),
   adjust: vi.fn(),
+  pin: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -29,6 +30,9 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
   requireDrawerManagerAccess: mocks.managerGate,
+}));
+vi.mock('@/lib/pharmacy/refund-authorization', () => ({
+  authenticateRefundPin: mocks.pin,
 }));
 vi.mock('@/lib/pharmacy/customer-loyalty', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/customer-loyalty')>(
@@ -81,6 +85,7 @@ beforeEach(() => {
   mocks.licensed.mockReturnValue(true);
   mocks.findFirst.mockResolvedValue(prior);
   mocks.queryRaw.mockResolvedValue([]);
+  mocks.pin.mockResolvedValue({ verified: true });
   mocks.create.mockImplementation(async ({ data }) => ({ id: 'program-2', ...data }));
 });
 
@@ -218,7 +223,7 @@ describe('DEV-764 manual adjustment authority', () => {
       branchId: 'branch-a',
       actorId: 'user-a',
     });
-    await caller('MEMBER').adjustPoints(input);
+    await caller('MEMBER').adjustPoints({ ...input, managerPin: '2468' });
     expect(mocks.managerGate).toHaveBeenCalledWith(expect.anything(), 'branch-a');
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
@@ -269,6 +274,7 @@ describe('DEV-764 manager adjustment ceiling', () => {
     points: 600,
     reason: 'Points missed on several receipts',
     idempotencyKey: 'adjust-key-2',
+    managerPin: '2468',
   };
   beforeEach(() => {
     mocks.adjust.mockResolvedValue({
@@ -358,5 +364,122 @@ describe('DEV-764 adjustment reads the ceiling under the program lock', () => {
     const lockAt = mocks.queryRaw.mock.invocationCallOrder[lockIndex]!;
     expect(lockAt).toBeLessThan(mocks.findFirst.mock.invocationCallOrder[0]!);
     expect(lockAt).toBeLessThan(mocks.adjust.mock.invocationCallOrder[0]!);
+  });
+});
+
+describe('DEV-881 manager adjustments need the manager PIN', () => {
+  const input = {
+    branchId: 'branch-a',
+    customerId: 'customer-a',
+    points: 40,
+    reason: 'Points missed on receipt 12',
+    idempotencyKey: 'adjust-key-pin',
+  };
+  beforeEach(() => {
+    mocks.adjust.mockResolvedValue({
+      entry: { id: 'entry-p', points: 40, reason: input.reason },
+      balanceBefore: 0,
+      balanceAfter: 40,
+      replayed: false,
+    });
+    mocks.managerGate.mockResolvedValue({
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      actorId: 'user-a',
+    });
+  });
+
+  it('refuses a manager without a PIN before any lock or write', async () => {
+    await expect(caller('MEMBER').adjustPoints(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Adjustment not recorded. Enter your manager PIN.',
+    });
+    expect(mocks.pin).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.adjust).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
+          pinVerified: false,
+        }),
+      })
+    );
+  });
+
+  it("refuses a manager whose own PIN is wrong, checked in the PIN's own transaction", async () => {
+    mocks.pin.mockResolvedValue({
+      blocked: 'Refund not recorded. Enter your manager or owner PIN.',
+    });
+    await expect(
+      caller('MEMBER').adjustPoints({ ...input, managerPin: '0000' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Adjustment not recorded. Enter your manager PIN.',
+    });
+    expect(mocks.pin).toHaveBeenCalledWith({
+      organizationId: 'org-a',
+      actorId: 'user-a',
+      pin: '0000',
+      action: 'pharmacyLoyalty.adjustPoints',
+      policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
+      errorCode: 'LOYALTY_ADJUST_PIN_REFUSED',
+    });
+    expect(mocks.adjust).not.toHaveBeenCalled();
+  });
+
+  it('records a manager adjustment after a verified PIN, bounded by the day total', async () => {
+    await expect(
+      caller('MEMBER').adjustPoints({ ...input, managerPin: '2468' })
+    ).resolves.toMatchObject({ points: 40 });
+    expect(mocks.pin.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.adjust.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.adjust).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-a', actorId: 'user-a', branchId: 'branch-a' },
+      {
+        customerId: 'customer-a',
+        points: 40,
+        reason: 'Points missed on receipt 12',
+        idempotencyKey: 'adjust-key-pin',
+      },
+      { managerLimit: 500 }
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: {
+          policy: 'PHARMACY_LOYALTY_ADJUST_MANAGER_PIN',
+          approverId: 'user-a',
+          pinVerified: true,
+        },
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacyLoyalty.adjustPoints',
+        metadata: expect.objectContaining({ authority: 'MANAGER', managerLimit: 500 }),
+      })
+    );
+  });
+
+  it('refuses a split grant once the day total would pass the ceiling', async () => {
+    mocks.adjust.mockRejectedValue(new PharmacyLoyaltyError('MANAGER_ADJUSTMENT_LIMIT'));
+    await expect(
+      caller('MEMBER').adjustPoints({ ...input, managerPin: '2468' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'A manager can adjust up to 500 points for a customer in one day. Larger totals need the owner.',
+    });
+  });
+
+  it('asks the owner for no PIN and applies no manager day total', async () => {
+    await caller('ADMIN').adjustPoints(input);
+    expect(mocks.pin).not.toHaveBeenCalled();
+    expect(mocks.adjust.mock.calls[0]).toHaveLength(3);
   });
 });
