@@ -3092,6 +3092,23 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
   });
 
+  it('links a loyalty card scanned after payment to a new bill, not the paid one (DEV-748)', async () => {
+    openTheDrawer();
+    Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      saleId: 'sale-b',
+      cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+  });
+
   it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
     mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

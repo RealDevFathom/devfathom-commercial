@@ -2294,8 +2294,13 @@ function ScopedPharmacyCounterConsole({
         return false;
       }
       setPending('customer');
+      // DEV-712: a card scanned after the last bill was paid or voided starts the next
+      // customer's bill, as a medicine scan does; the closed bill's patient is cleared.
+      const replaceClosedBill =
+        Boolean(saleId) && !attemptRef.current && billClosed(cartQuery.data, saleId);
+      if (replaceClosedBill) clearBill();
       try {
-        const activeSaleId = await ensureSale();
+        const activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
         const linked = await scanLoyaltyCard.mutateAsync({
           branchId,
           saleId: activeSaleId,
@@ -2315,7 +2320,7 @@ function ScopedPharmacyCounterConsole({
         setPending(null);
       }
     },
-    [branchId, busy, ensureSale, scanLoyaltyCard]
+    [branchId, busy, cartQuery.data, clearBill, ensureSale, openSale, saleId, scanLoyaltyCard]
   );
 
   const redeemCustomerPoints = useCallback(async () => {
