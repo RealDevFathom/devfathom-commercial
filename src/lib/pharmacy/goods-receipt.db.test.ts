@@ -1394,8 +1394,10 @@ describeIfDatabase('DEV-610 — a receipt reversal never deadlocks a concurrent 
       releaseLow = resolve;
     });
     let lowLocked!: (pid: number) => void;
-    const hasLow = new Promise<number>((resolve) => {
+    let lowFailed!: (error: unknown) => void;
+    const hasLow = new Promise<number>((resolve, reject) => {
       lowLocked = resolve;
+      lowFailed = reject;
     });
 
     // The concurrent stock path follows the global order through the shared
@@ -1408,6 +1410,8 @@ describeIfDatabase('DEV-610 — a receipt reversal never deadlocks a concurrent 
       await deps.locks.lockStockBalances(db, scopeOf(f), [high!]);
       return 'committed';
     });
+    // A failure before the low lock is held must fail the case, not hang it.
+    otherPath.catch(lowFailed);
     const otherPid = await hasLow;
 
     const reversal = inOrg(ORG_A, (db) =>
