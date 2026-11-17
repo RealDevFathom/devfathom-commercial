@@ -42,6 +42,7 @@ const hierarchy = [
 
 function saleDb(options: { receivedUnitsPerPack?: number[] } = {}) {
   return {
+    $queryRaw: vi.fn(async () => []),
     pharmacySale: {
       findFirst: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN', lines: [] })),
       updateMany: vi.fn(async () => ({ count: 1 })),
@@ -89,6 +90,7 @@ function saleDb(options: { receivedUnitsPerPack?: number[] } = {}) {
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'line-a',
         ...data,

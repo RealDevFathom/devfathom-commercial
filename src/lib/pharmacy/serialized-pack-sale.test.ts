@@ -179,6 +179,7 @@ function saleDb(
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: `sale-line-${++lineCount}`,
         ...data,
