@@ -59,6 +59,7 @@ export class PharmacySettlementError extends Error {
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
       | 'PREPAID_REFUND_RESTORES_BALANCE'
+      | 'TENDER_ATTEMPT_DISCARDED'
   ) {
     super(reason);
   }
@@ -248,6 +249,78 @@ export async function readPharmacyTenderOutcome(
   }
 }
 
+/** DEV-712: the idempotency record a supervisor's discard leaves on the attempt's key. */
+export const DISCARDED_TENDER_COMMAND = 'tender-discard';
+
+export type PharmacyTenderDiscardRecord = {
+  reason: string;
+  approvedByUserId: string;
+  approvalPolicy: string;
+  selfApproved: boolean;
+};
+
+export type PharmacyTenderDiscard =
+  | { status: 'DISCARDED' }
+  | { status: 'ACCEPTED'; result: z.infer<typeof tenderResultSchema> };
+
+/**
+ * DEV-712: a supervisor discards a counter payment attempt whose outcome is unknown.
+ *
+ * The attempt's key is claimed with a `tender-discard` record (who approved it and why), in
+ * the same `(organization, device, key)` slot the tender itself binds. An attempt still in
+ * flight therefore either commits first, and is returned here as ACCEPTED so the counter
+ * records it instead of forgetting it, or finds the discard record and is refused with
+ * IDEMPOTENCY_CONFLICT. No money moves here, and a discarded attempt can never land later.
+ */
+export async function discardPharmacyTenderAttempt(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: Omit<Parameters<typeof applyPharmacyTender>[2], 'adapter'>,
+  record: PharmacyTenderDiscardRecord
+): Promise<PharmacyTenderDiscard | null> {
+  const sale = await db.pharmacySale.findFirst({
+    where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { id: true },
+  });
+  if (!sale || sale.id !== input.saleId) return null;
+  const payloadHash = hash(input);
+  const evidence = {
+    saleId: input.saleId,
+    type: input.type,
+    amountMinor: input.amountMinor,
+    discardedByActorId: scope.actorId,
+    approvedByUserId: record.approvedByUserId,
+    approvalPolicy: record.approvalPolicy,
+    selfApproved: record.selfApproved,
+    reason: record.reason,
+  };
+  // Waits on the row lock of a tender holding this key, so its commit or rollback decides.
+  await db.$executeRaw(Prisma.sql`
+    INSERT INTO pharmacy_money_idempotency_keys
+      (id, "organizationId", "deviceId", key, "commandType", "payloadHash", "resultPayload", "createdAt")
+    VALUES (${randomUUID()}, ${scope.organizationId}, ${input.deviceId}, ${input.idempotencyKey}, ${DISCARDED_TENDER_COMMAND}, ${payloadHash}, ${JSON.stringify(evidence)}::jsonb, now())
+    ON CONFLICT ("organizationId", "deviceId", key) DO NOTHING`);
+  const prior = await db.pharmacyMoneyIdempotencyKey.findUnique({
+    where: {
+      organizationId_deviceId_key: {
+        organizationId: scope.organizationId,
+        deviceId: input.deviceId,
+        key: input.idempotencyKey,
+      },
+    },
+    select: { commandType: true, payloadHash: true },
+  });
+  if (!prior) throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
+  // A tender bound to this exact attempt committed: it is a payment, never discarded.
+  if (prior.commandType === 'tender' && prior.payloadHash === payloadHash) {
+    const outcome = await readPharmacyTenderOutcome(db, scope, input);
+    if (outcome.status === 'ACCEPTED') return { status: 'ACCEPTED', result: outcome.result };
+    throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
+  }
+  // A discard record, or a key bound to another payload: this attempt can never be accepted.
+  return { status: 'DISCARDED' };
+}
+
 async function bindIdempotency(
   db: ScopedDb,
   organizationId: string,
@@ -264,6 +337,9 @@ async function bindIdempotency(
   const prior = await db.pharmacyMoneyIdempotencyKey.findUnique({
     where: { organizationId_deviceId_key: { organizationId, deviceId, key } },
   });
+  // DEV-712: a supervisor discarded this attempt; it rolls back and is never recorded.
+  if (prior?.commandType === DISCARDED_TENDER_COMMAND)
+    throw new PharmacySettlementError('TENDER_ATTEMPT_DISCARDED');
   if (!prior || prior.commandType !== commandType || prior.payloadHash !== payloadHash)
     throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
   return prior;

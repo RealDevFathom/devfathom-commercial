@@ -20,6 +20,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptIssuedAt,
   receiptCashReceived,
   receiptPromotionLabel,
   receiptTitle,
@@ -611,8 +612,16 @@ export function CounterReceiptView({
             {strings.branch}: {receipt.branchName}
           </p>
           <p className="text-text-muted">
-            {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            {strings.date}:{' '}
+            {receipt.completedAt
+              ? formatReceiptIssuedAt(receipt.completedAt)
+              : (receipt.businessDate ?? formatReceiptDate(receipt.completedAt))}
           </p>
+          {receipt.cashierName ? (
+            <p className="text-text-muted">
+              {strings.cashier}: {receipt.cashierName}
+            </p>
+          ) : null}
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
           ) : null}

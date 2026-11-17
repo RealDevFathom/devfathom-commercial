@@ -242,6 +242,8 @@ model PharmacyBranch {
   onboardingGates                          PharmacyOnboardingGateState[]
   registeredDevices                        PharmacyRegisteredDevice[]
   ownerDigestSettings                      PharmacyOwnerDigestSetting[]
+  lostDemandTriggerSettings                PharmacyLostDemandTriggerSetting[]
+  lostDemandAdviceDecisions                PharmacyLostDemandAdviceDecision[]
   ownerDigestCaptures                      PharmacyOwnerDigestCapture[]
   refillReminderCaptures                   PharmacyRefillReminderCapture[]
   pharmacovigilanceReports                 PharmacyPharmacovigilanceReport[]
@@ -1002,7 +1004,9 @@ enum PharmacyInventoryCountStatus {
 enum PharmacyTransferStatus {
   /// PUR-07 §8A invariant 29: what a one-click draft action may create. A DRAFT
   /// transfer holds no stock and cannot be approved (`approveTransfer` requires
-  /// ALLOCATED), so no signal can reach a stock movement through it.
+  /// ALLOCATED), so no signal can reach a stock movement through it. DEV-80: only a
+  /// person at the source branch can allocate a DRAFT request, after which the usual
+  /// second-person approval still applies.
   DRAFT
   ALLOCATED
   APPROVED
@@ -14956,6 +14960,51 @@ model PharmacyOwnerDigestSetting {
   @@unique([organizationId, userId, branchId], map: "pharmacy_owner_digest_settings_org_user_branch_key")
   @@index([enabled, nextDueAt], map: "pharmacy_owner_digest_settings_due_idx")
   @@map("pharmacy_owner_digest_settings")
+}
+
+/// DEV-80 — per-branch lost-demand advice triggers and planning assumptions.
+/// Research figures are starting defaults only; every value here is editable.
+model PharmacyLostDemandTriggerSetting {
+  id                          String   @id @default(cuid())
+  organizationId              String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                    String
+  requestCountThreshold       Int      @default(3)
+  requestWindowDays           Int      @default(7)
+  estimatedLossThresholdMinor Int      @default(1000000)
+  lossWindowDays              Int      @default(30)
+  walkOutRateThresholdBps     Int      @default(1000)
+  forecastWindowDays          Int      @default(30)
+  safetyStockDays             Int      @default(7)
+  defaultLeadTimeDays         Int      @default(3)
+  updatedByUserId             String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_lost_demand_trigger_settings_branch_fkey")
+
+  @@unique([organizationId, branchId], map: "pharmacy_lost_demand_trigger_settings_org_branch_key")
+  @@map("pharmacy_lost_demand_trigger_settings")
+}
+
+/// DEV-80 — what a human did with one lost-demand advice card. Append-only. A
+/// draft decision names the DRAFT document it created; nothing here approves or
+/// sends anything.
+model PharmacyLostDemandAdviceDecision {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  demandKey       String
+  decision        String
+  purchaseOrderId String?
+  transferId      String?
+  reason          String?
+  actorUserId     String
+  createdAt       DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_lost_demand_advice_decisions_branch_fkey")
+
+  @@index([organizationId, branchId, demandKey, createdAt], map: "pharmacy_lost_demand_advice_decisions_key_idx")
+  @@map("pharmacy_lost_demand_advice_decisions")
 }
 
 /// Persistent CaptureChannel delivery. Unique business-date key makes cron
