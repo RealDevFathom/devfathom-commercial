@@ -57,8 +57,7 @@ export function CounterDrawerOperator({
             <>You run this cash drawer.</>
           ) : (
             <>
-              <span className="font-semibold text-text-strong">{runBy}</span> runs this cash
-              drawer.{' '}
+              <span className="font-semibold text-text-strong">{runBy}</span> runs this cash drawer.{' '}
               {canHandOver
                 ? 'As a manager or owner you can still take cash, or hand the till over.'
                 : 'Ask a manager or owner to hand it over to you before you take cash.'}
@@ -71,12 +70,18 @@ export function CounterDrawerOperator({
             variant="outline"
             className="h-11"
             disabled={pending}
+            aria-describedby={pending ? 'counter-handover-pending' : undefined}
             onClick={() => setOpen(true)}
           >
             Hand over till
           </Button>
         ) : null}
       </div>
+      {pending ? (
+        <p id="counter-handover-pending" className="text-sm text-text-muted">
+          Saving the till handover. Please wait.
+        </p>
+      ) : null}
       {canHandOver && open ? (
         <form
           className="space-y-3"
@@ -108,7 +113,13 @@ export function CounterDrawerOperator({
                 value={toCashierId}
                 disabled={pending}
                 aria-invalid={missingCashier}
-                aria-describedby={missingCashier ? 'counter-handover-error' : undefined}
+                aria-describedby={
+                  pending
+                    ? 'counter-handover-pending'
+                    : missingCashier
+                      ? 'counter-handover-error'
+                      : undefined
+                }
                 onChange={(event) => setToCashierId(event.target.value)}
               >
                 <option value="">Choose a cashier</option>
@@ -130,7 +141,13 @@ export function CounterDrawerOperator({
                 value={reason}
                 disabled={pending}
                 aria-invalid={missingReason}
-                aria-describedby={missingReason ? 'counter-handover-error' : undefined}
+                aria-describedby={
+                  pending
+                    ? 'counter-handover-pending'
+                    : missingReason
+                      ? 'counter-handover-error'
+                      : undefined
+                }
                 onChange={(event) => setReason(event.target.value)}
               />
             </div>
@@ -141,11 +158,17 @@ export function CounterDrawerOperator({
               variant="outline"
               className="h-11"
               disabled={pending}
+              aria-describedby={pending ? 'counter-handover-pending' : undefined}
               onClick={() => setOpen(false)}
             >
               Cancel
             </Button>
-            <Button type="submit" className="h-11" disabled={pending}>
+            <Button
+              type="submit"
+              className="h-11"
+              disabled={pending}
+              aria-describedby={pending ? 'counter-handover-pending' : undefined}
+            >
               {pending ? 'Handing over…' : 'Hand over'}
             </Button>
           </div>
