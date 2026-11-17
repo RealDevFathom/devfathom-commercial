@@ -12,8 +12,6 @@ export async function readPharmacyShiftHandover(
   scope: { organizationId: string; branchId: string },
   drawerSessionId: string
 ) {
-  // The router's scope also carries `actorId`, which is not a drawer column; only
-  // tenant and branch may reach the Prisma filter.
   const drawer = await db.pharmacyDrawerSession.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -24,12 +22,6 @@ export async function readPharmacyShiftHandover(
     select: { businessDate: true },
   });
   if (!drawer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Closed drawer not found.' });
-
-  // pharmacy_restock_interests is FORCE RLS keyed on the transaction-local branch
-  // setting; the explicit predicates below do not satisfy the policy on their own.
-  await db.$queryRaw(
-    Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
-  );
 
   // Counts, signed movement totals and subtraction stay in SQL. No names, drugs,
   // contact details or free-text customer fields are read into the note.

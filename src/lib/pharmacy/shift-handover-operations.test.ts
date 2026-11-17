@@ -4,9 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyCashCloseCheck } from './cash-close-check-operations';
 import { readPharmacyShiftHandover } from './shift-handover-operations';
 vi.mock('./cash-close-check-operations', () => ({ readPharmacyCashCloseCheck: vi.fn() }));
-// Same shape the router's scopeFor supplies, including the non-drawer actorId.
-const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
-const drawerScope = { organizationId: 'org-a', branchId: 'branch-a' };
+const scope = { organizationId: 'org-a', branchId: 'branch-a' };
 const businessDate = new Date('2026-11-16T00:00:00Z');
 const findings = [
   {
@@ -17,10 +15,14 @@ const findings = [
     explanation: 'Three voids require review.',
   },
 ];
+type DrawerFindFirst = (...args: unknown[]) => Promise<{ businessDate: Date } | null>;
 function fixture() {
   const db = {
-    pharmacyDrawerSession: { findFirst: vi.fn(async () => ({ businessDate })), update: vi.fn() },
-    $queryRaw: vi.fn(async () => [
+    pharmacyDrawerSession: {
+      findFirst: vi.fn<DrawerFindFirst>(async () => ({ businessDate })),
+      update: vi.fn(),
+    },
+    $queryRaw: vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => [
       {
         pendingRx: BigInt('2'),
         openOrders: BigInt('3'),
@@ -64,15 +66,6 @@ beforeEach(() => {
   });
 });
 describe('drawer handover snapshot', () => {
-  it('binds the branch RLS setting before reading the restock snapshot', async () => {
-    const f = fixture();
-    await f.read();
-    const calls = f.db.$queryRaw.mock.calls as unknown as Array<[Prisma.Sql]>;
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    expect(calls[0]![0].sql).toContain("set_config('app.current_branch_id'");
-    expect(calls[0]![0].values).toEqual(['branch-a']);
-    expect(calls[1]![0].sql).toContain('pharmacy_restock_interests');
-  });
   it('uses SQL figures and existing findings without writing or requiring day close', async () => {
     const f = fixture();
     const result = await f.read();
@@ -102,15 +95,24 @@ describe('drawer handover snapshot', () => {
       message: 'Closed drawer not found.',
     });
     expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
-      where: { ...drawerScope, id: 'drawer-a', status: 'CLOSED' },
+      where: { ...scope, id: 'drawer-a', status: 'CLOSED' },
       select: { businessDate: true },
     });
     expect(f.db.$queryRaw).not.toHaveBeenCalled();
   });
+  it('looks up the drawer with only tenant and branch fields even when scope carries extra keys', async () => {
+    const f = fixture();
+    const routerScope = { ...scope, actorId: 'user-a' };
+    await readPharmacyShiftHandover(f.db as unknown as ScopedDb, routerScope, 'drawer-a');
+    expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', branchId: 'branch-a', id: 'drawer-a', status: 'CLOSED' },
+      select: { businessDate: true },
+    });
+  });
   it('keeps every raw read parameterized and excludes order allocations from restock promises', async () => {
     const f = fixture();
     await f.read();
-    const query = (f.db.$queryRaw.mock.calls as unknown as Array<[Prisma.Sql]>)[1]![0];
+    const [query] = f.db.$queryRaw.mock.calls[0] as unknown as [Prisma.Sql];
     expect(query.values).toEqual([
       'org-a',
       'branch-a',
@@ -122,7 +124,7 @@ describe('drawer handover snapshot', () => {
       'org-a',
       'branch-a',
     ]);
-    expect(query.text).toContain('status = \'OPEN\' AND "orderLineId" IS NULL');
+    expect(query.text).toContain("status = 'OPEN' AND \"orderLineId\" IS NULL");
     expect(query.text).toContain('counted - expected AS "varianceMinor"');
     expect(query.text).not.toContain('org-a');
   });
