@@ -20,16 +20,26 @@ const sql = readFileSync(
         id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, "presentationId" TEXT NOT NULL,
         "parentPackLevelId" TEXT, level TEXT NOT NULL, "unitsPerParent" INTEGER NOT NULL,
         "effectiveTo" TIMESTAMP(3))`);
+      // Mirror production: forced tenant RLS that only platform-admin scope can see past.
+      await c.query(`ALTER TABLE pharmacy_pack_levels ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE pharmacy_pack_levels FORCE ROW LEVEL SECURITY;
+        CREATE POLICY tenant_isolation ON pharmacy_pack_levels
+          USING (current_setting('app.is_platform_admin', true) = 'true'
+            OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+          WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
+            OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))`);
       await run(c);
     } finally {
       await c.end();
     }
   }
+  const admin = `SELECT set_config('app.is_platform_admin', 'true', false)`;
   const row = (id: string, org = 'o1', units = 10, to: string | null = null) =>
     `INSERT INTO pharmacy_pack_levels VALUES ('${id}','${org}','p1',NULL,'STRIP',${units},${to ? `'${to}'` : 'NULL'})`;
 
   it('rejects duplicate open null-parent packs, allows other tenants, units and retired rows', async () => {
     await withSchema(async (c) => {
+      await c.query(admin);
       await c.query(sql);
       await c.query(sql); // rerun-safe
       await c.query(row('a'));
@@ -42,9 +52,12 @@ const sql = readFileSync(
 
   it('never alters existing duplicates and skips the index instead', async () => {
     await withSchema(async (c) => {
+      await c.query(admin);
       await c.query(row('a'));
       await c.query(row('b'));
+      await c.query(`RESET app.is_platform_admin`); // migration must set its own scope
       await c.query(sql);
+      await c.query(admin);
       const rows = await c.query('SELECT id FROM pharmacy_pack_levels WHERE "effectiveTo" IS NULL');
       expect(rows.rowCount).toBe(2);
       const idx = await c.query(

@@ -1,5 +1,9 @@
 BEGIN;
 
+-- pharmacy_pack_levels has forced row-level security: without platform-admin
+-- scope the duplicate check would see no rows and the index build could fail.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 -- Non-destructive duplicate-pack guard. Existing rows are never closed,
 -- re-parented or deleted: that could change stock conversions or referenced
 -- history. The unique index is built only when the open packs contain no

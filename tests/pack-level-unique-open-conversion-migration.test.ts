@@ -11,6 +11,7 @@ describe('pack level open-conversion uniqueness migration (static)', () => {
     expect(sql.trimStart().startsWith('BEGIN;')).toBe(true);
     expect(sql.trimEnd().endsWith('COMMIT;')).toBe(true);
     expect(sql).not.toMatch(/\b(UPDATE|DELETE)\b\s+(FROM\s+)?"?pharmacy_pack_levels/i);
+    expect(sql).toContain("set_config('app.is_platform_admin', 'true', true)");
     expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS');
     expect(sql).toContain(
       '("organizationId", "presentationId", COALESCE("parentPackLevelId", \'\'), "level", "unitsPerParent")'
