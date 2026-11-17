@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { MigrationStagingForm } from './migration-staging-form';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -144,6 +145,7 @@ export async function StagedMedicineCatalogue({
           counts.
         </p>
       </SectionCard>
+      {branchId && <MigrationStagingForm key={branchId} branchId={branchId} route={route} />}
       <SectionCard title="Source and branch" titleLevel={2}>
         <form action={route} className="flex flex-wrap items-end gap-3">
           <label className="grid gap-2 text-sm">
@@ -278,6 +280,7 @@ export async function StagedMedicineCatalogue({
                     'Source purprice',
                     'Source UnitPrice',
                     'Source PackUnits',
+                    'Staged quantity',
                     'Review',
                   ].map((label) => (
                     <th className="px-3 py-3 text-left" key={label} scope="col">
@@ -308,6 +311,9 @@ export async function StagedMedicineCatalogue({
                         </td>
                       )
                     )}
+                    <td className="px-3 py-3 text-right font-mono tabular-nums">
+                      {row.quantityReview.label ?? 'Not supplied'}
+                    </td>
                     <td className="px-3 py-3">
                       <StatusPill status="pending" label={row.status} />
                     </td>
@@ -352,7 +358,9 @@ export async function StagedMedicineCatalogue({
               'Lineage check': detail.lineage,
               'Normalized name preview': detail.normalizedNamePreview,
               'Natural key preview — never applied': detail.naturalKeyPreview,
-              'Staged canonical quantity — not stock': detail.canonicalQuantity,
+              'Quantity column counts': detail.quantityReview.choiceLabel,
+              'Staged quantity — not stock': detail.quantityReview.label,
+              'Stored staged quantity — not stock': detail.canonicalQuantity,
             }).map(([key, value]) => (
               <div key={key} className="min-w-0">
                 <dt className="text-text-muted">{key}</dt>
