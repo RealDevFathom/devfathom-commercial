@@ -36,7 +36,17 @@ const storedSchema = z
         saleId: id,
         deviceId: id,
         businessDate: z.string().datetime({ offset: false }),
-        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+        type: z.enum([
+          'CASH',
+          'CARD',
+          'BANK_TRANSFER',
+          'WALLET',
+          'CREDIT',
+          'KHATA',
+          'RAAST',
+          'JAZZCASH',
+          'EASYPAISA',
+        ]),
         amountMinor: minor.positive(),
         cashReceivedMinor: minor.optional(),
         idempotencyKey: z.string().trim().min(1).max(160),
@@ -89,13 +99,25 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const date = new Date(input.businessDate);
   if (isManualTender(input.type)) {
     if (input.approvalCode !== undefined) throw new Error(TENDER_STORAGE_MESSAGE);
-    manualTenderCaptureSchema.parse({ type: input.type, providerRef: input.providerRef,
-      payerName: input.payerName, referenceSkipped: input.referenceSkipped });
+    manualTenderCaptureSchema.parse({
+      type: input.type,
+      providerRef: input.providerRef,
+      payerName: input.payerName,
+      referenceSkipped: input.referenceSkipped,
+    });
   } else if (input.type === 'CARD' && input.approvalCode !== undefined) {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined)
       throw new Error(TENDER_STORAGE_MESSAGE);
-    manualCardCaptureSchema.parse({ providerRef: input.providerRef, approvalCode: input.approvalCode });
-  } else if (input.approvalCode !== undefined || input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
+    manualCardCaptureSchema.parse({
+      providerRef: input.providerRef,
+      approvalCode: input.approvalCode,
+    });
+  } else if (
+    input.approvalCode !== undefined ||
+    input.providerRef !== undefined ||
+    input.payerName !== undefined ||
+    input.referenceSkipped !== undefined
+  ) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   if (

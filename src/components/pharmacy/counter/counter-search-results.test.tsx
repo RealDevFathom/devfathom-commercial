@@ -566,7 +566,12 @@ describe('DEV-878 stock alternatives in search results', () => {
     const unavailable = {
       ...row,
       onHandUnits: 0,
-      stockAlternatives: { ingredientRecorded: true, exact: [alternative], other: [other] },
+      stockAlternatives: {
+        ingredientRecorded: true,
+        exact: [alternative],
+        other: [other],
+        truncated: false,
+      },
     };
     render(<CounterSearchResults {...callbacks} rows={[unavailable]} />);
     const exact = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
@@ -593,7 +598,12 @@ describe('DEV-878 stock alternatives in search results', () => {
           {
             ...row,
             onHandUnits: 0,
-            stockAlternatives: { ingredientRecorded: false, exact: [], other: [] },
+            stockAlternatives: {
+              ingredientRecorded: false,
+              exact: [],
+              other: [],
+              truncated: false,
+            },
           },
         ]}
       />
@@ -603,6 +613,20 @@ describe('DEV-878 stock alternatives in search results', () => {
       screen.queryByRole('list', { name: 'Same ingredient, strength and form' })
     ).not.toBeInTheDocument();
   });
+  it('says when more same-ingredient brands may be in stock than were checked', () => {
+    const rows = (truncated: boolean) => [
+      {
+        ...row,
+        onHandUnits: 0,
+        stockAlternatives: { ingredientRecorded: true, exact: [alternative], other: [], truncated },
+      },
+    ];
+    const view = render(<CounterSearchResults {...props()} rows={rows(true)} />);
+    expect(screen.getByText(/More brands with this ingredient may be in stock/)).toBeVisible();
+    view.rerender(<CounterSearchResults {...props()} rows={rows(false)} />);
+    expect(screen.queryByText(/More brands with this ingredient/)).not.toBeInTheDocument();
+  });
+
   it('explains when no exact brand is available', () => {
     render(
       <CounterSearchResults
@@ -611,7 +635,7 @@ describe('DEV-878 stock alternatives in search results', () => {
           {
             ...row,
             onHandUnits: 0,
-            stockAlternatives: { ingredientRecorded: true, exact: [], other: [] },
+            stockAlternatives: { ingredientRecorded: true, exact: [], other: [], truncated: false },
           },
         ]}
       />
@@ -628,7 +652,12 @@ describe('DEV-878 stock alternatives in search results', () => {
           {
             ...row,
             onHandUnits: 0,
-            stockAlternatives: { ingredientRecorded: true, exact: [alternative], other: [] },
+            stockAlternatives: {
+              ingredientRecorded: true,
+              exact: [alternative],
+              other: [],
+              truncated: false,
+            },
           },
         ]}
       />

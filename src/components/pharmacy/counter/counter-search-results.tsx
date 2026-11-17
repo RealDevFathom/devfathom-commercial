@@ -300,6 +300,12 @@ export function CounterSearchResults({
                           branch.
                         </p>
                       )}
+                      {row.stockAlternatives.truncated ? (
+                        <p className="text-xs text-text-muted">
+                          More brands with this ingredient may be in stock. Search by the ingredient
+                          name to see them all.
+                        </p>
+                      ) : null}
                       {row.stockAlternatives.other.length ? (
                         <>
                           <h3 className="text-sm font-semibold text-text-strong">

@@ -5200,7 +5200,12 @@ describe('DEV-878 search alternative uses the normal counter line path', () => {
         displayName: 'Requested brand',
         onHandUnits: 0,
         saleUnits: [],
-        stockAlternatives: { ingredientRecorded: true, exact: [candidate], other: [] },
+        stockAlternatives: {
+          ingredientRecorded: true,
+          exact: [candidate],
+          other: [],
+          truncated: false,
+        },
       });
       mocks.queries.counterSearch = query({ rows: [unavailable], truncated: false });
       if (kind === 'server-refusal')

@@ -206,14 +206,17 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByRole('status')).not.toHaveTextContent('Out of stock');
   });
 
-  it.each([false, true])('explains exhausted stock without a pack warning (inline: %s)', (inline) => {
-    renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null, inline });
-    expect(screen.getByRole('status')).toHaveTextContent('Out of stock');
-    expect(screen.getByRole('status')).toHaveTextContent('Capture as unfulfilled demand');
-    expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
-    expect(screen.queryAllByRole('radio')).toHaveLength(0);
-    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
-  });
+  it.each([false, true])(
+    'explains exhausted stock without a pack warning (inline: %s)',
+    (inline) => {
+      renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null, inline });
+      expect(screen.getByRole('status')).toHaveTextContent('Out of stock');
+      expect(screen.getByRole('status')).toHaveTextContent('Capture as unfulfilled demand');
+      expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
+      expect(screen.queryAllByRole('radio')).toHaveLength(0);
+      expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    }
+  );
 
   it('wraps the inline price preview instead of using fixed columns that overlap the Add button', () => {
     renderToggle({ inline: true });

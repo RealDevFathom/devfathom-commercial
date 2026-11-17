@@ -109,6 +109,8 @@ export type CounterSearchRow = CounterCatalogRow & {
     ingredientRecorded: boolean;
     exact: CounterCatalogRow[];
     other: CounterCatalogRow[];
+    /** More same-ingredient brands may be in stock than were checked. */
+    truncated: boolean;
   };
 };
 
@@ -130,8 +132,8 @@ type BalanceRow = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
-/** DEV-878: bound on same-ingredient candidates hydrated for one search. */
-const MAX_ALTERNATIVE_CANDIDATES = 50;
+/** DEV-878: bound on same-ingredient candidates checked per distinct ingredient set. */
+const MAX_ALTERNATIVE_CANDIDATES = 20;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -298,39 +300,54 @@ export async function searchCounterCatalog(
     return ids.length ? [ids] : [];
   });
   // Query only this tenant's ingredient graph. No brand dictionary or historical
-  // price is needed, and equal or more expensive brands remain eligible.
-  const candidates = ingredientSets.length
-    ? await db.medicine.findMany({
-        where: {
-          organizationId: scope.organizationId,
-          saleable: true,
-          OR: ingredientSets.map((ids) => ({
+  // price is needed, and equal or more expensive brands remain eligible. Each
+  // distinct ingredient set has its own bound, so one common ingredient cannot
+  // crowd out the suggestions for another unavailable match.
+  const distinctSets = [
+    ...new Map(ingredientSets.map((ids) => [JSON.stringify([...ids].sort()), ids])),
+  ];
+  const candidatesBySet = new Map(
+    await Promise.all(
+      distinctSets.map(async ([key, ids]) => {
+        const found = await db.medicine.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            saleable: true,
             strengths: { every: { ingredientId: { in: ids } } },
             AND: ids.map((ingredientId) => ({ strengths: { some: { ingredientId } } })),
-          })),
-          // Only medicines that can have sellable stock at this branch, so the cap
-          // below bounds the work without crowding out in-stock brands. The row
-          // kernel still applies the full sellability rules to each lot.
-          batches: {
-            some: {
-              state: 'ACTIVE',
-              expiresAt: { gt: at },
-              lots: {
-                some: {
-                  branchId: scope.branchId,
-                  receivedAt: { not: null, lte: at },
-                  balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+            // Only medicines that can have sellable stock at this branch, so the
+            // bound is spent on in-stock brands. The row kernel still applies the
+            // full sellability rules to each lot.
+            batches: {
+              some: {
+                state: 'ACTIVE',
+                expiresAt: { gt: at },
+                lots: {
+                  some: {
+                    branchId: scope.branchId,
+                    receivedAt: { not: null, lte: at },
+                    balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+                  },
                 },
               },
             },
           },
-        },
-        select: { id: true },
-        orderBy: { id: 'asc' },
-        take: MAX_ALTERNATIVE_CANDIDATES,
+          select: { id: true },
+          orderBy: { id: 'asc' },
+          // One extra row tells us the bound was reached.
+          take: MAX_ALTERNATIVE_CANDIDATES + 1,
+        });
+        return [
+          key,
+          {
+            ids: found.slice(0, MAX_ALTERNATIVE_CANDIDATES).map((medicine) => medicine.id),
+            truncated: found.length > MAX_ALTERNATIVE_CANDIDATES,
+          },
+        ] as const;
       })
-    : [];
-  const candidateIds = candidates.map((medicine) => medicine.id);
+    )
+  );
+  const candidateIds = [...new Set([...candidatesBySet.values()].flatMap((entry) => entry.ids))];
   const alternatives = candidateIds.length
     ? await hydrateCounterRows(
         db,
@@ -374,6 +391,7 @@ export async function searchCounterCatalog(
       ingredientRecorded,
       exact: exact.sort(compareStockAlternatives),
       other: other.sort(compareStockAlternatives),
+      truncated: candidatesBySet.get(ingredientSetKey(source.strengths))?.truncated ?? false,
     };
   }
   return { rows, truncated: matches.size > medicineIds.length };

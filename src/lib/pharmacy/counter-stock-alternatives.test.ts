@@ -60,8 +60,10 @@ function fixture(
       batch?: { medicineId: { in: string[] } };
       inventoryLotId?: { in: string[] };
       OR?: unknown[];
+      strengths?: { every: { ingredientId: { in: string[] } } };
     };
     include?: unknown;
+    take?: number;
   };
   const db = {
     medicineBarcode: { findFirst: vi.fn(async () => null) },
@@ -69,7 +71,7 @@ function fixture(
     medicineStrengthComponent: { findMany: vi.fn(async () => []) },
     presentation: { findMany: vi.fn(async () => []) },
     medicine: {
-      findMany: vi.fn(async ({ where, include }: Args) => {
+      findMany: vi.fn(async ({ where, include, take }: Args) => {
         const scoped = medicines.filter(
           (entry) => entry.organizationId === where.organizationId && entry.saleable
         );
@@ -78,8 +80,21 @@ function fixture(
         // be checked against the hydrated stored graph, never a string search match.
         return include
           ? scoped
-          : where.OR && 'strengths' in (where.OR[0] as object)
-            ? scoped.map(({ id }) => ({ id }))
+          : where.strengths
+            ? scoped
+                .filter(
+                  (entry) =>
+                    entry.strengths.every((component) =>
+                      where.strengths!.every.ingredientId.in.includes(component.ingredientId)
+                    ) &&
+                    // The branch-stock prefilter: a lot of this medicine exists here.
+                    lots.some(
+                      (stock) =>
+                        stock.batch.medicineId === entry.id && stock.branchId === scope.branchId
+                    )
+                )
+                .map(({ id }) => ({ id }))
+                .slice(0, take)
             : scoped.filter((entry) => entry.id === 'requested').map(({ id }) => ({ id }));
       }),
     },
@@ -166,12 +181,8 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
         where: {
           organizationId: 'org-a',
           saleable: true,
-          OR: [
-            {
-              strengths: { every: { ingredientId: { in: ['salt-a'] } } },
-              AND: [{ strengths: { some: { ingredientId: 'salt-a' } } }],
-            },
-          ],
+          strengths: { every: { ingredientId: { in: ['salt-a'] } } },
+          AND: [{ strengths: { some: { ingredientId: 'salt-a' } } }],
           batches: {
             some: {
               state: 'ACTIVE',
@@ -188,7 +199,7 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
         },
         select: { id: true },
         orderBy: { id: 'asc' },
-        take: 50,
+        take: 21,
       })
     );
   });
@@ -257,6 +268,34 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
     const result = (await f.search()).rows[0]!.stockAlternatives!;
     expect(result.exact).toEqual([]);
     expect(result.other.map((entry) => entry.medicineId)).toEqual(['alternative']);
+  });
+
+  it('bounds each ingredient set separately so one common salt cannot hide another', async () => {
+    const common = Array.from(
+      { length: 25 },
+      (_, index) => `a-common-${String(index).padStart(2, '0')}`
+    );
+    const f = fixture(
+      [
+        medicine('requested'),
+        medicine('requested-b', [component('salt-b')]),
+        ...common.map((id) => medicine(id)),
+        medicine('z-salt-b-brand', [component('salt-b')]),
+      ],
+      [...common.map((id) => lot(`lot-${id}`, id)), lot('lot-salt-b', 'z-salt-b-brand')]
+    );
+    f.db.medicineAlias.findMany.mockResolvedValueOnce([
+      { medicineId: 'requested' },
+      { medicineId: 'requested-b' },
+    ] as never);
+    const rows = (await f.search()).rows;
+    const a = rows.find((row) => row.medicineId === 'requested')!.stockAlternatives!;
+    const b = rows.find((row) => row.medicineId === 'requested-b')!.stockAlternatives!;
+    // The salt-b brand sorts after every salt-a brand, yet still reaches its own match.
+    expect(b.exact.map((entry) => entry.medicineId)).toEqual(['z-salt-b-brand']);
+    expect(b.truncated).toBe(false);
+    expect(a.exact).toHaveLength(20);
+    expect(a.truncated).toBe(true);
   });
 
   it('separates a different route even when the form matches', async () => {
@@ -344,7 +383,7 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
     if (kind === 'damaged') f.balances[0]!.disposition = 'DAMAGED';
     if (kind === 'empty') f.balances[0]!.onHandUnits = 0;
     const result = (await f.search()).rows[0]!.stockAlternatives!;
-    expect(result).toEqual({ ingredientRecorded: true, exact: [], other: [] });
+    expect(result).toEqual({ ingredientRecorded: true, exact: [], other: [], truncated: false });
     for (const call of f.db.pharmacyInventoryLot.findMany.mock.calls)
       expect(call[0].where).toMatchObject(scope);
     for (const call of f.db.pharmacyStockBalance.findMany.mock.calls)
@@ -357,6 +396,7 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
       ingredientRecorded: false,
       exact: [],
       other: [],
+      truncated: false,
     });
     expect(f.db.pharmacyInventoryLot.findMany).toHaveBeenCalledTimes(1);
   });
