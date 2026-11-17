@@ -595,6 +595,11 @@ function ScopedPharmacyCounterConsole({
   } | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  useEffect(() => {
+    if (!notice || (notice.tone !== 'success' && notice.tone !== 'info')) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [pending, setPending] = useState<string | null>(null);
   // DEV-508: Void and Shift+F4 open a reason-and-confirm dialog; nothing is voided until confirmed.
   const [voidOpen, setVoidOpen] = useState(false);
@@ -3198,7 +3203,10 @@ function ScopedPharmacyCounterConsole({
   }
 
   const scrollableCounter = (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:pb-4" data-counter-console="">
+    <div
+      className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:flex xl:flex-col xl:overflow-hidden xl:pb-4"
+      data-counter-console=""
+    >
       <nav
         aria-label="Counter shortcuts"
         className="sr-only focus-within:not-sr-only focus-within:mb-3"
@@ -3222,7 +3230,7 @@ function ScopedPharmacyCounterConsole({
           Skip to bill total
         </a>
       </nav>
-      <header className="mb-3 space-y-3">
+      <header className="mb-3 shrink-0 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
           <CounterSignOut
@@ -3269,7 +3277,7 @@ function ScopedPharmacyCounterConsole({
             >
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
-                  {branch.name} · {branch.code}
+                  {branch.name}
                 </option>
               ))}
             </select>
@@ -3388,7 +3396,7 @@ function ScopedPharmacyCounterConsole({
           role="status"
           aria-live="polite"
           data-counter-offline=""
-          className="mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+          className="mb-3 flex shrink-0 flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
         >
           <StatusPill status="offline" tone="warning" label="Offline" />
           <div className="min-w-0 flex-1 space-y-1">
@@ -3420,8 +3428,8 @@ function ScopedPharmacyCounterConsole({
           onCheckAgain={() => void refetchSaleReadiness()}
         />
       ) : null}
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="min-w-0 space-y-3">
+      <div className="grid items-start gap-3 xl:min-h-0 xl:flex-1 xl:grid-cols-2 xl:items-stretch">
+        <div className="min-w-0 space-y-3 xl:overflow-y-auto">
           <SectionCard
             id="counter-scan-search"
             tabIndex={-1}
@@ -3434,7 +3442,7 @@ function ScopedPharmacyCounterConsole({
                 <div
                   role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
                   aria-live="polite"
-                  className={`flex items-center gap-3 rounded-lg border p-3 ${
+                  className={`flex items-center gap-3 rounded-lg border p-3 ${notice.tone === 'success' || notice.tone === 'info' ? 'fixed inset-x-4 bottom-24 z-50 mx-auto max-w-lg bg-surface-card shadow-sm xl:bottom-6' : ''} ${
                     notice.tone === 'danger'
                       ? 'border-destructive/30 bg-destructive/10'
                       : notice.tone === 'warning'
@@ -3487,7 +3495,7 @@ function ScopedPharmacyCounterConsole({
                   context={{
                     branch: (() => {
                       const branch = branches.find((entry) => entry.id === branchId);
-                      return branch ? `${branch.name} · ${branch.code}` : null;
+                      return branch?.name ?? null;
                     })(),
                     counter: counterLabel(deviceId),
                     businessDay: new Date(
@@ -3830,23 +3838,6 @@ function ScopedPharmacyCounterConsole({
                 </div>
               </section>
             ) : null}
-            <section aria-label="Cart">
-              <CounterCartPanel
-                cart={cart}
-                alerts={alerts}
-                state={
-                  !saleId
-                    ? 'idle'
-                    : cartQuery.isLoading
-                      ? 'loading'
-                      : cartQuery.isError
-                        ? 'error'
-                        : 'ready'
-                }
-                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-                onRetry={() => void refreshTenderBill()}
-              />
-            </section>
           </SectionCard>
           {substituteInput ? (
             <SectionCard
@@ -3902,10 +3893,35 @@ function ScopedPharmacyCounterConsole({
           id="counter-bill-total"
           tabIndex={-1}
           aria-label="Bill total"
-          className="min-w-0 xl:sticky xl:top-0 [&_button]:rounded-[var(--radius-sm)]"
+          className="min-w-0 space-y-3 xl:sticky xl:top-0 xl:flex xl:min-h-0 xl:flex-col [&_button]:rounded-[var(--radius-sm)]"
         >
+          <section
+            aria-label="Cart"
+            tabIndex={0}
+            className="rounded-xl border border-border-subtle bg-surface-card outline-none focus-visible:ring-3 focus-visible:ring-ring/50 xl:min-h-24 xl:flex-1 xl:overflow-y-auto"
+          >
+            <h2 className="sticky top-0 border-b border-border-subtle bg-surface-card px-4 py-3 text-sm font-semibold text-text-strong">
+              Cart
+            </h2>
+            <CounterCartPanel
+              cart={cart}
+              alerts={alerts}
+              state={
+                !saleId
+                  ? 'idle'
+                  : cartQuery.isLoading
+                    ? 'loading'
+                    : cartQuery.isError
+                      ? 'error'
+                      : 'ready'
+              }
+              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+              onRetry={() => void refreshTenderBill()}
+            />
+          </section>
           <SectionCard
-            className="rounded-xl p-4"
+            className="shrink-0 rounded-xl p-3"
+            compact
             eyebrow="Bill total"
             actions={
               <span className="text-xs text-text-muted">
@@ -3913,7 +3929,7 @@ function ScopedPharmacyCounterConsole({
               </span>
             }
           >
-            <dl className="space-y-2 text-sm">
+            <dl className="grid grid-cols-3 gap-3 text-xs">
               {(
                 [
                   ['Gross', cart?.totals.grossMinor],
@@ -3921,7 +3937,7 @@ function ScopedPharmacyCounterConsole({
                   ['Tendered', cart?.totals.tenderedMinor],
                 ] as const
               ).map(([label, value]) => (
-                <div key={label} className="flex justify-between gap-3">
+                <div key={label} className="space-y-1">
                   <dt className="text-text-muted">{label}</dt>
                   <dd className="font-mono tabular-nums">
                     {currentBill && value !== undefined ? formatMinor(value) : '—'}
@@ -3929,61 +3945,65 @@ function ScopedPharmacyCounterConsole({
                 </div>
               ))}
             </dl>
-            <div className="my-4 border-y border-border-subtle py-4">
-              <p className="font-mono text-xs text-text-muted">
-                {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
-              </p>
-              <p className="mt-1 font-mono text-4xl font-semibold tracking-tight text-text-strong tabular-nums">
-                {billState === 'settled' && currentBill
-                  ? formatMinor(cart.totals.tenderedMinor)
-                  : balanceMinor === null
-                    ? '—'
-                    : formatMinor(balanceMinor)}
-              </p>
-            </div>
-            <div className="mb-2 empty:hidden">
-              <CounterChangeDue minor={confirmedChangeMinor} />
-            </div>
-            {billState === 'settled' ? (
-              <div className="space-y-2">
-                <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
-                  Start next bill
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 w-full"
-                  onClick={() => {
-                    if (settledReceipt) {
-                      if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
-                      setLastReceipt({ branchId, receipt: settledReceipt });
-                    }
-                    setReceiptOpen(true);
-                  }}
-                >
-                  Preview receipt
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 w-full"
-                  onClick={() => void printReceipt()}
-                >
-                  Print · {formatBinding(keymap.bindings.printReceipt)}
-                </Button>
+            <div className="my-3 grid grid-cols-2 items-center gap-3 border-y border-border-subtle py-3">
+              <div>
+                <p className="font-mono text-xs text-text-muted">
+                  {billState === 'settled'
+                    ? `Paid · receipt ${cart?.receiptNumber}`
+                    : 'Balance due'}
+                </p>
+                <p className="mt-1 font-mono text-3xl font-semibold tracking-tight text-text-strong tabular-nums">
+                  {billState === 'settled' && currentBill
+                    ? formatMinor(cart.totals.tenderedMinor)
+                    : balanceMinor === null
+                      ? '—'
+                      : formatMinor(balanceMinor)}
+                </p>
+                <div className="empty:hidden">
+                  <CounterChangeDue minor={confirmedChangeMinor} />
+                </div>
               </div>
-            ) : (
-              <Button
-                className="h-14 w-full justify-between"
-                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
-                aria-describedby="counter-pay-reason"
-                onClick={openPayment}
-              >
-                <span>Pay</span>
-                <span className="sr-only">·</span>
-                <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.openTender)}
-                </kbd>
-              </Button>
-            )}
+              {billState === 'settled' ? (
+                <div className="space-y-2">
+                  <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
+                    Start next bill
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full"
+                    onClick={() => {
+                      if (settledReceipt) {
+                        if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
+                        setLastReceipt({ branchId, receipt: settledReceipt });
+                      }
+                      setReceiptOpen(true);
+                    }}
+                  >
+                    Preview receipt
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full"
+                    onClick={() => void printReceipt()}
+                  >
+                    Print · {formatBinding(keymap.bindings.printReceipt)}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  className="h-14 w-full justify-between"
+                  disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+                  aria-describedby="counter-pay-reason"
+                  onClick={openPayment}
+                >
+                  <span>Pay</span>
+                  <span className="sr-only">·</span>
+                  <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
+                    {formatBinding(keymap.bindings.openTender)}
+                  </kbd>
+                </Button>
+              )}
+            </div>
             {!canSettlePayments ? (
               <div
                 role="status"
@@ -4212,6 +4232,10 @@ function ScopedPharmacyCounterConsole({
             // FORBIDDEN read means this actor cannot dispense, so the controlled
             // authorization panel is not offered (the server refuses it anyway).
             // Without Pharmacy Safety the read is not made at all, with the same outcome.
+            !(
+              activeRow?.restriction.controlled ||
+              (currentBill && cart.lines.some((line) => line.controlled))
+            ) ||
             !safetyLicensed ||
             (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
               'FORBIDDEN'

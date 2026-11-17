@@ -63,14 +63,17 @@ export function CounterKeymapLegend({
               </option>
             ))}
         </select>
-        <p className="text-sm text-text-muted">{keymap.preset.description}</p>
+        <p className="text-sm text-text-muted">
+          {keymap.preset.confirmed
+            ? keymap.preset.description
+            : 'Preview shortcuts for cashiers familiar with Abuzar, Candela or MARS.'}
+        </p>
         {!keymap.preset.confirmed ? (
           <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-warning">
-            <StatusPill status="unconfirmed" tone="warning" label="Placeholder" />
+            <StatusPill status="unconfirmed" tone="warning" label="Unconfirmed" />
             <span>
-              These chords are a proposal, to confirm in Phase 0
-              {keymap.preset.phaseZeroDecision ? ` (${keymap.preset.phaseZeroDecision})` : ''}. They
-              may change once the incumbent scorecard is complete.
+              These shortcuts are available for administrator preview. Confirm them with your team
+              before using them at the counter.
             </span>
           </p>
         ) : null}
