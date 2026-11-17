@@ -20,8 +20,6 @@ export type CounterSearchResultsProps = {
   error?: string | null;
   disabled?: boolean;
   disabledReason?: string | null;
-  /** A visible explanation owned by the parent; standalone uses its own text. */
-  disabledReasonId?: string;
   onSelect: (row: CounterSearchRow) => void;
   onCaptureDemand: () => void;
   onRetry: () => void;
@@ -65,22 +63,19 @@ export function CounterSearchResults({
   error,
   disabled = false,
   disabledReason,
-  disabledReasonId,
   onSelect,
   onCaptureDemand,
   onRetry,
 }: CounterSearchResultsProps) {
-  const localReasonId = useId();
-  const reasonId = disabledReasonId ?? localReasonId;
+  const reasonId = useId();
   const reason = disabled
     ? (disabledReason ?? 'Wait for the current counter action to finish.')
     : null;
-  const reasonText =
-    reason && !disabledReasonId ? (
-      <p id={reasonId} className="text-sm text-text-muted">
-        {reason}
-      </p>
-    ) : null;
+  const reasonText = reason ? (
+    <p id={reasonId} className="text-sm text-text-muted">
+      {reason}
+    </p>
+  ) : null;
   if (state === 'idle') {
     return (
       <p className="text-sm text-text-muted">
@@ -215,11 +210,6 @@ export function CounterSearchResults({
                   className="min-w-0 break-words text-sm font-semibold text-text-strong"
                 >
                   {counterMedicineDisplayName(row)}
-                  {row.strength ? (
-                    <span className="ms-1 font-normal text-text-body">
-                      <bdi dir="auto">{row.strength}</bdi>
-                    </span>
-                  ) : null}
                   {counterMedicineGenericName(row) ? (
                     <span dir="auto" className="block text-xs font-normal text-text-muted">
                       {counterMedicineGenericName(row)}
@@ -231,11 +221,22 @@ export function CounterSearchResults({
                   {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                 </span>
                 <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
-                  {row.presentation}
-                  {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                  <span className="block">
+                    <span>Strength:</span>{' '}
+                    <span className="ms-1">
+                      <bdi dir="auto">{row.strength ?? 'Unavailable'}</bdi>
+                    </span>
+                  </span>
+                  <span className="block">
+                    <span>Form:</span> {row.presentation}
+                    {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                  </span>
+                  <span className="block">
+                    <span>Stock:</span>{' '}
+                    {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
+                  </span>
                   {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
                   {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
-                  {` · ${formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}`}
                   {notes.length ? ` · ${notes.join(' · ')}` : ''}
                   {` · ${MATCH_LABEL[row.matchedOn]}`}
                 </span>
