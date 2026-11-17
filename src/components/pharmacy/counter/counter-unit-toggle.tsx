@@ -6,10 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { counterUnitNoun, saleUnitLabel } from '@/lib/pharmacy/counter-pricing';
 import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharmacy/counter-pricing';
 
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
+  dosageForm?: string | null;
+  priceFor?: (option: SaleUnitOption) => number | null;
   /** Safe stock available in the selected branch, supplied by the catalog row. */
   onHandUnits: number;
   selected: SaleUnitKind | null;
@@ -48,6 +51,8 @@ const KIND_LABEL: Record<SaleUnitKind, string> = {
  */
 export function CounterUnitToggle({
   options,
+  dosageForm = null,
+  priceFor,
   onHandUnits,
   selected,
   quantity,
@@ -62,6 +67,9 @@ export function CounterUnitToggle({
   emptyMessage,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
+  const containingPack = [...options]
+    .filter((option) => option.canonicalUnitsPerSaleUnit > 1)
+    .sort((a, b) => a.canonicalUnitsPerSaleUnit - b.canonicalUnitsPerSaleUnit)[0];
   const parsedQuantity = Number(quantity);
   const validQuantity =
     /^\d+$/.test(quantity) && Number.isSafeInteger(parsedQuantity) && parsedQuantity > 0;
@@ -97,6 +105,7 @@ export function CounterUnitToggle({
           {options.map((option) => {
             const active = option.kind === selected;
             const chord = chordFor?.(option.kind) ?? null;
+            const price = priceFor?.(option) ?? null;
             return (
               <button
                 key={`${option.kind}:${option.packLevelId}`}
@@ -113,11 +122,14 @@ export function CounterUnitToggle({
                   if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
                   event.preventDefault();
                   const index = options.findIndex((entry) => entry.kind === option.kind);
-                  const next =
+                  const nextIndex =
                     event.key === 'ArrowRight'
-                      ? options[(index + 1) % options.length]!
-                      : options[(index - 1 + options.length) % options.length]!;
-                  onSelect(next.kind);
+                      ? (index + 1) % options.length
+                      : (index - 1 + options.length) % options.length;
+                  onSelect(options[nextIndex]!.kind);
+                  event.currentTarget.parentElement
+                    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                    [nextIndex]?.focus();
                 }}
                 className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                   active
@@ -126,15 +138,20 @@ export function CounterUnitToggle({
                 }`}
               >
                 <span className="text-sm font-semibold">
-                  {KIND_LABEL[option.kind]}
-                  {option.levelLabel && option.levelLabel !== option.kind ? (
+                  {priceFor ? saleUnitLabel(option, dosageForm) : KIND_LABEL[option.kind]}
+                  {!priceFor && option.levelLabel && option.levelLabel !== option.kind ? (
                     <span className="ml-1 font-normal opacity-80">({option.levelLabel})</span>
                   ) : null}
                 </span>
                 <span
                   className={`font-mono text-xs tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
                 >
-                  {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
+                  {priceFor
+                    ? price === null
+                      ? 'Price unavailable'
+                      : `PKR ${formatMinor(price)}`
+                    : `${option.canonicalUnitsPerSaleUnit} units`}
+                  {chord ? ` · ${chord}` : ''}
                 </span>
               </button>
             );
@@ -208,6 +225,17 @@ export function CounterUnitToggle({
         ) : null}
       </div>
 
+      {options.length === 1 && options[0]?.canonicalUnitsPerSaleUnit === 1 ? (
+        <p className="text-xs text-text-muted">
+          Already sold as one {counterUnitNoun(dosageForm)}; no separate loose option.
+        </p>
+      ) : null}
+      {selected === 'UNIT' && containingPack ? (
+        <p className="text-xs text-text-muted">
+          1 {counterUnitNoun(dosageForm)} = 1/{containingPack.canonicalUnitsPerSaleUnit} of{' '}
+          {containingPack.levelLabel.toLowerCase()}
+        </p>
+      ) : null}
       {preview ? (
         <dl
           id={`${quantityId}-preview`}

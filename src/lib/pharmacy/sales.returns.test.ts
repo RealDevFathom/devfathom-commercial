@@ -189,7 +189,7 @@ describe('counter return boundaries', () => {
           lines: expect.objectContaining({
             include: expect.objectContaining({
               medicine: { select: { productName: true, controlled: true } },
-              packLevel: { select: { level: true } },
+              packLevel: { select: { level: true, parentPackLevelId: true } },
             }),
           }),
         }),
@@ -230,6 +230,44 @@ describe('counter return boundaries', () => {
       'sale'
     );
     expect(history.lines[0]).toMatchObject({ saleUnit: 'PACK', levelLabel: 'STRIP' });
+  });
+  it.each([
+    ['a strip cut from a standalone legacy box', null, 'STRIP'],
+    ['a hierarchy level sold as the middle unit', 'carton', 'BOX'],
+  ])('labels %s by what was sold (DEV-705)', async (_case, parentPackLevelId, levelLabel) => {
+    const sale = {
+      id: 'sale',
+      receiptNumber: 1,
+      receiptDeviceId: 'd',
+      businessDate: new Date('2026-10-01'),
+      lines: [
+        {
+          id: 'line',
+          medicine: { productName: 'Medicine', controlled: false },
+          packLevel: { level: 'BOX', parentPackLevelId },
+          saleUnit: 'STRIP',
+          quantity: 1,
+          unitPriceMinor: 1000,
+          discountMinor: 0,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          returnLines: [],
+          unidentifiedReturnHolds: [],
+          allocations: [],
+        },
+      ],
+      tenders: [],
+      returns: [],
+    };
+    const history = await readReturnHistory(
+      {
+        pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale) },
+        pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      scope,
+      'sale'
+    );
+    expect(history.lines[0]).toMatchObject({ saleUnit: 'STRIP', levelLabel });
   });
 });
 
