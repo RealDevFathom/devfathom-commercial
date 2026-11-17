@@ -72,8 +72,17 @@ function callerFor(
   const register = vi.fn();
   const lock = vi.fn();
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    $queryRaw: lock,
+    // Normalize both Prisma.sql objects and tagged-template calls into the same
+    // lock trace. Every lock remains visible to the existing ordering assertions.
+    $queryRaw: (query: unknown, ...values: unknown[]) => {
+      if (Array.isArray(query)) return lock(query, ...values);
+      const sql = query as { strings: string[]; values: unknown[] };
+      return lock(sql.strings, ...sql.values);
+    },
     pharmacyBranch: {
       findMany: async () => [{ id: 'branch-1' }],
       findFirst: async () => ({ id: 'branch-1' }),
@@ -406,6 +415,19 @@ describe('pharmacySales.addLine controlled actor', () => {
       expect(addSaleLine).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses an authorized controlled line on a closed day before stock or register writes', async () => {
+    const { caller, db, register } = emergencyCallerFor(null);
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'DAY_CLOSED',
+    });
+    expect(verifyOperatorCredential).toHaveBeenCalledOnce();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
 
   it('locks the sale row before the register lock, then dispenses (DEV-825)', async () => {
     const { caller, lock, consent } = emergencyCallerFor(null);

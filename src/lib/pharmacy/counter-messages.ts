@@ -118,7 +118,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // `PharmacySettlementError` can raise, because these are the failures a
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
-    'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+    'This business day is closed. New payments and drawer changes are blocked. The owner or a manager can reopen today for trading on Day close.',
+  // DEV-631: the owner's reopen-for-trading action on Day close.
+  DAY_NOT_CLOSED: 'This business day is not closed, so there is nothing to reopen.',
+  REOPEN_NOT_TODAY: "Only today's business day can be reopened for trading.",
   // DEV-630: the server books money on today in the workspace zone only.
   BUSINESS_DATE_NOT_CURRENT:
     'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
@@ -152,7 +155,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
-  REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  REOPEN_REASON_REQUIRED: 'Reopening a closed day needs a recorded reason.',
   INVALID_RECEIPT_LEASE:
     "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
   LEASE_REQUIRES_SETTLEMENT:
