@@ -13,6 +13,11 @@
 
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  COUNTER_SETUP_GUIDANCE,
+  counterSetupReason,
+  type CounterSetupReason,
+} from './counter-setup';
 
 /** The refusal the server sends when the actor may not sell a prescription-only line. */
 const RX_SALE_DENIED_SERVER_MESSAGE =
@@ -166,6 +171,13 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-622: the server's Rx sale refusal (a default Cashier on a prescription line, at
   // add-line or at payment) names who can finish the bill.
   [RX_SALE_DENIED_SERVER_MESSAGE]: COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
+  // DEV-860: a sale or line refused for a setup gap names what is missing instead of
+  // "Refresh and try again". The drawer keeps its own sentence above.
+  ...Object.fromEntries(
+    (Object.keys(COUNTER_SETUP_GUIDANCE) as CounterSetupReason[])
+      .filter((reason) => reason !== 'DRAWER_NOT_OPEN')
+      .map((reason) => [reason, COUNTER_SETUP_GUIDANCE[reason].message])
+  ),
 };
 
 /**
@@ -202,8 +214,13 @@ const COUNTER_DANGER_REASONS = new Set([
   'IDEMPOTENCY_CONFLICT',
 ]);
 
+/** DEV-860: a declared setup reason (`data.reason`) wins over the refusal's words. */
+function counterReason(error: unknown): string {
+  return counterSetupReason(error) ?? (error instanceof Error ? error.message : '');
+}
+
 export function counterErrorTone(error: unknown): CounterNoticeTone {
-  const reason = error instanceof Error ? error.message : '';
+  const reason = counterReason(error);
   if (COUNTER_INFO_REASONS.has(reason)) return 'info';
   if (COUNTER_DANGER_REASONS.has(reason)) return 'danger';
   return COUNTER_ERROR_MESSAGES[reason] ? 'warning' : 'danger';
@@ -250,10 +267,18 @@ export const COUNTER_GENERIC_ERROR_MESSAGE = 'Request failed.';
  */
 export function counterErrorMessage(error: unknown): string {
   if (!(error instanceof Error) || !error.message) return COUNTER_GENERIC_ERROR_MESSAGE;
-  const mapped = COUNTER_ERROR_MESSAGES[error.message];
+  const mapped = COUNTER_ERROR_MESSAGES[counterReason(error)];
   if (mapped) return mapped;
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
+}
+
+/** Sale admission displays only known copy; unexpected server prose can contain private data. */
+export function counterSaleErrorMessage(error: unknown): string {
+  const reason = counterReason(error);
+  return Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)
+    ? COUNTER_ERROR_MESSAGES[reason]!
+    : COUNTER_UNKNOWN_ERROR_MESSAGE;
 }
 
 function isForbidden(error: unknown): boolean {
