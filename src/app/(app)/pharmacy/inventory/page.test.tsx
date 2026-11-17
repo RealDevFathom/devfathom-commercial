@@ -76,7 +76,7 @@ const lot = {
     batchNumber: 'B-100',
     state: 'ACTIVE',
     expiresAt: new Date('2099-01-01'),
-    medicine: { productName: 'Medicine A', brandName: null },
+    medicine: { productName: 'Medicine A', brandName: null, strengths: [] },
   },
   balances: [available],
 };
