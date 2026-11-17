@@ -2809,11 +2809,8 @@ function ScopedPharmacyCounterConsole({
     );
   }
 
-  return (
-    <div
-      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
-      data-counter-console=""
-    >
+  const scrollableCounter = (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:pb-4" data-counter-console="">
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
@@ -2865,11 +2862,6 @@ function ScopedPharmacyCounterConsole({
                 </option>
               ))}
             </select>
-            {counterBusyReason ? (
-              <p id="counter-branch-reason" className="text-xs text-text-muted">
-                {counterBusyReason}
-              </p>
-            ) : null}
 
             <div className="flex flex-wrap items-center gap-2" aria-label="Bill status">
               <StatusPill
@@ -4023,6 +4015,21 @@ function ScopedPharmacyCounterConsole({
       <p className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
+    </div>
+  );
+
+  return (
+    <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden bg-surface-page">
+      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
+      {counterBusyReason ? (
+        <p
+          id="counter-branch-reason"
+          className="shrink-0 border-b border-border-subtle px-4 py-2 text-xs text-text-muted"
+        >
+          {counterBusyReason}
+        </p>
+      ) : null}
+      {scrollableCounter}
     </div>
   );
 }
