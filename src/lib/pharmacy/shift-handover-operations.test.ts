@@ -62,6 +62,15 @@ beforeEach(() => {
   });
 });
 describe('drawer handover snapshot', () => {
+  it('binds the branch RLS setting before reading the restock snapshot', async () => {
+    const f = fixture();
+    await f.read();
+    const calls = f.db.$queryRaw.mock.calls as unknown as Array<[Prisma.Sql]>;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[0]![0].sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[0]![0].values).toEqual(['branch-a']);
+    expect(calls[1]![0].sql).toContain('pharmacy_restock_interests');
+  });
   it('uses SQL figures and existing findings without writing or requiring day close', async () => {
     const f = fixture();
     const result = await f.read();
@@ -99,7 +108,7 @@ describe('drawer handover snapshot', () => {
   it('keeps every raw read parameterized and excludes order allocations from restock promises', async () => {
     const f = fixture();
     await f.read();
-    const query = (f.db.$queryRaw.mock.calls as unknown as [[Prisma.Sql]])[0][0];
+    const query = (f.db.$queryRaw.mock.calls as unknown as Array<[Prisma.Sql]>)[1]![0];
     expect(query.values).toEqual([
       'org-a',
       'branch-a',

@@ -18,6 +18,12 @@ export async function readPharmacyShiftHandover(
   });
   if (!drawer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Closed drawer not found.' });
 
+  // pharmacy_restock_interests is FORCE RLS keyed on the transaction-local branch
+  // setting; the explicit predicates below do not satisfy the policy on their own.
+  await db.$queryRaw(
+    Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
+  );
+
   // Counts, signed movement totals and subtraction stay in SQL. No names, drugs,
   // contact details or free-text customer fields are read into the note.
   const [row] = await db.$queryRaw<
