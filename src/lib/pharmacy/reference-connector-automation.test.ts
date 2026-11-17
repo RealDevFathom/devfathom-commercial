@@ -197,7 +197,7 @@ describe('manual reference connector automation', () => {
     expect(fixture.proposals).toEqual([]);
   });
 
-  it('applies descriptive fields but leaves identity and controlled status as proposals', async () => {
+  it('holds descriptive, identity and controlled fields as proposals before review', async () => {
     const result = await runManualReferenceConnector(
       fixture.db,
       runInput([
@@ -218,14 +218,17 @@ describe('manual reference connector automation', () => {
       ])
     );
 
-    expect(result).toMatchObject({ rowsApplied: 1, directFieldsApplied: 2, proposalRows: 1 });
+    expect(result).toMatchObject({ rowsApplied: 0, directFieldsApplied: 0, proposalRows: 1 });
     expect(fixture.target).toMatchObject({
       productName: 'Old name',
-      brandName: 'Direct brand',
-      manufacturer: 'Direct maker',
+      brandName: 'Old brand',
+      manufacturer: 'Old maker',
       controlled: false,
     });
+    expect(fixture.raw.medicine.update).not.toHaveBeenCalled();
     expect(fixture.proposals[0]?.payload.values).toMatchObject({
+      brandName: 'Direct brand',
+      manufacturer: 'Direct maker',
       productName: 'Confirmed later',
       drapRegistrationNumber: 'new-registration',
       controlled: 'true',

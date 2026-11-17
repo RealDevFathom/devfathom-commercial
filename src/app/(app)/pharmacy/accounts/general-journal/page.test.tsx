@@ -120,4 +120,21 @@ describe('GeneralJournalPage', () => {
     expect(output).toContain('could not be loaded');
     expect(output).not.toContain('JV-0001');
   });
+
+  it('shows the voucher day on the organization clock', async () => {
+    mocks.resolveTenantActor.mockResolvedValue({
+      ...actor,
+      organization: { id: 'org_1', timezone: 'Asia/Karachi' },
+    });
+    mocks.list.mockResolvedValue({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      vouchers: [{ ...voucher, occurredAt: new Date('2026-11-10T20:00:00.000Z') }],
+      retrievedAt: new Date('2026-11-15T00:00:00.000Z'),
+    });
+    const output = await html({ branch: 'branch_1' });
+    // 20:00 UTC on the 10th is already the 11th, 01:00, in Karachi.
+    expect(output).toContain('2026-11-11');
+    expect(output).not.toContain('2026-11-10');
+    expect(output).toContain('Date (PKT)');
+  });
 });

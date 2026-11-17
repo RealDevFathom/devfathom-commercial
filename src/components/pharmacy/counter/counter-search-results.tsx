@@ -25,6 +25,7 @@ export type CounterSearchResultsProps = {
   onSelect: (row: CounterSearchRow) => void;
   onCaptureDemand: () => void;
   onRetry: () => void;
+  listLabel?: string;
 };
 
 const LOCATION_LABEL: Record<string, string> = {
@@ -69,6 +70,7 @@ export function CounterSearchResults({
   onSelect,
   onCaptureDemand,
   onRetry,
+  listLabel = 'Search results',
 }: CounterSearchResultsProps) {
   const localReasonId = useId();
   const reasonId = disabledReasonId ?? localReasonId;
@@ -154,7 +156,7 @@ export function CounterSearchResults({
       {reasonText}
       <ul
         className="min-w-0 divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-card"
-        aria-label="Search results"
+        aria-label={listLabel}
       >
         {rows.map((row) => {
           const sellable = row.onHandUnits > 0 && row.saleableUnits.length > 0;
@@ -199,7 +201,7 @@ export function CounterSearchResults({
             location ?? 'Location unavailable',
           ].filter(Boolean);
           return (
-            <li key={row.medicineId}>
+            <li key={`${row.medicineId}:${row.presentationId}`}>
               <button
                 type="button"
                 disabled={disabled}
@@ -241,6 +243,11 @@ export function CounterSearchResults({
                     <span>Form:</span> {row.presentation}
                     {row.dosageForm ? ` · ${row.dosageForm}` : ''}
                   </span>
+                  {row.unitsPerPack ? (
+                    <span className="block">
+                      <span>Pack:</span> {row.unitsPerPack} units
+                    </span>
+                  ) : null}
                   <span className="block">
                     <span>Stock:</span>{' '}
                     {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
@@ -269,6 +276,79 @@ export function CounterSearchResults({
                   </span>
                 ) : null}
               </button>
+              {row.stockAlternatives ? (
+                <section
+                  aria-label={`Alternatives for ${counterMedicineDisplayName(row)}`}
+                  className="space-y-3 border-t border-border-subtle bg-surface-sunken p-3 sm:p-4"
+                >
+                  {!row.stockAlternatives.ingredientRecorded ? (
+                    <p className="text-sm text-text-muted">
+                      No ingredient recorded for this product
+                    </p>
+                  ) : (
+                    <>
+                      <h3 className="text-sm font-semibold text-text-strong">
+                        In-stock alternatives
+                      </h3>
+                      <StatusPill status="suggestion" tone="info" label="Suggestion only" />
+                      <p className="text-xs text-text-muted">
+                        Nothing is swapped automatically. For prescription-only or controlled
+                        medicines, the pharmacist decides on substitution.
+                      </p>
+                      {row.stockAlternatives.exact.length ? (
+                        <CounterSearchResults
+                          rows={row.stockAlternatives.exact}
+                          state="ready"
+                          query={query}
+                          activeMedicineId={activeMedicineId}
+                          disabled={disabled}
+                          disabledReason={disabledReason}
+                          disabledReasonId={reason ? reasonId : undefined}
+                          onSelect={onSelect}
+                          onCaptureDemand={onCaptureDemand}
+                          onRetry={onRetry}
+                          listLabel="Same ingredient, strength and form"
+                        />
+                      ) : (
+                        <p className="text-sm text-text-muted">
+                          No in-stock brand with the same ingredient, strength and form at this
+                          branch.
+                        </p>
+                      )}
+                      {row.stockAlternatives.truncated ? (
+                        <p className="text-xs text-text-muted">
+                          More brands with this ingredient may be in stock. Search by the ingredient
+                          name to see them all.
+                        </p>
+                      ) : null}
+                      {row.stockAlternatives.other.length ? (
+                        <>
+                          <h3 className="text-sm font-semibold text-text-strong">
+                            Other strengths or forms
+                          </h3>
+                          <p className="text-xs text-text-muted">
+                            These are not exact equivalents. Ask the pharmacist to review strength,
+                            form and route before selecting.
+                          </p>
+                          <CounterSearchResults
+                            rows={row.stockAlternatives.other}
+                            state="ready"
+                            query={query}
+                            activeMedicineId={activeMedicineId}
+                            disabled={disabled}
+                            disabledReason={disabledReason}
+                            disabledReasonId={reason ? reasonId : undefined}
+                            onSelect={onSelect}
+                            onCaptureDemand={onCaptureDemand}
+                            onRetry={onRetry}
+                            listLabel="Other strengths or forms"
+                          />
+                        </>
+                      ) : null}
+                    </>
+                  )}
+                </section>
+              ) : null}
             </li>
           );
         })}

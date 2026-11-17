@@ -7,6 +7,7 @@ import {
   COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterBillMovedOn,
+  counterDrawerErrorMessage,
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
@@ -261,6 +262,48 @@ describe('counter notices after a bill moves on (DEV-712)', () => {
     // The payment is still refused on the server; the batch needs replacing.
     expect(counterErrorTone(new Error('SALE_BATCH_RECALLED'))).toBe('warning');
     expect(counterErrorTone(new Error('REFUND_EXCEEDS_TENDER'))).toBe('warning');
+  });
+});
+
+describe('DEV-873: drawer refusals name the action that needs permission', () => {
+  const refusal = trpcFailure('You do not have permission for this action.', 'FORBIDDEN');
+
+  it('explains the float restriction without denying cashier payment access', () => {
+    const message = counterDrawerErrorMessage(refusal, 'open-with-float');
+    expect(message).toBe(
+      'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+    );
+    expect(message).not.toMatch(/does not take payments|complete this sale/);
+  });
+
+  it('explains assignment and handover restrictions without denying payment access', () => {
+    for (const action of ['assign-cashier', 'handover'] as const) {
+      expect(counterDrawerErrorMessage(refusal, action)).toBe(
+        'Only a manager or owner can assign the till to another cashier. Ask a manager.'
+      );
+    }
+  });
+
+  it('preserves a genuine counter-access refusal for an empty drawer', () => {
+    expect(counterDrawerErrorMessage(refusal, 'open')).toBe(
+      COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE
+    );
+  });
+
+  it('does not rewrite scope, safety, state, or non-FORBIDDEN errors as a float refusal', () => {
+    for (const error of [
+      trpcFailure('Branch is outside your scope.', 'FORBIDDEN'),
+      trpcFailure('You do not have permission for this action.', 'BAD_REQUEST'),
+      trpcFailure(
+        'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.',
+        'FORBIDDEN'
+      ),
+      new PharmacySettlementError('DAY_CLOSED'),
+      new PharmacySettlementError('OPEN_DRAWER'),
+    ]) {
+      for (const action of ['open-with-float', 'assign-cashier', 'handover'] as const)
+        expect(counterDrawerErrorMessage(error, action)).toBe(counterErrorMessage(error));
+    }
   });
 });
 
