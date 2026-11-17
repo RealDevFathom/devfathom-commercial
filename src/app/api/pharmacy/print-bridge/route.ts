@@ -57,6 +57,29 @@ function reply(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers });
 }
 
+/**
+ * Reads the body as UTF-8 while counting bytes as they arrive. Returns null and
+ * cancels the stream as soon as the limit is exceeded, so oversized bodies are
+ * never fully buffered.
+ */
+async function readBoundedText(request: Request, limit: number): Promise<string | null> {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** Only the Authorization header counts. Cookies and sessions are ignored. */
 function credentialFrom(request: Request) {
   const header = request.headers.get('authorization') ?? '';
@@ -148,8 +171,8 @@ export async function POST(request: Request) {
   return guarded(request, async () => {
     const credential = credentialFrom(request);
     if (!credential) return reply({ error: 'Print bridge credential required.' }, 401);
-    const raw = await request.text();
-    if (Buffer.byteLength(raw) > 4_096) return reply({ error: 'Acknowledgement too large.' }, 413);
+    const raw = await readBoundedText(request, 4_096);
+    if (raw === null) return reply({ error: 'Acknowledgement too large.' }, 413);
     let body: unknown = null;
     try {
       body = JSON.parse(raw);
