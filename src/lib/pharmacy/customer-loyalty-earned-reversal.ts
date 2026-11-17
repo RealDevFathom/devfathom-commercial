@@ -132,7 +132,7 @@ export async function reverseRefundedEarnedPoints(
   const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
   const byLot = await readExpiredPointsByLot(
     db,
-    { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
+    { organizationId: scope.organizationId, customerId },
     new Date()
   );
   const target = reversalAfterExpiry([earn], [earn.points - pointsFor(netPaidMinor)], byLot);
@@ -206,7 +206,6 @@ async function reverseKhataEarnedPoints(
     db,
     {
       organizationId: binding.organizationId,
-      branchId: binding.branchId,
       customerId: binding.customerId,
     },
     new Date()

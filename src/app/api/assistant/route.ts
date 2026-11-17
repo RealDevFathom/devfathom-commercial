@@ -18,7 +18,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { logAIProviderUnavailable, readAskFathomAvailability } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
-import { assistantSystemPrompt, detectReplyLocale } from '@/lib/ai/prompt';
+import { assistantSystemPrompt, resolveReplyLocale } from '@/lib/ai/prompt';
 import { createAnswerGuardTransform, GroundingEvidence } from '@/lib/ai/grounding';
 import { assistantTurnTier } from '@/lib/ai/quick-lookup';
 import { limitToolCalls } from '@/lib/ai/tool-call-limit';
@@ -235,13 +235,16 @@ async function respond(req: Request) {
     });
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
+  // The workspace's stored locale is the default reply language; Urdu script in the
+  // latest message, or an explicit choice of language, still wins.
+  const stored = await tenantDb.organization.findUnique({
+    where: { id: organization.id },
+    select: { locale: true },
+  });
+  const reply = resolveReplyLocale(recentUserText(messages, 1), stored?.locale);
   const result = streamText({
     model: ai.model,
-    system: assistantSystemPrompt(
-      ctx,
-      Object.keys(tools),
-      detectReplyLocale(recentUserText(messages, 1))
-    ),
+    system: assistantSystemPrompt(ctx, Object.keys(tools), reply.locale, reply.workspaceDefault),
     messages: modelMessages,
     // Cost control: send only the tools relevant to what the user is asking
     // about (a core read set + the matched domain), not all ~96 every request.

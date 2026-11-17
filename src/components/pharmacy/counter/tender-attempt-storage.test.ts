@@ -3,6 +3,7 @@ import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import {
   clearTenderAttempt,
+  freshTenderKey,
   persistTenderAttempt,
   readTenderAttempt,
   tenderAttemptStorageKey,
@@ -357,4 +358,22 @@ it('DEV-875 retains bank transfer evidence for recovery and rejects mixed captur
       persistTenderAttempt({ ...attempt, input: { ...attempt.input, ...change } })
     ).toThrow();
   }
+});
+
+describe('DEV-712 freshTenderKey', () => {
+  const key = 'counter-tender:sale-1:CASH:1250';
+
+  it('keeps a key no supervisor discarded, so a double tap still replays', () => {
+    expect(freshTenderKey(key, new Set())).toBe(key);
+    expect(freshTenderKey(key, new Set(['counter-tender:sale-1:CASH:999']))).toBe(key);
+  });
+
+  it('gives a discarded key a fresh attempt suffix every time', () => {
+    const discarded = new Set([key]);
+    const first = freshTenderKey(key, discarded);
+    const second = freshTenderKey(key, discarded);
+    expect(first).toMatch(/^counter-tender:sale-1:CASH:1250:retry:[0-9a-f-]{36}$/);
+    expect(second).not.toBe(first);
+    expect(first.length).toBeLessThanOrEqual(160);
+  });
 });

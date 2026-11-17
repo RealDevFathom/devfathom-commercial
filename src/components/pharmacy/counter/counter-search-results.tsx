@@ -215,6 +215,11 @@ export function CounterSearchResults({
                   className="min-w-0 break-words text-sm font-semibold text-text-strong"
                 >
                   {counterMedicineDisplayName(row)}
+                  {row.composition ? (
+                    <span dir="auto" className="block text-xs font-normal text-text-body">
+                      {row.composition}
+                    </span>
+                  ) : null}
                   {counterMedicineGenericName(row) ? (
                     <span dir="auto" className="block text-xs font-normal text-text-muted">
                       {counterMedicineGenericName(row)}

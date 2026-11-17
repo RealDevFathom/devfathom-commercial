@@ -447,9 +447,19 @@ export const pharmacyMarketingRouter = router({
       const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
         return { available: false as const, body: null, approved: false as const };
+      // The language is the workspace's stored preference, never free text from the client.
+      const org = await ctx.db.organization.findUnique({
+        where: { id: resolved.organizationId },
+        select: { locale: true },
+      });
       return draftMarketingCopy(
         { occasion: input.occasion, tone: input.tone },
-        { organizationId: resolved.organizationId, branchId: resolved.branchId }
+        {
+          organizationId: resolved.organizationId,
+          branchId: resolved.branchId,
+          // Stored locales can be regional (ur-PK, en-PK): compare the language subtag.
+          locale: org?.locale?.toLowerCase().split(/[-_]/)[0] === 'ur' ? 'ur' : 'en',
+        }
       );
     }),
   /** Owner-entered profile facts only; nothing is read from or written to Google. */

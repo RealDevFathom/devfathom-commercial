@@ -31,6 +31,11 @@ import {
   LOYALTY_POINT_VALUE_MINOR,
   type LoyaltyEarnRule,
 } from '@/lib/commerce/loyalty-arithmetic';
+import {
+  LOYALTY_MEMBERSHIP_REASON_MAX,
+  LOYALTY_MEMBERSHIP_REASON_MIN,
+  setLoyaltyMembership,
+} from '@/lib/pharmacy/loyalty-membership';
 import { annotateAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { requireDrawerManagerAccess } from '@/server/routers/pharmacy-sales';
@@ -75,6 +80,14 @@ export const adjustPointsInput = branchInput
       .refine((points) => points !== 0),
     reason: z.string().trim().min(3).max(500),
     idempotencyKey: z.string().trim().min(8).max(128),
+  })
+  .strict();
+
+export const membershipInput = branchInput
+  .extend({
+    customerId: z.string().trim().min(1).max(128),
+    active: z.boolean(),
+    reason: z.string().trim().min(LOYALTY_MEMBERSHIP_REASON_MIN).max(LOYALTY_MEMBERSHIP_REASON_MAX),
   })
   .strict();
 
@@ -310,7 +323,9 @@ export const pharmacyLoyaltyRouter = router({
               ? 'A removal cannot take the balance below zero.'
               : error.reason === 'IDEMPOTENCY_CONFLICT'
                 ? 'This adjustment was already recorded with different details.'
-                : 'Enter a whole number of points (not 0) and a reason of at least 3 characters.',
+                : error.reason === 'LOYALTY_INACTIVE'
+                  ? 'This member is deactivated. Re-enrol them before adjusting their points.'
+                  : 'Enter a whole number of points (not 0) and a reason of at least 3 characters.',
         });
       }
       throw error;
@@ -340,6 +355,50 @@ export const pharmacyLoyaltyRouter = router({
       balanceAfter: result.balanceAfter,
       replayed: result.replayed,
     };
+  }),
+  // DEV-764: enrol (re-enrol) or deactivate a loyalty member, with a written reason. The same
+  // owner-or-branch-manager gate as adjustments; a cashier is refused before any write.
+  setMembership: protectedProcedure.input(membershipInput).mutation(async ({ ctx, input }) => {
+    const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+    let result: Awaited<ReturnType<typeof setLoyaltyMembership>>;
+    try {
+      result = await ctx.db.$transaction((tx) =>
+        setLoyaltyMembership(txDb(tx), scope, {
+          customerId: input.customerId,
+          active: input.active,
+          reason: input.reason,
+        })
+      );
+    } catch (error) {
+      if (error instanceof PharmacyLoyaltyError) {
+        if (error.reason === 'CUSTOMER_NOT_FOUND')
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch or customer unavailable.' });
+        throw new TRPCError({
+          code: error.reason === 'LOYALTY_CONSENT_REQUIRED' ? 'PRECONDITION_FAILED' : 'BAD_REQUEST',
+          message:
+            error.reason === 'LOYALTY_CONSENT_REQUIRED'
+              ? 'The customer has not given current loyalty consent. Record consent at the counter, then enrol them.'
+              : 'Give a reason of at least 3 characters.',
+        });
+      }
+      throw error;
+    }
+    annotateAudit(ctx, {
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: input.active ? 'pharmacyLoyalty.enrolMember' : 'pharmacyLoyalty.deactivateMember',
+      targetType: 'PharmacyCustomer',
+      targetId: result.customer.id,
+      changes: { loyaltyActive: { before: result.before, after: result.after } },
+      metadata: {
+        branchId: input.branchId,
+        reason: input.reason,
+        pointsBalance: result.pointsBalance,
+        authority,
+        changed: result.changed,
+      },
+    });
+    return { loyaltyActive: result.after, changed: result.changed };
   }),
   branches: adminProcedure.query(({ ctx }) => {
     const scope = scopeFor(ctx);
