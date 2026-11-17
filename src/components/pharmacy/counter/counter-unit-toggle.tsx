@@ -128,8 +128,8 @@ export function CounterUnitToggle({
                       : (index - 1 + options.length) % options.length;
                   onSelect(options[nextIndex]!.kind);
                   event.currentTarget.parentElement
-                    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]
-                    ?.focus();
+                    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                    [nextIndex]?.focus();
                 }}
                 className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                   active
@@ -191,11 +191,12 @@ export function CounterUnitToggle({
               (quantity !== '' && !validQuantity) || (preview ? !preview.sufficient : undefined)
             }
             onKeyDown={(event) => {
+              // Ctrl+Enter is the legacy preset's add chord; both reach the add handler,
+              // which explains an empty, invalid or short quantity instead of ignoring it.
               if (
                 event.key !== 'Enter' ||
                 event.repeat ||
                 event.nativeEvent.isComposing ||
-                event.ctrlKey ||
                 event.altKey ||
                 event.metaKey ||
                 event.shiftKey
@@ -203,7 +204,7 @@ export function CounterUnitToggle({
                 return;
               event.preventDefault();
               event.stopPropagation();
-              if (!disabled && validQuantity && preview?.sufficient) onAdd?.();
+              if (!disabled) onAdd?.();
             }}
             onFocus={(event) => event.currentTarget.select()}
             onChange={(event) => onQuantityChange(event.target.value)}

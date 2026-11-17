@@ -880,8 +880,9 @@ describe('DEV-705 manual default sale unit', () => {
     levelLabel: 'UNIT',
     canonicalUnitsPerSaleUnit: 1,
   } as const;
-  it('starts tablets on one loose tablet', () => {
+  it('starts tablets and capsules on one loose unit', () => {
     expect(preferredSaleUnitOption([pack, strip, unit], 'Tablet')).toBe(unit);
+    expect(preferredSaleUnitOption([pack, strip, unit], 'Capsule')).toBe(unit);
   });
   it('falls back to the strip, then the largest unit, when no loose tablet is sellable', () => {
     expect(preferredSaleUnitOption([pack, strip], 'Tablet')).toBe(strip);

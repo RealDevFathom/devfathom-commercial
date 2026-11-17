@@ -330,14 +330,14 @@ export function legacyStripOption(input: {
   };
 }
 
-/** The unit a manually staged line starts on: a loose tablet (else its strip) for
- * tablets, otherwise the largest unit. The operator can still pick any offered unit. */
+/** The unit a manually staged line starts on: one loose tablet or capsule (else its
+ * strip), otherwise the largest unit. The operator can still pick any offered unit. */
 export function preferredSaleUnitOption<T extends SaleUnitOption>(
   options: readonly T[],
   dosageForm: string | null
 ): T | null {
   return (
-    (counterUnitNoun(dosageForm) === 'tablet'
+    (['tablet', 'capsule'].includes(counterUnitNoun(dosageForm))
       ? (looseSaleUnitOption(options) ?? options.find((option) => option.levelLabel === 'STRIP'))
       : null) ??
     options[0] ??
