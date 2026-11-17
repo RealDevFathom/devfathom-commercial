@@ -672,6 +672,7 @@ describe('counter returns', () => {
     ];
     render(<ReturnForm {...props} />);
     chooseReceipt();
+    chooseRefundReason();
     fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'prepaid' } });
     expect(
       screen.getAllByRole('option', { name: /Prepaid balance · PKR 10\.00 remaining/ }).length
