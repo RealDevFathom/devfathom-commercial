@@ -1,3 +1,4 @@
+import { Prisma } from '@/generated/prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -33,12 +34,7 @@ describe('refund route transport of the machine refund reference', () => {
   });
 
   it('GET exposes the payment provider so the UI can identify MANUAL card tenders', async () => {
-    const decimal = (value: string) => ({
-      plus: () => decimal(value),
-      minus: () => decimal(value),
-      toString: () => value,
-      toFixed: () => value,
-    });
+    const decimal = (value: string) => new Prisma.Decimal(value);
     const tender = {
       id: 't1',
       type: 'CARD',

@@ -53,13 +53,11 @@ function refundDb(provider = 'MANUAL') {
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantBranch: {
-      findUnique: vi
-        .fn()
-        .mockResolvedValue({
-          organizationId: 'org-1',
-          timezone: 'UTC',
-          businessDayCutoff: '04:00',
-        }),
+      findUnique: vi.fn().mockResolvedValue({
+        organizationId: 'org-1',
+        timezone: 'UTC',
+        businessDayCutoff: '04:00',
+      }),
     },
     restaurantDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     restaurantCoAuthorization: { create: vi.fn().mockResolvedValue({ id: 'coauth-1' }) },
