@@ -211,6 +211,34 @@ describe('jurisdiction.rules.publish', () => {
       expect(rows).toEqual([original]);
     }
   );
+  it('publishes a successor that keeps an existing published schedule name', async () => {
+    const permittedSchedules = { values: ['G'], provisional: false };
+    rows[0] = { ...original, permittedSchedules };
+    await expect(publish({ permittedSchedules })).resolves.toEqual({
+      id: 'test_only_v2',
+      version: 2,
+    });
+    expect(rows[1]).toMatchObject({ permittedSchedules });
+  });
+  it('refuses to publish empty sections with outstanding review as confirmed', async () => {
+    const empty = { values: [], toConfirm: 'TEST_ONLY outstanding counsel review' };
+    const emptyObject = { values: {}, toConfirm: 'TEST_ONLY outstanding counsel review' };
+    await expect(
+      publish({
+        licenceCategories: { ...empty, provisional: false },
+        permittedSchedules: { ...empty, provisional: false },
+        prescriptionOnlyClasses: { ...empty, provisional: false },
+        prescriptionRetentionDays: { ...emptyObject, provisional: false },
+        controlledRegisterFlags: { ...emptyObject, provisional: false },
+        pharmacistCoverageRule: { ...emptyObject, provisional: false },
+        recordRetentionByClass: { ...emptyObject, provisional: false },
+      })
+    ).rejects.toThrow();
+    expect(rows).toEqual([original]);
+    expect(db.jurisdictionRuleSet.update).not.toHaveBeenCalled();
+    expect(db.jurisdictionRuleSet.create).not.toHaveBeenCalled();
+    expect(audits.filter((audit) => audit.success)).toEqual([]);
+  });
   it('does not publish a successor of a placeholder', async () => {
     rows[0]!.isPlaceholder = true;
     await expect(publish()).rejects.toMatchObject({ status: 400 });

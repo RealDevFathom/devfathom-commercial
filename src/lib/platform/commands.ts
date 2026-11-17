@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { hash } from 'bcryptjs';
-import { publishJurisdictionRulesSchema, RULE_FIELDS } from '@/lib/platform/jurisdiction-rules';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -14,6 +13,7 @@ import {
 } from '@/generated/prisma/client';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
+import { publishJurisdictionRulesSchema, RULE_FIELDS } from '@/lib/platform/jurisdiction-rules';
 import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';

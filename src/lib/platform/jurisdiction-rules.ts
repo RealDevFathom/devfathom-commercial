@@ -34,7 +34,39 @@ const names = z
   .max(100)
   .refine((values) => new Set(values).size === values.length, 'Remove duplicate values.');
 const days = z.number().int().positive().max(36525);
-const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+// Same contract as the pharmacist-presence gate (src/lib/pharmacy/regulatory.ts):
+// a window may end at 24:00, the exclusive end of the local day.
+const startTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+const endTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/);
+const minutes = (value: string) => {
+  const [hours, mins] = value.split(':').map(Number);
+  return hours! * 60 + mins!;
+};
+
+type RuleFieldShape = { values?: unknown; provisional?: unknown; toConfirm?: unknown };
+
+function hasValues(values: unknown): boolean {
+  if (Array.isArray(values)) return values.length > 0;
+  if (values !== null && typeof values === 'object') return Object.keys(values).length > 0;
+  return typeof values === 'number';
+}
+
+/**
+ * DEV-99 confirmation contract. A field counts as confirmed only when it is
+ * explicitly `provisional: false`, records no outstanding review (`toConfirm`)
+ * and carries reviewed content. Empty sections can never be confirmed: a
+ * genuinely "not applicable" rule needs its own approved representation.
+ */
+export function ruleFieldConfirmed(field: unknown): boolean {
+  if (field === null || typeof field !== 'object' || Array.isArray(field)) return false;
+  const { values, provisional, toConfirm } = field as RuleFieldShape;
+  return (
+    provisional === false &&
+    (toConfirm === undefined || (typeof toConfirm === 'string' && toConfirm.trim() === '')) &&
+    hasValues(values)
+  );
+}
+
 const rule = <T extends z.ZodType>(values: T) =>
   z
     .object({
@@ -42,15 +74,41 @@ const rule = <T extends z.ZodType>(values: T) =>
       provisional: z.boolean(),
       toConfirm: z.string().trim().max(1000).optional(),
     })
-    .strict();
+    .strict()
+    .superRefine((field, context) => {
+      if (field.provisional !== false) return;
+      if (field.toConfirm) {
+        context.addIssue({
+          code: 'custom',
+          path: ['toConfirm'],
+          message: 'A confirmed field cannot record outstanding review. Keep it provisional.',
+        });
+      }
+      if (!hasValues(field.values)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['values'],
+          message: 'A confirmed field needs reviewed values. Keep an empty field provisional.',
+        });
+      }
+    });
 
 export const jurisdictionRulesSchema = z
   .object({
     licenceCategories: rule(names),
+    // Schedule names are the published names branch profiles record (see
+    // regulatoryProfileInput in src/lib/pharmacy/regulatory-profile-form.ts).
     permittedSchedules: rule(
       z
-        .array(z.enum(['OTC', 'RX', 'CONTROLLED']))
-        .max(3)
+        .array(
+          z
+            .string()
+            .trim()
+            .min(1)
+            .max(60)
+            .refine((value) => !value.includes('*'), 'Wildcards are not permitted.')
+        )
+        .max(40)
         .refine((values) => new Set(values).size === values.length, 'Remove duplicate schedules.')
     ),
     prescriptionOnlyClasses: rule(names),
@@ -82,12 +140,12 @@ export const jurisdictionRulesSchema = z
                   z
                     .object({
                       days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-                      start: time,
-                      end: time,
+                      start: startTime,
+                      end: endTime,
                     })
                     .strict()
                     .refine(
-                      (window) => window.start < window.end,
+                      (window) => minutes(window.start) < minutes(window.end),
                       'End must follow start; split overnight shifts into two windows.'
                     )
                 )
@@ -127,13 +185,5 @@ export const publishJurisdictionRulesSchema = jurisdictionRulesSchema.extend({
 });
 
 export function allRulesConfirmed(rules: Record<(typeof RULE_FIELDS)[number], unknown>): boolean {
-  return RULE_FIELDS.every((key) => {
-    const field = rules[key];
-    return (
-      field !== null &&
-      typeof field === 'object' &&
-      'provisional' in field &&
-      field.provisional === false
-    );
-  });
+  return RULE_FIELDS.every((key) => ruleFieldConfirmed(rules[key]));
 }

@@ -47,6 +47,24 @@ function draft() {
 }
 
 describe('jurisdiction editor', () => {
+  it('never shows outstanding review or an empty section as confirmed', () => {
+    render(
+      <JurisdictionRuleSets
+        ruleSets={[
+          {
+            ...ruleSet,
+            licenceCategories: {
+              ...testOnlyRules.licenceCategories,
+              toConfirm: 'TEST_ONLY outstanding review',
+            },
+            recordRetentionByClass: { values: {}, provisional: false },
+          },
+        ]}
+      />
+    );
+    expect(screen.getAllByText('Confirmed')).toHaveLength(5);
+    expect(screen.getAllByText('Provisional')).toHaveLength(2);
+  });
   it('shows all published values, dates and seven confirmation states', () => {
     render(<JurisdictionRuleSets ruleSets={[ruleSet]} />);
     expect(screen.getByRole('heading', { name: 'TEST_ONLY · version 1' })).toBeInTheDocument();

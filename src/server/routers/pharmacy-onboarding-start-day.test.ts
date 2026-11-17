@@ -138,6 +138,93 @@ describe('regulatory profile start day (DEV-298)', () => {
 });
 
 describe('DEV-99 pinned rule versions', () => {
+  const testOnlyBranch = {
+    id: 'branch-1',
+    name: 'Mall Road',
+    city: 'Lahore',
+    addressLine: '12 Mall Road',
+    provinceCode: 'TEST_ONLY',
+  };
+  async function setup() {
+    const { testOnlyRules } = await import('@/lib/test-support/jurisdiction-rules');
+    const current = {
+      ...versionStartingToday(),
+      version: 1,
+      provinceCode: 'TEST_ONLY',
+      jurisdictionRuleSetId: 'test_only_v1',
+      jurisdictionRuleSet: { ...testOnlyRules, code: 'TEST_ONLY', version: 1 },
+    };
+    const successor = {
+      ...testOnlyRules,
+      id: 'test_only_v2',
+      code: 'TEST_ONLY',
+      version: 2,
+      effectiveFrom: new Date('2099-01-01'),
+      effectiveTo: null,
+    };
+    mocks.branchFindMany.mockResolvedValue([testOnlyBranch]);
+    mocks.ruleSetFindMany.mockResolvedValue([successor]);
+    return { testOnlyRules, current, successor };
+  }
+
+  it('omits the notice once the branch has moved to another province', async () => {
+    const { current } = await setup();
+    mocks.branchFindMany.mockResolvedValue([{ ...testOnlyBranch, provinceCode: 'OTHER_TEST' }]);
+    mocks.profileFindMany.mockResolvedValue([current]);
+    const result = await pharmacyOnboardingRouter.createCaller(context()).regulatory();
+    expect(result.versions[0]!.newerConfirmedRuleSet).toBeUndefined();
+  });
+
+  it('omits the notice when a scheduled profile already adopts the newer rules', async () => {
+    const { testOnlyRules, current, successor } = await setup();
+    const scheduled = {
+      ...current,
+      id: 'profile-3',
+      version: 2,
+      effectiveFrom: successor.effectiveFrom,
+      jurisdictionRuleSetId: successor.id,
+      jurisdictionRuleSet: { ...testOnlyRules, code: 'TEST_ONLY', version: 2 },
+    };
+    mocks.profileFindMany.mockResolvedValue([scheduled, current]);
+    const result = await pharmacyOnboardingRouter.createCaller(context()).regulatory();
+    const effective = result.versions.find((version) => version.id === current.id)!;
+    expect(effective.jurisdictionRuleSetId).toBe('test_only_v1');
+    expect(effective.newerConfirmedRuleSet).toBeUndefined();
+  });
+
+  it('keeps the notice when a later profile still uses the old rules', async () => {
+    const { current, successor } = await setup();
+    const later = {
+      ...current,
+      id: 'profile-3',
+      version: 2,
+      effectiveFrom: new Date('2098-01-01'),
+    };
+    mocks.profileFindMany.mockResolvedValue([later, current]);
+    const result = await pharmacyOnboardingRouter.createCaller(context()).regulatory();
+    const effective = result.versions.find((version) => version.id === current.id)!;
+    expect(effective.newerConfirmedRuleSet).toEqual({
+      version: 2,
+      effectiveFrom: successor.effectiveFrom,
+    });
+  });
+
+  it('never announces a successor confirmed while review is outstanding', async () => {
+    const { current, successor } = await setup();
+    mocks.ruleSetFindMany.mockResolvedValue([
+      {
+        ...successor,
+        pharmacistCoverageRule: {
+          ...successor.pharmacistCoverageRule,
+          toConfirm: 'TEST_ONLY outstanding review',
+        },
+      },
+    ]);
+    mocks.profileFindMany.mockResolvedValue([current]);
+    const result = await pharmacyOnboardingRouter.createCaller(context()).regulatory();
+    expect(result.versions[0]!.newerConfirmedRuleSet).toBeUndefined();
+  });
+
   it.each([
     [true, today],
     [false, today],
@@ -153,6 +240,7 @@ describe('DEV-99 pinned rule versions', () => {
         jurisdictionRuleSet: { ...testOnlyRules, version: 1 },
       };
       mocks.profileFindMany.mockResolvedValue([oldProfile]);
+      mocks.branchFindMany.mockResolvedValue([testOnlyBranch]);
       mocks.ruleSetFindMany.mockResolvedValue([
         {
           ...testOnlyRules,

@@ -6,8 +6,11 @@ import {
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { RULE_FIELDS, RULE_FIELD_LABELS } from '@/lib/platform/jurisdiction-rules';
-import { ruleSetOptions } from '@/lib/pharmacy/regulatory-profile-form';
+import {
+  RULE_FIELDS,
+  RULE_FIELD_LABELS,
+  ruleFieldConfirmed,
+} from '@/lib/platform/jurisdiction-rules';
 
 const effectiveDate = new Intl.DateTimeFormat('en-GB', {
   dateStyle: 'medium',
@@ -17,14 +20,15 @@ const effectiveDate = new Intl.DateTimeFormat('en-GB', {
 
 const help: Record<(typeof RULE_FIELDS)[number], string> = {
   licenceCategories: 'values: an array of licence category names. Wildcards are not allowed.',
-  permittedSchedules: 'values: an array containing OTC, RX or CONTROLLED, without duplicates.',
+  permittedSchedules:
+    'values: an array of the published schedule names branch profiles record, without duplicates or wildcards.',
   prescriptionOnlyClasses: 'values: an array of class names. Wildcards are not allowed.',
   prescriptionRetentionDays:
     'values: a positive whole number of days or an object mapping class names to days (maximum 36525).',
   controlledRegisterFlags:
     'values: an object with optional recordEverySale (boolean) and emergencySupply: { maxUnits, repeatWindowHours, source: "JURISDICTION_RULE_SET" }.',
   pharmacistCoverageRule:
-    'values: an object with optional dispenseGrantRequired (boolean) and presenceHours: { timeZone, windows: [{ days: [0–6], start: "HH:MM", end: "HH:MM" }] }. Split overnight shifts into two windows.',
+    'values: an object with optional dispenseGrantRequired (boolean) and presenceHours: { timeZone, windows: [{ days: [0–6], start: "HH:MM", end: "HH:MM" }] }. An end of "24:00" covers up to midnight; split an overnight shift into two windows, for example 20:00–24:00 and 00:00–08:00.',
   recordRetentionByClass:
     'values: an object mapping PRESCRIPTION, CONTROLLED_REGISTER, FISCAL or AUDIT to positive whole days (maximum 36525).',
 };
@@ -41,7 +45,7 @@ function draftFields(ruleSet: JurisdictionRuleSet): CommandField[] {
         ...(ruleSet[name] as Record<string, unknown>),
         provisional: true,
       },
-      help: `${help[name]} Keep provisional: true until reviewed; set provisional: false only for a confirmed field. Optional toConfirm records outstanding review.`,
+      help: `${help[name]} Keep provisional: true until reviewed. Set provisional: false only for a reviewed field with values, and remove toConfirm, which records outstanding review.`,
     })),
     {
       name: 'effectiveFrom',
@@ -124,10 +128,8 @@ export function JurisdictionRuleSets({ ruleSets }: { ruleSets: JurisdictionRuleS
                   <dt className="text-sm">{RULE_FIELD_LABELS[field]}</dt>
                   <dd className="mt-1">
                     <StatusPill
-                      status={
-                        ruleSetOptions(ruleSet[field]).provisional ? 'Provisional' : 'Confirmed'
-                      }
-                      tone={ruleSetOptions(ruleSet[field]).provisional ? 'warning' : 'success'}
+                      status={ruleFieldConfirmed(ruleSet[field]) ? 'Confirmed' : 'Provisional'}
+                      tone={ruleFieldConfirmed(ruleSet[field]) ? 'success' : 'warning'}
                     />
                   </dd>
                 </div>

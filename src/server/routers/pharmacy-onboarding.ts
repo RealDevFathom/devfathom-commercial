@@ -1,4 +1,3 @@
-import { allRulesConfirmed } from '@/lib/platform/jurisdiction-rules';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
  * branch regulatory profile, and the activation status the operator reads when
@@ -56,6 +55,7 @@ import {
   regulatoryProfileInForceWhere,
   regulatoryStartInstant,
 } from '@/lib/pharmacy/regulatory-start';
+import { allRulesConfirmed } from '@/lib/platform/jurisdiction-rules';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -506,6 +506,7 @@ export const pharmacyOnboardingRouter = router({
               jurisdictionRuleSetId: true,
               jurisdictionRuleSet: {
                 select: {
+                  code: true,
                   version: true,
                   licenceCategories: true,
                   permittedSchedules: true,
@@ -552,12 +553,29 @@ export const pharmacyOnboardingRouter = router({
             selected ? { profile: version, site: { ...selected, active: true } } : undefined,
             timeZone
           );
-          const newerRules = successorRules.find(
-            (rules) =>
-              sameProvince(rules.code, version.provinceCode) &&
-              allRulesConfirmed(rules) &&
-              rules.version > jurisdictionRuleSet.version
-          );
+          // Only for rules that still apply to the selected branch: after a province
+          // change, the retained profile's former province is no longer relevant.
+          const candidate =
+            selected && sameProvince(selected.provinceCode, version.provinceCode)
+              ? successorRules.find(
+                  (rules) =>
+                    sameProvince(rules.code, version.provinceCode) &&
+                    allRulesConfirmed(rules) &&
+                    rules.version > jurisdictionRuleSet.version
+                )
+              : undefined;
+          // Once the owner has recorded a later profile version on these (or newer)
+          // rules, adoption is already scheduled and the notice would invite a duplicate.
+          const adoptionRecorded =
+            candidate !== undefined &&
+            versions.some(
+              (other) =>
+                other.effectiveFrom > version.effectiveFrom &&
+                (other.effectiveTo === null || other.effectiveTo > now) &&
+                sameProvince(other.jurisdictionRuleSet.code, candidate.code) &&
+                other.jurisdictionRuleSet.version >= candidate.version
+            );
+          const newerRules = adoptionRecorded ? undefined : candidate;
           return {
             ...version,
             ...(newerRules
