@@ -8362,6 +8362,7 @@ model RestaurantRefund {
   tipRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
   serviceChargeRefundAmount Decimal              @default(0) @db.Decimal(12, 2)
   deliveryFeeRefundAmount   Decimal              @default(0) @db.Decimal(12, 2)
+  roundingRefundAmount      Decimal              @default(0) @db.Decimal(12, 2)
   taxRefundAmount           Decimal              @default(0) @db.Decimal(12, 2)
   kind                      RestaurantRefundKind
   businessDate              DateTime             @db.Date
