@@ -11,6 +11,7 @@ import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { provisionPlatformAdmin } from './platform-admin.js';
 import { describeSeedFailure, isUniqueConstraintViolation } from './seed-failure.js';
 import { upsertStagingAdmin } from './staging-admin.js';
+import { localWorkspaceAddresses } from './seed-workspace-addresses.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
@@ -1511,7 +1512,7 @@ async function main() {
   // PLATFORM_ADMIN_PASSWORD lands on every deployment.
   await provisionPlatformAdmin(prisma);
 
-  await prisma.$transaction(
+  const addresses = await prisma.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.is_platform_admin', 'true', true),
@@ -1657,9 +1658,11 @@ async function main() {
         where: { organizationId: 'org_devfathom', role: { not: 'ADMIN' } },
         data: { organizationRoleId: memberRole.id },
       });
+      return localWorkspaceAddresses(tx);
     },
     { maxWait: 30_000, timeout: 300_000 }
   );
+  for (const line of addresses) console.log(line);
 }
 
 // ============================================

@@ -29,7 +29,8 @@ export type SerializedPackRefusal =
   | 'SERIAL_NOT_READABLE'
   | 'SERIAL_MEDICINE_MISMATCH'
   | 'SERIAL_ALREADY_SOLD'
-  | 'SERIAL_LOT_UNAVAILABLE';
+  | 'SERIAL_LOT_UNAVAILABLE'
+  | 'SERIAL_FEFO_APPROVAL_REQUIRED';
 
 export class PharmacySerializedPackError extends Error {
   constructor(readonly reason: SerializedPackRefusal) {
@@ -45,7 +46,10 @@ export type ResolvedSerializedPack = {
   inventoryLotId: string;
 };
 
-/** Allocation evidence for a pinned lot. Only recorded when the lot is not FEFO's choice. */
+/**
+ * Allocation evidence for a pinned lot. Only recorded when the lot is not FEFO's choice, and
+ * then only with a verified FEFO-override approval appended (DEV-843).
+ */
 export const SERIALIZED_PACK_APPROVAL_POLICY = 'gs1-serialized-pack-scan';
 
 export function serializedPackOverrideReason(serialNumber: string) {

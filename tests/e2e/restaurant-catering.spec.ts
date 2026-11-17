@@ -255,7 +255,7 @@ async function addLine(
   portions: string,
   unitPrice: string
 ) {
-  await page.getByLabel('Product or recipe').selectOption(source);
+  await page.getByLabel('Recipe', { exact: true }).selectOption(source);
   await page.getByLabel('Description').fill(description);
   await page.getByLabel('Portions').fill(portions);
   await page.getByLabel('Unit price').fill(unitPrice);
@@ -376,28 +376,18 @@ test('creates, costs, produces, delivers, and closes a catering order', async ({
     });
     await expect(recipeOption).toHaveJSProperty('disabled', true);
     await expect(recipeOption).not.toContainText('/portion');
-    const picker = page.getByLabel('Product or recipe');
+    const picker = page.getByLabel('Recipe', { exact: true });
+    // Catering now requires a recipe on every line; product-only choices are absent.
     await expect(
       picker.locator(`option[value="product:${cateringFixture.product.id}"]`)
-    ).toHaveJSProperty('disabled', false);
-    await picker.selectOption(`product:${cateringFixture.product.id}`);
-    await expect(picker).toHaveValue(`product:${cateringFixture.product.id}`);
-    await addLine(
-      page,
-      `product:${cateringFixture.product.id}`,
-      'Four packaged add-ons',
-      '4',
-      '5.00'
-    );
-    const productLine = await tenantQuery(
-      `SELECT "productId", portions::text, "unitPrice"::text
-       FROM restaurant_catering_order_lines
+    ).toHaveCount(0);
+    await expect(picker).toHaveValue('');
+    const lines = await tenantQuery(
+      `SELECT id FROM restaurant_catering_order_lines
        WHERE "organizationId"=$1 AND "orderId"=$2`,
       [fixture.organizationId, orderId]
     );
-    expect(productLine.rows).toEqual([
-      { productId: cateringFixture.product.id, portions: '4.000', unitPrice: '5.00' },
-    ]);
+    expect(lines.rows).toEqual([]);
   } finally {
     await tenantQuery(
       'UPDATE restaurant_ingredients SET "referenceCost"=$3 WHERE "organizationId"=$1 AND id=$2',
@@ -410,13 +400,19 @@ test('creates, costs, produces, delivers, and closes a catering order', async ({
     page.getByRole('option', { name: new RegExp(`^${cateringFixture.recipe.name} · .*2/portion$`) })
   ).toHaveJSProperty('disabled', false);
 
-  await addLine(
-    page,
-    `recipe:${cateringFixture.recipe.id}`,
-    'Ten celebration trays',
-    '10',
-    '15.00'
+  // Keep the add/remove-line coverage using the current recipe-backed contract.
+  await addLine(page, cateringFixture.recipe.id, 'Four packaged add-ons', '4', '5.00');
+  const recipeLine = await tenantQuery(
+    `SELECT "recipeId", "productId", portions::text, "unitPrice"::text
+     FROM restaurant_catering_order_lines
+     WHERE "organizationId"=$1 AND "orderId"=$2`,
+    [fixture.organizationId, orderId]
   );
+  expect(recipeLine.rows).toEqual([
+    { recipeId: cateringFixture.recipe.id, productId: null, portions: '4.000', unitPrice: '5.00' },
+  ]);
+
+  await addLine(page, cateringFixture.recipe.id, 'Ten celebration trays', '10', '15.00');
   await page.getByLabel('Cost type').selectOption('TRANSPORT');
   await page.getByLabel('Label').fill('Delivery van');
   await page.getByLabel('Amount', { exact: true }).fill('20.00');
@@ -581,7 +577,7 @@ async function moneyOrder(page: Page, name: string) {
     headcount: '2',
     quotedTotal: '100.00',
   });
-  await addLine(page, `recipe:${cateringFixture.recipe.id}`, 'Two money trays', '2', '50.00');
+  await addLine(page, cateringFixture.recipe.id, 'Two money trays', '2', '50.00');
   await approveBooking(page, '2026-10-20');
   return id;
 }
@@ -1014,13 +1010,7 @@ test('cancellation retains consumption; only explicit unused return restores sel
     headcount: '2',
     quotedTotal: '40.00',
   });
-  await addLine(
-    page,
-    `recipe:${cateringFixture.recipe.id}`,
-    'Two cancellation trays',
-    '2',
-    '20.00'
-  );
+  await addLine(page, cateringFixture.recipe.id, 'Two cancellation trays', '2', '20.00');
   await approveBooking(page, '2026-09-21');
   await moveTo(page, 'quoted');
   await expect(page.getByRole('button', { name: 'Move to confirmed' })).toBeVisible();

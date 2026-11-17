@@ -254,7 +254,7 @@ export function withApiAuth<T extends unknown[]>(
     } catch (err) {
       // Log the full error server-side, but never leak DB/Prisma internals or
       // stack details to the client — respond with a generic 500.
-      console.error(`API error in ${requiredScope}:`, err);
+      console.error('API error in %s:', requiredScope, err);
       recordRestAudit({
         request,
         ctx: auth,

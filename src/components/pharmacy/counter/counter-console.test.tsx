@@ -2236,6 +2236,69 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     }
   );
 
+  /** #1254: a cash payment refused because the drawer was closed elsewhere. */
+  async function refuseCashForClosedDrawer() {
+    openTheDrawer();
+    mocks.mutations.tender!.mockRejectedValueOnce(refused('BAD_REQUEST', 'DRAWER_NOT_OPEN'));
+    const view = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    enterPayment();
+    await screen.findByText(/Payment was not accepted/);
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+    // The re-read reports the drawer closed.
+    closeDrawer();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    fireEvent.click(within(payment).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(payment).not.toBeVisible());
+  }
+
+  it('#1254: a refused cash payment keeps "Open drawer" usable and re-reads the drawer', async () => {
+    await refuseCashForClosedDrawer();
+    // The bill itself still needs a re-read before it changes or takes money.
+    expect(screen.getByRole('button', { name: /^Hold/ })).toBeDisabled();
+    const step = screen.getByRole('form', { name: 'Open the cash drawer to start the shift' });
+    expect(within(step).getByLabelText('Opening cash')).toBeEnabled();
+    expect(within(step).getByRole('button', { name: 'Open drawer' })).toBeEnabled();
+    expect(within(step).queryByText(/Refresh this bill/)).not.toBeInTheDocument();
+  });
+
+  it('#1254: opening the drawer after a refusal re-reads the bill so payment can resume', async () => {
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    await refuseCashForClosedDrawer();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Opening cash'), { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
+      expect.objectContaining({ openingFloatMinor: 500000 })
+    );
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Hold/ })).toBeEnabled());
+  });
+
+  it('#1254: a refused non-cash payment does not re-read the drawer', async () => {
+    openTheDrawer();
+    mocks.mutations.tender!.mockRejectedValueOnce(refused('BAD_REQUEST', 'CARD_DECLINED'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment('BANK_TRANSFER');
+    await screen.findByText(/Payment was not accepted/);
+    expect(mocks.drawerStatusInvalidate).not.toHaveBeenCalled();
+  });
+
+  it('#1254: a drawer open without a refusal does not re-read the bill', async () => {
+    closeDrawer();
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Opening cash'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    await screen.findByText('Cash drawer opened for this counter.');
+    await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+    expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
   it('keeps the drawer step, with a retry, when the drawer status cannot be read (DEV-725)', () => {
     const refetch = vi.fn();
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isError: true, refetch };
@@ -2507,8 +2570,8 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   it('does not run F9 while a field is focused or another dialog is open', async () => {
     openTheDrawer();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
-    const quantity = screen.getByLabelText('Quantity');
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [] })));
+    const quantity = screen.getByLabelText('Requested tablets');
     quantity.focus();
     fireEvent.keyDown(quantity, { key: 'F9' });
     expect(document.activeElement).toBe(quantity);
@@ -5166,5 +5229,141 @@ describe('DEV-41 post-merge branch reasons and composed explanations', () => {
     expect(mocks.mutations.create).not.toHaveBeenCalled();
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-633 keyboard-only counter', () => {
+  const rows = [
+    barcodeRow(),
+    barcodeRow({ medicineId: 'second-result', displayName: 'Second item' }),
+  ];
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows, truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  function searchResults() {
+    const rendered = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'para' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    return { ...rendered, search };
+  }
+
+  it('picks and wraps ready results with arrows while keeping scan focus', () => {
+    const { search } = searchResults();
+    const active = () => mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId;
+    expect(fireEvent.keyDown(search, { key: 'ArrowUp' })).toBe(false);
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    expect(document.activeElement).toBe(search);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it.each(['empty', 'loading', 'error', 'placeholder', 'superseded'] as const)(
+    'leaves arrows with the field for %s results',
+    (state) => {
+      const { search, rerender } = searchResults();
+      if (state === 'empty') mocks.queries.counterSearch!.data = { rows: [], truncated: false };
+      if (state === 'loading') mocks.queries.counterSearch!.isFetching = true;
+      if (state === 'error') mocks.queries.counterSearch!.isError = true;
+      if (state === 'placeholder') mocks.queries.counterSearch!.isPlaceholderData = true;
+      if (state === 'superseded') fireEvent.change(search, { target: { value: 'different' } });
+      rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(fireEvent.keyDown(search, { key: 'ArrowDown' })).toBe(true);
+      expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBeNull();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it('claims F6 from a pointer-selected Quantity without repeating the add', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(rows[0]!));
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    fireEvent.change(quantity, { target: { value: '2' } });
+    expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+      )
+    );
+  });
+
+  it('moves from a picked result to Quantity, adds once with F6 and restores scan focus', async () => {
+    const { search } = searchResults();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    const quantity = screen.getByLabelText('Quantity');
+    expect(document.activeElement).toBe(quantity);
+    expect(quantity).toHaveValue('');
+    fireEvent.change(quantity, { target: { value: '2' } });
+    expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+      )
+    );
+    await waitFor(() => expect(document.activeElement).toBe(search));
+  });
+
+  it.each(['scan', 'quantity'] as const)(
+    'adds the selected quantity once with Enter from %s',
+    async (field) => {
+      const { search } = searchResults();
+      fireEvent.keyDown(search, { key: 'ArrowDown' });
+      const quantity = screen.getByLabelText('Quantity');
+      fireEvent.change(quantity, { target: { value: '2' } });
+      const target = field === 'scan' ? search : quantity;
+      target.focus();
+      expect(fireEvent.keyDown(target, { key: 'Enter' })).toBe(false);
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+        )
+      );
+    }
+  );
+
+  it('allows F9 from Quantity and blocks F6/F9 while a dialog is open', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(rows[0]!));
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    fireEvent.change(quantity, { target: { value: '2' } });
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+    try {
+      expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(true);
+      expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(true);
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    } finally {
+      dialog.remove();
+    }
+    expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(false);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText('Amount').closest('[tabindex="-1"]')
+      )
+    );
+  });
+
+  it('keeps modified arrows and composing Enter with the scan field', () => {
+    const { search } = searchResults();
+    expect(fireEvent.keyDown(search, { key: 'ArrowDown', shiftKey: true })).toBe(true);
+    expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBeNull();
+    expect(fireEvent.keyDown(search, { key: 'Enter', isComposing: true })).toBe(true);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 });
