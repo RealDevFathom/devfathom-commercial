@@ -74,7 +74,7 @@ function OrderCard({
     <article className="rounded-md border border-border-subtle bg-surface-sunken p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="font-mono text-[0.6875rem] tracking-wide text-text-muted uppercase">
+          <p className="font-mono text-xs tracking-wide text-text-muted uppercase">
             {order.id.slice(-8)} · {order.branch.name}
           </p>
           <h3 className="mt-1 font-display text-base font-semibold text-text-strong">
@@ -620,7 +620,7 @@ export function PharmacyCustomerOrderingConsole() {
 
           <div className="mt-5 flex items-center justify-between gap-3 border-t border-border-subtle pt-4">
             <div>
-              <p className="font-mono text-[0.6875rem] tracking-wide text-text-muted uppercase">
+              <p className="font-mono text-xs tracking-wide text-text-muted uppercase">
                 Total
               </p>
               <p className="font-display text-xl font-semibold text-text-strong">

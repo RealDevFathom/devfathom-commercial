@@ -99,7 +99,7 @@ export function CounterCartPanel({
         <thead className="sr-only bg-surface-sunken lg:not-sr-only lg:table-header-group">
           <tr
             role="row"
-            className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase"
+            className="font-mono text-xs tracking-wide text-text-muted uppercase"
           >
             {['#', 'Medicine', 'Unit × qty', 'Batch · Expiry', 'Amount'].map((heading) => (
               <th

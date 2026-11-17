@@ -50,7 +50,7 @@ export type RecordedSource = {
  * two batches claim different evidence for one handover.
  */
 export async function recordSource(
-  db: ScopedDb,
+  db: Pick<ScopedDb, 'pharmacyMigrationSource'>,
   input: { kind: MigrationSourceKind; fileName: string; bytes: Uint8Array | string }
 ): Promise<RecordedSource> {
   const contentHash = hashSourceBytes(input.bytes);
@@ -97,7 +97,10 @@ export type PersistedProfile = {
  * earlier batch stays exactly as it was profiled and the two can be compared.
  */
 export async function persistProfile(
-  db: ScopedDb,
+  db: Pick<
+    ScopedDb,
+    'pharmacyMigrationBatch' | 'pharmacyMigrationRow' | 'pharmacyMigrationException'
+  >,
   input: {
     sourceId: string;
     label: string;
@@ -112,6 +115,8 @@ export async function persistProfile(
       sourceId: input.sourceId,
       label: input.label,
       profilerVersion: input.profiler.version,
+      quantityUnit: input.result.quantityUnit,
+      quantityColumn: input.result.quantityColumn,
       status: 'PROFILING',
     },
   });
