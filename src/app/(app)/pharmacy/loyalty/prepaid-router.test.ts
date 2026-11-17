@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   pinSet: vi.fn(),
   setPin: vi.fn(),
+  liveOwner: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -31,6 +32,7 @@ vi.mock('@/server/audit', () => ({
   annotateAudit: mocks.audit,
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({ requireDrawerManagerAccess: mocks.access }));
+vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorIsPharmacyOwner: mocks.liveOwner }));
 vi.mock('@/lib/pharmacy/refund-authorization', () => ({
   authenticateRefundPin: mocks.pin,
   actorMayRefund: mocks.mayRefund,
@@ -94,6 +96,7 @@ beforeEach(() => {
   });
   mocks.save.mockResolvedValue({ id: 'version-a', version: 1 });
   mocks.pinSet.mockResolvedValue(true);
+  mocks.liveOwner.mockResolvedValue(true);
   mocks.setPin.mockResolvedValue({ accountId: 'account-a' });
 });
 describe('prepaid owner controls', () => {
@@ -199,5 +202,23 @@ describe('prepaid owner controls', () => {
         pin: '7310',
       }
     );
+  });
+  it('refuses a session ADMIN who is not the live owner, such as the owner-operator bundle', async () => {
+    mocks.liveOwner.mockResolvedValue(false);
+    const operator = caller('ADMIN');
+    for (const attempt of [
+      () => operator.overview({}),
+      () => operator.save({ tiers: [], refundable: true }),
+      () => operator.move(input),
+      () => operator.move({ ...input, kind: 'REFUND', pin: '1234' }),
+      () => operator.setPin({ customerId: 'customer-a', customerPin: '4821' }),
+    ])
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.liveOwner).toHaveBeenCalledWith(expect.anything(), 'org-a', 'owner-a');
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.pin).not.toHaveBeenCalled();
+    expect(mocks.move).not.toHaveBeenCalled();
+    expect(mocks.cash).not.toHaveBeenCalled();
+    expect(mocks.setPin).not.toHaveBeenCalled();
   });
 });

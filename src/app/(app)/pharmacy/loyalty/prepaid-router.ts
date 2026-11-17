@@ -28,15 +28,17 @@ import {
   setPrepaidPin,
 } from '@/lib/pharmacy/prepaid-tiers';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 
 export const PREPAID_OWNER_ONLY = 'Only the owner can manage prepaid tiers and balances.';
 
 /**
- * DEV-863: tiers, upfront payments and prepaid refunds belong to the owner. `adminProcedure`
- * checks a grantable capability that a delegated employee can hold, so the signed-in session
- * must also be this organization's owner (session ADMIN), before any read or money work.
+ * DEV-863: tiers, upfront payments, prepaid refunds and PIN resets belong to the owner.
+ * `adminProcedure` checks a grantable capability, and a session ADMIN can be a non-owner
+ * (the `owner-operator` bundle), so the actor must be the live organization owner: the system
+ * Owner role or an all-capability ADMIN, with no DENY. Checked before any read or money work.
  */
-function scopeFor(ctx: TRPCContext) {
+async function scopeFor(ctx: TRPCContext) {
   const user = ctx.session!.user;
   if (
     !user.organizationId ||
@@ -44,7 +46,10 @@ function scopeFor(ctx: TRPCContext) {
     !hasModule(ctx.entitlements, 'pharmacy-crm')
   )
     throw new TRPCError({ code: 'FORBIDDEN' });
-  if (user.role !== 'ADMIN')
+  if (
+    user.role !== 'ADMIN' ||
+    !(await actorIsPharmacyOwner(ctx.db as ScopedDb, user.organizationId, user.id))
+  )
     throw new TRPCError({ code: 'FORBIDDEN', message: PREPAID_OWNER_ONLY });
   return { organizationId: user.organizationId, actorId: user.id };
 }
@@ -72,7 +77,7 @@ export const pharmacyPrepaidRouter = router({
   overview: adminProcedure
     .input(z.object({ customerId: z.string().optional() }))
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx);
+      const scope = await scopeFor(ctx);
       const [versions, liability, customers, branches] = await Promise.all([
         prepaidSettings(ctx.db, scope.organizationId),
         ctx.db.pharmacyPrepaidAccount.aggregate({
@@ -153,7 +158,7 @@ export const pharmacyPrepaidRouter = router({
       };
     }),
   save: adminProcedure.input(prepaidTierSettings).mutation(async ({ ctx, input }) => {
-    const scope = scopeFor(ctx);
+    const scope = await scopeFor(ctx);
     const version = await ctx.db.$transaction((tx) =>
       publishPrepaidSettings(tx as ScopedDb, scope, input)
     );
@@ -168,7 +173,7 @@ export const pharmacyPrepaidRouter = router({
     return version;
   }),
   setPin: adminProcedure.input(prepaidPinInput).mutation(async ({ ctx, input }) => {
-    const scope = scopeFor(ctx);
+    const scope = await scopeFor(ctx);
     try {
       const result = await ctx.db.$transaction((tx) =>
         setPrepaidPin(tx as ScopedDb, scope, {
@@ -191,7 +196,7 @@ export const pharmacyPrepaidRouter = router({
     }
   }),
   move: adminProcedure.input(prepaidMovementInput).mutation(async ({ ctx, input }) => {
-    const owner = scopeFor(ctx);
+    const owner = await scopeFor(ctx);
     const scope = await requireDrawerManagerAccess(ctx, input.branchId);
     if (scope.organizationId !== owner.organizationId || scope.actorId !== owner.actorId)
       throw new TRPCError({ code: 'FORBIDDEN', message: PREPAID_OWNER_ONLY });
