@@ -72,7 +72,7 @@ export function CounterLostSaleChips({
         <p className="text-sm font-medium text-text-strong">
           Short: <span className="text-text-body">{requested}</span>
         </p>
-        <p className="font-mono text-[11px] uppercase tracking-wide text-text-muted">
+        <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
           Optional · {notify ? 'paused' : 'closes as Unknown in 5s'}
         </p>
       </div>
@@ -91,16 +91,17 @@ export function CounterLostSaleChips({
         ))}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
+        <Label
+          htmlFor={`${phoneId}-notify`}
+          className="flex min-h-11 cursor-pointer items-center gap-2"
+        >
           <Switch
             id={`${phoneId}-notify`}
             checked={notify}
             onCheckedChange={(checked) => setNotify(Boolean(checked))}
           />
-          <Label htmlFor={`${phoneId}-notify`} className="text-sm text-text-body">
-            Notify when back (customer agrees)
-          </Label>
-        </div>
+          <span className="text-sm text-text-body">Notify when back (customer agrees)</span>
+        </Label>
         {notify ? (
           <div className="flex min-w-0 flex-col gap-1">
             <Label htmlFor={phoneId} className="sr-only">

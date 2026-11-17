@@ -18,6 +18,7 @@ import {
   readExpiryDate,
   readMoneyMinor,
   readPackFactor,
+  isStrengthPackLabel,
   readQuantity,
   readText,
   type SourceTable,
@@ -129,21 +130,33 @@ export type ProfiledException = {
 
 export type ProfileResult = {
   columnMap: ColumnMap;
+  quantityUnit: QuantityUnit | null;
+  /** Header of the mapped quantity column, or null when none is mapped. */
+  quantityColumn: string | null;
   rows: ProfiledRow[];
   exceptions: ProfiledException[];
 };
 
 /**
  * Facts the receiving organization already knows, used for the two buckets that
- * cannot be decided from the source alone. Both are optional: absent context
- * means the bucket is not evaluated, never that it passed.
+ * cannot be decided from the source alone. Party facts are optional: absent
+ * context means those buckets are not evaluated, never that they passed.
+ * A missing quantity choice always leaves product quantities unresolved.
  */
 export type ProfileContext = {
   /** Natural keys of parties that already exist, from `naturalKey(PARTY, …)`. */
   knownPartyKeys?: ReadonlySet<string>;
   /** Party natural key → the balance the pharmacy's own statement declares. */
   declaredPartyBalanceMinor?: ReadonlyMap<string, bigint>;
+  /**
+   * Column-mapping choice: what the quantity column counts. No choice leaves
+   * canonical quantities null and raises UNIT_AMBIGUOUS. PACKS converts by
+   * the row's pack factor. The choice is stored on the batch, never in row evidence.
+   */
+  quantityUnit?: QuantityUnit;
 };
+
+export type QuantityUnit = 'UNITS' | 'PACKS';
 
 export class UnrecognisedSourceError extends Error {
   constructor(kind: MigrationSourceKind) {
@@ -167,10 +180,19 @@ export function profileTable(
   const columnMap = profiler.resolveColumns(table);
   if (!columnMap) throw new UnrecognisedSourceError(profiler.kind);
 
-  const rows = table.rows.map((cells, index) => buildRow(table, columnMap, cells, index));
+  const quantityUnit =
+    context.quantityUnit === 'PACKS' || context.quantityUnit === 'UNITS'
+      ? context.quantityUnit
+      : null;
+  const rows = table.rows.map((cells, index) =>
+    buildRow(table, columnMap, cells, index, quantityUnit)
+  );
   const exceptions = deriveExceptions(rows, table, columnMap, context, profiler);
 
-  return { columnMap, rows, exceptions };
+  const quantityIndex = columnMap.quantity;
+  const quantityColumn =
+    quantityIndex === undefined ? null : (table.headers[quantityIndex] ?? null);
+  return { columnMap, quantityUnit, quantityColumn, rows, exceptions };
 }
 
 function cellAt(
@@ -186,7 +208,8 @@ function buildRow(
   table: SourceTable,
   columnMap: ColumnMap,
   cells: readonly string[],
-  index: number
+  index: number,
+  quantityUnit: QuantityUnit | null
 ): ProfiledRow {
   const rawPayload: Record<string, string> = {};
   table.headers.forEach((header, position) => {
@@ -214,6 +237,22 @@ function buildRow(
     columnMap,
   });
 
+  const packFactor = readPackFactor(cellAt(columnMap, cells, 'pack'));
+  const sourceQuantity = readQuantity(cellAt(columnMap, cells, 'quantity'));
+  // A pack count is only convertible with a known units-per-pack factor; never assume 1,
+  // and never read a dosage strength such as "500mg" as one.
+  const conversionFactor = isStrengthPackLabel(cellAt(columnMap, cells, 'pack'))
+    ? null
+    : packFactor;
+  const quantityCanonical =
+    sourceQuantity === null || quantityUnit === null
+      ? null
+      : quantityUnit === 'PACKS'
+        ? conversionFactor === null
+          ? null
+          : sourceQuantity * conversionFactor
+        : sourceQuantity;
+
   return {
     sourceKey,
     rowNumber,
@@ -228,13 +267,13 @@ function buildRow(
     }),
     productName,
     packLabel,
-    packFactor: readPackFactor(cellAt(columnMap, cells, 'pack')),
+    packFactor,
     barcode,
     batchNumber: readText(cellAt(columnMap, cells, 'batch')),
     expiryDate: readExpiryDate(cellAt(columnMap, cells, 'expiry')),
     mrpMinor: readMoneyMinor(cellAt(columnMap, cells, 'mrp')),
     costMinor: readMoneyMinor(cellAt(columnMap, cells, 'cost')),
-    quantityCanonical: readQuantity(cellAt(columnMap, cells, 'quantity')),
+    quantityCanonical,
     supplierName,
     customerName,
     balanceMinor,
@@ -306,6 +345,10 @@ function deriveExceptions(
   profiler?: Pick<SourceProfiler, 'duplicateDiscriminator'>
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
+  const quantityUnit =
+    context.quantityUnit === 'PACKS' || context.quantityUnit === 'UNITS'
+      ? context.quantityUnit
+      : null;
   const raise = (rowIndex: number | null, bucket: ExceptionBucket, detail: string) => {
     exceptions.push({ rowIndex, bucket, severity: EXCEPTION_SEVERITY[bucket], detail });
   };
@@ -344,11 +387,15 @@ function deriveExceptions(
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
       }
       const quantityRaw = rawOf(columnMap, cells, 'quantity');
-      if (quantityRaw && row.quantityCanonical === null) {
+      if ((quantityRaw || !quantityUnit) && row.quantityCanonical === null) {
         raise(
           index,
           'UNIT_AMBIGUOUS',
-          `Quantity "${quantityRaw}" for ${where} is not a whole count of a canonical unit.`
+          !quantityUnit
+            ? `Choose whether quantity counts PACKS or UNITS for ${where}.`
+            : quantityUnit === 'PACKS' && readQuantity(quantityRaw ?? undefined) !== null
+              ? `Quantity "${quantityRaw}" packs for ${where} cannot be converted: no countable pack factor.`
+              : `Quantity "${quantityRaw}" for ${where} is not a whole count of a canonical unit.`
         );
       }
 

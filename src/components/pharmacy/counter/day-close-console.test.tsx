@@ -140,6 +140,9 @@ vi.mock('@/lib/trpc', () => ({
           error: mocks.mutationError,
         }),
       },
+      shiftHandoverNote: {
+        useQuery: () => ({ data: { note: 'Draft shift handover' }, isLoading: false }),
+      },
       closeAnomalyCheck: {
         useQuery: () => ({
           isLoading: false,
@@ -1023,5 +1026,28 @@ describe('day-close open bills warning (DEV-623)', () => {
     expect(openBillsWarning({ open: 0, held: 1 })).toBe(
       '1 held bill is still unpaid and holding stock. Resume or void it from Open bills on the counter.'
     );
+  });
+});
+
+describe('drawer-close handover availability', () => {
+  it('offers the note for a closed drawer while the business day remains open', () => {
+    mocks.extraDrawers = [
+      {
+        id: 'closed',
+        status: 'CLOSED',
+        openedAt: new Date('2026-09-29T01:00:00Z'),
+        openedBy: 'Shift operator',
+        expectedMinor: 100,
+        countedMinor: 100,
+      },
+    ];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Handover note')).toHaveValue('Draft shift handover');
+    expect(screen.getByLabelText('Closed drawer')).toHaveValue('closed');
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
+  it('does not offer a draft when no drawer is closed', () => {
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByText('Shift handover')).not.toBeInTheDocument();
   });
 });
