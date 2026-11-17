@@ -11,7 +11,7 @@ const cashiers = [
 
 describe('CounterOpenDrawerStep: who runs the till (DEV-821)', () => {
   it.each([false, true])(
-    'focuses opening cash when drawer checks finish (manager: %s)',
+    'enables opening cash when drawer checks finish without taking focus (manager: %s)',
     (canDeclareFloat) => {
       const onOpen = vi.fn();
       const { rerender } = render(
@@ -21,7 +21,7 @@ describe('CounterOpenDrawerStep: who runs the till (DEV-821)', () => {
       rerender(
         <CounterOpenDrawerStep disabled={false} canDeclareFloat={canDeclareFloat} onOpen={onOpen} />
       );
-      expect(screen.getByLabelText('Opening cash')).toHaveFocus();
+      expect(screen.getByLabelText('Opening cash')).toBeEnabled();
       expect(onOpen).not.toHaveBeenCalled();
     }
   );

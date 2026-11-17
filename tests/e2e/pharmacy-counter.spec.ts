@@ -828,14 +828,21 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
+  await expect(
+    dialog.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
+  ).toBeDisabled();
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
   await expect(dialog.getByLabel('Refund to')).not.toHaveValue('');
   await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(half);
   await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
-  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await pressControl(dialog.getByRole('button', { name: /^Restock.*Confirm return & refund$/ }));
   await expect(dialog.getByRole('status')).toContainText(
     `Return recorded and refunded: PKR ${half}`
   );
@@ -846,7 +853,21 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption('');
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
+  await expect(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await expect(dialog.getByRole('button', { name: /^Keep aside — don't resell/ })).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
+  await dialog.getByLabel('Keep-aside (quarantine) location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Batch marking unreadable; pharmacist verification required');
@@ -854,7 +875,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
     (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) - Number(half)).toFixed(2)
   );
   await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
-  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await pressControl(dialog.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
   await expect(dialog.getByRole('status')).toContainText('Return recorded and refunded');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'pharmacist verification pending'
