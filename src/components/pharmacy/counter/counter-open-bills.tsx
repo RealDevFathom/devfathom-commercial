@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -61,6 +61,7 @@ export function CounterOpenBills({
   const [open, setOpen] = useState(false);
   // DEV-508: the bill whose void is being confirmed, with a reason, in the void dialog.
   const [confirmVoid, setConfirmVoid] = useState<CounterOpenBill | null>(null);
+  const reasonId = useId();
   const count = bills?.length ?? 0;
   return (
     <>
@@ -99,11 +100,13 @@ export function CounterOpenBills({
             <p className="text-sm text-text-muted">No open or held bills in this branch.</p>
           ) : (
             <ul className="grid gap-3" aria-label="Open and held bills">
-              {bills!.map((bill) => {
+              {bills!.map((bill, index) => {
                 const current = bill.saleId === activeSaleId;
                 // The server refuses this void too; the money must be refunded first.
                 const paid = bill.tenderedMinor > 0;
                 const paidReason = `refund-first-${bill.saleId}`;
+                const busyReason = `${reasonId}-busy-${index}`;
+                const currentReason = `${reasonId}-current-${index}`;
                 return (
                   <li
                     key={bill.saleId}
@@ -141,6 +144,9 @@ export function CounterOpenBills({
                       <Button
                         className="h-11"
                         disabled={disabled || current}
+                        aria-describedby={
+                          disabled ? busyReason : current ? currentReason : undefined
+                        }
                         onClick={() => {
                           void onResume(bill).then((done) => {
                             if (done) setOpen(false);
@@ -153,12 +159,26 @@ export function CounterOpenBills({
                         variant="outline"
                         className="h-11"
                         disabled={disabled || paid}
-                        aria-describedby={paid ? paidReason : undefined}
+                        aria-describedby={
+                          [disabled ? busyReason : '', paid ? paidReason : '']
+                            .filter(Boolean)
+                            .join(' ') || undefined
+                        }
                         onClick={() => setConfirmVoid(bill)}
                       >
                         Void
                       </Button>
                     </div>
+                    {disabled ? (
+                      <p id={busyReason} className="text-sm text-text-muted">
+                        Wait for the current counter action to finish or review payment status.
+                      </p>
+                    ) : null}
+                    {current && !disabled ? (
+                      <p id={currentReason} className="text-sm text-text-muted">
+                        This bill is already on this counter.
+                      </p>
+                    ) : null}
                     {paid ? (
                       <p id={paidReason} className="text-sm text-text-muted">
                         Payment was taken on this bill. A manager or owner must refund it before the
