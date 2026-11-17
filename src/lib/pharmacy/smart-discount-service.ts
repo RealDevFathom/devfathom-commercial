@@ -151,8 +151,9 @@ export async function readDiscountSuggestions(
           unitCostMinor: true,
           unitsPerPack: true,
         },
+        // No row cap: an older saleable lot of the pack can carry the lowest MRP or
+        // highest cost, and must bound the suggestion too.
         orderBy: { createdAt: 'desc' },
-        take: 20,
       });
       if (!lots.length) return { ...base, suggestion: null, elasticity: null };
       // Compare like with like: only lots of the newest lot's pack level.

@@ -19,14 +19,16 @@ function suggestionDb() {
       ]),
     },
     pharmacyInventoryLot: {
-      findMany: vi.fn(async () => [
+      findMany: vi.fn(async (_args: { where: Record<string, unknown> }) => [
         { packLevelId: 'pack-box', printedMrpMinor: 1_200, unitCostMinor: 80, unitsPerPack: 10 },
         // A different pack size: never mixed into the box's cap or floor.
         { packLevelId: 'pack-strip', printedMrpMinor: 100, unitCostMinor: 999, unitsPerPack: 1 },
       ]),
     },
     pharmacyCompetitorPriceObservation: {
-      findFirst: vi.fn(async () => ({ observedPriceMinor: 1_100 })),
+      findFirst: vi.fn(async (_args: { where: Record<string, unknown> }) => ({
+        observedPriceMinor: 1_100,
+      })),
     },
     pharmacySaleLine: { findMany: vi.fn(async () => []) },
   };
@@ -40,11 +42,10 @@ describe('DEV-66 discount suggestions read', () => {
       now: NOW,
     });
 
-    const lotWhere = (
-      db.pharmacyInventoryLot.findMany.mock.calls[0] as unknown as [
-        { where: Record<string, unknown> },
-      ]
-    )[0].where;
+    const lotArgs = db.pharmacyInventoryLot.findMany.mock.calls[0]![0];
+    const lotWhere = lotArgs.where;
+    // No row cap: the cap and floor must see every eligible lot of the pack.
+    expect(lotArgs).not.toHaveProperty('take');
     expect(lotWhere).toMatchObject({
       organizationId: 'org-a',
       branchId: 'branch-a',
@@ -52,11 +53,8 @@ describe('DEV-66 discount suggestions read', () => {
       batch: { state: 'ACTIVE', expiresAt: { gt: NOW }, medicine: { saleable: true } },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
     });
-    const competitorWhere = (
-      db.pharmacyCompetitorPriceObservation.findFirst.mock.calls[0] as unknown as [
-        { where: Record<string, unknown> },
-      ]
-    )[0].where;
+    const competitorArgs = db.pharmacyCompetitorPriceObservation.findFirst.mock.calls[0]![0];
+    const competitorWhere = competitorArgs.where;
     expect(competitorWhere).toMatchObject({ medicineId: 'medicine-a', packLevelId: 'pack-box' });
 
     expect(row).toMatchObject({
@@ -117,6 +115,15 @@ describe('DEV-66 competitor price log', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           branchId: 'branch-a',
+          medicineId: 'medicine-a',
+          packLevelId: 'pack-box',
+          recordedByUserId: 'manager-a',
+        }),
+      })
+    );
+  });
+});
+-a',
           medicineId: 'medicine-a',
           packLevelId: 'pack-box',
           recordedByUserId: 'manager-a',
