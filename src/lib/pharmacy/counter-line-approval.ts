@@ -11,6 +11,7 @@ import {
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
@@ -222,7 +223,17 @@ async function verifyApproverPin(
   const selfApproved = approver.id === scope.actorId;
   if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
-  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: approver.id,
+      credentialHash: credential.credentialHash,
+      secret: input.pin,
+      action: `pharmacy.counterApproval.${kind}`,
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),

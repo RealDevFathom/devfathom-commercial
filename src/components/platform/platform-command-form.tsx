@@ -325,8 +325,12 @@ export function PlatformCommandForm({
       if (!response.ok) {
         const mapped = Object.fromEntries(
           Object.entries(body.fieldErrors ?? {}).map(([path, message]) => [
-            fields.find((field) => path === field.name || path.endsWith(`.${field.name}`))?.name ??
-              path,
+            fields.find(
+              (field) =>
+                path === field.name ||
+                path.startsWith(`${field.name}.`) ||
+                path.endsWith(`.${field.name}`)
+            )?.name ?? path,
             message,
           ])
         );

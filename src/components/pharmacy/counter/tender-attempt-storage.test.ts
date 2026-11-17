@@ -339,6 +339,27 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   expect(window.localStorage.length).toBe(0);
 });
 
+it('DEV-875 retains bank transfer evidence for recovery and rejects mixed capture', () => {
+  const attempt = original();
+  attempt.input.type = 'BANK_TRANSFER';
+  delete attempt.input.cashReceivedMinor;
+  attempt.input.providerRef = 'BANK/2026-001';
+  attempt.draft.cashReceived = '';
+  persistTenderAttempt(attempt);
+  expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  clearTenderAttempt(attempt);
+  for (const change of [
+    { providerRef: '   ' },
+    { payerName: 'Ayesha' },
+    { referenceSkipped: true },
+    { approvalCode: 'A1B2' },
+  ]) {
+    expect(() =>
+      persistTenderAttempt({ ...attempt, input: { ...attempt.input, ...change } })
+    ).toThrow();
+  }
+});
+
 describe('DEV-712 freshTenderKey', () => {
   const key = 'counter-tender:sale-1:CASH:1250';
 

@@ -25,6 +25,7 @@ import { resignationsRouter } from './resignations';
 import { passwordResetRouter } from './password-reset';
 import { reviewsRouter } from './reviews';
 import { twoFactorRouter } from './two-factor';
+import { approvalAuthenticatorRouter } from './approval-authenticator';
 import { webhooksRouter } from './webhooks';
 import { emailRouter } from './email';
 import { organizationAdminRouter } from './organization-admin';
@@ -106,6 +107,7 @@ export const appRouter = router({
   passwordReset: passwordResetRouter,
   reviews: reviewsRouter,
   twoFactor: twoFactorRouter,
+  approvalAuthenticator: approvalAuthenticatorRouter,
   webhooks: webhooksRouter,
   email: emailRouter,
   organizationAdmin: organizationAdminRouter,

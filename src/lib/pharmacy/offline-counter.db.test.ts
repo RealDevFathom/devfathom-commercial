@@ -1252,6 +1252,7 @@ describeIfDatabase('leased receipt settlement', () => {
       deviceId: fixture.deviceId,
       businessDate: new Date(),
       type: 'BANK_TRANSFER' as const,
+      providerRef: 'BANK-001',
       amountMinor: 100,
       idempotencyKey: tag('tender'),
       leasedReceipt: {
@@ -1333,6 +1334,7 @@ describeIfDatabase('leased receipt settlement', () => {
           {
             ...f.input,
             type: 'CASH',
+            providerRef: undefined,
           },
           {
             deviceSecret: f.fixture.deviceSecret,

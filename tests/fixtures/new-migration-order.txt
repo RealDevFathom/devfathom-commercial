@@ -6,3 +6,4 @@
 20261117090400_restaurant_manual_card_provider
 20261117090500_pharmacy_sold_pack_serials
 20261117090600_migration_quantity_unit
+20261117090700_approval_authenticators
