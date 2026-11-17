@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ transaction: vi.fn(), scope: vi.fn(), query: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  transaction: vi.fn(),
+  scope: vi.fn(),
+  query: vi.fn(),
+  drainOrganization: vi.fn(),
+}));
 vi.mock('@/lib/db', () => ({ db: { $transaction: mocks.transaction } }));
+vi.mock('@/lib/side-effects/drain', () => ({ drainOrganization: mocks.drainOrganization }));
 import { trackTransactionWork } from '@/lib/side-effects/scope';
 import { createTenantDb, withTenantDb, withPlatformDb } from './scoped-db';
 beforeEach(() => {
@@ -10,6 +16,7 @@ beforeEach(() => {
     run({ $queryRawUnsafe: mocks.scope, restaurantPrintRoute: { findMany: mocks.query } })
   );
   mocks.query.mockResolvedValue([]);
+  mocks.drainOrganization.mockResolvedValue(undefined);
 });
 describe('tenant transaction isolation options', () => {
   it('forwards explicit isolation while applying tenant and user scope before queries', async () => {
@@ -80,7 +87,7 @@ describe('tenant transaction isolation options', () => {
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
-  it('waits for transaction-local work before completing a successful transaction', async () => {
+  it('waits for transaction-local work without scheduling an outbox drain', async () => {
     let finishWork!: () => void;
     const work = new Promise<void>((resolve) => {
       finishWork = resolve;
@@ -101,6 +108,7 @@ describe('tenant transaction isolation options', () => {
 
     finishWork();
     await expect(result).resolves.toBe('committed');
+    expect(mocks.drainOrganization).not.toHaveBeenCalled();
   });
 
   it('settles transaction-local work before rethrowing a callback failure', async () => {
