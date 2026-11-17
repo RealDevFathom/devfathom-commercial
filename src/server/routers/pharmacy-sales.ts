@@ -35,7 +35,8 @@ import {
   isManualTender,
   manualMerchantPolicies,
   MANUAL_CARD_APPROVAL_CODE,
-  MANUAL_CARD_REFERENCE,
+  BANK_TRANSFER_REFERENCE_MAX_LENGTH,
+  hasValidTenderProviderReference,
 } from '@/lib/pharmacy/manual-payments';
 import {
   readManualPaymentSettings,
@@ -54,6 +55,12 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { RefusalReason } from '@/server/refusal-reason';
+import {
+  evaluateCounterSaleReadiness,
+  type CounterSaleReadiness,
+} from '@/lib/pharmacy/sale-readiness';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   actorManagesBranchDrawers,
@@ -74,8 +81,8 @@ import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
@@ -151,6 +158,7 @@ import {
 } from '@/lib/pharmacy/duplicate-salt-acknowledgement';
 import {
   addSaleLine,
+  replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
   captureDemand,
@@ -250,8 +258,9 @@ const tenderInput = z
      */
     overLimitApproval: counterApprovalPin.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
-    // reference, never a full card number. Each tender's shape is enforced in settlement.
-    providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
+    // reference, never a full card number. Bank transfers use the bank statement reference.
+    // Each tender's shape is enforced in settlement.
+    providerRef: z.string().max(BANK_TRANSFER_REFERENCE_MAX_LENGTH).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
@@ -262,7 +271,8 @@ const tenderInput = z
      */
     prepaidPin: prepaidPin.optional(),
   })
-  .strict();
+  .strict()
+  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -351,6 +361,35 @@ async function marginScopeFor(
   // Branch stock, cost and margin stay inside the caller's active branch assignment.
   // Only a session ADMIN of this organization may read any of its active branches.
   if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignment.some((row) => row.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
+}
+
+/**
+ * DEV-876: a counter read (stock, lots, substitutes, upsells, pack scans, the
+ * drawer and the customer's loyalty and credit) stays inside the caller's active
+ * branch assignment, as the counter's writes already do. A branch outside the
+ * workspace keeps `scopeFor`'s refusal; only a session ADMIN of this organization
+ * may read an active branch they are not assigned to.
+ */
+async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId !== scope.organizationId)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (user.role === 'ADMIN') return scope;
   const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -974,7 +1013,14 @@ async function requireCounterReceiptAccess(
     annotateOrgAdminReceiptAccess(ctx, branch, assigned);
     return scope;
   }
-  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  // DEV-860: by now the branch is an active branch of the caller's own organization and
+  // the caller an active member with counter access, so naming the missing assignment
+  // reveals nothing about another tenant or user. Every earlier refusal names no reason.
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Branch is outside your scope.',
+    cause: new RefusalReason(BRANCH_NOT_ASSIGNED),
+  });
 }
 
 /** Navigation uses the counter's grant and branch rules without recording an access. */
@@ -1502,7 +1548,7 @@ export const pharmacySalesRouter = router({
       try {
         return await readCustomerSnapshot(
           ctx.db,
-          await scopeFor(ctx, input.branchId),
+          await assignedBranchScope(ctx, input.branchId),
           input.customerId,
           input.page
         );
@@ -1567,7 +1613,7 @@ export const pharmacySalesRouter = router({
   drawerStatus: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       const openDrawer = await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId);
       if (!openDrawer) return { openDrawer, operatingCashier: null };
       // DEV-821: who runs this till, so the counter can say so before a cash payment.
@@ -1754,7 +1800,7 @@ export const pharmacySalesRouter = router({
         : // DEV-713: a card outcome needs the same counter access as the card write.
           isManualTender(input.type) || input.type === 'CARD'
           ? await requireCounterReceiptAccess(ctx, input.branchId, true)
-          : await scopeFor(ctx, input.branchId);
+          : await assignedBranchScope(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
@@ -1986,6 +2032,46 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /**
+   * DEV-860: what stops this counter selling, listed before the first scan. The same
+   * member, capability and branch gate as `create`; a missing branch assignment is
+   * reported rather than thrown. Codes only: the counter maps them to text, and only an
+   * organization administrator (`canFixSetup`) is linked to the setup pages.
+   */
+  saleReadiness: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          deviceId: z.string().min(1).max(200).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const { scope, assigned, orgAdmin } = await counterReceiptGrant(ctx, input.branchId);
+      if (!assigned.has(input.branchId) && !orgAdmin) {
+        return {
+          ready: false,
+          blockers: [BRANCH_NOT_ASSIGNED],
+          warnings: [],
+          canFixSetup: false,
+        } satisfies CounterSaleReadiness & { canFixSetup: boolean };
+      }
+      const takesPayment = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:counter',
+        undefined,
+        { db: ctx.db }
+      );
+      const readiness = await evaluateCounterSaleReadiness(ctx.db as unknown as ScopedDb, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
+        deviceId: input.deviceId ?? null,
+        takesPayment,
+      });
+      return { ...readiness, canFixSetup: orgAdmin };
+    }),
   create: protectedProcedure
     .input(
       z
@@ -2155,8 +2241,6 @@ export const pharmacySalesRouter = router({
         );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          for (const { kind, approval } of approvals)
-            await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -2168,14 +2252,27 @@ export const pharmacySalesRouter = router({
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             const { prescription } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
+              prescription &&
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
                 db,
               }))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            const replay = await replaySaleLine(db, scope, lineInput);
+            if (replay) {
+              // The counter's key omits the prescription, so a changed reference is a new request.
+              if (
+                replay.line.prescriptionLineId !== (prescription?.prescriptionLineId ?? null) ||
+                replay.line.prescriptionPatientId !== (prescription?.patientId ?? null)
+              )
+                throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+              return replay;
+            }
+            for (const { kind, approval } of approvals)
+              await confirmCounterApproval(db, scope, kind, approval);
+            if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const reference = await resolvePrescriptionReference(db, scope, {
               ...prescription,
@@ -2251,7 +2348,15 @@ export const pharmacySalesRouter = router({
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
-            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+            !(await verifyApprovalSecret(db, {
+              organizationId: scope.organizationId,
+              approverUserId: pharmacist.id,
+              credentialHash: credential.credentialHash,
+              secret: authorization.pin,
+              action: 'pharmacySales.controlledAuthorization',
+              requestedById: scope.actorId,
+              now,
+            }))
           ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
@@ -2263,10 +2368,59 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // A retry is validated like a new request before replay, so an unknown earlier
+          // serial is refused either way.
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
+          // DEV-874: a retry replays only after the independent pharmacist PIN passes again,
+          // so a missing or wrong PIN never returns the saved controlled line.
+          const replay = await replaySaleLine(db, scope, lineInput);
+          if (replay) {
+            // The counter key omits the patient and dispensing authority, so a retry must
+            // carry every detail the register recorded for this line.
+            const recorded = await db.pharmacyControlledRegisterEntry.findMany({
+              where: {
+                organizationId: scope.organizationId,
+                stockMovementId: { in: replay.allocation.movementIds },
+              },
+              select: {
+                patientId: true,
+                patientAddress: true,
+                prescriptionLineId: true,
+                emergency: true,
+                prescriberName: true,
+                prescriberRegNo: true,
+                rxSerialWritten: true,
+                refEntryId: true,
+              },
+            });
+            const emergency = authorization.emergency;
+            const prescriptionLineId = emergency
+              ? null
+              : (authorization.prescriptionLineId ?? null);
+            if (
+              recorded.length === 0 ||
+              recorded.some(
+                (entry) =>
+                  entry.patientId !== authorization.patientId ||
+                  entry.patientAddress !== authorization.patientAddress ||
+                  entry.emergency !== emergency ||
+                  entry.prescriptionLineId !== prescriptionLineId ||
+                  entry.rxSerialWritten !== authorization.rxSerialWritten ||
+                  entry.refEntryId !== (refEntry?.id ?? null) ||
+                  // A prescription fill snapshots its prescriber from the prescription line.
+                  (emergency &&
+                    (entry.prescriberName !== (authorization.prescriberName ?? null) ||
+                      entry.prescriberRegNo !== (authorization.prescriberRegNo ?? null)))
+              )
+            )
+              throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+            return replay;
+          }
+          for (const { kind, approval } of approvals)
+            await confirmCounterApproval(db, scope, kind, approval);
           if (authorization.emergency) {
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
@@ -2417,19 +2571,6 @@ export const pharmacySalesRouter = router({
           )
             return blocked;
           const units = input.quantity * input.canonicalUnitsPerSaleUnit;
-          const previous = await db.pharmacySaleLine.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-              saleId: input.saleId,
-              idempotencyKey: input.idempotencyKey,
-            },
-          });
-          if (previous)
-            return {
-              blocked:
-                'This request was already recorded. Refresh the cart before adding another line.',
-            };
           if (
             !Number.isSafeInteger(units) ||
             rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
@@ -3035,7 +3176,11 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await findSubstituteProposals(ctx.db, await scopeFor(ctx, input.branchId), input);
+        return await findSubstituteProposals(
+          ctx.db,
+          await assignedBranchScope(ctx, input.branchId),
+          input
+        );
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
@@ -3214,7 +3359,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) =>
-      findUpsellSuggestions(ctx.db, await scopeFor(ctx, input.branchId), {
+      findUpsellSuggestions(ctx.db, await assignedBranchScope(ctx, input.branchId), {
         medicineIds: input.medicineIds,
         limit: input.limit,
       })
@@ -3474,6 +3619,12 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      // DEV-860: a member who is not an administrator and lists no branch is not assigned
+      // to any active branch. That names only the caller's own standing: nothing about
+      // which branches exist or who else is assigned. An administrator sees every active
+      // branch, so an empty list for them means no branch is set up.
+      setupReason: !orgAdmin && branches.length === 0 ? BRANCH_NOT_ASSIGNED : null,
+      canFixSetup: orgAdmin,
     };
   }),
 
@@ -3527,7 +3678,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await searchCounterCatalog(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await searchCounterCatalog(ctx.db, await assignedBranchScope(ctx, input.branchId), {
           query: input.query,
           limit: input.limit,
         });
@@ -3540,7 +3691,7 @@ export const pharmacySalesRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,
@@ -3558,7 +3709,7 @@ export const pharmacySalesRouter = router({
   counterLotOptions: protectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       // `onHand` returns balance buckets already in FEFO order (expiry, then
       // receipt), so first appearance is the order the allocator would use.
       const buckets = await onHand(ctx.db, scope, input.medicineId, new Date());

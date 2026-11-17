@@ -425,6 +425,34 @@ describe('counter returns', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Find receipt' }).closest('form')!);
     expect(screen.getByText('Receipt not found')).toBeVisible();
   });
+  it('explains a negative receipt number inline and marks the field invalid', () => {
+    mocks.lookup = {};
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    const field = screen.getByLabelText('Receipt number');
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    fireEvent.change(field, { target: { value: '-5' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Find receipt' }).closest('form')!);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(/Negative numbers and zero are not receipt numbers/);
+    expect(screen.getByText(/made of digits/)).toBeVisible();
+    fireEvent.change(field, { target: { value: '5' } });
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+  });
+  it('does not redisplay cached receipts after an invalid search is edited', () => {
+    render(<ReturnForm {...props} />);
+    const field = screen.getByLabelText('Receipt number');
+    const form = screen.getByRole('button', { name: 'Find receipt' }).closest('form')!;
+    fireEvent.change(field, { target: { value: '12' } });
+    fireEvent.submit(form);
+    expect(screen.getByRole('button', { name: /Receipt 12/ })).toBeVisible();
+    fireEvent.change(field, { target: { value: '-5' } });
+    fireEvent.submit(form);
+    expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
+    fireEvent.change(field, { target: { value: '-6' } });
+    expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
+    expect(screen.queryByText('Receipt not found')).toBeNull();
+  });
   it('reads the receipt sequence from printed references', () => {
     expect(parseReceiptNumber('1042')).toBe(1042);
     expect(parseReceiptNumber(' QA-1042 ')).toBe(1042);

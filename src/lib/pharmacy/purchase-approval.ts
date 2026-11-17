@@ -12,8 +12,8 @@ import {
   LOCKOUT_DURATION_MS,
   MAX_FAILED_ATTEMPTS,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 
 export const SOLO_OWNER_POLICY = 'PHARMACY_SOLO_OWNER_PIN';
@@ -109,7 +109,17 @@ async function verifyApprover(
   });
   const now = new Date();
   if (!credential || isLockedOut(credential, now)) return { blocked: APPROVAL_BLOCKED } as const;
-  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId,
+      approverUserId: approverId,
+      credentialHash: credential.credentialHash,
+      secret: pin,
+      action: 'pharmacy.purchaseApproval',
+      requestedById: input.actorId ?? approverId,
+      now,
+    }))
+  ) {
     if (!crossPerson) {
       await db.restaurantOperatorCredential.update({
         where: { id: credential.id },

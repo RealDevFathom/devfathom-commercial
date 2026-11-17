@@ -31,6 +31,7 @@ import {
   aggregateTenderTotals,
   MANUAL_CARD_PROVIDER,
   manualCardCaptureSchema,
+  bankTransferCaptureSchema,
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
@@ -236,6 +237,9 @@ export async function readPharmacyTenderOutcome(
     if (input.approvalCode !== undefined && (tender.provider !== MANUAL_CARD_PROVIDER ||
       tender.providerRef !== input.providerRef?.trim() ||
       tender.approvalCode !== input.approvalCode.trim())) return unknown;
+
+    if (input.type === 'BANK_TRANSFER' &&
+      (tender.providerRef ?? null) !== (input.providerRef?.trim() ?? null)) return unknown;
 
     return { status: 'ACCEPTED', replayUnsafe: true, result };
   } catch {
@@ -517,14 +521,16 @@ export async function applyPharmacyTender(
   // DEV-713: a card taken on a standalone terminal is the default card path.
   // The integrated provider path runs only when a provider adapter is supplied.
   const manualCard = input.type === 'CARD' && !input.adapter;
-  if (manualCard) {
+  const bankTransfer = input.type === 'BANK_TRANSFER';
+  if (manualCard || bankTransfer) {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined ||
         input.cashReceivedMinor !== undefined)
       throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
-  } else if (input.approvalCode !== undefined) {
+  }
+  if (!manualCard && input.approvalCode !== undefined) {
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   }
-  if (!isManualTender(input.type) && !manualCard &&
+  if (!isManualTender(input.type) && !manualCard && !bankTransfer &&
       (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined))
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   if (input.type === 'CASH') {
@@ -575,6 +581,12 @@ export async function applyPharmacyTender(
     if (!sale.customerId) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     await assertPrepaidPin(db, scope.organizationId, sale.customerId, options.prepaidPin);
     provider = PREPAID_PROVIDER;
+  } else if (bankTransfer) {
+    const capture = bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef });
+    if (!capture.success) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+    providerRef = capture.data.providerRef;
+    // The signed-in cashier confirms the transfer reached the bank account.
+    confirmedById = scope.actorId;
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
     if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
