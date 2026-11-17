@@ -67,6 +67,8 @@ declare module 'next-auth/jwt' {
     status?: string;
     mustChangePassword?: boolean;
     lastValidatedAt?: number;
+    // #1252: sign-in time (epoch ms); bounds the session's absolute lifetime.
+    signedInAt?: number;
     // #16: session revocation as its own claim, never folded into `status`.
     sessionRevoked?: boolean;
     sessionInvalidReason?: SessionInvalidReason | null;
