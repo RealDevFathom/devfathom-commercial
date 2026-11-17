@@ -134,3 +134,28 @@ describe('CounterDrawerOperator (DEV-821)', () => {
     expect(screen.queryByLabelText('Reason')).not.toBeInTheDocument();
   });
 });
+
+describe('DEV-41 remaining disabled explanations for drawer handover', () => {
+  it('explains the locked handover fields and actions while saving', () => {
+    const props = {
+      operatingCashier: { name: 'Synthetic cashier', isYou: true },
+      cashiers,
+      onHandover: vi.fn(),
+    };
+    const view = render(<CounterDrawerOperator {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over till' }));
+    view.rerender(<CounterDrawerOperator {...props} pending />);
+    for (const element of [
+      screen.getByLabelText('Hand the till to'),
+      screen.getByLabelText('Reason'),
+      screen.getByRole('button', { name: 'Cancel' }),
+      screen.getByRole('button', { name: 'Handing over…' }),
+    ]) {
+      expect(element).toBeDisabled();
+      expect(element).toHaveAccessibleDescription('Saving the till handover. Please wait.');
+    }
+    view.rerender(<CounterDrawerOperator {...props} />);
+    expect(screen.getByRole('button', { name: 'Hand over' })).not.toHaveAccessibleDescription();
+    expect(props.onHandover).not.toHaveBeenCalled();
+  });
+});
