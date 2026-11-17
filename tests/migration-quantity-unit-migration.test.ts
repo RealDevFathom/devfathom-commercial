@@ -68,7 +68,9 @@ describeIfDatabase('migration quantityUnit column (legacy-preserving)', () => {
 
     const batch = await db.query(`SELECT "quantityUnit" FROM "pharmacy_migration_batches"`);
     expect(batch.rows).toEqual([{ quantityUnit: null }]);
-    const row = await db.query(`SELECT "quantityCanonical"::text AS q FROM "pharmacy_migration_rows"`);
+    const row = await db.query(
+      `SELECT "quantityCanonical"::text AS q FROM "pharmacy_migration_rows"`
+    );
     expect(row.rows).toEqual([{ q: '29' }]);
 
     const column = await db.query(

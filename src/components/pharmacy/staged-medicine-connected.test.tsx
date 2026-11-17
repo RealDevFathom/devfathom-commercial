@@ -67,8 +67,7 @@ function makeDb() {
       update: async ({ data }: { data: Record<string, unknown> }) =>
         Object.assign(state.batches[0]!, data),
       count: async () => state.batches.length,
-      findMany: async () =>
-        state.batches.map((batch) => ({ ...batch, source: state.sources[0] })),
+      findMany: async () => state.batches.map((batch) => ({ ...batch, source: state.sources[0] })),
       findFirst: async () => ({ ...state.batches[0], source: state.sources[0] }),
     },
     pharmacyMigrationRow: {

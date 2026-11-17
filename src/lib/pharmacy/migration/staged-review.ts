@@ -19,7 +19,15 @@ export const SOURCE_REFERENCE_COLUMNS = [
   'StockValue',
 ] as const;
 
-const QUANTITY_HEADERS = ['qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty'];
+const QUANTITY_HEADERS = [
+  'qty',
+  'quantity',
+  'stock',
+  'stockqty',
+  'onhand',
+  'balanceqty',
+  'closingqty',
+];
 
 export function exceptionWorkflow(bucket: ExceptionBucket) {
   if (bucket === 'MISSING_BATCH' || bucket === 'MISSING_EXPIRY') return 'Opening stock';
@@ -86,7 +94,9 @@ export function stagedReference(
     label:
       canonical === null
         ? suppliedQuantity && quantityUnit
-          ? `Unresolved: "${suppliedQuantity}" ${quantityUnit === 'PACKS' ? 'packs' : 'units'} (no countable ${quantityUnit === 'PACKS' ? 'pack factor' : 'whole count'})`
+          ? quantityUnit === 'PACKS'
+            ? `Unresolved: "${suppliedQuantity}" packs (no countable pack factor)`
+            : `Unresolved: "${suppliedQuantity}" units (not a whole count)`
           : suppliedQuantity
             ? `Unresolved: "${suppliedQuantity}" (choose packs or units)`
             : null
