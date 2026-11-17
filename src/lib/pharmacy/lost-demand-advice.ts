@@ -297,6 +297,8 @@ export type BranchStockFact = {
   branchName: string;
   availableUnits: number;
   dailyDemandUnits: number;
+  /** The donor's own lead time + safety stock days; falls back to the caller's. */
+  coverageDays?: number;
 };
 
 export type TransferSuggestion = {
@@ -307,8 +309,9 @@ export type TransferSuggestion = {
 };
 
 /**
- * A donor keeps its own lead-time demand plus safety stock; only what is above
- * that is surplus. The largest surplus wins, ties broken by branch id.
+ * A donor keeps its own lead-time demand plus safety stock, measured with its own
+ * branch settings; only what is above that is surplus. The largest surplus wins,
+ * ties broken by branch id.
  */
 export function suggestTransfer(
   donors: readonly BranchStockFact[],
@@ -318,7 +321,7 @@ export function suggestTransfer(
   if (neededUnits <= 0) return null;
   let best: TransferSuggestion | null = null;
   for (const donor of donors) {
-    const keep = Math.ceil(donor.dailyDemandUnits * coverageDays);
+    const keep = Math.ceil(donor.dailyDemandUnits * (donor.coverageDays ?? coverageDays));
     const surplus = donor.availableUnits - keep;
     if (surplus <= 0) continue;
     if (

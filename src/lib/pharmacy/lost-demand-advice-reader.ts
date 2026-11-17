@@ -233,17 +233,27 @@ async function alternateFacts(
         sale: { status: 'COMPLETED' },
       },
       orderBy: { createdAt: 'desc' },
-      select: { unitPriceMinor: true, unitCostMinor: true, canonicalUnitsPerSaleUnit: true },
+      select: {
+        quantity: true,
+        canonicalUnits: true,
+        grossMinor: true,
+        discountMinor: true,
+        unitCostMinor: true,
+      },
     });
     alternates.push({
       medicineId: row.id,
       label: row.brandName ?? row.productName,
       availableUnits: stock.get(scope.branchId) ?? 0,
+      // Net of the line's recorded discount (promotion, voucher or manual), so a
+      // discounted last sale never overstates the margin or its ranking.
       marginPerUnitMinor:
-        lastSale && lastSale.canonicalUnitsPerSaleUnit > 0
+        lastSale && lastSale.canonicalUnits > 0
           ? Math.floor(
-              (lastSale.unitPriceMinor - lastSale.unitCostMinor) /
-                lastSale.canonicalUnitsPerSaleUnit
+              (lastSale.grossMinor -
+                lastSale.discountMinor -
+                lastSale.unitCostMinor * lastSale.quantity) /
+                lastSale.canonicalUnits
             )
           : null,
     });
@@ -381,6 +391,23 @@ export async function readLostDemandAdvice(
     select: { id: true, name: true },
   });
   const forecastSince = new Date(now.getTime() - config.forecastWindowDays * DAY_MS);
+  // Each donor keeps the reserve its own branch settings call for.
+  const donorSettings = donorBranches.length
+    ? await db.pharmacyLostDemandTriggerSetting.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: { in: donorBranches.map((branch) => branch.id) },
+        },
+      })
+    : [];
+  const donorCoverage = new Map(
+    donorBranches.map((branch) => {
+      const own = resolveLostDemandTriggerConfig(
+        donorSettings.find((row) => row.branchId === branch.id)
+      );
+      return [branch.id, own.defaultLeadTimeDays + own.safetyStockDays];
+    })
+  );
 
   const advice: LostDemandAdvice[] = [];
   for (const trigger of triggers) {
@@ -429,6 +456,7 @@ export async function readLostDemandAdvice(
       branchName: branch.name,
       availableUnits: stock.get(branch.id) ?? 0,
       dailyDemandUnits: demand.get(branch.id) ?? 0,
+      coverageDays: donorCoverage.get(branch.id),
     }));
     advice.push(
       buildLostDemandAdvice({

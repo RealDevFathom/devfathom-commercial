@@ -235,4 +235,36 @@ describe('readLostDemandAdvice', () => {
       1
     );
   });
+
+  it('keeps each donor branch own configured cover before offering its surplus', async () => {
+    db.pharmacyLostDemandTriggerSetting!.findMany!.mockResolvedValue([
+      { branchId: 'b2', safetyStockDays: 30, defaultLeadTimeDays: 3 },
+    ]);
+    const { advice } = await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    const salt = advice.find((row) => row.demandKey === `salt:${saltStrengthKey(PARACETAMOL)}`)!;
+    // 300 sellable at 1/day, keeping South's own 33 days, not the receiver's 10.
+    expect(salt.transfer).toMatchObject({ fromBranchId: 'b2', surplusUnits: 267 });
+    expect(db.pharmacyLostDemandTriggerSetting!.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', branchId: { in: ['b2'] } },
+    });
+  });
+
+  it('nets the recorded line discount out of an alternate margin', async () => {
+    db.medicine!.findMany!.mockResolvedValue([
+      { id: 'brand_c', productName: 'Brand C', brandName: 'Brand C', strengths: PARACETAMOL },
+    ]);
+    db.pharmacySaleLine!.findFirst!.mockResolvedValue({
+      quantity: 1,
+      canonicalUnits: 10,
+      grossMinor: 1_000,
+      discountMinor: 300,
+      unitCostMinor: 600,
+    });
+    const { advice } = await readLostDemandAdvice(db as unknown as ScopedDb, SCOPE, NOW);
+    const salt = advice.find((row) => row.demandKey === `salt:${saltStrengthKey(PARACETAMOL)}`)!;
+    // (1000 gross - 300 discount - 600 cost) / 10 units, not (1000 - 600) / 10.
+    expect(salt.alternates).toEqual([
+      expect.objectContaining({ medicineId: 'brand_c', marginPerUnitMinor: 10 }),
+    ]);
+  });
 });

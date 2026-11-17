@@ -252,6 +252,22 @@ describe('suggestTransfer', () => {
     });
   });
 
+  it('measures each donor against its own cover when it has one', () => {
+    const donors = [
+      {
+        branchId: 'b2',
+        branchName: 'South',
+        availableUnits: 250,
+        dailyDemandUnits: 10,
+        coverageDays: 30,
+      },
+    ];
+    expect(suggestTransfer(donors, 150, 10)).toBeNull();
+    expect(suggestTransfer([{ ...donors[0]!, coverageDays: undefined }], 150, 10)).toMatchObject({
+      surplusUnits: 150,
+    });
+  });
+
   it('suggests nothing without surplus or need', () => {
     const donors = [{ branchId: 'b1', branchName: 'N', availableUnits: 10, dailyDemandUnits: 1 }];
     expect(suggestTransfer(donors, 5, 10)).toBeNull();
