@@ -193,6 +193,8 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  printBridges PharmacyPrintBridge[]
+  printJobs PharmacyPrintJob[]
   customerPortalLinks    PharmacyCustomerPortalLink[]
   customerPortalSessions PharmacyCustomerPortalSession[]
   customerPortalRequests PharmacyCustomerPortalRequest[]
@@ -1299,6 +1301,7 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  printJobs PharmacyPrintJob[]
   portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -16874,4 +16877,75 @@ model UploadedFileLegacyBinding {
   @@unique([organizationId, name, ownerType, ownerId], map: "uploaded_file_legacy_bindings_owner_key")
   @@index([organizationId, name], map: "uploaded_file_legacy_bindings_name_idx")
   @@map("uploaded_file_legacy_bindings")
+}
+
+
+model PharmacyPrintBridge {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  /// Opaque host printer target (tcp://, queue:///, /dev/). The host allowlist
+  /// must also contain it; the server never dials it.
+  printerId         String
+  deviceSecretHash  String               @unique(map: "pharmacy_print_bridges_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  branch PharmacyBranch     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  jobs   PharmacyPrintJob[]
+
+  @@unique([organizationId, id], map: "pharmacy_print_bridges_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_print_bridges_org_branch_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_print_bridges_org_branch_status_idx")
+  @@map("pharmacy_print_bridges")
+}
+
+
+enum PharmacyPrintJobStatus {
+  PENDING
+  FAILED
+  TRANSPORT_ACCEPTED
+}
+
+
+model PharmacyPrintJob {
+  id                 String                 @id @default(cuid())
+  organizationId     String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  bridgeId           String
+  printerId          String
+  saleId             String
+  receiptNumber      Int
+  copyNumber         Int
+  reprint            Boolean
+  idempotencyKey     String
+  document           Json
+  byteCount          Int
+  paperWidth         Int
+  status             PharmacyPrintJobStatus @default(PENDING)
+  attemptCount       Int                    @default(0)
+  queuedAt           DateTime               @default(now())
+  lastAttemptAt      DateTime?
+  acceptedAt         DateTime?
+  failureCode        String?
+  requestedByActorId String
+  retriedByActorId   String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  bridge PharmacyPrintBridge @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Restrict)
+  sale   PharmacySale        @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  branch PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_print_jobs_org_id_key")
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_print_jobs_idempotency_key")
+  @@unique([organizationId, branchId, saleId, copyNumber], map: "pharmacy_print_jobs_copy_key")
+  @@index([organizationId, bridgeId, status, queuedAt], map: "pharmacy_print_jobs_claim_idx")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_print_jobs_sale_idx")
+  @@map("pharmacy_print_jobs")
 }
