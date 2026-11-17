@@ -396,3 +396,108 @@ provides branch/printer confirmation, retained server-timestamp receipts and a f
 acknowledgement path for unresolved outcomes. Its synthetic tests do not establish visual
 or browser behavior. Live concurrency/RLS, migration execution, runtime behavior, physical
 output and old-writer rollout acceptance remain open.
+
+## Pharmacy thermal receipts (DEV-741)
+
+Pharmacy reuses the same host bridge script, ESC/POS renderer, transport grammar, host allowlist
+and per-attempt marker as Restaurant. It has its own queue (`pharmacy_print_jobs`) and its own
+branch-bound bridge records (`pharmacy_print_bridges`), because pharmacy branches are a separate
+aggregate. A Pharmacy bridge credential can never claim Restaurant work, drive the counter
+transport or open a terminal session, and the reverse also holds.
+
+### Connection paths (USB first)
+
+USB thermal printing is the first priority. Network and Bluetooth stay available for other
+pharmacies. Every path below needs a printer that accepts raw ESC/POS. No connection is marked
+compatible until the actual printer, driver and host have passed a real-device test that the
+owner authorized. Nothing here assumes a printer brand or model.
+
+| Connection | Host OS        | Printer ID to enroll                        | What the host needs                                                                                     |
+| ---------- | -------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| USB        | Windows        | `queue:///Receipt%20Printer`                | An installed local queue for the printer that accepts RAW data (vendor driver or a generic/text driver) |
+| USB        | macOS          | `queue:///Receipt_Printer`                  | An installed CUPS destination that accepts `-o raw`                                                     |
+| USB        | Linux or macOS | `/dev/usb/lp0` or `usb:///dev/usb/lp0`      | A writable character device the OS already created                                                      |
+| Network    | Any            | `tcp://192.168.1.50:9100`                   | Raw TCP printing enabled on the printer, at a stable address                                            |
+| Bluetooth  | Windows        | `queue:///Receipt%20Printer`                | The printer paired and an installed RAW queue on its port. The bridge cannot open a COM port directly.  |
+| Bluetooth  | macOS or Linux | `serial:///dev/cu.<name>` or `/dev/rfcomm0` | A paired serial (SPP) device node, with speed and flow control already set by the OS or vendor          |
+
+What is not supported:
+
+- Bluetooth Low Energy (GATT-only) printers.
+- Device discovery or the OS default printer. Every target must be named explicitly.
+- Opening a Windows COM port directly.
+- Thermal printers that do not accept ESC/POS (for example, raster-only or vendor-language models).
+  Print to those, and to every A4 printer, through the browser/OS print dialog with the installed
+  driver. That browser path is unchanged and stays the fallback. DEV-742 owns the A4 and thermal
+  format settings.
+
+Run `bun scripts/print-bridge.ts --dry-run` on the host first. It checks the target syntax
+and allowlist without opening the device, queue or network. It is not a hardware test.
+
+### Enrollment and host setup
+
+An administrator enrolls one bridge per receipt printer through `pharmacyPrinting.enrollBridge`
+(branch, name, explicit printer target). The response shows the credential **once**; only its
+SHA-256 is stored and the audit log records inputs, never the credential. The credential has the
+form `ppb_<secret>.<base64url organization id>`. The organization part is a routing hint, not a
+secret: it lets the transport open the tenant scope before the hash lookup, so no platform-wide
+read or row-level-security change is needed. Revoke with `pharmacyPrinting.revokeBridge`;
+revocation applies on the bridge's next poll and cannot be undone (enroll a new bridge instead).
+
+On the host, use the same variables as above with the Pharmacy credential, then:
+
+```sh
+bun scripts/print-bridge.ts --dry-run
+bun scripts/print-bridge.ts
+```
+
+The credential prefix selects `/api/pharmacy/print-bridge`; there is no separate setting to
+mismatch. The token file path (`PRINT_BRIDGE_TOKEN_FILE`) accepts Pharmacy credentials. One-use
+enrollment codes are Restaurant-only.
+
+### Printing a receipt and delivery status
+
+`pharmacyPrinting.enqueueReceipt` accepts only `branchId`, `saleId`, `locale`, required
+`paper` (`THERMAL_58` or `THERMAL_80`), required `requestKey` and optional `bridgeId`. It never accepts printable content: the job is
+built by the same server code as the existing ESC/POS download (`counterReceiptPrintJob`), from
+the settled sale, under the same receipt authorization, with the same reprint marking.
+
+- **Duplicates.** Every click requires a stable request key; retries of that request replay before
+  allocating a copy. Copy numbering is shared with browser and download printing. The server
+  marks copies after the first as "REPRINT - not a new sale"; callers cannot override it.
+  The queue stores the durable copy number and a foreign key to its dispatch evidence.
+- **Fallback.** Urdu or other non-ASCII text, no enrolled bridge, or an offline bridge (no poll
+  for 60 s) returns `status: 'FALLBACK'` with `fallback: 'BROWSER_OS'` and queues nothing. Two
+  active bridges in a branch require an explicit `bridgeId`; the server never guesses a printer.
+- **Paper width.** The branch's saved receipt layout (58 or 80 mm) is rendered into the job and
+  stored with it. Saved A4 or a mismatched width refuses enqueue and retry. Settings are locked
+  through copy allocation. Existing jobs are replayed even if settings subsequently change.
+
+`pharmacyPrinting.jobStatus` returns one of:
+
+| State             | Meaning                                                               |
+| ----------------- | --------------------------------------------------------------------- |
+| `QUEUED`          | Waiting for the bridge. Not sent.                                     |
+| `SENDING`         | Claimed by the bridge in the last 30 s.                               |
+| `SENT_TO_PRINTER` | The host transport accepted the bytes. **Paper is not confirmed.**    |
+| `FAILED`          | The bridge reported a transport failure. Partial output is possible.  |
+| `UNCONFIRMED`     | Claimed, but the bridge never answered. Output is unknown.            |
+| `EXPIRED`         | Not claimed within 5 minutes. Never sent, and it will not print late. |
+
+`paperConfirmed` is always `false`: no transport here can observe paper.
+
+### Retry
+
+Nothing retries automatically. `pharmacyPrinting.retryJob` resends the **same** job (same
+document and marking) as a new attempt, only from `FAILED`, `UNCONFIRMED` or `EXPIRED`, only to
+an active, online bridge, and records who retried. After `FAILED` or `UNCONFIRMED` the operator
+must pass `confirmNoPaperPrinted: true` after checking the printer. The retry and a late bridge
+acknowledgement are guarded on the same attempt, so only one can win, and the old claim token
+stops working. The host marker is per attempt, so attempt 1 can never replay.
+
+### Not verified
+
+Automated checks and their exact commit are recorded in the draft PR. Optional PostgreSQL
+suites require a local restricted-role database; an absent database is not a passing test. No physical printer, OS spooler, host
+bridge run against a deployed API, browser flow or deployment was exercised. The settings and
+test-print screens are DEV-742's.

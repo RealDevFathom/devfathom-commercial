@@ -235,7 +235,7 @@ describe('first-observed repeat-purchase cohorts', () => {
     const queryRaw = vi.fn();
     await expect(
       readRepeatPurchasing(mockDb(queryRaw), 'org', { ...filters, asOf: 'invalid' })
-    ).rejects.toThrow('valid UTC');
+    ).rejects.toThrow('valid enrollment');
     expect(queryRaw).not.toHaveBeenCalled();
   });
 });
@@ -261,3 +261,32 @@ function mockDb(queryRaw: ReturnType<typeof vi.fn>): ScopedDb {
     $transaction: (run: (db: typeof tx) => Promise<unknown>) => run(tx),
   } as unknown as ScopedDb;
 }
+
+describe('repeat purchasing enrollment days on the organization clock', () => {
+  it('counts a receipt at 01:00 PKT on the picked day as enrolled, though still the day before in UTC', () => {
+    const base = {
+      branchIds: ['b1'],
+      from: '2026-05-01',
+      to: '2026-05-01',
+      asOf: '2026-08-01T00:00:00Z',
+    };
+    const receipt = {
+      id: 's1',
+      organizationId: 'org',
+      branchId: 'b1',
+      status: 'COMPLETED',
+      originalSaleId: null,
+      customerId: 'c1',
+      completedAt: new Date('2026-04-30T20:00:00Z'),
+      receiptNumber: 1,
+      createdAt: new Date('2026-04-30T20:00:00Z'),
+      lines: [],
+      refunds: [],
+    };
+    const now = new Date('2026-09-01T00:00:00Z');
+    expect(summarizeRepeatPurchasing([receipt], 'org', base, now).completedReceipts).toBe(0);
+    expect(
+      summarizeRepeatPurchasing([receipt], 'org', base, now, 'Asia/Karachi').completedReceipts
+    ).toBe(1);
+  });
+});

@@ -193,6 +193,8 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  printBridges PharmacyPrintBridge[]
+  printJobs PharmacyPrintJob[]
   customerPortalLinks    PharmacyCustomerPortalLink[]
   customerPortalSessions PharmacyCustomerPortalSession[]
   customerPortalRequests PharmacyCustomerPortalRequest[]
@@ -240,6 +242,8 @@ model PharmacyBranch {
   onboardingGates                          PharmacyOnboardingGateState[]
   registeredDevices                        PharmacyRegisteredDevice[]
   ownerDigestSettings                      PharmacyOwnerDigestSetting[]
+  lostDemandTriggerSettings                PharmacyLostDemandTriggerSetting[]
+  lostDemandAdviceDecisions                PharmacyLostDemandAdviceDecision[]
   ownerDigestCaptures                      PharmacyOwnerDigestCapture[]
   refillReminderCaptures                   PharmacyRefillReminderCapture[]
   pharmacovigilanceReports                 PharmacyPharmacovigilanceReport[]
@@ -666,6 +670,7 @@ model Medicine {
   controlledRegisterEntries    PharmacyControlledRegisterEntry[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
   drapPriceAlerts              PharmacyDrapPriceAlert[]
+  catalogueEdits               PharmacyCatalogueEdit[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
   promotions                   PharmacyPromotion[]
@@ -673,6 +678,27 @@ model Medicine {
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
+}
+
+/// DEV-766: immutable proposals; only a reviewed proposal may update a live catalogue item.
+model PharmacyCatalogueEdit {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId        String
+  editorId          String
+  editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
+  operation         String   @default("UPDATE_MEDICINE")
+  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  changes           Json
+  expectedUpdatedAt DateTime
+  status            String   @default("PENDING")
+  reviewerId        String?
+  reviewedAt        DateTime?
+  soloPinVerifiedAt DateTime?
+  createdAt         DateTime @default(now())
+
+  @@index([organizationId, status, createdAt])
+  @@map("pharmacy_catalogue_edits")
 }
 
 model MedicineStrengthComponent {
@@ -771,6 +797,7 @@ model MedicineProvenance {
   sourceType         MedicineProvenanceSourceType
   retrievedAt        DateTime
   confidence         Decimal?                     @db.Decimal(5, 4)
+  editorId           String?
   reviewer           String?
   status             MedicineProvenanceStatus
   supersedesId       String?
@@ -1000,7 +1027,9 @@ enum PharmacyInventoryCountStatus {
 enum PharmacyTransferStatus {
   /// PUR-07 §8A invariant 29: what a one-click draft action may create. A DRAFT
   /// transfer holds no stock and cannot be approved (`approveTransfer` requires
-  /// ALLOCATED), so no signal can reach a stock movement through it.
+  /// ALLOCATED), so no signal can reach a stock movement through it. DEV-80: only a
+  /// person at the source branch can allocate a DRAFT request, after which the usual
+  /// second-person approval still applies.
   DRAFT
   ALLOCATED
   APPROVED
@@ -1299,6 +1328,7 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  printJobs PharmacyPrintJob[]
   portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1350,6 +1380,12 @@ model PharmacyCustomer {
   phoneLast4       String?
   creditLimitMinor Int                          @default(0)
   active           Boolean                      @default(true)
+  /// DEV-764: loyalty membership. A deactivated member keeps their points but neither earns
+  /// nor spends them until re-enrolled. Separate from `active` (the retail identity).
+  loyaltyActive          Boolean   @default(true)
+  loyaltyStatusChangedAt DateTime?
+  /// Why the member was last deactivated or re-enrolled.
+  loyaltyStatusReason    String?
   userId           String?
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
@@ -1357,6 +1393,7 @@ model PharmacyCustomer {
   patient                PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
   sales                  PharmacySale[]
   pointsEntries          PharmacyLoyaltyPointsEntry[]
+  loyaltyReconciliations PharmacyLoyaltyBalanceReconciliation[]
   paidFamilyAccounts     PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships      PharmacyFamilyMember[]
   user                   User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
@@ -1528,6 +1565,9 @@ model PharmacyLoyaltyPointsEntry {
   expiresAt        DateTime?
   /// DEV-764: EXPIRY only, the earned lot it closes.
   reversesEntryId  String?
+  /// DEV-764: true on entries posted while balances were kept per branch (a spend among them
+  /// took only from lots of its own branch). Entries posted since spend organization-wide.
+  branchLocal      Boolean                  @default(false)
   actorId          String
   idempotencyKey   String
   occurredAt       DateTime                 @default(now())
@@ -1543,9 +1583,29 @@ model PharmacyLoyaltyPointsEntry {
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, customerId, occurredAt])
+  @@index([organizationId, customerId, occurredAt], map: "pharmacy_loyalty_points_entries_customer_idx")
   @@index([organizationId, saleId])
   @@index([organizationId, refundId])
   @@map("pharmacy_loyalty_points_entries")
+}
+
+/// DEV-764: the audited merge of per-branch loyalty balances into one balance per customer.
+/// One row per branch for every customer who held points at more than one branch, written once
+/// by the merge migration. Append-only.
+model PharmacyLoyaltyBalanceReconciliation {
+  id             String           @id @default(dbgenerated("gen_random_uuid()::text"))
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  branchId       String
+  /// The customer's balance at this branch when the balances were merged.
+  points         Int
+  /// Ledger entries behind that balance.
+  entries        Int
+  reconciledAt   DateTime         @default(now())
+  customer       PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_balance_reconciliations_customer_fkey")
+
+  @@unique([organizationId, customerId, branchId], map: "pharmacy_loyalty_balance_reconciliations_branch_key")
+  @@map("pharmacy_loyalty_balance_reconciliations")
 }
 
 model PharmacyMoneyIdempotencyKey {
@@ -3636,6 +3696,7 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  catalogueEdits                PharmacyCatalogueEdit[] @relation("CatalogueEditEditor")
   pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
   pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
   id                 String     @id @default(cuid())
@@ -14921,6 +14982,51 @@ model PharmacyOwnerDigestSetting {
   @@map("pharmacy_owner_digest_settings")
 }
 
+/// DEV-80 — per-branch lost-demand advice triggers and planning assumptions.
+/// Research figures are starting defaults only; every value here is editable.
+model PharmacyLostDemandTriggerSetting {
+  id                          String   @id @default(cuid())
+  organizationId              String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                    String
+  requestCountThreshold       Int      @default(3)
+  requestWindowDays           Int      @default(7)
+  estimatedLossThresholdMinor Int      @default(1000000)
+  lossWindowDays              Int      @default(30)
+  walkOutRateThresholdBps     Int      @default(1000)
+  forecastWindowDays          Int      @default(30)
+  safetyStockDays             Int      @default(7)
+  defaultLeadTimeDays         Int      @default(3)
+  updatedByUserId             String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_lost_demand_trigger_settings_branch_fkey")
+
+  @@unique([organizationId, branchId], map: "pharmacy_lost_demand_trigger_settings_org_branch_key")
+  @@map("pharmacy_lost_demand_trigger_settings")
+}
+
+/// DEV-80 — what a human did with one lost-demand advice card. Append-only. A
+/// draft decision names the DRAFT document it created; nothing here approves or
+/// sends anything.
+model PharmacyLostDemandAdviceDecision {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  demandKey       String
+  decision        String
+  purchaseOrderId String?
+  transferId      String?
+  reason          String?
+  actorUserId     String
+  createdAt       DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_lost_demand_advice_decisions_branch_fkey")
+
+  @@index([organizationId, branchId, demandKey, createdAt], map: "pharmacy_lost_demand_advice_decisions_key_idx")
+  @@map("pharmacy_lost_demand_advice_decisions")
+}
+
 /// Persistent CaptureChannel delivery. Unique business-date key makes cron
 /// retries idempotent while retaining exact RPT-01 metric keys and contracts.
 model PharmacyOwnerDigestCapture {
@@ -16876,4 +16982,75 @@ model UploadedFileLegacyBinding {
   @@unique([organizationId, name, ownerType, ownerId], map: "uploaded_file_legacy_bindings_owner_key")
   @@index([organizationId, name], map: "uploaded_file_legacy_bindings_name_idx")
   @@map("uploaded_file_legacy_bindings")
+}
+
+
+model PharmacyPrintBridge {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  /// Opaque host printer target (tcp://, queue:///, /dev/). The host allowlist
+  /// must also contain it; the server never dials it.
+  printerId         String
+  deviceSecretHash  String               @unique(map: "pharmacy_print_bridges_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  branch PharmacyBranch     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  jobs   PharmacyPrintJob[]
+
+  @@unique([organizationId, id], map: "pharmacy_print_bridges_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_print_bridges_org_branch_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_print_bridges_org_branch_status_idx")
+  @@map("pharmacy_print_bridges")
+}
+
+
+enum PharmacyPrintJobStatus {
+  PENDING
+  FAILED
+  TRANSPORT_ACCEPTED
+}
+
+
+model PharmacyPrintJob {
+  id                 String                 @id @default(cuid())
+  organizationId     String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  bridgeId           String
+  printerId          String
+  saleId             String
+  receiptNumber      Int
+  copyNumber         Int
+  reprint            Boolean
+  idempotencyKey     String
+  document           Json
+  byteCount          Int
+  paperWidth         Int
+  status             PharmacyPrintJobStatus @default(PENDING)
+  attemptCount       Int                    @default(0)
+  queuedAt           DateTime               @default(now())
+  lastAttemptAt      DateTime?
+  acceptedAt         DateTime?
+  failureCode        String?
+  requestedByActorId String
+  retriedByActorId   String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  bridge PharmacyPrintBridge @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Restrict)
+  sale   PharmacySale        @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  branch PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_print_jobs_org_id_key")
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_print_jobs_idempotency_key")
+  @@unique([organizationId, branchId, saleId, copyNumber], map: "pharmacy_print_jobs_copy_key")
+  @@index([organizationId, bridgeId, status, queuedAt], map: "pharmacy_print_jobs_claim_idx")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_print_jobs_sale_idx")
+  @@map("pharmacy_print_jobs")
 }

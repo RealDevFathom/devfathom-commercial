@@ -6,12 +6,14 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
+import { StatusPill } from '@/components/ui/status-pill';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
 import { formatUtcInstant } from '@/lib/utc-instant';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
 import { AdjustPointsForm } from './adjust-points-form';
+import { MembershipForm } from './membership-form';
 import {
   describeLoyaltyEarnRule,
   describeRedemptionValue,
@@ -83,6 +85,14 @@ async function loadLoyalty(text: (key: string) => string) {
       denied: error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code),
     };
   }
+}
+
+function MembershipPill({ active }: { active: boolean }) {
+  return active ? (
+    <StatusPill status="active" label="Member" />
+  ) : (
+    <StatusPill status="deactivated" tone="neutral" label="Deactivated" />
+  );
 }
 
 export default async function LoyaltyPage({
@@ -256,7 +266,10 @@ export default async function LoyaltyPage({
         </div>
         <p className="mt-2 text-sm text-text-muted">
           What every unredeemed point across the organization would take off bills at the current
-          redemption value. Expired, redeemed and removed points are not counted.
+          redemption value. Expired, redeemed and removed points are not counted. Each customer has
+          one balance across all branches. By branch: points earned or added there, less points
+          spent or expired there, so a branch whose customers redeem points earned elsewhere can be
+          below zero.
         </p>
         {liability.branches.length > 0 && (
           <div
@@ -302,8 +315,8 @@ export default async function LoyaltyPage({
       <SectionCard title="Customers" titleLevel={2}>
         <LoyaltyCustomerSearch branches={branches} branchId={branchId} query={query} />
         <p className="mt-3 text-sm text-text-muted">
-          Retail customers across this workspace. Points shown only for {branchName}. Clinical
-          records are excluded. Select a customer to see their points history.
+          Retail customers across this workspace. Each customer has one points balance across all
+          branches. Clinical records are excluded. Select a customer to see their points history.
         </p>
         {customers.length > 0 && (
           <div
@@ -314,11 +327,11 @@ export default async function LoyaltyPage({
           >
             <table className="w-full text-sm">
               <caption className="sr-only">
-                {query ? `Customers matching ${query}` : 'Loyalty customers'} at {branchName}
+                {query ? `Customers matching ${query}` : 'Loyalty customers'}
               </caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {['Customer', 'Phone', 'Loyalty no.', 'Points'].map((t) => (
+                  {['Customer', 'Phone', 'Loyalty no.', 'Membership', 'Points'].map((t) => (
                     <th
                       key={t}
                       scope="col"
@@ -349,6 +362,9 @@ export default async function LoyaltyPage({
                       {c.phoneLast4 ? `ending ${c.phoneLast4}` : 'Not recorded'}
                     </td>
                     <td className="break-all p-3 font-mono text-xs">{c.id}</td>
+                    <td className="p-3">
+                      <MembershipPill active={c.loyaltyActive !== false} />
+                    </td>
                     <td className="p-3 text-right font-mono tabular-nums">{c.pointsBalance}</td>
                   </tr>
                 ))}
@@ -394,13 +410,93 @@ export default async function LoyaltyPage({
             language template is not configured.
           </p>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <MembershipPill active={history.customer.loyaltyActive !== false} />
+            {history.customer.loyaltyStatusChangedAt && (
+              <span className="text-text-muted">
+                {history.customer.loyaltyActive !== false ? 'Re-enrolled' : 'Deactivated'}{' '}
+                <time dateTime={history.customer.loyaltyStatusChangedAt.toISOString()}>
+                  {formatUtcInstant(history.customer.loyaltyStatusChangedAt)}
+                </time>
+                {history.customer.loyaltyStatusReason
+                  ? ` · ${history.customer.loyaltyStatusReason}`
+                  : ''}
+              </span>
+            )}
+          </div>
           <p className="mt-2 text-sm text-text-muted">
-            {branchName} · {history.total} ledger entries. All-time branch balance; newest entries
-            first. Refunds, reversals, adjustments and expiries remain visible.
+            {history.total} ledger entries. One balance across all branches, all time; newest
+            entries first, each with the branch it was recorded at. Refunds, reversals, adjustments
+            and expiries remain visible.
           </p>
+          {history.reconciliation.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-sm font-semibold text-text-strong">
+                Branch balances merged
+              </h3>
+              <p className="mb-2 text-sm text-text-muted">
+                This customer held points at more than one branch before balances became one. These
+                were the branch balances on{' '}
+                <time dateTime={history.reconciliation[0]!.reconciledAt.toISOString()}>
+                  {formatUtcInstant(history.reconciliation[0]!.reconciledAt)}
+                </time>
+                ; together they make the balance above. Nothing was added or removed.
+              </p>
+              <div
+                className="overflow-x-auto"
+                role="region"
+                aria-label="Branch balances merged"
+                tabIndex={0}
+              >
+                <table className="w-full text-sm">
+                  <caption className="sr-only">Branch balances merged into one balance</caption>
+                  <thead className="font-mono text-xs uppercase">
+                    <tr>
+                      {['Branch', 'Entries', 'Points'].map((t) => (
+                        <th
+                          key={t}
+                          scope="col"
+                          className={`p-3 ${t === 'Branch' ? 'text-left' : 'text-right'}`}
+                        >
+                          {t}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.reconciliation.map((row) => (
+                      <tr
+                        key={row.branchId}
+                        className="border-t border-border-subtle hover:bg-surface-sunken"
+                      >
+                        <td className="p-3">{branchLabel(row.branchId)}</td>
+                        <td className="p-3 text-right font-mono tabular-nums">{row.entries}</td>
+                        <td className="p-3 text-right font-mono tabular-nums">{row.points}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <h3 className="mb-3 text-sm font-semibold text-text-strong">Membership</h3>
+            <MembershipForm
+              key={String(history.customer.loyaltyActive !== false)}
+              branchId={branchId}
+              customerId={customerId}
+              loyaltyActive={history.customer.loyaltyActive !== false}
+            />
+          </div>
           <div className="mt-5 border-t border-border-subtle pt-5">
             <h3 className="mb-3 text-sm font-semibold text-text-strong">Adjust points</h3>
-            <AdjustPointsForm branchId={branchId} customerId={customerId} />
+            {history.customer.loyaltyActive !== false ? (
+              <AdjustPointsForm branchId={branchId} customerId={customerId} />
+            ) : (
+              <p className="text-sm text-text-muted">
+                Points cannot be adjusted while the member is deactivated. Re-enrol them first.
+              </p>
+            )}
           </div>
           {history.entries.length ? (
             <div
@@ -411,11 +507,11 @@ export default async function LoyaltyPage({
             >
               <table className="w-full text-sm">
                 <caption className="sr-only">
-                  Points history for {history.customer.displayName} at {branchName}
+                  Points history for {history.customer.displayName}
                 </caption>
                 <thead className="font-mono text-xs uppercase">
                   <tr>
-                    {['Time (UTC)', 'Event', 'Source receipt', 'Points'].map((t) => (
+                    {['Time (UTC)', 'Event', 'Branch', 'Source receipt', 'Points'].map((t) => (
                       <th
                         key={t}
                         scope="col"
@@ -455,6 +551,7 @@ export default async function LoyaltyPage({
                           </span>
                         )}
                       </td>
+                      <td className="p-3">{branchLabel(e.branchId)}</td>
                       <td className="p-3">
                         {e.sale ? (
                           <>
@@ -494,7 +591,7 @@ export default async function LoyaltyPage({
             </div>
           ) : (
             <p role="status" className="mt-4">
-              No points entries for this customer at this branch yet.
+              No points entries for this customer yet.
             </p>
           )}
           <nav aria-label="Points pages" className="mt-3 flex flex-wrap items-center gap-4">

@@ -35,8 +35,12 @@ export function MedicinePackSetup() {
   );
   const presentation = medicine.data?.presentations.find((item) => item.id === presentationId);
   const create = trpc.pharmacyMedicine.createPackLevel.useMutation({
-    onSuccess: async () => {
-      setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
+    onSuccess: async (result) => {
+      setMessage(
+        'status' in result
+          ? 'Pack submitted for catalogue approval.'
+          : 'Pack created. Return to Pharmacy setup to continue with opening stock.'
+      );
       setLevel('');
       setUnits('');
       await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
@@ -121,7 +125,7 @@ export function MedicinePackSetup() {
           onSubmit={(event) => {
             event.preventDefault();
             const quantity = Number(units);
-            const effectiveFrom = new Date(`${effectiveDate}T00:00:00Z`);
+            const effectiveFrom = new Date(`${effectiveDate}T00:00:00+05:00`);
             if (
               !Number.isSafeInteger(quantity) ||
               quantity <= 0 ||
@@ -242,7 +246,8 @@ export function MedicinePackSetup() {
                 onChange={(event) => setEffectiveDate(event.target.value)}
               />
               <span className="block text-sm text-text-muted">
-                Available from this date at midnight UTC. Future packs cannot be received yet.
+                Available from this date at midnight Pakistan time. Future packs cannot be received
+                yet.
               </span>
             </label>
           </fieldset>
@@ -335,8 +340,11 @@ function PackBarcodeEditor({
   const [message, setMessage] = useState('');
   const save = trpc.pharmacyMedicine.setPackBarcode.useMutation({
     onSuccess: async (row) => {
-      setCode(row.code);
-      setMessage(`Barcode ${row.code} saved on this pack.`);
+      if ('status' in row) setMessage('Barcode submitted for catalogue approval.');
+      else {
+        setCode(row.code);
+        setMessage(`Barcode ${row.code} saved on this pack.`);
+      }
       await onSaved();
     },
   });

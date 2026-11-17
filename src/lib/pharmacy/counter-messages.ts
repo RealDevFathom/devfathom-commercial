@@ -55,6 +55,9 @@ export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE = `Your role does not 
 /** The server's generic capability refusal (no `pharmacy:counter` for payment and drawer). */
 const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action.';
 
+/** DEV-712: the refusal a payment gets when a supervisor discarded its attempt. */
+export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -155,6 +158,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
+  // DEV-712: a supervisor discarded this payment attempt; the next one gets a new key.
+  [TENDER_ATTEMPT_DISCARDED]:
+    'A supervisor discarded that payment attempt, so it was not recorded. Take the payment again.',
   UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
@@ -340,5 +346,27 @@ export function counterPaymentErrorMessage(error: unknown): string {
     error.message === NO_PERMISSION_SERVER_MESSAGE
   )
     return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
+  return counterErrorMessage(error);
+}
+
+/**
+ * Drawer operations have different gates: only opening an empty till for yourself
+ * uses payment access. A float or another cashier requires manager access. Match
+ * only the generic capability refusal; preserve scope and other specific errors.
+ */
+export function counterDrawerErrorMessage(
+  error: unknown,
+  action: 'open' | 'open-with-float' | 'assign-cashier' | 'handover'
+): string {
+  if (action === 'open') return counterPaymentErrorMessage(error);
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  ) {
+    return action === 'open-with-float'
+      ? 'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+      : 'Only a manager or owner can assign the till to another cashier. Ask a manager.';
+  }
   return counterErrorMessage(error);
 }

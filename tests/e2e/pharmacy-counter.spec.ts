@@ -4,6 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { PHARMACY_E2E, PHARMACY_E2E_EXPECTED } from './pharmacy-counter-fixture';
+import { resolvePharmacyE2eDatabaseUrl } from '../../scripts/pharmacy-e2e-environment';
+import { workspaceToday } from '../../src/lib/timezone';
+import { counterLabel } from '../../src/lib/pharmacy/counter-label';
 
 /**
  * PH-POS counter browser acceptance — POS-01, POS-02, POS-03, POS-08, POS-09.
@@ -29,6 +32,52 @@ import { PHARMACY_E2E, PHARMACY_E2E_EXPECTED } from './pharmacy-counter-fixture'
 test.describe.configure({ mode: 'serial' });
 
 if (process.env.PHARMACY_E2E !== '1') throw new Error('PHARMACY_E2E=1 is required.');
+
+let otcLotId: string;
+
+test.beforeAll(async () => {
+  // The disposable counter corpus needs a licensed branch, just as a real sale does.
+  // These synthetic records never alter a live jurisdiction or regulatory profile.
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  await db.connect();
+  try {
+    await db.query('BEGIN');
+    await db.query(
+      "SELECT set_config('app.is_platform_admin', 'true', true), set_config('app.current_organization_id', $1, true)",
+      [PHARMACY_E2E.organizationId]
+    );
+    await db.query(`INSERT INTO pharmacy_jurisdiction_rule_sets
+      (id,code,version,"effectiveFrom","licenceCategories","permittedSchedules","prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags","pharmacistCoverageRule","recordRetentionByClass")
+      VALUES ('jurisdiction_pharmacy_counter_e2e','PHARMACY-COUNTER-E2E',1,'2026-09-01',
+        '{"provisional":false,"values":["PHARMACY"]}', '{"provisional":false,"values":["RX"]}',
+        '{"provisional":false,"values":[]}', '{"provisional":false,"values":{}}',
+        '{"provisional":false,"values":{}}',
+        '{"provisional":false,"values":{"presenceHours":{"timeZone":"Asia/Karachi","windows":[{"days":[0,1,2,3,4,5,6],"start":"00:00","end":"24:00"}]}}}',
+        '{"provisional":false,"values":{}}') ON CONFLICT (id) DO NOTHING`);
+    await db.query(
+      `INSERT INTO pharmacy_branch_regulatory_profiles
+      (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,
+       "licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules",
+       "qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
+      SELECT 'regulatory_pharmacy_counter_e2e',"organizationId",id,1,'2026-09-01',"provinceCode",'jurisdiction_pharmacy_counter_e2e',
+        jsonb_build_object('addressLine',"addressLine",'city',city),'PHARMACY','SYNTHETIC-E2E-ONLY','2026-09-01','2040-01-01',
+        'evidence://pharmacy-counter-e2e/licence',ARRAY['RX'],'QP-E2E-ONLY','2026-09-01','2040-01-01',
+        'evidence://pharmacy-counter-e2e/roster','REGISTERED','{}'
+      FROM pharmacy_branches WHERE "organizationId"=$1 AND id=$2 ON CONFLICT (id) DO NOTHING`,
+      [PHARMACY_E2E.organizationId, PHARMACY_E2E.branchId]
+    );
+    const lots = await db.query<{ id: string }>(
+      `SELECT id FROM pharmacy_inventory_lots WHERE "organizationId"=$1 AND "branchId"=$2 AND "manufacturingBatchId"=$3`,
+      [PHARMACY_E2E.organizationId, PHARMACY_E2E.branchId, PHARMACY_E2E.medicines.otc.batchId]
+    );
+    expect(lots.rows).toHaveLength(1);
+    otcLotId = lots.rows[0]!.id;
+    await db.query('COMMIT');
+  } finally {
+    await db.end();
+  }
+});
 
 /** Focus a control and activate it with the keyboard. Never a pointer. */
 async function pressControl(target: Locator) {
@@ -177,7 +226,13 @@ test('the cashier is offered only destinations a cashier can open (DEV-497)', as
  */
 async function openDrawer(page: Page) {
   // DEV-725: opening the drawer is the shift's first step and records the counted cash.
-  await page.getByLabel('Opening cash', { exact: true }).fill('0');
+  const openingCash = page.getByLabel('Opening cash', { exact: true });
+  if ((await openingCash.getAttribute('readonly')) !== null) {
+    // Cashiers open empty tills; only managers can edit the opening float.
+    await expect(openingCash).toHaveValue('0');
+  } else {
+    await openingCash.fill('0');
+  }
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
@@ -334,11 +389,111 @@ async function setQuantity(page: Page, quantity: number) {
  * set to the balance due and focus on the panel; Enter takes the payment.
  */
 async function tenderCash(page: Page, amount: string) {
+  await expect(page.getByLabel('Scan or search')).toBeEnabled();
   await page.keyboard.press('F9');
+  const panel = page
+    .getByRole('dialog', { name: 'Payment', exact: true })
+    .locator('div[tabindex="-1"]')
+    .filter({ has: page.getByRole('group', { name: 'Payment method', exact: true }) });
+  await expect(panel).toBeFocused();
   await expect(page.getByLabel('Cash received')).toHaveValue(amount);
   await expect(page.getByText('Change', { exact: true }).locator('..')).toContainText('0.00');
+  await expect(page.getByRole('button', { name: 'Take payment', exact: true })).toBeEnabled();
   await page.keyboard.press('Enter');
 }
+
+test('DEV-498 keeps cart and payment visible while searching across the Studio viewport matrix', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCounter(page);
+  await openDrawer(page);
+  const scan = page.getByLabel('Scan or search');
+  const beforeDismiss = await scan.boundingBox();
+  await expect(page.getByText('Cash drawer opened for this counter.')).toHaveCount(0, {
+    timeout: 7000,
+  });
+  expect(await scan.boundingBox()).toEqual(beforeDismiss);
+  await expect(page.getByLabel('Bill status')).toContainText('Drawer open');
+  await pressControl(page.getByRole('button', { name: /^Patient/ }));
+  await expect(page.getByLabel('Pharmacist PIN')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  const otc = PHARMACY_E2E.medicines.otc;
+  await trpcMutation(page, 'pharmacyInventory.breakPack', {
+    branchId: PHARMACY_E2E.branchId,
+    inventoryLotId: otcLotId,
+    stockLocationId: PHARMACY_E2E.stockLocationId,
+    requiredLooseUnits: otc.onHandUnits,
+    idempotencyKey: 'pharmacy-counter-layout-open-stock',
+  });
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F5');
+  await setQuantity(page, 1);
+  for (let line = 1; line <= 20; line++) {
+    await setQuantity(page, line);
+    await page.keyboard.press('F6');
+    await expect(page.getByLabel('Bill status')).toContainText(
+      `Bill open · ${line} ${line === 1 ? 'line' : 'lines'}`
+    );
+  }
+
+  for (const width of [375, 768, 1024, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(
+        (value) => document.documentElement.setAttribute('data-theme', value),
+        theme
+      );
+      for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+        await page.emulateMedia({ reducedMotion });
+        await page.keyboard.press('F2');
+        await expect(scan).toBeFocused();
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+        ).toBe(true);
+        await expect(page.locator('[data-counter-console]')).not.toContainText(
+          /(?:POS|CRM)-\d|Phase 0|D01/
+        );
+        if (width >= 1280) {
+          const geometry = await page.evaluate(() => {
+            const cart = document.querySelector('section[aria-label="Cart"]')!;
+            const rail = document.querySelector('aside[aria-label="Bill total"]')!;
+            const pay = Array.from(rail.querySelectorAll('button')).find((button) =>
+              button.textContent?.startsWith('Pay')
+            )!;
+            const search = document.querySelector('#counter-search')!;
+            return {
+              cart: cart.getBoundingClientRect().toJSON(),
+              pay: pay.getBoundingClientRect().toJSON(),
+              search: search.getBoundingClientRect().toJSON(),
+              scrollable: cart.scrollHeight > cart.clientHeight,
+              height: window.innerHeight,
+            };
+          });
+          expect(geometry.cart.height).toBeGreaterThan(140);
+          expect(geometry.cart.left).toBeGreaterThan(geometry.search.right);
+          expect(geometry.pay.bottom).toBeLessThanOrEqual(geometry.height);
+          expect(geometry.scrollable).toBe(true);
+        }
+        await page.screenshot({
+          path: testInfo.outputPath(`counter-${width}-${theme}-${reducedMotion}.png`),
+        });
+      }
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.keyboard.press('Shift+F4');
+  const dialog = page.getByRole('dialog', { name: 'Void this bill?' });
+  const reason = dialog.getByRole('radio', { name: 'Duplicate bill' });
+  await reason.focus();
+  await reason.press('Space');
+  await pressControl(dialog.getByRole('button', { name: 'Void bill' }));
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible();
+});
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
   const otc = PHARMACY_E2E.medicines.otc;
@@ -362,7 +517,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   // Every field POS-02 requires on the row.
   await expect(row).toContainText(otc.strength);
   await expect(row).toContainText(otc.presentation);
-  await expect(row).toContainText(`${otc.onHandUnits} units`);
+  await expect(row).toContainText(`${otc.onHandUnits} tabs`);
   await expect(row).toContainText(otc.batchNumber);
   await expect(row).toContainText('2028-06-30');
   await expect(row).toContainText('250.00');
@@ -377,13 +532,13 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(page.getByText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal).first()).toBeVisible();
 
   await page.keyboard.press('F6');
-  const cart = page.getByRole('list', { name: 'Cart lines' });
+  const cart = page.getByRole('table', { name: 'Cart lines' });
   await expect(cart).toContainText(otc.name, { timeout: 15_000 });
   await expect(cart).toContainText('2 ×');
   await expect(page.getByText('Bill open · 1 line')).toBeVisible();
 
   // POS-03: the cart shows the FEFO allocation, batch and expiry included.
-  const allocation = page.getByRole('list', { name: `FEFO allocation for ${otc.name}` });
+  const allocation = page.getByRole('list', { name: `Batch allocation for ${otc.name}` });
   await expect(allocation).toContainText(`Batch ${otc.batchNumber}`);
   await expect(allocation).toContainText('Exp 2028-06-30');
   await expect(allocation).toContainText('20 units');
@@ -397,14 +552,16 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await search(page, otc.barcode);
   await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
-  await expect(cart).toContainText(`1 × ${otc.name}`);
-  await expect(cart).toContainText(`pack · ${otc.unitsPerPack} units @ ${packPrice}`);
+  await expect(cart.getByRole('row').filter({ hasText: otc.name }).last()).toContainText(
+    '1 × pack'
+  );
+  await expect(cart).toContainText(`pack · ${otc.unitsPerPack} tablets @ ${packPrice}`);
 
   await tenderCash(page, billTotal);
 
   // POS-08: a settled bill renders a receipt carrying medicine, strength,
   // batch and expiry, and a receipt number the tender issued.
-  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(otc.name);
   await expect(receipt).toContainText(otc.strength);
@@ -428,6 +585,8 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(urduReceipt).toHaveAttribute('dir', 'rtl');
   await expect(urduReceipt).toContainText('بیچ');
   await expect(urduReceipt).toContainText(otc.batchNumber);
+  await localeSelect.selectOption('en');
+  await expect(receipt).toBeVisible();
 });
 
 test('bill 2 — name search and a loose unit on a medicine with no strip level', async ({
@@ -452,12 +611,14 @@ test('bill 2 — name search and a loose unit on a medicine with no strip level'
   await expect(page.getByText(PHARMACY_E2E_EXPECTED.syrupTenUnitTotal).first()).toBeVisible();
 
   await page.keyboard.press('F6');
-  const cart = page.getByRole('list', { name: 'Cart lines' });
+  const cart = page.getByRole('table', { name: 'Cart lines' });
   await expect(cart).toContainText(syrup.name, { timeout: 15_000 });
   await expect(cart).toContainText('10 units');
 
   await tenderCash(page, PHARMACY_E2E_EXPECTED.syrupTenUnitTotal);
-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible({
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible({
     timeout: 15_000,
   });
 });
@@ -483,17 +644,21 @@ test('bill 3 — Urdu transliteration alias resolves the same medicine and sells
   await stageFirstResult(page, otc.name);
 
   await page.keyboard.press('F3');
-  await expect(page.getByRole('radio', { name: /Pack/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(
+    page.getByRole('radio', { name: new RegExp(`^Box of ${otc.unitsPerPack} `) })
+  ).toHaveAttribute('aria-checked', 'true');
   await setQuantity(page, 1);
   await expect(page.getByText('250.00').first()).toBeVisible();
 
   await page.keyboard.press('F6');
-  const cart = page.getByRole('list', { name: 'Cart lines' });
+  const cart = page.getByRole('table', { name: 'Cart lines' });
   await expect(cart).toContainText(otc.name, { timeout: 15_000 });
   await expect(cart).toContainText('100 units');
 
   await tenderCash(page, '250.00');
-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible({
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible({
     timeout: 15_000,
   });
 });
@@ -518,7 +683,7 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
   await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(rx.name, {
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(rx.name, {
     timeout: 15_000,
   });
 
@@ -540,12 +705,19 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   await expect(blocks.getByRole('status')).toHaveCount(0);
 
   // Tender is refused while the block stands.
+  await page.keyboard.press('Escape');
   await page.keyboard.press('F9');
   await expect(page.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   await expect(page.getByText(/unresolved safety block/i)).toBeVisible();
 
   // The only way past is to correct the bill. Shift+F4 voids it.
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Shift+F4');
+  const voidDialog = page.getByRole('dialog', { name: 'Void this bill?' });
+  await expect(voidDialog).toBeVisible();
+  await voidDialog.getByRole('radio', { name: 'Duplicate bill' }).focus();
+  await voidDialog.getByRole('radio', { name: 'Duplicate bill' }).press('Space');
+  await pressControl(voidDialog.getByRole('button', { name: 'Void bill' }));
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
@@ -557,9 +729,10 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await openCounter(page);
   await openDrawer(page);
 
-  const legend = page.getByRole('heading', { name: 'Workflow map' });
+  await pressControl(page.getByRole('button', { name: 'Shortcuts', exact: true }));
+  const legend = page.getByRole('dialog', { name: 'Shortcuts', exact: true });
   await expect(legend).toBeVisible();
-  // The chords a cashier needs are readable without opening help.
+  // Help keeps the workflow map and its configuration together.
   //
   // `exact` matters: each action also has an `sr-only` live-region announcement
   // ("Focus scan and search: F2") for screen-reader users, so a loose text match
@@ -572,14 +745,13 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await preset.focus();
   await preset.selectOption('legacySpeed');
 
-  // The honest-placeholder claim is about the WARNING the counter raises, not
-  // about the preset's prose description — both mention Phase 0, so the
-  // assertion is scoped to the live status region that carries the caveat.
-  const placeholderNotice = page.getByRole('status').filter({ hasText: /to confirm in Phase 0/i });
+  // The preview keeps a visible warning without exposing internal planning codes.
+  const placeholderNotice = legend
+    .getByRole('status')
+    .filter({ hasText: /Confirm them with your team/i });
   await expect(placeholderNotice).toBeVisible({ timeout: 15_000 });
-  // Named against the PRD §12 open decision, so the caveat is falsifiable.
-  await expect(placeholderNotice).toContainText('D01');
-  await expect(placeholderNotice).toContainText(/Placeholder/i);
+  await expect(placeholderNotice).not.toContainText(/D01|Phase 0/);
+  await expect(placeholderNotice).toContainText(/Unconfirmed/i);
 
   // Restore the default so a re-run starts from the shipped map.
   await preset.focus();
@@ -670,13 +842,15 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
 
   // One whole bottle: exactly the new lot's contents.
   await page.keyboard.press('F3');
-  await expect(page.getByRole('radio', { name: /Pack/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(
+    page.getByRole('radio', { name: new RegExp(`^Box of ${syrup.unitsPerPack} `) })
+  ).toHaveAttribute('aria-checked', 'true');
   await setQuantity(page, 1);
   await page.keyboard.press('F6');
-  const cart = page.getByRole('list', { name: 'Cart lines' });
+  const cart = page.getByRole('table', { name: 'Cart lines' });
   await expect(cart).toContainText(syrup.name, { timeout: 15_000 });
 
-  const allocation = page.getByRole('list', { name: `FEFO allocation for ${syrup.name}` });
+  const allocation = page.getByRole('list', { name: `Batch allocation for ${syrup.name}` });
   await expect(allocation).toContainText(`Batch ${batchNumber}`);
   await expect(allocation).not.toContainText(`Batch ${syrup.batchNumber}`);
   await expect(allocation).toContainText(`${syrup.unitsPerPack} units`);
@@ -685,7 +859,7 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
   await expect(allocation).toContainText(/Near expiry · 4[4-6] d/);
 
   await tenderCash(page, '180.00');
-  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(batchNumber);
 });
@@ -714,6 +888,13 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await db.query(
       `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect) VALUES ($1, $2, $3, 'pharmacy:dispense', 'ALLOW') ON CONFLICT ("organizationRoleId", capability) DO UPDATE SET effect='ALLOW'`,
       [familyId + '_permission', PHARMACY_E2E.organizationId, PHARMACY_E2E.roleId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_loyalty_program_versions
+       (id,"organizationId",version,"earnMode","earnPoints","perSpendMinor","redemptionValueMinor","khataEarns","effectiveFrom","actorId")
+       VALUES ('program_pharmacy_counter_e2e',$1,1,'PERCENT_OF_SPEND',500,1000000,100,true,'2026-09-01',$2)
+       ON CONFLICT (id) DO NOTHING`,
+      [PHARMACY_E2E.organizationId, PHARMACY_E2E.adminId]
     );
     await db.query(
       `INSERT INTO pharmacy_patient_consents (id, "organizationId", "patientId", purpose, channel, version, granted, "recordedByUserId") VALUES ($1, $2, $3, 'LOYALTY', 'IN_PERSON', 1, true, $4) ON CONFLICT DO NOTHING`,
@@ -771,18 +952,24 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       await strip.press('Space');
       await setQuantity(page, 1);
       await pressControl(page.getByRole('button', { name: /Add to cart/ }));
-      await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(
+      await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(
         PHARMACY_E2E.medicines.otc.name
       );
+      await pressControl(page.getByRole('button', { name: /^Patient/ }));
       const patientSearch = page.getByLabel('Find patient');
       await patientSearch.focus();
       await patientSearch.fill(PHARMACY_E2E.patientName);
       await patientSearch.press('Enter');
       await pressControl(page.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+      await page.keyboard.press('Escape');
+      await expect(scan).toBeFocused();
+      await pressControl(page.getByRole('button', { name: /^Loyalty/ }));
       await pressControl(page.getByRole('button', { name: 'Link selected patient' }));
       await expect(page.getByText('Loyalty customer linked to this bill.')).toBeVisible();
     };
     await makeBill();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('F9');
     await pressControl(
       page
         .getByRole('group', { name: 'Payment method', exact: true })
@@ -833,6 +1020,11 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       .getByLabel('Your password (current account)')
       .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
+    await expect(
+      page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('F9');
     await expect(page.getByText('Settled', { exact: true })).toBeVisible();
     const popupPromise = page.waitForEvent('popup');
     await pressControl(page.getByRole('button', { name: 'Print Khata statement' }));
@@ -842,6 +1034,25 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await expect(popup.locator('body')).not.toContainText(PHARMACY_E2E.patientName);
     await popup.screenshot({ path: testInfo.outputPath('khata-statement.png') });
     await popup.close();
+    // Khata earns under the owner's configured rule when money is collected, not on debt.
+    const deviceId = await page.evaluate(() =>
+      localStorage.getItem('devfathom.pharmacy.counter.device')
+    );
+    expect(deviceId).toMatch(/^counter-/);
+    await trpcMutation(
+      page,
+      'pharmacySales.recordKhataPayment',
+      {
+        branchId: PHARMACY_E2E.branchId,
+        familyAccountId: familyId,
+        amountMinor: 2500,
+        tender: 'CASH',
+        deviceId,
+        businessDate: new Date(`${workspaceToday('Asia/Karachi')}T00:00:00.000Z`).toISOString(),
+        idempotencyKey: `counter-e2e-collection-${familyId}`,
+      },
+      ['businessDate']
+    );
     await begin();
     expect(
       Number(
@@ -914,13 +1125,14 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
   await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(
     PHARMACY_E2E.medicines.otc.name
   );
   await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
-  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   const receiptNumber = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
+  await page.keyboard.press('Escape');
   await pressControl(page.getByRole('button', { name: 'Returns & refunds' }));
   const dialog = page.getByRole('dialog', { name: 'Returns & refunds' });
   await dialog.getByLabel('Receipt number', { exact: true }).fill(receiptNumber);
@@ -932,8 +1144,11 @@ test('sell → return → refund → reprint from the counter', async ({ page })
     name: new RegExp('Receipt ' + receiptNumber + ' ·'),
   });
   // New browser context has its own device sequence; choose its receipt explicitly.
-  if (device) await pressControl(matches.filter({ hasText: device }));
-  else await pressControl(matches.first());
+  if (device) {
+    const label = counterLabel(device);
+    expect(label).not.toBeNull();
+    await pressControl(matches.filter({ hasText: label! }));
+  } else await pressControl(matches.first());
   // DEV-501: a one-line return and refund is one form and one confirm. The only line and
   // the only (cash) tender are preselected; quantity is in the unit sold (strips) plus loose
   // units, and the refund is prefilled from the returned quantity.
@@ -1034,6 +1249,44 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
 });
 
+test('[DEF-13] cashier float guidance and refusal preserve empty-drawer access', async ({
+  page,
+}) => {
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  const openingCash = page.getByLabel('Opening cash', { exact: true });
+  await expect(openingCash).toHaveAttribute('readonly', '');
+  await expect(openingCash).toHaveValue('0');
+  await expect(page.getByRole('group', { name: 'Quick amounts' })).toHaveCount(0);
+  await expect(page.getByText(/Count the cash in the drawer/)).toHaveCount(0);
+  await expect(page.getByText(/Ask a manager or owner to declare any opening float/)).toBeVisible();
+
+  // Simulate stale presentation data after a permission change. The real cashier
+  // session and database grants remain unchanged: the server must refuse the float.
+  await page.route('**/api/trpc/**', async (route) => {
+    const names = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const index = names.indexOf('pharmacySales.refundAccess');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const result = Array.isArray(body) ? body[index] : body;
+    if (result?.result?.data?.json) result.result.data.json.authorized = true;
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await expect(openingCash).toBeEditable();
+  await openingCash.fill('5000');
+  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Only a manager or owner can open with a float.' })
+  ).toContainText(
+    'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+  );
+  await expect(page.getByText(/Your role does not take payments/)).toHaveCount(0);
+  await expect(openingCash).toHaveValue('5000');
+  await expect(page.getByLabel('Scan or search')).toHaveCount(0);
+  await openDrawer(page);
+});
+
 test('cashier — the seeded cashier sells from the counter and gets the receipt', async ({
   page,
 }) => {
@@ -1048,11 +1301,11 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
   await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name, {
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(otc.name, {
     timeout: 15_000,
   });
   await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
-  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(otc.name);
   await expect(receipt).toContainText(otc.batchNumber);
@@ -1067,20 +1320,26 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await page.keyboard.press('F4');
   await setQuantity(page, 2);
   await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(otc.name);
   await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible();
   await page.goto('/pharmacy/counter/close');
   await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
   const inputs = page.getByLabel(/Counted cash for drawer/);
   await expect(inputs.first()).toBeVisible();
+  let shortageAssigned = false;
   for (let i = 0; i < (await inputs.count()); i++) {
     const field = inputs.nth(i);
     const row = field.locator('..').locator('..');
     const text = await row.innerText();
     const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
-    await field.fill((expected - (i === 0 ? 1 : 0)).toFixed(2));
+    const shortage = !shortageAssigned && expected >= 1 ? 1 : 0;
+    if (shortage) shortageAssigned = true;
+    await field.fill((expected - shortage).toFixed(2));
   }
+  expect(shortageAssigned).toBe(true);
   await expect(page.getByTestId('Variance')).toHaveText('-1.00');
   await page.getByLabel('Variance note').fill('One rupee short at nightly count');
   await page.getByRole('checkbox').focus();

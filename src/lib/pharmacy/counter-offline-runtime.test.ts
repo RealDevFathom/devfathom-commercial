@@ -20,7 +20,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
 
-import { PharmacyCounterRuntime } from './counter-offline-runtime';
+import { PharmacyCounterRuntime, startReceiptLeaseRenewal } from './counter-offline-runtime';
 import type { SnapshotVerifier } from './counter-offline-runtime';
 import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
@@ -803,5 +803,120 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
     await expect(
       counter.enqueue({ ...cashSale(1), payload: { deviceSecret: 'pcd_x' } }, MATRIX)
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
+  });
+});
+
+describe('DEV-712 — the receipt lease renews in the background', () => {
+  const block = (overrides: Record<string, unknown> = {}) => ({
+    id: 'lease_2',
+    deviceId: SCOPE.deviceId,
+    blockStart: 1_000,
+    blockEnd: 1_099,
+    nextNumber: 1_000,
+    ...overrides,
+  });
+
+  it('tops up a low runway so the next sale still gets a number', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    const reserve = vi.fn(async () => block());
+    for (const attempt of [0, 1, 2]) {
+      expect((await counter.enqueue(cashSale(1), MATRIX)).ok, `attempt ${attempt}`).toBe(true);
+    }
+    expect(await counter.renewReceiptLeases(reserve)).toEqual({
+      status: 'RENEWED',
+      remaining: 100,
+    });
+    expect(reserve).toHaveBeenCalledExactlyOnceWith(100);
+    const next = await counter.enqueue(cashSale(1), MATRIX);
+    expect(next).toMatchObject({ ok: true, command: { receiptNumber: 1_000 } });
+    // The old block keeps its issued numbers; the new one is persisted beside it.
+    const reopened = runtime(driver);
+    await reopened.hydrate();
+    expect(reopened.snapshot().queue?.leases).toEqual([
+      { leaseId: 'lease_1', blockStart: 900, blockEnd: 902, nextNumber: 903 },
+      { leaseId: 'lease_2', blockStart: 1_000, blockEnd: 1_099, nextNumber: 1_001 },
+    ]);
+  });
+
+  it('does not reserve while the runway is above the low-water mark', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const reserve = vi.fn(async () => block());
+    expect(await counter.renewReceiptLeases(reserve, { lowWater: 3 })).toEqual({
+      status: 'SUFFICIENT',
+      remaining: 3,
+    });
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('is single-flight: overlapping renewals reserve one block', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    let release!: (value: unknown) => void;
+    const reserve = vi.fn(() => new Promise((resolve) => (release = resolve)));
+    const first = counter.renewReceiptLeases(reserve);
+    const second = counter.renewReceiptLeases(reserve);
+    release(block());
+    expect(await first).toEqual(await second);
+    expect(reserve).toHaveBeenCalledTimes(1);
+    expect(counter.snapshot().queue?.leases).toHaveLength(2);
+  });
+
+  it.each([
+    ['a refused request', () => Promise.reject(new Error('forbidden'))],
+    ['another device', async () => block({ deviceId: 'counter_2' })],
+    ['a malformed block', async () => block({ blockEnd: 900 })],
+    [
+      'an overlapping block',
+      async () => block({ blockStart: 902, blockEnd: 990, nextNumber: 902 }),
+    ],
+  ])('keeps the held leases and never throws on %s', async (_label, answer) => {
+    const counter = await readyCounter(createMemoryDriver());
+    const before = counter.snapshot().queue?.leases;
+    await expect(counter.renewReceiptLeases(vi.fn(answer))).resolves.toEqual({
+      status: 'FAILED',
+      remaining: 3,
+    });
+    expect(counter.snapshot().queue?.leases).toEqual(before);
+  });
+
+  it('never renews a revoked counter', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.revoke();
+    const reserve = vi.fn(async () => block());
+    expect(await counter.renewReceiptLeases(reserve)).toEqual({ status: 'STOPPED', remaining: 0 });
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('runs now, on every interval and when the browser comes back online, until stopped', async () => {
+    vi.useFakeTimers();
+    try {
+      const renewReceiptLeases = vi.fn(async () => ({
+        status: 'SUFFICIENT' as const,
+        remaining: 50,
+      }));
+      const onResult = vi.fn();
+      const reserve = vi.fn();
+      const stop = startReceiptLeaseRenewal({ renewReceiptLeases }, reserve, {
+        intervalMs: 1_000,
+        onResult,
+      });
+      expect(renewReceiptLeases).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(renewReceiptLeases).toHaveBeenCalledTimes(2);
+      window.dispatchEvent(new Event('online'));
+      expect(renewReceiptLeases).toHaveBeenCalledTimes(3);
+      expect(renewReceiptLeases).toHaveBeenCalledWith(reserve, {
+        lowWater: undefined,
+        size: undefined,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onResult).toHaveBeenCalledWith({ status: 'SUFFICIENT', remaining: 50 });
+      stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      window.dispatchEvent(new Event('online'));
+      expect(renewReceiptLeases).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

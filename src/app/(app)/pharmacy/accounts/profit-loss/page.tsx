@@ -9,7 +9,12 @@ import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ProfitAndLossReport } from './report';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 export const metadata: Metadata = { title: 'Profit and loss · Pharmacy accounts' };
@@ -23,9 +28,15 @@ export default async function ProfitAndLossPage({
 }) {
   const query = await searchParams;
   const now = new Date();
-  const from =
-    scalar(query.from) ?? new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
-  const to = scalar(query.to) ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  // The organization zone is known once the context resolves; until then (or if it fails) the
+  // default window is counted on the UTC clock.
+  let timeZone: string | null | undefined;
+  const fromQuery = scalar(query.from);
+  const toQuery = scalar(query.to);
+  const defaults = () => ({
+    from: fromQuery ?? workspaceDateOffset(timeZone, -30, now),
+    to: toQuery ?? workspaceDateOffset(timeZone, 1, now),
+  });
   let branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
   let result: Awaited<
@@ -34,6 +45,7 @@ export default async function ProfitAndLossPage({
   let error: string | null = null;
   try {
     const ctx = await createTRPCContext();
+    timeZone = ctx.organization?.timezone ?? 'UTC';
     branches = (await pharmacyReportsRouter.createCaller(ctx).branches()).branches;
     if ([query.branch, query.from, query.to].some(Array.isArray)) {
       throw new TRPCError({ code: 'BAD_REQUEST' });
@@ -44,10 +56,16 @@ export default async function ProfitAndLossPage({
     } else {
       // The report caller enforces admin, reports licensing/capabilities, tenant,
       // active branch and UTC period validation. No bookkeeping workspace call.
+      const picked = defaults();
+      // `to` is exclusive: the start of that day on the organization's clock.
+      const window = {
+        from: workspaceDateRange(picked.from, picked.from, timeZone).from,
+        to: workspaceDateRange(picked.to, picked.to, timeZone).from,
+      };
       result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,
-        from: `${from}T00:00:00Z`,
-        to: `${to}T00:00:00Z`,
+        from: window.from.toISOString(),
+        to: window.to.toISOString(),
         page: 1,
       });
     }
@@ -56,9 +74,11 @@ export default async function ProfitAndLossPage({
       cause instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED', 'NOT_FOUND'].includes(cause.code)
         ? 'Owner financial-report permission, Pharmacy Reports access and an authorized active branch are required.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
-          ? 'Choose one branch and a valid UTC date window of up to 92 days, with the exclusive end after the start, then retry.'
+          ? 'Choose one branch and a valid date window of up to 92 days, with the exclusive end after the start, then retry.'
           : 'Profit and loss could not be read. Retry the report.';
   }
+  const { from, to } = defaults();
+  const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -95,11 +115,11 @@ export default async function ProfitAndLossPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From (UTC)
+            From ({zone})
             <Input className="min-h-11" name="from" type="date" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            To, exclusive (UTC)
+            To, exclusive ({zone})
             <Input className="min-h-11" name="to" type="date" defaultValue={to} required />
           </label>
           <Button className="min-h-11" disabled={!branches.length}>
@@ -117,10 +137,11 @@ export default async function ProfitAndLossPage({
       {result && (
         <SectionCard title="Posted profit and loss">
           <p className="break-words text-sm text-text-muted">
-            {formatUtcInstant(result.from)} to {formatUtcInstant(result.to)} (end exclusive).
-            Source: {plainReportSource(result.source) ?? 'posted accounts'}. Coverage: posted
-            entries only; completeness and cost coverage unknown. Amounts use each recorded
-            currency. Retrieved {formatUtcInstant(result.freshness.retrievedAt)}.
+            {formatWorkspaceDateTime(result.from, timeZone)} to{' '}
+            {formatWorkspaceDateTime(result.to, timeZone)} (end exclusive). Source:{' '}
+            {plainReportSource(result.source) ?? 'posted accounts'}. Coverage: posted entries only;
+            completeness and cost coverage unknown. Amounts use each recorded currency. Retrieved{' '}
+            {formatWorkspaceDateTime(result.freshness.retrievedAt, timeZone)}.
           </p>
           <ProfitAndLossReport statements={result.profitAndLoss} />
         </SectionCard>
