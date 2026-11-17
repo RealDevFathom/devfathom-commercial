@@ -8,8 +8,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 
 export type ControlledRestorationPin = { staffProfileId: string; pin: string };
 export type ControlledRestorationWitness = {
@@ -155,7 +155,17 @@ async function verifyRestorationPin(
   }
   const refused = selfWitness ? 'SOLO_PIN_REFUSED' : null;
   if (isLockedOut(credential, now)) return refused;
-  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: witness.id,
+      credentialHash: credential.credentialHash,
+      secret: input.pin,
+      action: 'pharmacy.controlledRestorationWitness',
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),

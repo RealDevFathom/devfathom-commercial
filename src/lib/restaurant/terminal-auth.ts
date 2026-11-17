@@ -41,6 +41,7 @@ import {
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
@@ -588,14 +589,18 @@ export async function authenticateOperator(
     type: OperatorCredentialType;
     secret: string;
     now: Date;
+    /** DEV-879: set when the credential approves an action rather than signing in. An
+     * approver who enrolled an approval authenticator must then enter its current code
+     * instead of their PIN (see `verifyApprovalSecret`). */
+    approval?: { action: string; requestedByStaffProfileId?: string | null };
   }
 ): Promise<OperatorAuthResult> {
-  const { staffProfileId, deviceId, branchId, type, secret, now } = params;
+  const { staffProfileId, deviceId, branchId, type, secret, now, approval } = params;
 
   const [profile, branch, credentials] = await Promise.all([
     db.restaurantStaffProfile.findUnique({
       where: { id: staffProfileId },
-      select: { id: true, primaryBranchId: true, status: true },
+      select: { id: true, primaryBranchId: true, status: true, userId: true },
     }),
     // Completion wave: whether THIS branch requires a rostered shift. Read
     // alongside the profile so the enforced path costs no extra round trip, and
@@ -641,7 +646,18 @@ export async function authenticateOperator(
     return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(state, now) };
   }
 
-  const valid = await verifyOperatorCredential(type, secret, credential.credentialHash);
+  const valid =
+    approval && type === 'PIN'
+      ? (await verifyApprovalSecret(db, {
+          organizationId: credential.organizationId,
+          approverUserId: profile.userId,
+          credentialHash: credential.credentialHash,
+          secret,
+          action: approval.action,
+          requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
+          now,
+        })) !== null
+      : await verifyOperatorCredential(type, secret, credential.credentialHash);
   if (!valid) {
     const next = registerFailedAttempt(state, now);
     await db.restaurantOperatorCredential.update({ where: { id: credential.id }, data: next });

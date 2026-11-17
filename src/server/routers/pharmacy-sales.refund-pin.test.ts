@@ -1,6 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-647: refunds need a manager or owner who re-enters their own PIN. Cashiers cannot start one.
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('server-only', () => ({}));
 const tenant = vi.hoisted(() => ({ db: null as unknown }));
 // The PIN check runs in its own tenant transaction; here it sees the fixture's database.
