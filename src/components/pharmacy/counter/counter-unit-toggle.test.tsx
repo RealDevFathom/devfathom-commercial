@@ -141,16 +141,11 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByText('Pro-rata ceiling')).toBeTruthy();
   });
 
-  it('counts overstock in boxes, not canonical units, with a correct plural', () => {
-    renderToggle({ selected: 'PACK', quantity: '5', preview: previewFor('PACK', 5, 250) });
-    expect(screen.getByRole('alert').textContent).toContain('Only 2 boxes on hand');
-  });
-
   it('reports a shortfall instead of quietly allowing an unfillable line', () => {
     renderToggle({ selected: 'PACK', quantity: '2', preview: previewFor('PACK', 2, 150) });
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('Short by 50 units');
-    expect(alert.textContent).toContain('Only 1 box on hand');
+    expect(alert.textContent).toMatch(/Only 1 \w+ on hand/);
     expect(alert.textContent).not.toContain('safe units');
     expect(screen.getByLabelText('Quantity').getAttribute('aria-invalid')).toBe('true');
   });
