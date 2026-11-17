@@ -40,6 +40,8 @@ import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
+import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
+import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
 import { readActiveBill, rememberActiveBill, type ActiveBillScope } from './active-bill-storage';
@@ -529,6 +531,14 @@ function ScopedPharmacyCounterConsole({
   const lastAddOutcome = useRef<'added' | 'pending'>('added');
   const lineAttempts = useRef(new Map<string, string>());
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
+  const packApprovalResolver = useRef<((approval: CounterApprovalPin | null) => void) | null>(null);
+  const [packApproval, setPackApproval] = useState<{ medicineName: string } | null>(null);
+  const finishPackApproval = useCallback((approval: CounterApprovalPin | null) => {
+    const resolve = packApprovalResolver.current;
+    packApprovalResolver.current = null;
+    setPackApproval(null);
+    resolve?.(approval);
+  }, []);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantityText, setQuantityText] = useState('1');
@@ -704,6 +714,19 @@ function ScopedPharmacyCounterConsole({
       lastAddOutcome.current = 'added';
     },
     [branchAuthorized, branchId, catalogueCache]
+  );
+
+  useEffect(
+    () => () => {
+      packApprovalResolver.current?.(null);
+      packApprovalResolver.current = null;
+    },
+    [branchAuthorized, branchId]
+  );
+
+  const loadScannedPackApprovers = useCallback(
+    () => utils.client.pharmacySales.scannedPackFefoApprovers.query({ branchId }),
+    [branchId, utils]
   );
 
   const discardReceiptIntent = useCallback(() => {
@@ -1755,7 +1778,7 @@ function ScopedPharmacyCounterConsole({
           : undefined;
         const refSerial = Number(billAuth.refSerial);
         const attemptKeys: string[] = [];
-        const postLine = (lineSaleId: string) => {
+        const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
             lineSaleId,
             row.medicineId,
@@ -1807,7 +1830,9 @@ function ScopedPharmacyCounterConsole({
             // scanner gesture must allocate another item, even for the same code.
             idempotencyKey: key,
             // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
-            ...(scannedPack ? { scannedPack: { payload: scannedPack.payload } } : {}),
+            ...(scannedPack
+              ? { scannedPack: { payload: scannedPack.payload, ...(approval ? { approval } : {}) } }
+              : {}),
             ...(overrideLotId && batchOverride
               ? {
                   // #520: the server resolves who approved the override; the counter never names one.
@@ -1819,10 +1844,32 @@ function ScopedPharmacyCounterConsole({
               : {}),
           });
         };
+        let packApprovalUsed = false;
+        const postScannedLine = async (lineSaleId: string) => {
+          try {
+            return await postLine(lineSaleId);
+          } catch (error) {
+            if (
+              !scannedPack ||
+              !(error instanceof Error) ||
+              error.message !== 'SERIAL_FEFO_APPROVAL_REQUIRED'
+            )
+              throw error;
+            if (!scanIsCurrent()) return null;
+            const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+              packApprovalResolver.current = resolve;
+              setPackApproval({ medicineName: row.displayName });
+            });
+            if (!approval || !scanIsCurrent()) return null;
+            // Approval belongs to this exact bill and physical pack only.
+            packApprovalUsed = true;
+            return postLine(lineSaleId, approval);
+          }
+        };
         let startedNextBill = replaceClosedBill;
-        let added: Awaited<ReturnType<typeof postLine>>;
+        let added: Awaited<ReturnType<typeof postScannedLine>>;
         try {
-          added = await postLine(activeSaleId);
+          added = await postScannedLine(activeSaleId);
         } catch (error) {
           // DEV-712: the server says this bill already moved on — paid on another
           // screen, or this copy was stale. Re-read it and, once it is confirmed
@@ -1834,6 +1881,7 @@ function ScopedPharmacyCounterConsole({
             !counterBillMovedOn(error) ||
             freshBill ||
             controlled ||
+            packApprovalUsed ||
             prescriptionLine ||
             attemptRef.current
           )
@@ -1845,8 +1893,9 @@ function ScopedPharmacyCounterConsole({
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
-          added = await postLine(activeSaleId);
+          added = await postScannedLine(activeSaleId);
         }
+        if (!added) return;
         if ('blocked' in added) {
           catalogueCache.clear();
           setNotice({ tone: 'warning', message: added.blocked });
@@ -1887,6 +1936,8 @@ function ScopedPharmacyCounterConsole({
         });
         if (counterSetupReason(error)) void refetchSaleReadiness();
       } finally {
+        setPackApproval(null);
+        packApprovalResolver.current = null;
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
       }
@@ -1989,17 +2040,7 @@ function ScopedPharmacyCounterConsole({
         setScanSettles((count) => count + 1);
       }
     },
-    [
-      addToCart,
-      branchId,
-      busy,
-      catalogueCache,
-      query,
-      runSearch,
-      setupNotice,
-      stageRow,
-      utils,
-    ]
+    [addToCart, branchId, busy, catalogueCache, query, runSearch, setupNotice, stageRow, utils]
   );
 
   const queueScan = useCallback(
@@ -4077,6 +4118,14 @@ function ScopedPharmacyCounterConsole({
               <p id="counter-resume-reason" className="mt-2 text-xs text-text-muted">
                 {resumeDisabledReason}
               </p>
+            ) : null}
+            {packApproval ? (
+              <CounterPackApprovalDialog
+                medicineName={packApproval.medicineName}
+                loadApprovers={loadScannedPackApprovers}
+                onCancel={() => finishPackApproval(null)}
+                onConfirm={finishPackApproval}
+              />
             ) : null}
             <CounterVoidDialog
               open={voidOpen && Boolean(saleId)}
