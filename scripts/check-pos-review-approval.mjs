@@ -196,6 +196,25 @@ const scenarios = [
     scopeChange: true,
     stale: true,
   })),
+  {
+    name: 'server-409-repeated-reversions-zero-clicks',
+    server409: 'add-item',
+    lifecycle: true,
+    a: catalog({ price: '4.00' }),
+    b: catalog({ price: '4.00' }),
+    before: 'Needs review',
+    stale: false,
+  },
+  ...[true, false].map((cachedOriginal) => ({
+    name: `successive-foreign-publications-${cachedOriginal ? 'cached' : 'fetch'}-original`,
+    cachedOriginal,
+    originalScope: true,
+    a: catalog({ publicationId: 'foreign-publication-two' }),
+    b: catalog({ publicationId: 'foreign-publication-three' }),
+    before: 'Publication: Different from the saved order',
+    after: 'Reviewing the saved order’s original menu.',
+    stale: true,
+  })),
 ];
 let browser;
 const results = [];
@@ -263,6 +282,13 @@ try {
             scenario.selector && url.searchParams.get('channel') !== activeCatalog.channel
               ? scenario.a
               : activeCatalog;
+          if (
+            url.searchParams.get('publicationId') === input.open.publicationId &&
+            scenario.originalScope
+          ) {
+            data = catalog({ price: '4.00' });
+            evidence.originalMenuRequests = (evidence.originalMenuRequests ?? 0) + 1;
+          }
         } else if (path.endsWith('/orders/open-orders')) data = { orders: [] };
         else if (path.endsWith('/orders/commercial-terms'))
           data = { profiles: [], rules: [], serviceChargeRate: null };
@@ -304,6 +330,12 @@ try {
       await tab2.evaluate(() => window.posReviewFixture.mount());
       await expect(tab2.getByLabel('Channel', { exact: true })).toBeEnabled();
       await expect(tab2.getByRole('button', { name: 'Lock terminal', exact: true })).toBeEnabled();
+      if (scenario.cachedOriginal) {
+        await tab2.evaluate(
+          (menu) => window.posReviewFixture.cache(menu),
+          catalog({ price: '4.00' })
+        );
+      }
       await tab2.evaluate((draft) => window.posReviewFixture.seed(draft), {
         ...input,
         lines: scenario.lines ?? input.lines,
@@ -324,6 +356,73 @@ try {
         evidence.createdServerReview = before.queue.drafts[0].review;
       } else {
         assert.equal(requests.length, 0, 'Catalog review setup must never replay');
+      }
+      if (scenario.lifecycle) {
+        // Two additional synthetic composers exercise concurrent saves without
+        // granting the active operator authority to replay their orders.
+        await Promise.all(
+          [tab1, tab2].map((page, index) =>
+            page.evaluate((draft) => window.posReviewFixture.seed(draft), {
+              ...input,
+              composerStaffProfileId: `waiting-operator-${index}`,
+              lines: [{ menuItemId: 'tea', quantity: index + 1, quotedUnitPrice: '4.00' }],
+            })
+          )
+        );
+        const saved = await tab2.evaluate(() => window.posReviewFixture.read());
+        const savedIds = saved.queue.drafts.map((draft) => draft.draftId);
+        assert.equal(savedIds.length, 3);
+        evidence.zeroClickTransitions = [];
+        for (const menu of [
+          catalog(),
+          catalog({ price: '4.00' }),
+          catalog({ price: '7.00' }),
+          catalog({ price: '4.00' }),
+          catalog({ price: '4.00', coffee: false }),
+          catalog({ price: '4.00' }),
+          { ...catalog({ price: '4.00' }), channelOpen: false },
+          catalog({ price: '4.00' }),
+        ]) {
+          activeCatalog = menu;
+          await tab2.reload();
+          await tab2.waitForFunction(() => Boolean(window.posReviewFixture));
+          await tab2.evaluate(() => window.posReviewFixture.mount());
+          await expect(
+            tab2.getByRole('button', { name: 'Send deliberately', exact: true }).first()
+          ).toBeEnabled();
+          const persisted = await tab2.evaluate(() => window.posReviewFixture.read());
+          assert.equal(persisted.queue.drafts[0].status, 'NEEDS_REVIEW');
+          assert.deepEqual(persisted.queue.drafts[0].commands, before.queue.drafts[0].commands);
+          assert.deepEqual(
+            persisted.queue.drafts.map((draft) => draft.draftId),
+            savedIds
+          );
+          assert.deepEqual(
+            requests,
+            initialRequests,
+            'Catalog reversion/reload must never settle a server refusal'
+          );
+          // Exercise the real reconnect handler and await its async work via the UI.
+          await tab2.evaluate(() => {
+            window.dispatchEvent(new Event('offline'));
+            window.dispatchEvent(new Event('online'));
+          });
+          await expect(
+            tab2.getByRole('button', { name: 'Lock terminal', exact: true })
+          ).toBeEnabled();
+          assert.deepEqual(
+            requests,
+            initialRequests,
+            'Reconnect must not approve the server review'
+          );
+          evidence.zeroClickTransitions.push({
+            price: menu.sections[0].items[0].price,
+            available: menu.sections[0].items[0].available,
+            channelOpen: menu.channelOpen,
+            status: persisted.queue.drafts[0].status,
+            additionalRequests: requests.length - initialRequests.length,
+          });
+        }
       }
       if (scenario.reloadBeforeApproval) {
         await tab1.reload();
@@ -375,6 +474,27 @@ try {
         await expect(send).toBeEnabled();
         await expect(tab1.getByRole('alert').filter({ hasText: feedback })).toBeVisible();
         await expect(card).toContainText(scenario.after);
+        if (scenario.originalScope) {
+          await expect(card).toContainText('The menu publication changed.');
+          await expect(card).toContainText('Publication: Same as the saved order');
+          await expect(card).toContainText('Price: 4.00 → 4.00');
+          assert.equal(
+            after.queue.drafts[0].review.catalog.publicationId,
+            input.open.publicationId
+          );
+          assert.equal((await card.innerText()).includes('foreign-publication'), false);
+          assert.equal((await card.innerText()).includes(input.open.publicationId), false);
+          if (!scenario.cachedOriginal) assert.equal(evidence.originalMenuRequests, 1);
+          // Further unrelated publications cannot displace the retained original.
+          activeCatalog = catalog({ publicationId: 'foreign-publication-four', price: '9.00' });
+          await tab2.evaluate((menu) => window.posReviewFixture.cache(menu), activeCatalog);
+          const retained = await tab2.evaluate(() => window.posReviewFixture.read());
+          assert.equal(
+            retained.queue.drafts[0].review.catalog.publicationId,
+            input.open.publicationId
+          );
+          assert.deepEqual(retained.queue.drafts[0].commands, before.queue.drafts[0].commands);
+        }
         if (scenario.scopeChange) {
           await expect(card).toContainText(
             'Sending keeps the order’s original Dine in channel and publication'
@@ -393,7 +513,8 @@ try {
         await tab1.screenshot({ path: resolve(artifacts, `${scenario.name}.png`), fullPage: true });
         if (
           scenario.name === 'same-line-price-lock-reload' ||
-          scenario.name === 'visible-channel-and-publication-scope'
+          scenario.name === 'visible-channel-and-publication-scope' ||
+          scenario.cachedOriginal
         ) {
           evidence.visualMatrix = [];
           for (const width of [375, 768, 1024, 1440]) {
@@ -460,6 +581,14 @@ try {
           'Server review must have catalog identity before display'
         );
       }
+      if (scenario.originalScope) {
+        assert.deepEqual(
+          completed.queue.drafts[0].commands[0].body,
+          before.queue.drafts[0].commands[0].body
+        );
+        assert.equal(completed.queue.drafts[0].commands[1].body.quotedUnitPrice, '4.00');
+      }
+      if (scenario.lifecycle) assert.equal(completed.queue.drafts.length, 3);
       evidence.completed = completed.queue.drafts[0];
       evidence.replayRequests = requests;
       evidence.result = 'PASS';
@@ -467,6 +596,17 @@ try {
       evidence.result = 'FAIL';
       evidence.error = error.stack ?? String(error);
       evidence.browserErrors = errors;
+      evidence.requestsAtFailure = [...requests];
+      const reader = context.pages()[1];
+      if (
+        reader &&
+        !reader.isClosed() &&
+        (await reader.evaluate(
+          () => Boolean(window.posReviewFixture) && !window.posReviewFixture.lockHeld
+        ))
+      ) {
+        evidence.persistedAtFailure = await reader.evaluate(() => window.posReviewFixture.read());
+      }
       failures.push(scenario.name);
     } finally {
       await context.close();

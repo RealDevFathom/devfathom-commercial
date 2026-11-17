@@ -1317,3 +1317,102 @@ describe('server review identity before display', () => {
     expect(nextReplayCommand(blocked.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
   });
 });
+
+describe('server obligations across catalog transitions', () => {
+  it.each([false, true])(
+    'retains the server refusal through repeated drift/reversion (legacy=%s)',
+    (legacy) => {
+      const original = seeded([draftInput()]);
+      let state = applyReplayOutcome(original, {
+        draftId: original.drafts[0].draftId,
+        commandId: 'c2',
+        outcome: classifyReplayOutcome({ status: 409 }),
+        catalog: catalog(),
+      }).snapshot;
+      if (legacy) delete state.drafts[0].serverReview;
+      const commands = state.drafts[0].commands;
+      for (const change of [
+        { price: '525.00' },
+        { price: '450.00' },
+        { price: '700.00' },
+        { price: '450.00' },
+        { available: false },
+        { available: true },
+      ]) {
+        const menu = catalog();
+        menu.sections[0].items[0] = { ...menu.sections[0].items[0], ...change };
+        state = markDraftsForCatalogReview(JSON.parse(JSON.stringify(state)), menu).snapshot;
+        state = resumeAfterReauth(state);
+        expect(state.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(state.drafts[0].serverReview?.reason).toBe('CATALOG_CONFLICT');
+        expect(state.drafts[0].review?.reason).toBe('CATALOG_CONFLICT');
+        expect(state.drafts[0].commands).toEqual(commands);
+        expect(nextReplayCommand(state, DEVICE, OPERATOR).status).toBe('IDLE');
+      }
+      const approved = resolveReviewedDraft(
+        state,
+        state.drafts[0].draftId,
+        'REPLAY',
+        state.drafts[0].review,
+        catalog().version,
+        catalog()
+      );
+      expect(approved.status).toBe('APPLIED');
+      expect(approved.snapshot.drafts[0].serverReview).toBeNull();
+      expect(nextReplayCommand(approved.snapshot, DEVICE, OPERATOR).status).toBe('READY');
+    }
+  );
+
+  it('does not release a server obligation on retry, pause/resume, or a late acknowledgement', () => {
+    const original = seeded([draftInput()]);
+    let state = applyReplayOutcome(original, {
+      draftId: original.drafts[0].draftId,
+      commandId: 'c2',
+      outcome: classifyReplayOutcome({ status: 409 }),
+      catalog: catalog(),
+    }).snapshot;
+    for (const status of [0, 401, 201]) {
+      state = applyReplayOutcome(state, {
+        draftId: state.drafts[0].draftId,
+        commandId: 'c2',
+        outcome: classifyReplayOutcome({ status }),
+        serverRef: 'late-item',
+      }).snapshot;
+      state = resumeAfterReauth(state);
+      expect(state.drafts[0].status).toBe('NEEDS_REVIEW');
+      expect(state.drafts[0].review?.reason).toBe('CATALOG_CONFLICT');
+      expect(nextReplayCommand(state, DEVICE, OPERATOR).status).toBe('IDLE');
+    }
+  });
+
+  it('shows another changed line after explicit server approval without accepting that line', () => {
+    const original = seeded([
+      draftInput({
+        lines: [
+          { menuItemId: 'mi-1', quantity: 1, quotedUnitPrice: '450.00' },
+          { menuItemId: 'mi-1', quantity: 2, quotedUnitPrice: '400.00' },
+        ],
+      }),
+    ]);
+    const state = applyReplayOutcome(original, {
+      draftId: original.drafts[0].draftId,
+      commandId: 'c2',
+      outcome: classifyReplayOutcome({ status: 409 }),
+      catalog: catalog(),
+    }).snapshot;
+    const refreshed = markDraftsForCatalogReview(state, catalog()).snapshot;
+    expect(refreshed.drafts[0].review?.atCommandId).toBe('c2');
+    const approved = resolveReviewedDraft(
+      refreshed,
+      state.drafts[0].draftId,
+      'REPLAY',
+      refreshed.drafts[0].review,
+      catalog().version,
+      catalog()
+    ).snapshot;
+    expect(approved.drafts[0].serverReview).toBeNull();
+    expect(approved.drafts[0].review).toMatchObject({ reason: 'PRICE_CHANGED', atCommandId: 'c3' });
+    expect(approved.drafts[0].commands[2]).toEqual(original.drafts[0].commands[2]);
+    expect(nextReplayCommand(approved, DEVICE, OPERATOR).status).toBe('IDLE');
+  });
+});

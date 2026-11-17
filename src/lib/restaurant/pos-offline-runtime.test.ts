@@ -612,4 +612,113 @@ describe('persisted server review creation', () => {
     await tabA.replay('staff-1', send);
     expect(send).toHaveBeenCalledTimes(1);
   });
+  it.each([true, false])(
+    'returns successive foreign publications to original scope (cached=%s)',
+    async (cached) => {
+      const driver = createMemoryDriver();
+      const tabA = new PosOfflineRuntime(scope, driver);
+      const tabB = new PosOfflineRuntime(scope, driver);
+      await tabA.hydrate();
+      if (cached) await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+      await tabA.enqueue(input);
+      await tabA.cacheCatalog(
+        { ...menu('5.00'), publicationId: 'foreign-2' },
+        '2026-11-17T01:00:00Z'
+      );
+      const displayed = tabA.snapshot().queue!.drafts[0];
+      await tabB.cacheCatalog(
+        { ...menu('5.00'), publicationId: 'foreign-3' },
+        '2026-11-17T02:00:00Z'
+      );
+      expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+        cached ? 'STALE' : 'CATALOG_REQUIRED'
+      );
+      const send = vi.fn(async () => ({ status: 201, serverRef: 'ref' }));
+      await tabA.resume();
+      await tabA.replay('staff-1', send);
+      expect(send).not.toHaveBeenCalled();
+      if (!cached) {
+        await tabB.cacheCatalog(
+          { ...menu('9.00'), publicationId: 'foreign-4' },
+          '2026-11-17T03:00:00Z'
+        );
+        expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+          'CATALOG_REQUIRED'
+        );
+        await tabA.replay('staff-1', send);
+        expect(send).not.toHaveBeenCalled();
+        await tabB.cacheCatalog(menu(), '2026-11-17T04:00:00Z');
+      }
+      await tabB.cacheCatalog(
+        { ...menu('9.00'), publicationId: 'foreign-5' },
+        '2026-11-17T05:00:00Z'
+      );
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      await reloaded.hydrate();
+      const fresh = reloaded.snapshot().queue!.drafts[0];
+      expect(fresh.status).toBe('NEEDS_REVIEW');
+      expect(fresh.commands).toEqual(displayed.commands);
+      expect(fresh.review?.catalog).toMatchObject({
+        publicationId: input.open.publicationId,
+        retainedOriginal: true,
+        line: { currentPrice: '4.00', quotedPrice: '4.00' },
+      });
+      expect(reloaded.snapshot().queue!.reviewCatalogs).toHaveLength(2);
+      expect(await reloaded.resolveReview(fresh.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+      await reloaded.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(2);
+      const completed = reloaded.snapshot().queue!.drafts[0];
+      expect(completed.commands[0].body).toEqual(displayed.commands[0].body);
+      expect(completed.commands[1].body).toMatchObject({ quotedUnitPrice: '4.00' });
+      expect(completed.status).toBe('COMPLETED');
+    }
+  );
+
+  it('requires a fresh approval if the retained original catalog itself changes', async () => {
+    const driver = createMemoryDriver();
+    const a = new PosOfflineRuntime(scope, driver);
+    const b = new PosOfflineRuntime(scope, driver);
+    await a.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await a.enqueue(input);
+    await a.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-2' }, '2026-11-17T01:00:00Z');
+    const first = a.snapshot().queue!.drafts[0];
+    await b.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-3' }, '2026-11-17T02:00:00Z');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', first.review)).toBe('STALE');
+    const original = a.snapshot().queue!.drafts[0];
+    await b.cacheCatalog(menu('7.00'), '2026-11-17T03:00:00Z');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', original.review)).toBe('STALE');
+    expect(a.snapshot().queue!.drafts[0].commands).toEqual(first.commands);
+    const fresh = a.snapshot().queue!.drafts[0];
+    expect(fresh.review?.catalog?.line?.currentPrice).toBe('7.00');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+    expect(a.snapshot().queue!.drafts[0].commands[1].body).toMatchObject({
+      quotedUnitPrice: '7.00',
+    });
+  });
+  it('creates a new obligation when explicit retry receives another 409', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await runtime.enqueue(input);
+    let calls = 0;
+    const send = vi.fn(async () =>
+      ++calls === 1 ? { status: 201, serverRef: 'order' } : { status: 409 }
+    );
+    await runtime.replay('staff-1', send);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await runtime.cacheCatalog(menu('5.00'), '2026-11-17T01:00:00Z');
+      await runtime.cacheCatalog(menu(), '2026-11-17T02:00:00Z');
+      await runtime.resume();
+      const count = send.mock.calls.length;
+      await runtime.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(count);
+      const displayed = runtime.snapshot().queue!.drafts[0];
+      expect(displayed.status).toBe('NEEDS_REVIEW');
+      expect(await runtime.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+        'APPLIED'
+      );
+      await runtime.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(count + 1);
+      expect(runtime.snapshot().queue!.drafts[0].serverReview?.reason).toBe('CATALOG_CONFLICT');
+    }
+  });
 });

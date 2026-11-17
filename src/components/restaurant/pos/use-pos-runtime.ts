@@ -936,6 +936,22 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
             displayedReview
           );
           syncQueue();
+          if (result === 'CATALOG_REQUIRED') {
+            const draft = offlineRuntime.current
+              ?.snapshot()
+              .queue?.drafts.find((entry) => entry.draftId === draftId);
+            const open = draft?.commands.find((command) => command.kind === 'OPEN_ORDER');
+            if (open) {
+              const original = await request<EffectiveMenu>(
+                effectiveMenuPath(open.body.channel, open.body.publicationId),
+                {
+                  headers: authHeaders(runtime),
+                }
+              );
+              await offlineRuntime.current?.cacheCatalog(original, new Date().toISOString());
+            }
+          }
+          syncQueue();
           if (result !== 'APPLIED') {
             setNotice({
               tone: 'warning',

@@ -20,6 +20,7 @@ import {
   classifyReplayOutcome,
   createQueueSnapshot,
   enqueueDraft,
+  draftMatchesCatalog,
   markDraftsForCatalogReview,
   nextReplayCommand,
   resolveReviewedDraft,
@@ -27,6 +28,7 @@ import {
   type PosDraftInput,
   type PosDraftReview,
   type PosQueueSnapshot,
+  type PosQueuedDraft,
   type PosReplayRequest,
 } from './pos-command-queue';
 
@@ -92,8 +94,38 @@ export class PosOfflineRuntime {
         : '';
     const catalog = sanitizeCatalogSnapshot(payload, { version, fetchedAtClient });
     await this.commit(() => {
-      const reviewed = markDraftsForCatalogReview(this.queue(), catalog);
-      this.state = { ...this.state, catalog, queue: reviewed.snapshot };
+      const queue = this.queue();
+      const catalogs = new Map(
+        [
+          ...(queue.reviewCatalogs ?? []),
+          ...(this.state.catalog ? [this.state.catalog] : []),
+          catalog,
+        ].map((entry) => [
+          JSON.stringify([entry.branchId, entry.channel, entry.publicationId]),
+          entry,
+        ])
+      );
+      const reviewCatalogs = [...catalogs.values()].filter(
+        (entry) =>
+          entry === catalog ||
+          (entry.branchId === this.scope.branchId &&
+            queue.drafts.some((draft) => {
+              const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
+              return (
+                draft.status !== 'COMPLETED' &&
+                Boolean(open?.body.publicationId) &&
+                draftMatchesCatalog(draft, entry)
+              );
+            }))
+      );
+      this.state = { ...this.state, catalog, queue: { ...queue, reviewCatalogs } };
+      const drafts = queue.drafts.map((draft) => {
+        const ownCatalog = this.catalogFor(draft);
+        if (!ownCatalog) return draft;
+        return markDraftsForCatalogReview({ ...queue, drafts: [draft] }, ownCatalog).snapshot
+          .drafts[0];
+      });
+      this.state = { ...this.state, queue: { ...this.queue(), drafts } };
       return { persist: true, result: undefined };
     });
     return catalog;
@@ -156,19 +188,75 @@ export class PosOfflineRuntime {
     draftId: string,
     decision: 'REPLAY' | 'DISCARD',
     displayedReview: PosDraftReview | null
-  ): Promise<ReturnType<typeof resolveReviewedDraft>['status']> {
-    return this.commit(() => {
-      const resolved = resolveReviewedDraft(
-        this.queue(),
-        draftId,
-        decision,
-        displayedReview,
-        this.state.catalog?.version ?? '',
-        this.state.catalog ?? null
-      );
-      this.state = { ...this.state, queue: resolved.snapshot };
-      return { persist: true, result: resolved.status };
-    });
+  ): Promise<ReturnType<typeof resolveReviewedDraft>['status'] | 'CATALOG_REQUIRED'> {
+    return this.commit<ReturnType<typeof resolveReviewedDraft>['status'] | 'CATALOG_REQUIRED'>(
+      () => {
+        let draft = this.queue().drafts.find((entry) => entry.draftId === draftId);
+        if (decision === 'REPLAY' && draft?.review?.reason === 'COMPOSER_UNVERIFIED') {
+          return { persist: false, result: 'REFUSED' };
+        }
+        const current = this.state.catalog;
+        const displayed = displayedReview?.catalog;
+        // A binary "different publication" label cannot distinguish two foreign
+        // publications. Return to the order's own scope instead of approving either.
+        if (
+          decision === 'REPLAY' &&
+          draft?.review &&
+          current &&
+          displayed &&
+          !displayed.publicationMatchesOrder &&
+          !draftMatchesCatalog(draft, current) &&
+          displayed.publicationId !== current.publicationId &&
+          !draft.retainOriginalCatalog
+        ) {
+          const scopeReview: PosDraftReview = {
+            ...draft.review,
+            reason: 'CATALOG_SCOPE_CHANGED',
+            message:
+              'The menu publication changed. Review the saved order’s original menu before sending.',
+          };
+          draft = { ...draft, retainOriginalCatalog: true, scopeReview, review: scopeReview };
+          this.state = {
+            ...this.state,
+            queue: {
+              ...this.queue(),
+              drafts: this.queue().drafts.map((entry) =>
+                entry.draftId === draftId ? draft! : entry
+              ),
+            },
+          };
+        }
+        const catalog = draft ? this.catalogFor(draft) : current;
+        if (decision === 'REPLAY' && draft?.retainOriginalCatalog && !catalog) {
+          this.state = {
+            ...this.state,
+            queue: {
+              ...this.queue(),
+              drafts: this.queue().drafts.map((entry) =>
+                entry.draftId === draftId
+                  ? {
+                      ...entry,
+                      status: 'NEEDS_REVIEW',
+                      review: entry.review && { ...entry.review, originalCatalogRequired: true },
+                    }
+                  : entry
+              ),
+            },
+          };
+          return { persist: true, result: 'CATALOG_REQUIRED' };
+        }
+        const resolved = resolveReviewedDraft(
+          this.queue(),
+          draftId,
+          decision,
+          displayedReview,
+          catalog?.version ?? '',
+          catalog ?? null
+        );
+        this.state = { ...this.state, queue: resolved.snapshot };
+        return { persist: true, result: resolved.status };
+      }
+    );
   }
 
   replay(
@@ -245,7 +333,9 @@ export class PosOfflineRuntime {
           commandId: step.commandId,
           outcome,
           serverRef: response.serverRef,
-          catalog: this.state.catalog,
+          catalog: this.catalogFor(
+            this.queue().drafts.find((draft) => draft.draftId === step.draftId)!
+          ),
         });
         this.state = { ...this.state, queue: result.snapshot };
         if (result.snapshot.replay === 'STOPPED_REVOKED') {
@@ -266,6 +356,15 @@ export class PosOfflineRuntime {
 
   close(): void {
     this.driver.close();
+  }
+
+  private catalogFor(draft: PosQueuedDraft): PosCatalogSnapshot | null {
+    if (!draft?.retainOriginalCatalog) return this.state.catalog;
+    return (
+      this.queue().reviewCatalogs?.find(
+        (catalog) => catalog.branchId === this.scope.branchId && draftMatchesCatalog(draft, catalog)
+      ) ?? null
+    );
   }
 
   private queue(): PosQueueSnapshot {

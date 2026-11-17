@@ -764,6 +764,15 @@ function ReviewDetails({ review }: { review: PosDraftReview | null }) {
     channel === 'DINE_IN' ? 'Dine in' : channel === 'TAKEAWAY' ? 'Takeaway' : 'Delivery';
   return (
     <div className="mt-2 space-y-1 text-sm text-text-body">
+      {review?.originalCatalogRequired && (
+        <p>The saved order’s menu must be loaded before approval. Nothing has been sent.</p>
+      )}
+      {catalog.retainedOriginal && (
+        <p>
+          Reviewing the saved order’s original menu. Changes to other publications are not applied
+          to this order.
+        </p>
+      )}
       <p>
         Menu: {catalog.menuName} · {channelName(catalog.channel)}
       </p>
@@ -789,6 +798,7 @@ function ReviewDetails({ review }: { review: PosDraftReview | null }) {
           <p>
             Price: {line.quotedPrice ?? 'not recorded'} → {line.currentPrice ?? 'unavailable'}
           </p>
+          <p>Item: {line.available ? 'Available' : 'Unavailable'}</p>
           {line.modifiers.map((modifier, index) => (
             <p key={modifier.optionId}>
               {modifier.name ?? `Selected modifier ${index + 1}`}:{' '}
