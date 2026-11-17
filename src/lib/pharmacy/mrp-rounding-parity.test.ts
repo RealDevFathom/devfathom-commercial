@@ -171,6 +171,7 @@ function saleDb() {
     packLevel: counterDb().packLevel,
     medicinePackMrp: mrpTable(),
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'sale-line-a',
         ...data,

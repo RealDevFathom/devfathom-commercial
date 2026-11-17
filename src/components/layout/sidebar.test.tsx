@@ -585,8 +585,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     'pharmacy:inventory',
     'pharmacy:manage',
   ];
-  const currentLinks = () =>
-    screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page');
+  const currentLinks = () => screen.queryAllByRole('link', { current: 'page' });
 
   it.each([
     ['/pharmacy', 'Onboarding'],
