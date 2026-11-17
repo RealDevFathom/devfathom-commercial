@@ -79,12 +79,18 @@ export async function pricePrepaidSale<T extends Sale>(
   const pending = (line: Line) =>
     !line.tierName && (lastTenderAt === null || line.createdAt.getTime() > lastTenderAt);
   if (!sale.lines.some(pending)) return sale;
-  if (persist) await lockPrepaidCustomer(db, sale.organizationId, sale.customerId);
-  const account = await readPrepaidAccount(db, sale.organizationId, sale.customerId);
-  if (!account || account.balanceMinor <= 0 || !account.tierName || !account.tierVersionId)
-    return sale;
+  const funded = (row: Awaited<ReturnType<typeof readPrepaidAccount>>) =>
+    row && row.balanceMinor > 0 && row.tierName && row.tierVersionId ? row : null;
+  let account = funded(await readPrepaidAccount(db, sale.organizationId, sale.customerId));
+  if (!account) return sale;
+  // A tender freezes prices under the customer lock, re-reading the tier it now holds.
+  if (persist) {
+    await lockPrepaidCustomer(db, sale.organizationId, sale.customerId);
+    account = funded(await readPrepaidAccount(db, sale.organizationId, sale.customerId));
+    if (!account) return sale;
+  }
   const version = await db.pharmacyPrepaidTierVersion.findFirst({
-    where: { id: account.tierVersionId, organizationId: sale.organizationId },
+    where: { id: account.tierVersionId!, organizationId: sale.organizationId },
     select: { actorId: true },
   });
   if (!version) throw new Error('Prepaid tier author unavailable.');
