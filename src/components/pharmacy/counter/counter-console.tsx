@@ -2818,7 +2818,7 @@ function ScopedPharmacyCounterConsole({
         <a
           href="#counter-scan-search"
           onClick={(event) => {
-            if (searchRef.current) {
+            if (searchRef.current && !searchRef.current.disabled) {
               event.preventDefault();
               searchRef.current.focus();
             }
